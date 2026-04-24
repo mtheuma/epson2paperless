@@ -1,4 +1,5 @@
 type LogLevel = "debug" | "info" | "warn" | "error";
+type LogFormat = "text" | "json";
 
 const LEVELS: Record<LogLevel, number> = {
   debug: 0,
@@ -8,19 +9,47 @@ const LEVELS: Record<LogLevel, number> = {
 };
 
 let currentLevel: LogLevel = "info";
+let currentFormat: LogFormat = "text";
 
 export function setLogLevel(level: LogLevel): void {
   currentLevel = level;
 }
 
+export function setLogFormat(format: LogFormat): void {
+  currentFormat = format;
+}
+
+function serialiseData(data: unknown): unknown {
+  if (data instanceof Error) {
+    return { name: data.name, message: data.message, stack: data.stack };
+  }
+  return data;
+}
+
 function log(level: LogLevel, module: string, message: string, data?: unknown): void {
   if (LEVELS[level] < LEVELS[currentLevel]) return;
 
-  const timestamp = new Date().toISOString();
-  const prefix = `${timestamp} [${level.toUpperCase()}] [${module}]`;
   // warn/error go to stderr so log aggregators can separate them from info stream.
   const sink = level === "warn" ? console.warn : level === "error" ? console.error : console.log;
 
+  if (currentFormat === "json") {
+    const record: Record<string, unknown> = {
+      ts: new Date().toISOString(),
+      level,
+      module,
+      msg: message,
+    };
+    if (data !== undefined) record.data = serialiseData(data);
+    try {
+      sink(JSON.stringify(record));
+    } catch {
+      sink(JSON.stringify({ ...record, data: String(data) }));
+    }
+    return;
+  }
+
+  const timestamp = new Date().toISOString();
+  const prefix = `${timestamp} [${level.toUpperCase()}] [${module}]`;
   if (data !== undefined) {
     sink(`${prefix} ${message}`, data);
   } else {
