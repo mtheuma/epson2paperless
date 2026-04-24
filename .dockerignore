@@ -1,0 +1,27 @@
+# VCS + local tooling
+.git
+.github
+.claude
+.reference
+.githooks
+.gitattributes
+.gitignore
+
+# Source captures + test artefacts (large, not needed in build context)
+tools/frida-capture/captures/*.jsonl
+tools/wireshark-captures/
+scan.log*
+test-output/
+coverage/
+dist/
+node_modules/
+
+# Dev-only docs + helpers
+docs/
+CLAUDE.md
+command.bat
+scripts/
+
+# Env files (never ship secrets)
+.env
+.env.*

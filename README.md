@@ -58,6 +58,23 @@ When the service is up you'll see:
 
 Within about 60 seconds, the destination name (default `Paperless`) should appear on the printer's **Scan to Computer** list. If it doesn't, see [Troubleshooting](#troubleshooting) below.
 
+## Run via Docker
+
+An image is published to GitHub Container Registry on every `main` push (`:main`) and every `v*` git tag (`:vX.Y.Z` + `:latest`). Available architectures: `linux/amd64` and `linux/arm64`.
+
+Point the service at your printer and run one command:
+
+1. Edit `compose.yaml` — set `PRINTER_IP` to your printer's IPv4 address and `./output` to wherever you want scans written.
+2. Run `docker compose up -d`.
+3. Follow the logs: `docker compose logs -f epson2paperless`.
+
+Notes:
+
+- **`network_mode: host` is required** — the printer announces itself over UDP multicast on port 2968, which doesn't traverse Docker's default bridge network. Pre-baked into the shipped `compose.yaml`.
+- The container runs as UID 1000 (`node` user). If your host mount's owner is different, `chown` it to match or the container can't write scans. For a NAS user with a non-default UID, you'll need to adjust ownership on the mounted volume path.
+- Docker Desktop on macOS / Windows has caveats around host networking — the primary deployment target is a Linux server. Desktop users can work around via `extra_hosts` or by exposing the printer IP directly, but it's not officially supported.
+- For Paperless-ngx direct upload, uncomment `PAPERLESS_URL` and either `PAPERLESS_TOKEN` or `PAPERLESS_TOKEN_FILE` in `compose.yaml`. See [Pair with Paperless-ngx](#pair-with-paperless-ngx) below for the full option set.
+
 ## Use it
 
 1. Load one or more pages in the ADF — or leave the ADF empty and place a single sheet on the flatbed glass. The printer detects which source is loaded.
