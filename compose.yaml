@@ -4,6 +4,7 @@
 services:
   epson2paperless:
     image: ghcr.io/mtheuma/epson2paperless:latest
+    container_name: epson2paperless
     restart: unless-stopped
     network_mode: host
     init: true
