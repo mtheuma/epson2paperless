@@ -2,52 +2,42 @@
 
 **Send scans from compatible Epson EcoTank printers straight to a folder on your computer — no Epson app in the middle.**
 
-`epson2paperless` is a small service that runs on a machine on your LAN. Press **Scan** on the printer panel, pick your destination, set the format to JPEG or PDF, and the file appears in the folder of your choice a few seconds later. Supports the ADF (1-Sided or 2-Sided, single or multi-page) and the flatbed glass. Pair the output folder with [Paperless-ngx](https://github.com/paperless-ngx/paperless-ngx)'s consume directory and you've got a paperless scanning setup end-to-end.
+`epson2paperless` is a small service that runs on a machine on your LAN. Press **Scan** on the printer panel, pick your destination, and the file appears in the folder of your choice a few seconds later.
 
-> **Not affiliated with Seiko Epson Corporation.** This project is an independent, clean-room re-implementation of the network behavior of an Epson "Scan to Computer" workflow, developed by analyzing the wire protocol of a device the author owns. No Epson source code, firmware, or binaries are included or distributed. "EPSON", "EcoTank", and "ET-4950" are trademarks of Seiko Epson Corporation, used here descriptively to identify the hardware this software interoperates with.
+What you get:
+
+- **Printer panel → file in a folder.** No desktop app, no Windows-only driver.
+- **JPG or PDF, 1-Sided or 2-Sided, ADF or flatbed.** The panel chooses the format; the service honours it.
+- **Standalone or Paperless-ngx feeder.** Drop scans into a consume folder, or POST them directly to the Paperless-ngx API.
 
 ## Requirements
 
-- A compatible **Epson EcoTank** printer on your LAN. Developed and tested on the **ET-4950**; other EcoTank models likely work but haven't been verified yet — reports welcome via Issues.
-- **Node.js 24.15.0 LTS** or newer.
-- The PC running `epson2paperless` on the **same broadcast domain** as the printer (same switch / VLAN). Multicast discovery doesn't cross most routers by default.
+- A compatible **Epson EcoTank** printer on your LAN. Developed and tested on the **ET-4950**; other EcoTank models likely work but haven't been verified — reports welcome via Issues.
+- **Node.js 24.15.0 LTS** or newer (or Docker).
+- The PC running `epson2paperless` on the **same local network** as the printer — same Wi-Fi or Ethernet, not across a router. See [HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md#discovery-and-keepalive-udp-multicast) for why multicast matters.
 
-## Install
+## Quick start
+
+### Docker (recommended)
+
+A multi-arch image (`linux/amd64`, `linux/arm64`) is published to GitHub Container Registry on every `main` push (`:main`) and every `v*` git tag (`:vX.Y.Z` + `:latest`).
+
+1. Edit `compose.yaml` — set `PRINTER_IP` to your printer's IPv4 address and `./output` to wherever you want scans written.
+2. `docker compose up -d`.
+3. Follow the logs: `docker compose logs -f epson2paperless`.
+
+Notes:
+
+- Uses host networking — the printer's multicast beacon can't reach a bridged container. [Why](docs/HOW-IT-WORKS.md#discovery-and-keepalive-udp-multicast).
+- Container runs as UID 1000 (`node`). If your mount has a different owner, `chown` it to match.
+- Docker Desktop on macOS / Windows has caveats around host networking; the primary deployment target is a Linux server.
+
+### Run from source
 
 ```bash
 git clone https://github.com/mtheuma/epson2paperless.git
 cd epson2paperless
 npm install
-```
-
-## Configure
-
-Configuration is via environment variables. Only `PRINTER_IP` is required.
-
-| Variable              | Required | Default          | What it does                                                                                                                                            |
-| --------------------- | -------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PRINTER_IP`          | ✅       | —                | The printer's IPv4 address.                                                                                                                             |
-| `SCAN_DEST_NAME`      |          | `Paperless`      | The label the printer shows on its panel.                                                                                                               |
-| `OUTPUT_DIR`          |          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                        |
-| `LOG_LEVEL`           |          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                    |
-| `LOG_FORMAT`          |          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line — for `docker logs` + Loki / `jq`).                                                      |
-| `LANGUAGE`            |          | `en`             | 2-letter locale we send to the printer; no observed user-visible effect, kept for future testing.                                                       |
-| `PREVIEW_ACTION`      |          | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen. |
-| `TEMP_DIR`            |          | (system default) | Per-session temp directory for in-progress pages. Leave empty to use the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is tmpfs-backed.     |
-| `SCAN_DEST_ID`        |          | `0x02`           | Advanced — destination ID. Leave as default unless you know why.                                                                                        |
-| `HEALTH_PORT`         |          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                   |
-| `KEEPALIVE_INTERVAL`  |          | `500`            | ms between keepalive responses. Leave as default.                                                                                                       |
-| `SHUTDOWN_TIMEOUT_MS` |          | `30000`          | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                                               |
-
-## Run
-
-**Windows:**
-
-The repo ships with `command.bat.example`. Copy it to `command.bat` (which is gitignored so your local `PRINTER_IP` / paths stay private), edit the values, then double-click to run. The script sets sensible env vars for local development and tees output to `scan.log`.
-
-**Linux / macOS:**
-
-```bash
 PRINTER_IP=192.0.2.58 OUTPUT_DIR=./scans npm run dev
 ```
 
@@ -57,49 +47,49 @@ When the service is up you'll see:
 [INFO] [main] epson2paperless ready — waiting for scan from printer panel
 ```
 
-Within about 60 seconds, the destination name (default `Paperless`) should appear on the printer's **Scan to Computer** list. If it doesn't, see [Troubleshooting](#troubleshooting) below.
+Within about 60 seconds, your destination (default `Paperless`) appears in the printer's **Scan to Computer** list. If it doesn't, see [Troubleshooting](#troubleshooting).
 
-### One-shot mode
+**Windows:** copy `command.bat.example` to `command.bat` (gitignored, so your local `PRINTER_IP` / paths stay private), edit the values, then double-click. The script tees output to `scan.log`.
 
-If you'd rather run a single scan and exit instead of keeping a daemon alive (handy for cron jobs, automation scripts, or end-to-end testing), use `npm run scan`:
-
-```bash
-PRINTER_IP=192.0.2.58 OUTPUT_DIR=./scans npm run scan
-```
-
-The one-shot entry point starts the same multicast-discovery and push-scan listener as `npm run dev`, waits for one panel press, saves the scan, and exits 0. Notes:
-
-- No health endpoint is opened — the process lives only long enough to handle the one scan.
-- Exit codes: `0` on success, `1` on scan failure, `130` on SIGINT (Ctrl-C), `143` on SIGTERM.
-- Push-scans that arrive after the first are ignored with a warning (belt-and-braces against an accidental double-press while the first scan is still running).
-
-## Run via Docker
-
-An image is published to GitHub Container Registry on every `main` push (`:main`) and every `v*` git tag (`:vX.Y.Z` + `:latest`). Available architectures: `linux/amd64` and `linux/arm64`.
-
-Point the service at your printer and run one command:
-
-1. Edit `compose.yaml` — set `PRINTER_IP` to your printer's IPv4 address and `./output` to wherever you want scans written.
-2. Run `docker compose up -d`.
-3. Follow the logs: `docker compose logs -f epson2paperless`.
-
-Notes:
-
-- **`network_mode: host` is required** — the printer announces itself over UDP multicast on port 2968, which doesn't traverse Docker's default bridge network. Pre-baked into the shipped `compose.yaml`.
-- The container runs as UID 1000 (`node` user). If your host mount's owner is different, `chown` it to match or the container can't write scans. For a NAS user with a non-default UID, you'll need to adjust ownership on the mounted volume path.
-- Docker Desktop on macOS / Windows has caveats around host networking — the primary deployment target is a Linux server. Desktop users can work around via `extra_hosts` or by exposing the printer IP directly, but it's not officially supported.
-- For Paperless-ngx direct upload, uncomment `PAPERLESS_URL` and either `PAPERLESS_TOKEN` or `PAPERLESS_TOKEN_FILE` in `compose.yaml`. See [Pair with Paperless-ngx](#pair-with-paperless-ngx) below for the full option set.
+**One-shot mode** — `npm run scan` runs a single scan and exits, handy for cron jobs or end-to-end tests. Exit codes: `0` success, `1` scan failure, `130` SIGINT (Ctrl-C), `143` SIGTERM. No health endpoint is opened, and any push-scan that arrives after the first is ignored with a warning.
 
 ## Use it
 
-1. Load one or more pages in the ADF — or leave the ADF empty and place a single sheet on the flatbed glass. The printer detects which source is loaded.
+1. Load pages in the ADF — or leave the ADF empty and place a single sheet on the flatbed glass. The printer detects which source is loaded.
 2. At the printer panel, press **Scan** → select your destination (default `Paperless`).
 3. Choose **Action** (Save as JPEG / Save as PDF) and **Sides** (1-Sided / 2-Sided) on the panel.
 4. Wait for the panel to show **"Scan complete"**.
 5. A timestamped file appears in `OUTPUT_DIR`:
-   - JPG + single page → `scan_2026-04-20_081438.jpg`
-   - JPG + multi-page → `scan_2026-04-20_081438_01.jpg`, `_02.jpg`, …
-   - PDF (any page count) → one multi-page `scan_2026-04-20_081438.pdf`
+   - JPG, single page → `scan_2026-04-20_081438.jpg`
+   - JPG, multi-page → `scan_2026-04-20_081438_01.jpg`, `_02.jpg`, …
+   - PDF, any page count → one multi-page `scan_2026-04-20_081438.pdf`
+
+## Configure
+
+Configuration is via environment variables. Only `PRINTER_IP` is required.
+
+| Variable         | Required | Default          | What it does                                                                                                                                            |
+| ---------------- | -------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PRINTER_IP`     | ✅       | —                | The printer's IPv4 address.                                                                                                                             |
+| `SCAN_DEST_NAME` |          | `Paperless`      | The label the printer shows on its panel.                                                                                                               |
+| `OUTPUT_DIR`     |          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                        |
+| `LOG_LEVEL`      |          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                    |
+| `LOG_FORMAT`     |          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line — for `docker logs` + Loki / `jq`).                                                      |
+| `PREVIEW_ACTION` |          | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen. |
+| `TEMP_DIR`       |          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                               |
+| `HEALTH_PORT`    |          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                   |
+
+<details>
+<summary>Advanced (leave as default unless you know why)</summary>
+
+| Variable              | Default | What it does                                                                              |
+| --------------------- | ------- | ----------------------------------------------------------------------------------------- |
+| `SCAN_DEST_ID`        | `0x02`  | Destination ID byte sent in keepalive packets.                                            |
+| `LANGUAGE`            | `en`    | 2-letter locale sent to the printer; no observed user-visible effect.                     |
+| `KEEPALIVE_INTERVAL`  | `500`   | ms between keepalive responses.                                                           |
+| `SHUTDOWN_TIMEOUT_MS` | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown. |
+
+</details>
 
 ## Pair with Paperless-ngx
 
@@ -111,7 +101,7 @@ PRINTER_IP=192.0.2.58 OUTPUT_DIR=/srv/paperless/consume npm run dev
 
 ### Direct upload (alternative to consume folder)
 
-If you'd rather have scans POSTed straight into Paperless-ngx's API than dropped into its consume folder, set:
+If you'd rather POST scans straight into Paperless-ngx's API than drop them into its consume folder, set:
 
 | Var                             | Required for direct upload | Default | What it does                                                                                                                               |
 | ------------------------------- | -------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -120,7 +110,7 @@ If you'd rather have scans POSTed straight into Paperless-ngx's API than dropped
 | `PAPERLESS_TOKEN_FILE`          |                            | —       | Alternative to `PAPERLESS_TOKEN` — read the token from a file. For Docker secrets / Kubernetes. Takes precedence if both are set.          |
 | `PAPERLESS_DELETE_AFTER_UPLOAD` |                            | `true`  | Delete the local file after a successful upload. Set to `false` to keep a local copy.                                                      |
 
-When both URL and token are set, every scan is uploaded to Paperless-ngx **after** the local file is written. The local file stays by default — the upload is additive. If the upload fails (network blip, Paperless-ngx down), the scan is still safe in `OUTPUT_DIR` and you can re-upload manually or fall back to the consume-folder path.
+When both URL and token are set, every scan is uploaded **after** the local file is written. The local file stays by default — the upload is additive. If the upload fails (network blip, Paperless-ngx down), the scan is still safe in `OUTPUT_DIR` and you can re-upload manually or fall back to the consume-folder path.
 
 Multi-page ADF scans in JPG mode upload one document per page. Pick **PDF** on the printer panel if you'd rather have them grouped into a single Paperless-ngx document.
 
@@ -137,15 +127,17 @@ The printer broadcasts a discovery beacon roughly once a minute; wait at least 6
 Rare edge case. Restart the service with `Ctrl-C` and relaunch.
 
 **Output folder fills with duplicates named `scan_..._1.jpg`.**
-Normal. If two scans land in the same second (rare but possible), the service appends `_1`, `_2` to avoid overwriting.
+Normal. If two scans land in the same second, the service appends `_1`, `_2` to avoid overwriting.
 
 ## Further reading
 
-- **[docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md)** — technical walkthrough of the protocol and the service's architecture. The wire format, the scanner state machine, and the reverse-engineering methodology used to derive them.
+- **[docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md)** — full technical walkthrough: the wire protocol, the scanner state machine, and the reverse-engineering methodology used to derive them.
 
-## License
+## License & trademarks
 
 MIT. See [`LICENSE`](LICENSE) for the full text.
+
+**Not affiliated with Seiko Epson Corporation.** This project is an independent, clean-room re-implementation of the network behavior of an Epson "Scan to Computer" workflow, developed by analyzing the wire protocol of a device the author owns. No Epson source code, firmware, or binaries are included or distributed. "EPSON", "EcoTank", and "ET-4950" are trademarks of Seiko Epson Corporation, used here descriptively to identify the hardware this software interoperates with.
 
 ---
 

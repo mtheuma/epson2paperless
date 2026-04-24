@@ -8,6 +8,7 @@ Within that trust boundary, be aware of two deliberate design choices:
 
 - **The printer does not authenticate the host.** Epson's "Scan to Computer" protocol has no host-side credential. Any machine on the same broadcast domain can register as a scan destination. This matches the stock Epson driver's behaviour.
 - **TLS to the printer is unverified (`rejectUnauthorized: false`).** The ET-4950 ships a per-device factory-generated self-signed certificate — there is no CA chain to validate against, and no published fingerprint. Standard TLS validation would refuse every printer on the market. Our TLS connection gets confidentiality and integrity against a passive attacker, but **not** authentication of the peer: a LAN attacker who can impersonate `PRINTER_IP` during an active scan could feed arbitrary JPEG/PDF bytes into `OUTPUT_DIR`.
+- **The `/health` endpoint binds to all interfaces and is LAN-reachable.** It exposes a coarse `lastScan` timestamp. This is information-equivalent to the multicast keepalive traffic any LAN observer can already see on `239.255.255.253:2968`, so binding to localhost would be cosmetic rather than substantive. Open by design so external monitoring tools (Uptime Kuma, healthchecks.io, etc.) can probe the service without per-deployment opt-in.
 
 ## Mitigations
 
