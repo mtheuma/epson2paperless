@@ -19,7 +19,7 @@ async function main() {
   setLogFormat(config.logFormat);
 
   logStartupBanner(config, "epson2paperless starting");
-  const { responder } = await startPrinterDiscovery(config);
+  const responder = await startPrinterDiscovery(config);
 
   const inflight = createInflightTracker();
 

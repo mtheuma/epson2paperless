@@ -12,14 +12,12 @@ export function logStartupBanner(config: Config, modeMessage: string): void {
   log.info(`Destination name: ${config.scanDestName}`);
   log.info(`Output directory: ${config.outputDir}`);
 
-  const hasUrl = Boolean(config.paperlessUrl);
-  const hasToken = Boolean(config.paperlessToken);
-  if (hasUrl && hasToken) {
+  if (isPaperlessEnabled(config)) {
     const retention = config.paperlessDeleteAfterUpload
       ? "local files deleted after successful upload"
       : "local files retained";
     log.info(`Paperless upload: enabled (${config.paperlessUrl}) — ${retention}`);
-  } else if (hasUrl || hasToken) {
+  } else if (config.paperlessUrl || config.paperlessToken) {
     log.warn(
       "Paperless upload disabled: both PAPERLESS_URL and PAPERLESS_TOKEN (or PAPERLESS_TOKEN_FILE) must be set",
     );
@@ -28,9 +26,7 @@ export function logStartupBanner(config: Config, modeMessage: string): void {
   }
 }
 
-export async function startPrinterDiscovery(
-  config: Config,
-): Promise<{ localIp: string; responder: KeepaliveResponder }> {
+export async function startPrinterDiscovery(config: Config): Promise<KeepaliveResponder> {
   const localIp = await getLocalIpForTarget(config.printerIp);
   log.info(`Local IP: ${localIp}`);
 
@@ -50,7 +46,7 @@ export async function startPrinterDiscovery(
     burstIntervalMs: 500,
   });
   await responder.start();
-  return { localIp, responder };
+  return responder;
 }
 
 export function installCrashHandlers(): void {

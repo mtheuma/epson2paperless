@@ -18,7 +18,7 @@ async function main() {
   setLogFormat(config.logFormat);
 
   logStartupBanner(config, "epson2paperless one-shot — will exit after the first scan completes");
-  const { responder } = await startPrinterDiscovery(config);
+  const responder = await startPrinterDiscovery(config);
 
   type ExitReason =
     | { kind: "complete" }
