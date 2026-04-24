@@ -29,6 +29,7 @@ import {
 } from "./output.js";
 import { setJpegOrientation } from "./exif.js";
 import { composePdfFromJpegs } from "./pdf.js";
+import { uploadAllToPaperless, type PaperlessUploadOptions } from "./paperless-upload.js";
 
 const log = createLogger("scanner");
 
@@ -48,6 +49,12 @@ export interface ScanSession {
   duplex: boolean;
   /** Effective output format, already resolved against PREVIEW_ACTION. */
   action: "jpg" | "pdf";
+  /**
+   * Optional Paperless-ngx upload config. When present, each output file
+   * is POSTed to Paperless-ngx after being written locally. Absent means
+   * no upload — current default behaviour preserved.
+   */
+  paperless?: PaperlessUploadOptions;
 }
 
 /**
@@ -952,6 +959,9 @@ export function startScanSession(
               "jpg",
             );
             log.info(`Scan complete — wrote ${saved.length} JPG file(s); first: ${saved[0]}`);
+            if (session.paperless) {
+              await uploadAllToPaperless(saved, session.paperless);
+            }
           } else {
             // PDF branch
             try {
@@ -961,6 +971,9 @@ export function startScanSession(
               const pdfName = generateFilename(sessionTs, "pdf");
               const savedPath = writeOutputFile(session.outputDir, pdfName, pdfBuf);
               log.info(`Scan complete — saved PDF to ${savedPath}`);
+              if (session.paperless) {
+                await uploadAllToPaperless([savedPath], session.paperless);
+              }
             } catch (err) {
               const msg = err instanceof Error ? err.message : String(err);
               log.error(`PDF composition failed: ${msg}. Falling back to JPG output.`);
@@ -971,6 +984,9 @@ export function startScanSession(
                 "jpg",
               );
               log.info(`Saved ${saved.length} JPG file(s) as fallback`);
+              if (session.paperless) {
+                await uploadAllToPaperless(saved, session.paperless);
+              }
             }
           }
         } finally {
