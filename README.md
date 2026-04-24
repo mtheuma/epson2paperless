@@ -69,7 +69,7 @@ PRINTER_IP=192.0.2.58 OUTPUT_DIR=./scans npm run scan
 The one-shot entry point starts the same multicast-discovery and push-scan listener as `npm run dev`, waits for one panel press, saves the scan, and exits 0. Notes:
 
 - No health endpoint is opened — the process lives only long enough to handle the one scan.
-- `Ctrl-C` before the panel press exits with code 130 (standard shell interrupt convention).
+- Exit codes: `0` on success, `1` on scan failure, `130` on SIGINT (Ctrl-C), `143` on SIGTERM.
 - Push-scans that arrive after the first are ignored with a warning (belt-and-braces against an accidental double-press while the first scan is still running).
 
 ## Run via Docker

@@ -53,17 +53,17 @@ async function main() {
   });
   await responder.start();
 
-  // Outer coordination: `scanSettled` resolves when the one scan finishes,
-  // and rejects if a signal interrupts us before the panel press.
-  let scanComplete!: () => void;
-  let scanFailed!: (err: unknown) => void;
-  const scanSettled = new Promise<void>((res, rej) => {
-    scanComplete = res;
-    scanFailed = rej;
+  type ExitReason =
+    | { kind: "complete" }
+    | { kind: "fail"; err: unknown }
+    | { kind: "signal"; signal: NodeJS.Signals };
+
+  let settle!: (reason: ExitReason) => void;
+  const settled = new Promise<ExitReason>((res) => {
+    settle = res;
   });
 
   const inflight = createInflightTracker();
-  let scanStarted = false;
 
   const pushscanServer = createPushScanServer(2968, (info) => {
     const effective = resolveEffectiveAction(info.action, config.previewAction);
@@ -71,19 +71,18 @@ async function main() {
       log.warn(`Ignoring push-scan: action=${info.action}, previewAction=${config.previewAction}`);
       return;
     }
-    if (scanStarted) {
+    if (inflight.count > 0) {
       log.warn("Additional push-scan received — ignoring (one-shot already in progress)");
       return;
     }
-    scanStarted = true;
     log.info(
       `PushScan received (duplex=${info.duplex}, action=${effective}) — starting TLS scan session`,
     );
 
     const paperless: PaperlessUploadOptions | undefined = isPaperlessEnabled(config)
       ? {
-          url: config.paperlessUrl!,
-          token: config.paperlessToken!,
+          url: config.paperlessUrl,
+          token: config.paperlessToken,
           deleteAfterUpload: config.paperlessDeleteAfterUpload,
         }
       : undefined;
@@ -99,31 +98,47 @@ async function main() {
       paperless,
     });
     void inflight.track(scanPromise);
-    scanPromise.then(() => scanComplete()).catch((err) => scanFailed(err));
+    scanPromise.then(
+      () => settle({ kind: "complete" }),
+      (err) => settle({ kind: "fail", err }),
+    );
   });
 
   log.info("epson2paperless ready — waiting for one scan from printer panel");
 
-  const onSignal = (signal: string): void => {
+  const onSignal = (signal: NodeJS.Signals): void => {
     log.info(`Received ${signal} — interrupting one-shot`);
-    scanFailed(new Error(`Interrupted by ${signal}`));
+    settle({ kind: "signal", signal });
   };
-  process.on("SIGINT", () => onSignal("SIGINT"));
-  process.on("SIGTERM", () => onSignal("SIGTERM"));
+  process.on("SIGINT", onSignal);
+  process.on("SIGTERM", onSignal);
+  process.on("uncaughtException", (err) => {
+    log.error("Uncaught exception — exiting", err);
+    process.exit(1);
+  });
+  process.on("unhandledRejection", (reason) => {
+    log.error("Unhandled rejection (not exiting)", reason);
+  });
 
-  let exitCode = 0;
-  try {
-    await scanSettled;
-    log.info("Scan complete — shutting down");
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    log.warn(`One-shot aborted: ${msg}`);
-    exitCode = 130;
+  const reason = await settled;
+  process.off("SIGINT", onSignal);
+  process.off("SIGTERM", onSignal);
+
+  let exitCode: number;
+  switch (reason.kind) {
+    case "complete":
+      log.info("Scan complete — shutting down");
+      exitCode = 0;
+      break;
+    case "fail":
+      log.error("Scan failed — shutting down", reason.err);
+      exitCode = 1;
+      break;
+    case "signal":
+      exitCode = reason.signal === "SIGTERM" ? 143 : 130;
+      break;
   }
 
-  // Teardown mirrors the daemon's runShutdown ordering: close the push-scan
-  // listener first so no new requests arrive, drain any in-flight scan via
-  // the inflight tracker, then stop the multicast responder.
   try {
     pushscanServer.close();
     const drainResult = await inflight.waitAll(config.shutdownTimeoutMs);

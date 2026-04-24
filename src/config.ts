@@ -64,6 +64,8 @@ export function loadConfig(): Config {
   return configSchema.parse(raw);
 }
 
-export function isPaperlessEnabled(config: Config): boolean {
+export function isPaperlessEnabled(
+  config: Config,
+): config is Config & { paperlessUrl: string; paperlessToken: string } {
   return Boolean(config.paperlessUrl && config.paperlessToken);
 }

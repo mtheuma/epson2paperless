@@ -69,8 +69,8 @@ async function main() {
 
     const paperless: PaperlessUploadOptions | undefined = isPaperlessEnabled(config)
       ? {
-          url: config.paperlessUrl!,
-          token: config.paperlessToken!,
+          url: config.paperlessUrl,
+          token: config.paperlessToken,
           deleteAfterUpload: config.paperlessDeleteAfterUpload,
         }
       : undefined;
