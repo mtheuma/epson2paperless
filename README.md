@@ -6,7 +6,7 @@
 
 What you get:
 
-- **Printer panel → file in a folder.** Runs headless — no Epson app keeping a desktop session alive.
+- **Printer panel → file in a folder.** No Epson app required.
 - **JPG or PDF, 1-Sided or 2-Sided, ADF or flatbed.** The panel chooses the format; the service honours it.
 - **Standalone or Paperless-ngx feeder.** Drop scans into a consume folder, or POST them directly to the Paperless-ngx API.
 
