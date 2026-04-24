@@ -13,6 +13,7 @@ describe("loadConfig", () => {
     delete process.env.KEEPALIVE_INTERVAL;
     delete process.env.HEALTH_PORT;
     delete process.env.LOG_LEVEL;
+    delete process.env.LOG_FORMAT;
     delete process.env.LANGUAGE;
     delete process.env.PREVIEW_ACTION;
     delete process.env.TEMP_DIR;
@@ -37,6 +38,7 @@ describe("loadConfig", () => {
     expect(config.keepaliveInterval).toBe(500);
     expect(config.healthPort).toBe(3000);
     expect(config.logLevel).toBe("info");
+    expect(config.logFormat).toBe("text");
     expect(config.language).toBe("en");
   });
 
@@ -88,6 +90,19 @@ describe("loadConfig", () => {
   it("rejects invalid PREVIEW_ACTION", () => {
     process.env.PRINTER_IP = "192.0.2.58";
     process.env.PREVIEW_ACTION = "invalid";
+    expect(() => loadConfig()).toThrow();
+  });
+
+  it("accepts LOG_FORMAT=json", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.LOG_FORMAT = "json";
+    const config = loadConfig();
+    expect(config.logFormat).toBe("json");
+  });
+
+  it("rejects invalid LOG_FORMAT", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.LOG_FORMAT = "yaml";
     expect(() => loadConfig()).toThrow();
   });
 
