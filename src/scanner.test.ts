@@ -675,3 +675,57 @@ describe("scanner post-scan sequencing", () => {
     await sessionPromise;
   });
 });
+
+describe("startScanSession — printer cert pinning", () => {
+  it("connects when fingerprint matches", () => {
+    const fake = new FakeTlsSocket();
+    const FP = "AB:CD:EF:01:23:45:67:89:0A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78";
+    fake.setPeerCertificate(FP);
+
+    void startScanSession(
+      {
+        printerIp: "192.0.2.58",
+        port: 1865,
+        destId: 0x02,
+        outputDir: "/tmp/test-out",
+        tempDir: "",
+        duplex: false,
+        action: "jpg",
+        printerCertFingerprint: FP,
+      },
+      fake.asFactory(),
+    );
+
+    fake.simulateConnect();
+    // Feed the Welcome packet so the scanner can send the first protocol record (LOCK).
+    fake.feed(buildIsPacket(0x8000));
+    // After secureConnect with matching fp, scanner sends the first protocol record.
+    expect(fake.writes.length).toBeGreaterThan(0);
+  });
+
+  it("aborts before any send when fingerprint mismatches", async () => {
+    const fake = new FakeTlsSocket();
+    fake.setPeerCertificate(
+      "11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11",
+    );
+
+    const done = startScanSession(
+      {
+        printerIp: "192.0.2.58",
+        port: 1865,
+        destId: 0x02,
+        outputDir: "/tmp/test-out",
+        tempDir: "",
+        duplex: false,
+        action: "jpg",
+        printerCertFingerprint:
+          "AB:CD:EF:01:23:45:67:89:0A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78",
+      },
+      fake.asFactory(),
+    );
+
+    fake.simulateConnect();
+    await done;
+    expect(fake.writes.length).toBe(0);
+  });
+});
