@@ -1,5 +1,8 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { loadConfig } from "./config.js";
+import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { loadConfig, isPaperlessEnabled } from "./config.js";
 
 describe("loadConfig", () => {
   beforeEach(() => {
@@ -14,6 +17,10 @@ describe("loadConfig", () => {
     delete process.env.PREVIEW_ACTION;
     delete process.env.TEMP_DIR;
     delete process.env.SHUTDOWN_TIMEOUT_MS;
+    delete process.env.PAPERLESS_URL;
+    delete process.env.PAPERLESS_TOKEN;
+    delete process.env.PAPERLESS_TOKEN_FILE;
+    delete process.env.PAPERLESS_DELETE_AFTER_UPLOAD;
   });
 
   it("throws if PRINTER_IP is missing", () => {
@@ -114,5 +121,76 @@ describe("loadConfig", () => {
     process.env.PRINTER_IP = "192.0.2.58";
     process.env.SHUTDOWN_TIMEOUT_MS = "not-a-number";
     expect(() => loadConfig()).toThrow();
+  });
+
+  it("picks up PAPERLESS_URL + PAPERLESS_TOKEN from env", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.PAPERLESS_URL = "http://paperless.lan:8000";
+    process.env.PAPERLESS_TOKEN = "abc123";
+    const config = loadConfig();
+    expect(config.paperlessUrl).toBe("http://paperless.lan:8000");
+    expect(config.paperlessToken).toBe("abc123");
+    expect(config.paperlessDeleteAfterUpload).toBe(false);
+  });
+
+  it("reads PAPERLESS_TOKEN_FILE from disk and trims whitespace", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    const tmp = mkdtempSync(path.join(os.tmpdir(), "paperless-test-"));
+    const tokenFile = path.join(tmp, "token");
+    try {
+      writeFileSync(tokenFile, "  file-token-xyz  \n");
+      process.env.PAPERLESS_URL = "http://paperless.lan:8000";
+      process.env.PAPERLESS_TOKEN_FILE = tokenFile;
+      const config = loadConfig();
+      expect(config.paperlessToken).toBe("file-token-xyz");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("PAPERLESS_TOKEN_FILE takes precedence over PAPERLESS_TOKEN when both set", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    const tmp = mkdtempSync(path.join(os.tmpdir(), "paperless-test-"));
+    const tokenFile = path.join(tmp, "token");
+    try {
+      writeFileSync(tokenFile, "from-file");
+      process.env.PAPERLESS_URL = "http://paperless.lan:8000";
+      process.env.PAPERLESS_TOKEN = "from-env";
+      process.env.PAPERLESS_TOKEN_FILE = tokenFile;
+      const config = loadConfig();
+      expect(config.paperlessToken).toBe("from-file");
+    } finally {
+      rmSync(tmp, { recursive: true, force: true });
+    }
+  });
+
+  it("throws at startup when PAPERLESS_TOKEN_FILE points at a nonexistent path", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.PAPERLESS_URL = "http://paperless.lan:8000";
+    process.env.PAPERLESS_TOKEN_FILE = "/definitely/does/not/exist";
+    expect(() => loadConfig()).toThrow(/PAPERLESS_TOKEN_FILE/);
+  });
+
+  it("isPaperlessEnabled returns false when URL or token is missing", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+
+    // No vars set — both undefined
+    let config = loadConfig();
+    expect(isPaperlessEnabled(config)).toBe(false);
+
+    // URL only
+    process.env.PAPERLESS_URL = "http://paperless.lan:8000";
+    config = loadConfig();
+    expect(isPaperlessEnabled(config)).toBe(false);
+
+    // URL + token — enabled
+    process.env.PAPERLESS_TOKEN = "abc";
+    config = loadConfig();
+    expect(isPaperlessEnabled(config)).toBe(true);
+
+    // Token only (url cleared)
+    delete process.env.PAPERLESS_URL;
+    config = loadConfig();
+    expect(isPaperlessEnabled(config)).toBe(false);
   });
 });
