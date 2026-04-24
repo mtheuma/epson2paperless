@@ -11,19 +11,18 @@ services:
       PRINTER_IP: 192.0.2.58
       SCAN_DEST_NAME: Paperless
       LOG_LEVEL: info
-      OUTPUT_DIR: /scans
+      # OUTPUT_DIR: /output       # image default; override only if you change the volume target path below
       # PREVIEW_ACTION: reject    # default; override to jpg|pdf to rewrite panel's "Preview on Computer"
       # TEMP_DIR: /tmp            # default; override if /tmp is tmpfs-constrained
       # SHUTDOWN_TIMEOUT_MS: 30000
       #
       # Paperless-ngx direct upload (optional — see README § Direct upload).
-      # When both URL and token are set, every scan is POSTed to Paperless after the local file is written.
       # PAPERLESS_URL: http://paperless:8000
       # PAPERLESS_TOKEN: <your-api-token>
       # PAPERLESS_TOKEN_FILE: /run/secrets/paperless_token   # alternative to _TOKEN; takes precedence if both set
       # PAPERLESS_DELETE_AFTER_UPLOAD: "true"                # default; set "false" to keep local file after upload
     volumes:
-      - ./output:/scans
+      - ./output:/output
     healthcheck:
       test:
         - CMD
