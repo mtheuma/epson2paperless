@@ -13,6 +13,20 @@ import type * as tls from "node:tls";
 export class FakeTlsSocket extends EventEmitter {
   readonly writes: Buffer[] = [];
   private onSecureConnect?: () => void;
+  private peerCertFingerprint: string | null = null;
+
+  /** Set the fingerprint that getPeerCertificate() returns. Use null to simulate a missing cert. */
+  setPeerCertificate(fingerprint: string | null): void {
+    this.peerCertFingerprint = fingerprint;
+  }
+
+  getPeerCertificate(_detailed?: boolean): tls.PeerCertificate {
+    return { fingerprint256: this.peerCertFingerprint } as unknown as tls.PeerCertificate;
+  }
+
+  destroy(): void {
+    this.emit("close");
+  }
 
   /** Called by the factory to register the scanner's connect callback. */
   setOnConnect(cb?: () => void): void {
