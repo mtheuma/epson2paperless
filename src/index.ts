@@ -22,7 +22,10 @@ async function main() {
   const hasUrl = Boolean(config.paperlessUrl);
   const hasToken = Boolean(config.paperlessToken);
   if (hasUrl && hasToken) {
-    log.info(`Paperless upload: enabled (${config.paperlessUrl})`);
+    const retention = config.paperlessDeleteAfterUpload
+      ? "local files deleted after successful upload"
+      : "local files retained";
+    log.info(`Paperless upload: enabled (${config.paperlessUrl}) — ${retention}`);
   } else if (hasUrl || hasToken) {
     log.warn(
       "Paperless upload disabled: both PAPERLESS_URL and PAPERLESS_TOKEN (or PAPERLESS_TOKEN_FILE) must be set",
