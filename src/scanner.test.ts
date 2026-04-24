@@ -710,7 +710,6 @@ describe("startScanSession — printer cert pinning", () => {
     fake.simulateConnect();
     // Feed the Welcome packet so the scanner can send the first protocol record (LOCK).
     fake.feed(buildIsPacket(0x8000));
-    // After secureConnect with matching fp, scanner sends the first protocol record.
     expect(fake.writes.length).toBeGreaterThan(0);
   });
 

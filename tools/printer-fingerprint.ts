@@ -8,7 +8,6 @@ if (!ip) {
 }
 
 const destId = process.env.SCAN_DEST_ID ? parseInt(process.env.SCAN_DEST_ID, 16) : 0x02;
-let connected = false;
 
 const socket = tls.connect(
   {
@@ -20,19 +19,18 @@ const socket = tls.connect(
     maxVersion: "TLSv1.2",
   },
   () => {
-    const cert = socket.getPeerCertificate(true);
+    const cert = socket.getPeerCertificate();
     if (!cert?.fingerprint256) {
       console.error("Connected but no peer certificate available");
       process.exit(1);
     }
-    connected = true;
     console.log(cert.fingerprint256);
     socket.destroy();
   },
 );
 
 socket.on("error", (err) => {
-  if (connected) return; // fingerprint already captured; post-close noise
+  if (socket.destroyed) return; // fingerprint already captured; post-close noise
   console.error(`Connection failed: ${err.message}`);
   process.exit(1);
 });

@@ -215,7 +215,7 @@ export function startScanSession(
       },
       () => {
         if (session.printerCertFingerprint) {
-          const peer = socket.getPeerCertificate(true);
+          const peer = socket.getPeerCertificate();
           const actual = peer?.fingerprint256;
           if (actual !== session.printerCertFingerprint) {
             log.error(
