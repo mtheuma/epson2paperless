@@ -154,10 +154,7 @@ describe("uploadAllToPaperless", () => {
           token: "secret-token-xyz",
           deleteAfterUpload: false,
         });
-        const allLogArgs = [
-          ...logSpy.mock.calls.flat(),
-          ...errSpy.mock.calls.flat(),
-        ]
+        const allLogArgs = [...logSpy.mock.calls.flat(), ...errSpy.mock.calls.flat()]
           .map((arg) => (typeof arg === "string" ? arg : JSON.stringify(arg)))
           .join("\n");
         expect(allLogArgs).not.toContain("secret-token-xyz");

@@ -31,10 +31,7 @@ function buildUploadUrl(baseUrl: string): string {
   return trimmed + UPLOAD_PATH;
 }
 
-async function uploadOne(
-  filePath: string,
-  opts: PaperlessUploadOptions,
-): Promise<void> {
+async function uploadOne(filePath: string, opts: PaperlessUploadOptions): Promise<void> {
   const bytes = readFileSync(filePath);
   const blob = new Blob([bytes], { type: contentTypeFor(filePath) });
   const form = new FormData();
