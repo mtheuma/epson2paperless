@@ -86,7 +86,7 @@ If you'd rather have scans POSTed straight into Paperless-ngx's API than dropped
 | `PAPERLESS_URL`                 | yes                        | —       | Base URL of your Paperless-ngx, e.g. `http://paperless:8000`. The service appends `/api/documents/post_document/` — just give it the host. |
 | `PAPERLESS_TOKEN`               | yes                        | —       | API token. Create via Paperless-ngx admin → Users → your user → API token.                                                                 |
 | `PAPERLESS_TOKEN_FILE`          |                            | —       | Alternative to `PAPERLESS_TOKEN` — read the token from a file. For Docker secrets / Kubernetes. Takes precedence if both are set.          |
-| `PAPERLESS_DELETE_AFTER_UPLOAD` |                            | `false` | Delete the local file after a successful upload.                                                                                           |
+| `PAPERLESS_DELETE_AFTER_UPLOAD` |                            | `true`  | Delete the local file after a successful upload. Set to `false` to keep a local copy.                                                      |
 
 When both URL and token are set, every scan is uploaded to Paperless-ngx **after** the local file is written. The local file stays by default — the upload is additive. If the upload fails (network blip, Paperless-ngx down), the scan is still safe in `OUTPUT_DIR` and you can re-upload manually or fall back to the consume-folder path.
 
@@ -99,7 +99,7 @@ The printer broadcasts a discovery beacon roughly once a minute; wait at least 6
 
 - Confirm the PC is on the same subnet as the printer. Try `ping <printer-ip>`.
 - Check your firewall — UDP port `2968` needs to be allowed for multicast traffic from the printer.
-- Make sure no other Epson software (e.g. Epson Event Manager) is running on the same PC — it can fight over the same port.
+- Make sure Epson Event Manager isn't running on the same PC — it binds the same port. Other Epson software (drivers, ScanSmart) is fine.
 
 **Service hangs after a scan.**
 Rare edge case. Restart the service with `Ctrl-C` and relaunch.

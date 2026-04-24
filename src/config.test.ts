@@ -123,13 +123,22 @@ describe("loadConfig", () => {
     expect(() => loadConfig()).toThrow();
   });
 
-  it("picks up PAPERLESS_URL + PAPERLESS_TOKEN from env", () => {
+  it("picks up PAPERLESS_URL + PAPERLESS_TOKEN from env (defaults to delete-after-upload=true)", () => {
     process.env.PRINTER_IP = "192.0.2.58";
     process.env.PAPERLESS_URL = "http://paperless.lan:8000";
     process.env.PAPERLESS_TOKEN = "abc123";
     const config = loadConfig();
     expect(config.paperlessUrl).toBe("http://paperless.lan:8000");
     expect(config.paperlessToken).toBe("abc123");
+    expect(config.paperlessDeleteAfterUpload).toBe(true);
+  });
+
+  it("PAPERLESS_DELETE_AFTER_UPLOAD=false explicitly opts out of deletion", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.PAPERLESS_URL = "http://paperless.lan:8000";
+    process.env.PAPERLESS_TOKEN = "abc123";
+    process.env.PAPERLESS_DELETE_AFTER_UPLOAD = "false";
+    const config = loadConfig();
     expect(config.paperlessDeleteAfterUpload).toBe(false);
   });
 

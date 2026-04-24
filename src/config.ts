@@ -20,7 +20,7 @@ const configSchema = z.object({
   shutdownTimeoutMs: z.coerce.number().int().min(100).default(30000),
   paperlessUrl: z.string().url("PAPERLESS_URL must be a valid URL").optional(),
   paperlessToken: z.string().optional(),
-  paperlessDeleteAfterUpload: z.boolean().default(false),
+  paperlessDeleteAfterUpload: z.boolean().default(true),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -54,7 +54,11 @@ export function loadConfig(): Config {
     shutdownTimeoutMs: process.env.SHUTDOWN_TIMEOUT_MS || undefined,
     paperlessUrl: process.env.PAPERLESS_URL || undefined,
     paperlessToken,
-    paperlessDeleteAfterUpload: process.env.PAPERLESS_DELETE_AFTER_UPLOAD === "true",
+    // undefined → Zod default (true) applies. Explicit "true" / "false" override it.
+    paperlessDeleteAfterUpload:
+      process.env.PAPERLESS_DELETE_AFTER_UPLOAD === undefined
+        ? undefined
+        : process.env.PAPERLESS_DELETE_AFTER_UPLOAD === "true",
   };
 
   return configSchema.parse(raw);
