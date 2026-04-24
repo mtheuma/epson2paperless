@@ -22,6 +22,7 @@ services:
       # PAPERLESS_TOKEN: <your-api-token>
       # PAPERLESS_TOKEN_FILE: /run/secrets/paperless_token   # alternative to _TOKEN; takes precedence if both set
       # PAPERLESS_DELETE_AFTER_UPLOAD: "true"                # default; set "false" to keep local file after upload
+      # PRINTER_CERT_FINGERPRINT: AB:CD:EF:01:23:45:67:89:0A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78
     volumes:
       - ./output:/output
     healthcheck:

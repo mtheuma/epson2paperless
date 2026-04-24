@@ -82,13 +82,13 @@ Configuration is via environment variables. Only `PRINTER_IP` is required.
 <details>
 <summary>Advanced (leave as default unless you know why)</summary>
 
-| Variable                   | Default | What it does                                                                                                                                                                           |
-| -------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SCAN_DEST_ID`             | `0x02`  | Destination ID byte sent in keepalive packets.                                                                                                                                         |
-| `LANGUAGE`                 | `en`    | 2-letter locale sent to the printer; no observed user-visible effect.                                                                                                                  |
-| `KEEPALIVE_INTERVAL`       | `500`   | ms between keepalive responses.                                                                                                                                                        |
-| `PRINTER_CERT_FINGERPRINT` | —       | Optional. SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`). When set, scans abort if the peer's cert doesn't match. Discover with `npm run printer-fingerprint -- <ip>`. |
-| `SHUTDOWN_TIMEOUT_MS`      | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                                                                              |
+| Variable                   | Default | What it does                                                                                                                   |
+| -------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
+| `SCAN_DEST_ID`             | `0x02`  | Destination ID byte sent in keepalive packets.                                                                                 |
+| `LANGUAGE`                 | `en`    | 2-letter locale sent to the printer; no observed user-visible effect.                                                          |
+| `KEEPALIVE_INTERVAL`       | `500`   | ms between keepalive responses.                                                                                                |
+| `PRINTER_CERT_FINGERPRINT` | —       | Optional SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`). When set, scans abort if the peer cert doesn't match. |
+| `SHUTDOWN_TIMEOUT_MS`      | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                      |
 
 </details>
 
