@@ -15,10 +15,10 @@ function makeFiles(names: string[]): { dir: string; paths: string[] } {
 }
 
 describe("uploadAllToPaperless", () => {
-  let fetchMock: ReturnType<typeof vi.fn>;
+  let fetchMock: ReturnType<typeof vi.fn<typeof fetch>>;
 
   beforeEach(() => {
-    fetchMock = vi.fn();
+    fetchMock = vi.fn<typeof fetch>();
     vi.stubGlobal("fetch", fetchMock);
   });
 

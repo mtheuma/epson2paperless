@@ -1,4 +1,4 @@
-import { loadConfig } from "./config.js";
+import { loadConfig, isPaperlessEnabled } from "./config.js";
 import { setLogLevel, createLogger } from "./logger.js";
 import { getLocalIpForTarget } from "./network.js";
 import { createKeepaliveResponder } from "./keepalive.js";
@@ -6,6 +6,7 @@ import { createPushScanServer, resolveEffectiveAction } from "./pushscan.js";
 import { startScanSession } from "./scanner.js";
 import { createHealthServer, setLastScanTime } from "./health.js";
 import { createInflightTracker, shutdown as runShutdown } from "./lifecycle.js";
+import type { PaperlessUploadOptions } from "./paperless-upload.js";
 
 const log = createLogger("main");
 
@@ -17,6 +18,18 @@ async function main() {
   log.info(`Printer IP: ${config.printerIp}`);
   log.info(`Destination name: ${config.scanDestName}`);
   log.info(`Output directory: ${config.outputDir}`);
+
+  const hasUrl = Boolean(config.paperlessUrl);
+  const hasToken = Boolean(config.paperlessToken);
+  if (hasUrl && hasToken) {
+    log.info(`Paperless upload: enabled (${config.paperlessUrl})`);
+  } else if (hasUrl || hasToken) {
+    log.warn(
+      "Paperless upload disabled: both PAPERLESS_URL and PAPERLESS_TOKEN (or PAPERLESS_TOKEN_FILE) must be set",
+    );
+  } else {
+    log.info("Paperless upload: disabled (no PAPERLESS_URL/PAPERLESS_TOKEN)");
+  }
 
   const localIp = await getLocalIpForTarget(config.printerIp);
   log.info(`Local IP: ${localIp}`);
@@ -51,6 +64,14 @@ async function main() {
     );
     setLastScanTime(new Date().toISOString());
 
+    const paperless: PaperlessUploadOptions | undefined = isPaperlessEnabled(config)
+      ? {
+          url: config.paperlessUrl!,
+          token: config.paperlessToken!,
+          deleteAfterUpload: config.paperlessDeleteAfterUpload,
+        }
+      : undefined;
+
     const scanPromise = startScanSession({
       printerIp: config.printerIp,
       port: 1865,
@@ -59,6 +80,7 @@ async function main() {
       tempDir: config.tempDir,
       duplex: info.duplex,
       action: effective,
+      paperless,
     });
     void inflight.track(scanPromise);
   });
