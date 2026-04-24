@@ -1,24 +1,40 @@
 #!/bin/sh
-# pre-push hook: run the test suite before allowing a push to main.
+# pre-push hook: run lint + format:check + test before allowing a push to main.
 #
 # Activate (once per clone):   git config core.hooksPath .githooks
 # Bypass in a one-off case:    git push --no-verify
 #
 # Why only main: feature / integration branches are fair game for
-# in-progress WIP pushes. CI will still run the suite on every push via
+# in-progress WIP pushes. CI will still run the full gate on every push via
 # .github/workflows/test.yml — this hook is a local backstop for the
-# "oops, I just committed straight to main" case.
+# "oops, I just committed straight to main" case, matching CI's three-step
+# gate (lint + format:check + test) so a push that passes here will also
+# pass CI.
 
 while read -r local_ref local_sha remote_ref remote_sha; do
   if [ "$remote_ref" = "refs/heads/main" ]; then
-    echo "[pre-push] Pushing to main — running test suite..."
+    echo "[pre-push] Pushing to main — running lint + format:check + tests..."
+    if ! npm run lint; then
+      echo ""
+      echo "[pre-push] Lint failed — push to main aborted."
+      echo "[pre-push] Try:  npm run lint:fix"
+      echo "[pre-push] Or bypass with:  git push --no-verify"
+      exit 1
+    fi
+    if ! npm run format:check; then
+      echo ""
+      echo "[pre-push] Prettier check failed — push to main aborted."
+      echo "[pre-push] Fix with:  npm run format  (then commit)"
+      echo "[pre-push] Or bypass with:  git push --no-verify"
+      exit 1
+    fi
     if ! npm test; then
       echo ""
       echo "[pre-push] Tests failed — push to main aborted."
-      echo "[pre-push] If you genuinely need to bypass, re-run with:  git push --no-verify"
+      echo "[pre-push] Or bypass with:  git push --no-verify"
       exit 1
     fi
-    echo "[pre-push] Tests passed — allowing push."
+    echo "[pre-push] All checks passed — allowing push."
   fi
 done
 

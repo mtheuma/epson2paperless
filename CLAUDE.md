@@ -15,13 +15,13 @@ See:
 
 ## Commands
 
-- `npm test` — full Vitest suite (183 tests, ~1s). Includes `src/scanner.test.ts`, a replay harness that asserts byte-for-byte equivalence against recorded Frida captures. Six parametrised entries: three JPG (1p-simplex, 3p-simplex, 1p-duplex — asserting JPEGs on disk + EXIF APP1 orientation, `Orientation=3` on duplex back pages only) and three PDF reusing the same captures with `action='pdf'` (asserting one composed `scan_<ts>.pdf` with correct page count and `/Rotate=180` on back pages). Treat this as a regression shield — protocol edits that change wire bytes must be mirrored in fixtures.
+- `npm test` — full Vitest suite (196 tests, ~1s). Includes `src/scanner.test.ts`, a replay harness that asserts byte-for-byte equivalence against recorded Frida captures. Six parametrised entries: three JPG (1p-simplex, 3p-simplex, 1p-duplex — asserting JPEGs on disk + EXIF APP1 orientation, `Orientation=3` on duplex back pages only) and three PDF reusing the same captures with `action='pdf'` (asserting one composed `scan_<ts>.pdf` with correct page count and `/Rotate=180` on back pages). Treat this as a regression shield — protocol edits that change wire bytes must be mirrored in fixtures.
 - `npm test -- <name>` — filter by file name (e.g. `npm test -- pushscan`).
 - `npx vitest run <path> --reporter=verbose` — single file, verbose output.
 - `npm run dev` — start the service via `tsx` (no build step).
 - `npm run build` — TypeScript compile to `dist/`. Usually not needed in dev.
 - `npm run lint` / `npm run lint:fix` — ESLint with typescript-eslint type-checked rules (`eslint.config.mjs`). Test files and `tools/` relax `no-unsafe-*` around fixture-heavy code.
-- `npm run format` / `npm run format:check` — Prettier (`.prettierrc.json`). `.git-blame-ignore-revs` hides the bulk-format commit from blame.
+- `npm run format` / `npm run format:check` — Prettier (`.prettierrc.json`).
 
 ## Configuration
 
@@ -59,7 +59,7 @@ The `PARA` payload from `buildParaPayload(duplex)` is hardcoded and byte-matched
 
 ### Local pre-push hook
 
-`.githooks/pre-push` blocks `git push origin main` unless `npm test` passes. **Activate once per clone:**
+`.githooks/pre-push` blocks `git push origin main` unless `npm run lint`, `npm run format:check`, and `npm test` all pass — mirrors CI's three-step gate so a push that passes here will also pass CI. **Activate once per clone:**
 
 ```
 git config core.hooksPath .githooks
