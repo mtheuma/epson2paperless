@@ -1,14 +1,14 @@
 # epson2paperless
 
-**Send scans from your Epson ET-4950 straight to a folder on your computer — no Windows app in the middle.**
+**Send scans from compatible Epson EcoTank printers straight to a folder on your computer — no Epson app in the middle.**
 
 `epson2paperless` is a small service that runs on a machine on your LAN. Press **Scan** on the printer panel, pick your destination, set the format to JPEG or PDF, and the file appears in the folder of your choice a few seconds later. Supports the ADF (1-Sided or 2-Sided, single or multi-page) and the flatbed glass. Pair the output folder with [Paperless-ngx](https://github.com/paperless-ngx/paperless-ngx)'s consume directory and you've got a paperless scanning setup end-to-end.
 
-> **Not affiliated with Seiko Epson Corporation.** This project is an independent, clean-room re-implementation of the network behavior of an Epson "Scan to Computer" workflow, developed by analyzing the wire protocol of a device the author owns. No Epson source code, firmware, or binaries are included or distributed. "EPSON" and "ET-4950" are trademarks of Seiko Epson Corporation, used here descriptively to identify the hardware this software interoperates with.
+> **Not affiliated with Seiko Epson Corporation.** This project is an independent, clean-room re-implementation of the network behavior of an Epson "Scan to Computer" workflow, developed by analyzing the wire protocol of a device the author owns. No Epson source code, firmware, or binaries are included or distributed. "EPSON", "EcoTank", and "ET-4950" are trademarks of Seiko Epson Corporation, used here descriptively to identify the hardware this software interoperates with.
 
 ## Requirements
 
-- An **Epson ET-4950** printer on your LAN.
+- A compatible **Epson EcoTank** printer on your LAN. Developed and tested on the **ET-4950**; other EcoTank models likely work but haven't been verified yet — reports welcome via Issues.
 - **Node.js 24.15.0 LTS** or newer.
 - The PC running `epson2paperless` on the **same broadcast domain** as the printer (same switch / VLAN). Multicast discovery doesn't cross most routers by default.
 
