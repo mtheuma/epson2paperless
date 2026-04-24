@@ -1,5 +1,5 @@
 import { loadConfig, isPaperlessEnabled } from "./config.js";
-import { setLogLevel, createLogger } from "./logger.js";
+import { setLogLevel, setLogFormat, createLogger } from "./logger.js";
 import { getLocalIpForTarget } from "./network.js";
 import { createKeepaliveResponder } from "./keepalive.js";
 import { createPushScanServer, resolveEffectiveAction } from "./pushscan.js";
@@ -13,6 +13,7 @@ const log = createLogger("main");
 async function main() {
   const config = loadConfig();
   setLogLevel(config.logLevel);
+  setLogFormat(config.logFormat);
 
   log.info("epson2paperless starting");
   log.info(`Printer IP: ${config.printerIp}`);
