@@ -264,3 +264,36 @@ describe("buildPaperlessOptions", () => {
     });
   });
 });
+
+describe("PRINTER_CERT_FINGERPRINT", () => {
+  beforeEach(() => {
+    delete process.env.PRINTER_IP;
+    delete process.env.PRINTER_CERT_FINGERPRINT;
+  });
+
+  it("accepts a 32-byte uppercase fingerprint", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.PRINTER_CERT_FINGERPRINT =
+      "AB:CD:EF:01:23:45:67:89:0A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78";
+    const config = loadConfig();
+    expect(config.printerCertFingerprint).toBe(
+      "AB:CD:EF:01:23:45:67:89:0A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78",
+    );
+  });
+
+  it("normalises lowercase to uppercase", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.PRINTER_CERT_FINGERPRINT =
+      "ab:cd:ef:01:23:45:67:89:0a:bc:de:f0:12:34:56:78:9a:bc:de:f0:12:34:56:78:9a:bc:de:f0:12:34:56:78";
+    const config = loadConfig();
+    expect(config.printerCertFingerprint).toBe(
+      "AB:CD:EF:01:23:45:67:89:0A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78",
+    );
+  });
+
+  it("rejects a malformed fingerprint", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.PRINTER_CERT_FINGERPRINT = "AB:CD:EF"; // too short
+    expect(() => loadConfig()).toThrow(/PRINTER_CERT_FINGERPRINT/);
+  });
+});
