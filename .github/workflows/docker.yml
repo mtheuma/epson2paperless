@@ -5,29 +5,28 @@ on:
     branches: [main]
     tags: ["v*"]
 
+concurrency:
+  group: docker-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: read
   packages: write
 
-jobs:
-  build-amd64:
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
-      - uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-      - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
-        with:
-          push: true
-          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}-amd64
-          platforms: linux/amd64
+env:
+  IMAGE: ghcr.io/${{ github.repository }}
 
-  build-arm64:
-    runs-on: ubuntu-24.04-arm
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux/amd64
+          - runner: ubuntu-24.04-arm
+            platform: linux/arm64
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v6
       - uses: docker/login-action@v3
@@ -36,33 +35,51 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - uses: docker/setup-buildx-action@v3
-      - uses: docker/build-push-action@v6
+      - id: build
+        uses: docker/build-push-action@v6
         with:
-          push: true
-          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}-arm64
-          platforms: linux/arm64
+          platforms: ${{ matrix.platform }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          cache-from: type=gha,scope=${{ matrix.platform }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.platform }}
+      - name: Export digest
+        run: |
+          mkdir -p /tmp/digests
+          digest="${{ steps.build.outputs.digest }}"
+          touch "/tmp/digests/${digest#sha256:}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: digests-${{ strategy.job-index }}
+          path: /tmp/digests/*
+          if-no-files-found: error
+          retention-days: 1
 
   merge:
-    needs: [build-amd64, build-arm64]
+    needs: build
     runs-on: ubuntu-24.04
     steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: digests-*
+          path: /tmp/digests
+          merge-multiple: true
       - uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Derive tags
-        id: tags
+      - uses: docker/setup-buildx-action@v3
+      - id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+      - name: Create manifest list and push
+        working-directory: /tmp/digests
         run: |
-          if [[ "${{ github.ref_type }}" == "tag" ]]; then
-            echo "tags=ghcr.io/${{ github.repository }}:${{ github.ref_name }} ghcr.io/${{ github.repository }}:latest" >> "$GITHUB_OUTPUT"
-          else
-            echo "tags=ghcr.io/${{ github.repository }}:main" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Merge manifests
-        run: |
-          for tag in ${{ steps.tags.outputs.tags }}; do
-            docker buildx imagetools create -t "$tag" \
-              ghcr.io/${{ github.repository }}:${{ github.sha }}-amd64 \
-              ghcr.io/${{ github.repository }}:${{ github.sha }}-arm64
-          done
+          docker buildx imagetools create \
+            $(jq -cr '.tags | map("-t " + .) | join(" ")' <<< "$DOCKER_METADATA_OUTPUT_JSON") \
+            $(printf "${{ env.IMAGE }}@sha256:%s " *)
