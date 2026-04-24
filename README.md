@@ -59,6 +59,20 @@ When the service is up you'll see:
 
 Within about 60 seconds, the destination name (default `Paperless`) should appear on the printer's **Scan to Computer** list. If it doesn't, see [Troubleshooting](#troubleshooting) below.
 
+### One-shot mode
+
+If you'd rather run a single scan and exit instead of keeping a daemon alive (handy for cron jobs, automation scripts, or end-to-end testing), use `npm run scan`:
+
+```bash
+PRINTER_IP=192.0.2.58 OUTPUT_DIR=./scans npm run scan
+```
+
+The one-shot entry point starts the same multicast-discovery and push-scan listener as `npm run dev`, waits for one panel press, saves the scan, and exits 0. Notes:
+
+- No health endpoint is opened — the process lives only long enough to handle the one scan.
+- Exit codes: `0` on success, `1` on scan failure, `130` on SIGINT (Ctrl-C), `143` on SIGTERM.
+- Push-scans that arrive after the first are ignored with a warning (belt-and-braces against an accidental double-press while the first scan is still running).
+
 ## Run via Docker
 
 An image is published to GitHub Container Registry on every `main` push (`:main`) and every `v*` git tag (`:vX.Y.Z` + `:latest`). Available architectures: `linux/amd64` and `linux/arm64`.
