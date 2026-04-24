@@ -293,9 +293,15 @@ export function startScanSession(
         clearTimeoutTimer();
         return;
       }
+      if (state === "ERROR") {
+        // Post-destroy noise (e.g. after a fingerprint-mismatch abort). The
+        // mismatch path already logged the real error.
+        log.debug(`Post-destroy error ignored: ${err.message}`);
+        return;
+      }
       log.error(`TLS connection error in state ${state}`, err);
       clearTimeoutTimer();
-      if (state !== "ERROR" && state !== "DONE") {
+      if (state !== "DONE") {
         transitionToError();
       }
     });

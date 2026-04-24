@@ -677,6 +677,16 @@ describe("scanner post-scan sequencing", () => {
 });
 
 describe("startScanSession — printer cert pinning", () => {
+  let tempDir: string;
+
+  beforeEach(() => {
+    tempDir = mkdtempSync(path.join(os.tmpdir(), "epson-pin-test-"));
+  });
+
+  afterEach(() => {
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
   it("connects when fingerprint matches", () => {
     const fake = new FakeTlsSocket();
     const FP =
@@ -688,8 +698,8 @@ describe("startScanSession — printer cert pinning", () => {
         printerIp: "192.0.2.58",
         port: 1865,
         destId: 0x02,
-        outputDir: "/tmp/test-out",
-        tempDir: "",
+        outputDir: tempDir,
+        tempDir: tempDir,
         duplex: false,
         action: "jpg",
         printerCertFingerprint: FP,
@@ -715,8 +725,8 @@ describe("startScanSession — printer cert pinning", () => {
         printerIp: "192.0.2.58",
         port: 1865,
         destId: 0x02,
-        outputDir: "/tmp/test-out",
-        tempDir: "",
+        outputDir: tempDir,
+        tempDir: tempDir,
         duplex: false,
         action: "jpg",
         printerCertFingerprint:
