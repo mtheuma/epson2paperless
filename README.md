@@ -30,7 +30,7 @@ Configuration is via environment variables. Only `PRINTER_IP` is required.
 | `SCAN_DEST_NAME`      |          | `Paperless`      | The label the printer shows on its panel.                                                                                                               |
 | `OUTPUT_DIR`          |          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                        |
 | `LOG_LEVEL`           |          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                    |
-| `LANGUAGE`            |          | `en`             | 2-letter language code (affects the panel label).                                                                                                       |
+| `LANGUAGE`            |          | `en`             | 2-letter locale we send to the printer; no observed user-visible effect, kept for future testing.                                                       |
 | `PREVIEW_ACTION`      |          | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen. |
 | `TEMP_DIR`            |          | (system default) | Per-session temp directory for in-progress pages. Leave empty to use the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is tmpfs-backed.     |
 | `SCAN_DEST_ID`        |          | `0x02`           | Advanced — destination ID. Leave as default unless you know why.                                                                                        |
