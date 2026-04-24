@@ -224,6 +224,11 @@ export function startScanSession(
             );
             state = "ERROR";
             clearTimeoutTimer();
+            try {
+              fs.rmSync(sessionTempDir, { recursive: true, force: true });
+            } catch {
+              /* ignore — cleanup best-effort */
+            }
             socket.destroy();
             // Don't call transitionToError() — it sends an UNLOCK packet, but
             // we never sent the LOCK (we're aborting at handshake). The

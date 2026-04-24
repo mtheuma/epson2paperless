@@ -679,7 +679,8 @@ describe("scanner post-scan sequencing", () => {
 describe("startScanSession — printer cert pinning", () => {
   it("connects when fingerprint matches", () => {
     const fake = new FakeTlsSocket();
-    const FP = "AB:CD:EF:01:23:45:67:89:0A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78";
+    const FP =
+      "AB:CD:EF:01:23:45:67:89:0A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78";
     fake.setPeerCertificate(FP);
 
     void startScanSession(
