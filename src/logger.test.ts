@@ -81,14 +81,18 @@ describe("logger", () => {
     it("falls back gracefully on circular references", () => {
       const log = createLogger("mod");
       interface Self {
+        marker?: string;
         self?: Self;
       }
-      const o: Self = {};
+      const o: Self = { marker: "visible" };
       o.self = o;
       expect(() => log.info("circular", o)).not.toThrow();
       const raw = logSpy.mock.calls[0][0] as string;
-      const parsed = JSON.parse(raw) as Record<string, unknown>;
-      expect(parsed.data).toBe("[object Object]");
+      const parsed = JSON.parse(raw) as { data: string };
+      expect(typeof parsed.data).toBe("string");
+      expect(parsed.data).toContain("marker");
+      expect(parsed.data).toContain("visible");
+      expect(parsed.data).toContain("Circular");
     });
 
     it("respects level gating", () => {
