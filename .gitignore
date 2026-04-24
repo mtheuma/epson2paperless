@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.bin
+*.raw
+test-output/
+.claude/
+.reference/
+coverage/
+scan.log*
+command.bat
+CLAUDE.local.md

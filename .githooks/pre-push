@@ -1,0 +1,25 @@
+#!/bin/sh
+# pre-push hook: run the test suite before allowing a push to main.
+#
+# Activate (once per clone):   git config core.hooksPath .githooks
+# Bypass in a one-off case:    git push --no-verify
+#
+# Why only main: feature / integration branches are fair game for
+# in-progress WIP pushes. CI will still run the suite on every push via
+# .github/workflows/test.yml — this hook is a local backstop for the
+# "oops, I just committed straight to main" case.
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_ref" = "refs/heads/main" ]; then
+    echo "[pre-push] Pushing to main — running test suite..."
+    if ! npm test; then
+      echo ""
+      echo "[pre-push] Tests failed — push to main aborted."
+      echo "[pre-push] If you genuinely need to bypass, re-run with:  git push --no-verify"
+      exit 1
+    fi
+    echo "[pre-push] Tests passed — allowing push."
+  fi
+done
+
+exit 0

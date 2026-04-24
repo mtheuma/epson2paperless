@@ -1,0 +1,7 @@
+dist/
+node_modules/
+coverage/
+.reference/
+tools/frida-capture/captures/
+package-lock.json
+.git-blame-ignore-revs
