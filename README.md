@@ -77,6 +77,21 @@ Point `OUTPUT_DIR` at Paperless-ngx's consume directory (typically `./consume` o
 PRINTER_IP=192.0.2.58 OUTPUT_DIR=/srv/paperless/consume npm run dev
 ```
 
+### Direct upload (alternative to consume folder)
+
+If you'd rather have scans POSTed straight into Paperless-ngx's API than dropped into its consume folder, set:
+
+| Var                             | Required for direct upload | Default | What it does                                                                                                                               |
+| ------------------------------- | -------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
+| `PAPERLESS_URL`                 | yes                        | —       | Base URL of your Paperless-ngx, e.g. `http://paperless:8000`. The service appends `/api/documents/post_document/` — just give it the host. |
+| `PAPERLESS_TOKEN`               | yes                        | —       | API token. Create via Paperless-ngx admin → Users → your user → API token.                                                                 |
+| `PAPERLESS_TOKEN_FILE`          |                            | —       | Alternative to `PAPERLESS_TOKEN` — read the token from a file. For Docker secrets / Kubernetes. Takes precedence if both are set.          |
+| `PAPERLESS_DELETE_AFTER_UPLOAD` |                            | `false` | Delete the local file after a successful upload.                                                                                           |
+
+When both URL and token are set, every scan is uploaded to Paperless-ngx **after** the local file is written. The local file stays by default — the upload is additive. If the upload fails (network blip, Paperless-ngx down), the scan is still safe in `OUTPUT_DIR` and you can re-upload manually or fall back to the consume-folder path.
+
+Multi-page ADF scans in JPG mode upload one document per page. Pick **PDF** on the printer panel if you'd rather have them grouped into a single Paperless-ngx document.
+
 ## Troubleshooting
 
 **Destination doesn't appear on the printer panel.**

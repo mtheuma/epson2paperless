@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { z } from "zod";
 
 const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
@@ -17,11 +18,28 @@ const configSchema = z.object({
   previewAction: z.enum(["reject", "jpg", "pdf"]).default("reject"),
   tempDir: z.string().default(""),
   shutdownTimeoutMs: z.coerce.number().int().min(100).default(30000),
+  paperlessUrl: z.string().url("PAPERLESS_URL must be a valid URL").optional(),
+  paperlessToken: z.string().optional(),
+  paperlessDeleteAfterUpload: z.boolean().default(false),
 });
 
 export type Config = z.infer<typeof configSchema>;
 
 export function loadConfig(): Config {
+  // Resolve PAPERLESS_TOKEN — PAPERLESS_TOKEN_FILE takes precedence when both
+  // are set. A missing / unreadable _TOKEN_FILE is a startup error.
+  let paperlessToken: string | undefined;
+  if (process.env.PAPERLESS_TOKEN_FILE) {
+    try {
+      paperlessToken = readFileSync(process.env.PAPERLESS_TOKEN_FILE, "utf8").trim();
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(`PAPERLESS_TOKEN_FILE is set but cannot be read: ${msg}`);
+    }
+  } else if (process.env.PAPERLESS_TOKEN) {
+    paperlessToken = process.env.PAPERLESS_TOKEN;
+  }
+
   const raw = {
     printerIp: process.env.PRINTER_IP,
     scanDestName: process.env.SCAN_DEST_NAME || undefined,
@@ -34,7 +52,14 @@ export function loadConfig(): Config {
     previewAction: process.env.PREVIEW_ACTION || undefined,
     tempDir: process.env.TEMP_DIR || undefined,
     shutdownTimeoutMs: process.env.SHUTDOWN_TIMEOUT_MS || undefined,
+    paperlessUrl: process.env.PAPERLESS_URL || undefined,
+    paperlessToken,
+    paperlessDeleteAfterUpload: process.env.PAPERLESS_DELETE_AFTER_UPLOAD === "true",
   };
 
   return configSchema.parse(raw);
+}
+
+export function isPaperlessEnabled(config: Config): boolean {
+  return Boolean(config.paperlessUrl && config.paperlessToken);
 }
