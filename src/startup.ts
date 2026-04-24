@@ -24,6 +24,14 @@ export function logStartupBanner(config: Config, modeMessage: string): void {
   } else {
     log.info("Paperless upload: disabled (no PAPERLESS_URL/PAPERLESS_TOKEN)");
   }
+
+  if (config.printerCertFingerprint) {
+    log.info(
+      `Printer cert pinning: enabled (sha256 ${config.printerCertFingerprint.slice(0, 8)}…)`,
+    );
+  } else {
+    log.info("Printer cert pinning: disabled (set PRINTER_CERT_FINGERPRINT to enable)");
+  }
 }
 
 export async function startPrinterDiscovery(config: Config): Promise<KeepaliveResponder> {

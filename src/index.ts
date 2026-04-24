@@ -43,6 +43,7 @@ async function main() {
       duplex: info.duplex,
       action: effective,
       paperless: buildPaperlessOptions(config),
+      printerCertFingerprint: config.printerCertFingerprint,
     });
     void inflight.track(scanPromise);
   });
