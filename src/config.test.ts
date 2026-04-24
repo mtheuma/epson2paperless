@@ -3,6 +3,7 @@ import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { loadConfig, isPaperlessEnabled } from "./config.js";
+import { buildPaperlessOptions } from "./startup.js";
 
 describe("loadConfig", () => {
   beforeEach(() => {
@@ -216,5 +217,50 @@ describe("loadConfig", () => {
     delete process.env.PAPERLESS_URL;
     config = loadConfig();
     expect(isPaperlessEnabled(config)).toBe(false);
+  });
+});
+
+describe("buildPaperlessOptions", () => {
+  beforeEach(() => {
+    delete process.env.PRINTER_IP;
+    delete process.env.PAPERLESS_URL;
+    delete process.env.PAPERLESS_TOKEN;
+    delete process.env.PAPERLESS_TOKEN_FILE;
+    delete process.env.PAPERLESS_DELETE_AFTER_UPLOAD;
+  });
+
+  it("returns undefined when either URL or token is missing", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    expect(buildPaperlessOptions(loadConfig())).toBeUndefined();
+
+    process.env.PAPERLESS_URL = "http://paperless.lan:8000";
+    expect(buildPaperlessOptions(loadConfig())).toBeUndefined();
+
+    delete process.env.PAPERLESS_URL;
+    process.env.PAPERLESS_TOKEN = "abc";
+    expect(buildPaperlessOptions(loadConfig())).toBeUndefined();
+  });
+
+  it("returns options with deleteAfterUpload=true by default", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.PAPERLESS_URL = "http://paperless.lan:8000";
+    process.env.PAPERLESS_TOKEN = "abc123";
+    expect(buildPaperlessOptions(loadConfig())).toEqual({
+      url: "http://paperless.lan:8000",
+      token: "abc123",
+      deleteAfterUpload: true,
+    });
+  });
+
+  it("honours PAPERLESS_DELETE_AFTER_UPLOAD=false", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.PAPERLESS_URL = "http://paperless.lan:8000";
+    process.env.PAPERLESS_TOKEN = "abc123";
+    process.env.PAPERLESS_DELETE_AFTER_UPLOAD = "false";
+    expect(buildPaperlessOptions(loadConfig())).toEqual({
+      url: "http://paperless.lan:8000",
+      token: "abc123",
+      deleteAfterUpload: false,
+    });
   });
 });
