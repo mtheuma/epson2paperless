@@ -22,7 +22,7 @@ body:
     id: firmware
     attributes:
       label: Firmware version
-      description: Settings → Firmware Update → check now.
+      description: Shown under Settings → Firmware Update.
       placeholder: e.g. CG21B6
     validations:
       required: true
