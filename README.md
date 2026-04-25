@@ -30,7 +30,7 @@ When the list outgrows a single readable table, it'll move to its own file under
 
 ### Docker (recommended)
 
-A multi-arch image (`linux/amd64`, `linux/arm64`) is published to GitHub Container Registry on every `main` push (`:main`) and every `v*` git tag (`:vX.Y.Z` + `:latest`).
+Image: **`ghcr.io/mtheuma/epson2paperless`** — multi-arch (`linux/amd64`, `linux/arm64`). Published to GHCR on every `main` push (`:main`) and every `v*` git tag (`:vX.Y.Z` + `:latest`).
 
 1. Edit `compose.yaml` — set `PRINTER_IP` to your printer's IPv4 address and `./output` to wherever you want scans written.
 2. `docker compose up -d`.
