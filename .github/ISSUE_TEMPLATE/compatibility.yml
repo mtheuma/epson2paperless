@@ -1,0 +1,70 @@
+name: Compatibility report
+description: Report whether your Epson printer works (or doesn't) with epson2paperless.
+title: "Compatibility: <model>"
+labels: ["compatibility"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for sharing a compatibility report — both successes and failures
+        help the [Compatible printers](../../#compatible-printers) table grow.
+
+  - type: input
+    id: model
+    attributes:
+      label: Printer model
+      description: e.g. `ET-4950`. Found on the front of the printer.
+      placeholder: ET-XXXX
+    validations:
+      required: true
+
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware version
+      description: Settings → Firmware Update → check now.
+      placeholder: e.g. CG21B6
+    validations:
+      required: true
+
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Works
+        - Partially works
+        - Doesn't work
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: tested
+    attributes:
+      label: What did you test?
+      description: Tick everything you actually tried.
+      options:
+        - label: ADF, 1-Sided, JPG
+        - label: ADF, 1-Sided, PDF
+        - label: ADF, 2-Sided, JPG
+        - label: ADF, 2-Sided, PDF
+        - label: Flatbed, JPG
+        - label: Flatbed, PDF
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: |
+        For "Partially works" / "Doesn't work" — what failed, what the panel showed, any error logs
+        (run with `LOG_LEVEL=debug` for state transitions). For "Works" — anything quirky worth knowing.
+      placeholder: |
+        e.g. ADF simplex worked, but duplex back pages were not flipped 180°.
+        Panel showed "Scanning Error" after ~30s.
+
+  - type: input
+    id: version
+    attributes:
+      label: epson2paperless version
+      description: e.g. `v0.2.0` or a commit SHA.
+      placeholder: v0.2.0

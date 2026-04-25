@@ -22,7 +22,7 @@ What you get:
 | --------------------- | ----------- | -------------------------------------- |
 | **ET-4950 / ET-4956** | ✅ Verified | Same hardware, different colour shells |
 
-Compatibility reports are welcome whether your model works or doesn't — open an [issue](https://github.com/mtheuma/epson2paperless/issues) with the `compatibility` label, including the printer model, firmware version, and a short note on what worked or failed. The table grows from those reports.
+Compatibility reports are welcome whether your model works or doesn't — [open an issue](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) using the compatibility template. The table grows from those reports.
 
 When the list outgrows a single readable table, it'll move to its own file under `docs/`.
 
