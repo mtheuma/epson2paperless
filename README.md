@@ -12,9 +12,19 @@ What you get:
 
 ## Requirements
 
-- A compatible **Epson** printer on your LAN. Developed and tested on the **ET-4950**; other EcoTank models likely work but haven't been verified — reports welcome via Issues.
+- A compatible **Epson** printer on your LAN — see [Compatible printers](#compatible-printers) below.
 - **Node.js 24.15.0 LTS** or newer (or Docker).
 - The PC running `epson2paperless` on the **same local network** as the printer — same Wi-Fi or Ethernet, not across a router. See [HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md#discovery-and-keepalive-udp-multicast) for why multicast matters.
+
+## Compatible printers
+
+| Model                 | Status      | Notes                                  |
+| --------------------- | ----------- | -------------------------------------- |
+| **ET-4950 / ET-4956** | ✅ Verified | Same hardware, different colour shells |
+
+Compatibility reports are welcome whether your model works or doesn't — open an [issue](https://github.com/mtheuma/epson2paperless/issues) with the `compatibility` label, including the printer model, firmware version, and a short note on what worked or failed. The table grows from those reports.
+
+When the list outgrows a single readable table, it'll move to its own file under `docs/`.
 
 ## Quick start
 
@@ -153,13 +163,13 @@ If `epson2paperless` saved you an afternoon of fighting with a printer and you'd
 
 [![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/A0A41CAGWG)
 
-Also genuinely valuable: opening an issue with what worked / didn't on your EcoTank model — the more data points, the better the README's "compatible models" claim gets.
+Equally valuable: reporting your printer's compatibility so the [Compatible printers](#compatible-printers) table grows.
 
 ## License & trademarks
 
 MIT. See [`LICENSE`](LICENSE) for the full text.
 
-**Not affiliated with Seiko Epson Corporation.** This project is an independent, clean-room re-implementation of the network behavior of an Epson "Scan to Computer" workflow, developed by analyzing the wire protocol of a device the author owns. No Epson source code, firmware, or binaries are included or distributed. "EPSON", "EcoTank", and "ET-4950" are trademarks of Seiko Epson Corporation, used here descriptively to identify the hardware this software interoperates with.
+**Not affiliated with Seiko Epson Corporation.** This project is an independent, clean-room re-implementation of the network behavior of an Epson "Scan to Computer" workflow, developed by analyzing the wire protocol of a device the author owns. No Epson source code, firmware, or binaries are included or distributed. "EPSON", "EcoTank", "ET-4950", and "ET-4956" are trademarks of Seiko Epson Corporation, used here descriptively to identify the hardware this software interoperates with.
 
 ---
 
