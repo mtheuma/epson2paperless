@@ -316,9 +316,9 @@ Because the protocol was built from these captures, the replay test is both a re
 | `src/pdf.ts`       | PDF composition from per-page JPEGs using pdf-lib                          |
 | `src/output.ts`    | Output filename generation and temp-file promotion                         |
 | `src/health.ts`    | HTTP health-check endpoint on port 3000                                    |
-| `src/logger.ts`    | Structured logger (wraps pino)                                             |
+| `src/logger.ts`    | Hand-rolled structured logger; text or JSON output via `LOG_FORMAT`        |
 | `src/lifecycle.ts` | Graceful shutdown coordination                                             |
-| `src/network.ts`   | Network interface enumeration helpers                                      |
+| `src/network.ts`   | Resolves the local IP that can reach the printer (UDP `connect()` trick)   |
 
 Test files mirror the module they cover (`src/scanner.test.ts`, `src/keepalive.test.ts`, etc.). The replay test harness support code lives in `src/test-support/`.
 
@@ -335,7 +335,7 @@ Reverse-engineering artifacts:
 
 ## Testing
 
-The test suite uses Vitest and runs with `npm test` (approximately 150 tests, completing in under two seconds).
+The test suite uses Vitest and runs with `npm test` (216 tests across 14 files, completing in roughly a second).
 
 **The replay harness** (`src/scanner.test.ts`) is the most important test file. It instantiates the real `startScanSession` function with a fake TLS socket factory. The fake socket replays the RECV side of a Frida capture (the bytes the printer sent), advancing one IS packet at a time, and records every byte the state machine sends. After the session completes, the test asserts byte-for-byte equality against the SEND side of the capture. On-disk output files are also asserted — JPEG files for JPG-mode runs (including EXIF orientation verification), and a composed PDF for PDF-mode runs (including page count and `/Rotate` metadata on back pages).
 
@@ -354,7 +354,7 @@ The test suite uses Vitest and runs with `npm test` (approximately 150 tests, co
 
 The test fixture for `src/pdf.test.ts` is `test-fixtures/sample-page.jpg`, a small JPEG extracted from the 1p-simplex Frida capture by `tools/extract-test-jpeg.ts`.
 
-CI runs `npm install && npm test` on every push and every pull request targeting `main` (see `.github/workflows/test.yml`). The workflow uses `npm install` rather than `npm ci` because the lockfile is generated on Windows and lacks Linux-only optional native dependencies; running `npm ci` on Linux would fail with a missing-dependency error.
+CI runs `npm install` followed by the same lint + format:check + test trio that the local pre-push hook enforces, on every push to `dev` / `main` and every pull request targeting `main` (see `.github/workflows/test.yml`). The workflow uses `npm install` rather than `npm ci` because the lockfile is generated on Windows and lacks Linux-only optional native dependencies; running `npm ci` on Linux would fail with a missing-dependency error.
 
 To run a single test file with verbose output:
 
