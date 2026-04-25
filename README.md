@@ -1,6 +1,6 @@
 # epson2paperless
 
-**Send scans from compatible Epson EcoTank printers straight to a folder on your computer — no Epson app in the middle.**
+**Send scans from compatible Epson printers straight to a folder on your computer — no Epson app in the middle.**
 
 `epson2paperless` is a small service that runs on a machine on your LAN. Press **Scan** on the printer panel, pick your destination, and the file appears in the folder of your choice a few seconds later.
 
@@ -12,7 +12,7 @@ What you get:
 
 ## Requirements
 
-- A compatible **Epson EcoTank** printer on your LAN. Developed and tested on the **ET-4950**; other EcoTank models likely work but haven't been verified — reports welcome via Issues.
+- A compatible **Epson** printer on your LAN. Developed and tested on the **ET-4950**; other EcoTank models likely work but haven't been verified — reports welcome via Issues.
 - **Node.js 24.15.0 LTS** or newer (or Docker).
 - The PC running `epson2paperless` on the **same local network** as the printer — same Wi-Fi or Ethernet, not across a router. See [HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md#discovery-and-keepalive-udp-multicast) for why multicast matters.
 
