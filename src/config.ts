@@ -22,6 +22,14 @@ const configSchema = z.object({
   paperlessUrl: z.string().url("PAPERLESS_URL must be a valid URL").optional(),
   paperlessToken: z.string().optional(),
   paperlessDeleteAfterUpload: z.boolean().default(true),
+  printerCertFingerprint: z
+    .string()
+    .regex(
+      /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/i,
+      "PRINTER_CERT_FINGERPRINT must be 32 colon-separated hex bytes (sha256, e.g. AB:CD:EF:…)",
+    )
+    .transform((s) => s.toUpperCase())
+    .optional(),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -61,6 +69,7 @@ export function loadConfig(): Config {
       process.env.PAPERLESS_DELETE_AFTER_UPLOAD === undefined
         ? undefined
         : process.env.PAPERLESS_DELETE_AFTER_UPLOAD === "true",
+    printerCertFingerprint: process.env.PRINTER_CERT_FINGERPRINT || undefined,
   };
 
   return configSchema.parse(raw);

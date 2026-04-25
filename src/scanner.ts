@@ -55,6 +55,13 @@ export interface ScanSession {
    * no upload — current default behaviour preserved.
    */
   paperless?: PaperlessUploadOptions;
+  /**
+   * Optional SHA-256 fingerprint of the printer's TLS certificate (colon-
+   * separated uppercase hex, e.g. "AB:CD:…"). When set, the scanner aborts
+   * immediately if the peer cert's fingerprint256 doesn't match — before
+   * any protocol bytes are sent.
+   */
+  printerCertFingerprint?: string;
 }
 
 /**
@@ -207,6 +214,29 @@ export function startScanSession(
         minVersion: "TLSv1.2",
       },
       () => {
+        if (session.printerCertFingerprint) {
+          const peer = socket.getPeerCertificate();
+          const actual = peer?.fingerprint256;
+          if (actual !== session.printerCertFingerprint) {
+            log.error(
+              `Printer cert fingerprint mismatch — expected ${session.printerCertFingerprint}, ` +
+                `got ${actual ?? "(none)"} — aborting scan`,
+            );
+            state = "ERROR";
+            clearTimeoutTimer();
+            try {
+              fs.rmSync(sessionTempDir, { recursive: true, force: true });
+            } catch {
+              /* ignore — cleanup best-effort */
+            }
+            socket.destroy();
+            // Don't call transitionToError() — it sends an UNLOCK packet, but
+            // we never sent the LOCK (we're aborting at handshake). The
+            // socket's "close" handler resolves the outer promise.
+            return;
+          }
+          log.debug(`Printer cert fingerprint verified: ${actual}`);
+        }
         log.info("TLS connection established");
         state = "WELCOME";
         resetTimeout();
@@ -263,9 +293,15 @@ export function startScanSession(
         clearTimeoutTimer();
         return;
       }
+      if (state === "ERROR") {
+        // Post-destroy noise (e.g. after a fingerprint-mismatch abort). The
+        // mismatch path already logged the real error.
+        log.debug(`Post-destroy error ignored: ${err.message}`);
+        return;
+      }
       log.error(`TLS connection error in state ${state}`, err);
       clearTimeoutTimer();
-      if (state !== "ERROR" && state !== "DONE") {
+      if (state !== "DONE") {
         transitionToError();
       }
     });
