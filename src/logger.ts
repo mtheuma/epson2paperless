@@ -56,7 +56,9 @@ function log(level: LogLevel, module: string, message: string, data?: unknown): 
 
   const prefix = `${timestamp} [${level.toUpperCase()}] [${module}]`;
   if (data !== undefined) {
-    sink(`${prefix} ${message}`, data);
+    // Pass "%s" explicitly so console.* doesn't treat the (potentially
+    // user-derived) message as a format string — CodeQL js/tainted-format-string.
+    sink("%s", `${prefix} ${message}`, data);
   } else {
     sink(`${prefix} ${message}`);
   }
