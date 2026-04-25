@@ -8,7 +8,7 @@ The project's scope is the wire protocol between an Epson EcoTank printer's "Sca
 
 Open a GitHub issue with:
 
-- Printer model and firmware version (panel → Setup → Firmware Update → check now will show the version).
+- Printer model and firmware version (Settings → Firmware Update → check now will show the version on the ET-4950 — adjust for your model).
 - What you tried, what you expected, and what actually happened.
 - Relevant logs. Re-running with `LOG_LEVEL=debug` shows scanner state transitions and per-request detail; please include the section spanning from "ready" through the failure.
 - For protocol-level issues, a `tshark` / Wireshark capture of port 2968 traffic is enormously helpful.
