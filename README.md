@@ -147,6 +147,14 @@ Normal. If two scans land in the same second, the service appends `_1`, `_2` to 
 
 - **[docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md)** — full technical walkthrough: the wire protocol, the scanner state machine, and the reverse-engineering methodology used to derive them.
 
+## Support
+
+If `epson2paperless` saved you an afternoon of fighting with a printer and you'd like to say thanks, you can:
+
+[![ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/A0A41CAGWG)
+
+Also genuinely valuable: opening an issue with what worked / didn't on your EcoTank model — the more data points, the better the README's "compatible models" claim gets.
+
 ## License & trademarks
 
 MIT. See [`LICENSE`](LICENSE) for the full text.
