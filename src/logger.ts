@@ -56,7 +56,8 @@ function log(level: LogLevel, module: string, message: string, data?: unknown): 
 
   const prefix = `${timestamp} [${level.toUpperCase()}] [${module}]`;
   if (data !== undefined) {
-    sink(`${prefix} ${message}`, data);
+    // message is caller-supplied and may contain %-tokens; pin the format to "%s".
+    sink("%s", `${prefix} ${message}`, data);
   } else {
     sink(`${prefix} ${message}`);
   }

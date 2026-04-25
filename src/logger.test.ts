@@ -32,12 +32,14 @@ describe("logger", () => {
       expect(arg).toMatch(/^\d{4}-\d{2}-\d{2}T\S+Z \[INFO\] \[mod\] hello$/);
     });
 
-    it("passes data as a second console argument", () => {
+    it("passes data as a separate console argument (not concatenated into the message)", () => {
       const log = createLogger("mod");
       log.info("scan done", { pages: 3 });
-      expect(logSpy).toHaveBeenCalledWith(expect.stringMatching(/\[INFO\] \[mod\] scan done$/), {
-        pages: 3,
-      });
+      expect(logSpy).toHaveBeenCalledWith(
+        "%s",
+        expect.stringMatching(/\[INFO\] \[mod\] scan done$/),
+        { pages: 3 },
+      );
     });
   });
 
