@@ -53,7 +53,7 @@ Implemented in `src/pushscan.ts`. `parsePushScanRequest` extracts the SOAP field
 
 ### The scan session (TLS + ESC/I-2 over "IS" framing)
 
-The actual image transfer happens over a TLS 1.2 session that the service initiates outbound to the printer on port 1865. TLS certificate verification is disabled — the printer presents a self-signed certificate and there is no trust chain to validate against.
+The actual image transfer happens over a TLS 1.2 session that the service initiates outbound to the printer on port 1865. TLS chain validation is disabled — the printer presents a self-signed certificate and there is no trust chain to validate against. As an opt-in alternative, setting `PRINTER_CERT_FINGERPRINT` pins the peer's SHA-256 fingerprint and aborts the scan at handshake time on mismatch (see `README.md`).
 
 Inside the TLS tunnel, all traffic is wrapped in Epson's proprietary **IS framing**. Every message — in both directions — is an IS packet:
 
