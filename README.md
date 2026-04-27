@@ -20,8 +20,8 @@ What you get:
 
 | Model                 | Status      | Notes                                  |
 | --------------------- | ----------- | -------------------------------------- |
-| **ET-3950**           | ✅ Verified | Reported by user                       |
-| **ET-4950 / ET-4956** | ✅ Verified | Same hardware, different colour shells |
+| **ET-3950**           | ✅ Verified |                                       |
+| **ET-4950 / ET-4956** | ✅ Verified | Same hardware, different colours      |
 
 Compatibility reports are welcome whether your model works or doesn't — [open an issue](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) using the compatibility template.
 
