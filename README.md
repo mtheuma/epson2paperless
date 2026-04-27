@@ -20,9 +20,10 @@ What you get:
 
 | Model                 | Status      | Notes                                  |
 | --------------------- | ----------- | -------------------------------------- |
+| **ET-3950**           | ✅ Verified | Reported by user                       |
 | **ET-4950 / ET-4956** | ✅ Verified | Same hardware, different colour shells |
 
-Compatibility reports are welcome whether your model works or doesn't — [open an issue](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) using the compatibility template. 
+Compatibility reports are welcome whether your model works or doesn't — [open an issue](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) using the compatibility template.
 
 ## Quick start
 
@@ -30,7 +31,7 @@ Compatibility reports are welcome whether your model works or doesn't — [open 
 
 Image: **`ghcr.io/mtheuma/epson2paperless`** — multi-arch (`linux/amd64`, `linux/arm64`). Published to GHCR on every `main` push (`:main`) and every `v*` git tag (`:vX.Y.Z` + `:latest`).
 
-1. Edit `compose.yaml` — set `PRINTER_IP` to your printer's IPv4 address and `./output` to wherever you want scans written.
+1. In `compose.yaml`, set `PRINTER_IP` to your printer's IPv4 address and `./output` to wherever you want scans written.
 2. `docker compose up -d`.
 3. Follow the logs: `docker compose logs -f epson2paperless`.
 
@@ -63,7 +64,7 @@ Within about 60 seconds, your destination (default `Paperless`) appears in the p
 
 ## Use it
 
-1. Load pages in the ADF — or leave the ADF empty and place a single sheet on the flatbed glass. The printer detects which source is loaded.
+1. Load pages in the ADF, or leave the ADF empty and place a single sheet on the flatbed glass. The printer detects which source is loaded.
 2. At the printer panel, press **Scan** → select your destination (default `Paperless`).
 3. Choose **Action** (Save as JPEG / Save as PDF) and **Sides** (1-Sided / 2-Sided) on the panel.
 4. Wait for the panel to show **"Scan complete"**.
@@ -125,12 +126,12 @@ PRINTER_IP=192.0.2.58 OUTPUT_DIR=/srv/paperless/consume npm run dev
 
 If you'd rather POST scans straight into Paperless-ngx's API than drop them into its consume folder, set:
 
-| Var                             | Required for direct upload | Default | What it does                                                                                                                               |
-| ------------------------------- | -------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| `PAPERLESS_URL`                 | yes                        | —       | Base URL of your Paperless-ngx, e.g. `http://paperless:8000`. The service appends `/api/documents/post_document/` — just give it the host. |
-| `PAPERLESS_TOKEN`               | yes                        | —       | API token. Create via Paperless-ngx admin → Users → your user → API token.                                                                 |
-| `PAPERLESS_TOKEN_FILE`          |                            | —       | Alternative to `PAPERLESS_TOKEN` — read the token from a file. For Docker secrets / Kubernetes. Takes precedence if both are set.          |
-| `PAPERLESS_DELETE_AFTER_UPLOAD` |                            | `true`  | Delete the local file after a successful upload. Set to `false` to keep a local copy.                                                      |
+| Var                             | Required for direct upload | Default | What it does                                                                                                                                 |
+| ------------------------------- | -------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PAPERLESS_URL`                 | yes                        | —       | Base URL of your Paperless-ngx, e.g. `http://paperless:8000`. The service appends `/api/documents/post_document/`, so give it just the host. |
+| `PAPERLESS_TOKEN`               | yes                        | —       | API token. Create via Paperless-ngx admin → Users → your user → API token.                                                                   |
+| `PAPERLESS_TOKEN_FILE`          |                            | —       | Alternative to `PAPERLESS_TOKEN` — read the token from a file. For Docker secrets / Kubernetes. Takes precedence if both are set.            |
+| `PAPERLESS_DELETE_AFTER_UPLOAD` |                            | `true`  | Delete the local file after a successful upload. Set to `false` to keep a local copy.                                                        |
 
 When both URL and token are set, every scan is uploaded **after** the local file is written. The local file stays by default — the upload is additive. If the upload fails (network blip, Paperless-ngx down), the scan is still safe in `OUTPUT_DIR` and you can re-upload manually or fall back to the consume-folder path.
 
