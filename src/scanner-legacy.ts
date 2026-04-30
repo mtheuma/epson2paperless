@@ -475,6 +475,7 @@ export function startScanSessionLegacy(
           geom.heightPx,
           session.jpegQuality,
         );
+        if (getState() === "ERROR") return; // bail if fail() ran during the ~8s encode
         const pageNum = pageJpegPaths.length + 1;
         const jpgPath = path.join(sessionTempDir, `page_${String(pageNum).padStart(3, "0")}.jpg`);
         fs.writeFileSync(jpgPath, jpg);
@@ -484,6 +485,8 @@ export function startScanSessionLegacy(
         fail(`raw-to-jpeg encoding failed: ${err instanceof Error ? err.message : String(err)}`);
         return;
       }
+
+      if (getState() === "ERROR") return; // also bail before transitioning
 
       // Flatbed: skip eject; go straight to POST_STATUS.
       // ADF: would send page-eject here (not implemented yet — flatbed-only for now).
