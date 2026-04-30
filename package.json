@@ -9,6 +9,7 @@
     "dev": "tsx src/index.ts",
     "scan": "tsx src/one-shot.ts",
     "printer-fingerprint": "tsx tools/printer-fingerprint.ts",
+    "test-page:generate": "tsx tools/test-page/generate.ts",
     "kill-dev": "node scripts/kill-dev.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
