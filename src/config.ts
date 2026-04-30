@@ -3,35 +3,47 @@ import { z } from "zod";
 
 const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
 
-const configSchema = z.object({
-  printerIp: z
-    .string({ error: "PRINTER_IP is required and must be a string" })
-    .regex(ipv4Regex, "PRINTER_IP must be a valid IPv4 address"),
-  scanDestName: z.string().default("Paperless"),
-  // scanDestId is a hex byte (e.g. "02"); parsed in loadConfig.
-  scanDestId: z.number().int().min(1).max(255).default(0x02),
-  outputDir: z.string().default("/output"),
-  keepaliveInterval: z.coerce.number().int().min(100).default(500),
-  healthPort: z.coerce.number().int().min(1).max(65535).default(3000),
-  logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
-  logFormat: z.enum(["text", "json"]).default("text"),
-  language: z.string().length(2).default("en"),
-  jpegQuality: z.coerce.number().int().min(1).max(100).default(90),
-  previewAction: z.enum(["reject", "jpg", "pdf"]).default("reject"),
-  tempDir: z.string().default(""),
-  shutdownTimeoutMs: z.coerce.number().int().min(100).default(30000),
-  paperlessUrl: z.string().url("PAPERLESS_URL must be a valid URL").optional(),
-  paperlessToken: z.string().optional(),
-  paperlessDeleteAfterUpload: z.boolean().default(true),
-  printerCertFingerprint: z
-    .string()
-    .regex(
-      /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/i,
-      "PRINTER_CERT_FINGERPRINT must be 32 colon-separated hex bytes (sha256, e.g. AB:CD:EF:…)",
-    )
-    .transform((s) => s.toUpperCase())
-    .optional(),
-});
+const configSchema = z
+  .object({
+    printerIp: z
+      .string({ error: "PRINTER_IP is required and must be a string" })
+      .regex(ipv4Regex, "PRINTER_IP must be a valid IPv4 address"),
+    scanDestName: z.string().default("Paperless"),
+    // scanDestId is a hex byte (e.g. "02"); parsed in loadConfig.
+    scanDestId: z.number().int().min(1).max(255).default(0x02),
+    outputDir: z.string().default("/output"),
+    keepaliveInterval: z.coerce.number().int().min(100).default(500),
+    healthPort: z.coerce.number().int().min(1).max(65535).default(3000),
+    logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
+    logFormat: z.enum(["text", "json"]).default("text"),
+    language: z.string().length(2).default("en"),
+    jpegQuality: z.coerce.number().int().min(1).max(100).default(90),
+    previewAction: z.enum(["reject", "jpg", "pdf"]).default("reject"),
+    printerProtocol: z.enum(["auto", "esci2", "legacy"]).default("auto"),
+    tempDir: z.string().default(""),
+    shutdownTimeoutMs: z.coerce.number().int().min(100).default(30000),
+    paperlessUrl: z.string().url("PAPERLESS_URL must be a valid URL").optional(),
+    paperlessToken: z.string().optional(),
+    paperlessDeleteAfterUpload: z.boolean().default(true),
+    printerCertFingerprint: z
+      .string()
+      .regex(
+        /^([0-9A-F]{2}:){31}[0-9A-F]{2}$/i,
+        "PRINTER_CERT_FINGERPRINT must be 32 colon-separated hex bytes (sha256, e.g. AB:CD:EF:…)",
+      )
+      .transform((s) => s.toUpperCase())
+      .optional(),
+  })
+  .superRefine((cfg, ctx) => {
+    if (cfg.printerProtocol === "legacy" && cfg.printerCertFingerprint) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "PRINTER_CERT_FINGERPRINT is incompatible with PRINTER_PROTOCOL=legacy (the legacy variant uses plain TCP, not TLS).",
+        path: ["printerCertFingerprint"],
+      });
+    }
+  });
 
 export type Config = z.infer<typeof configSchema>;
 
@@ -72,6 +84,7 @@ export function loadConfig(): Config {
         ? undefined
         : process.env.PAPERLESS_DELETE_AFTER_UPLOAD === "true",
     printerCertFingerprint: process.env.PRINTER_CERT_FINGERPRINT || undefined,
+    printerProtocol: process.env.PRINTER_PROTOCOL || undefined,
   };
 
   return configSchema.parse(raw);
