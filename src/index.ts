@@ -1,7 +1,6 @@
 import { loadConfig } from "./config.js";
 import { setLogLevel, setLogFormat, createLogger } from "./logger.js";
 import { createPushScanServer, resolveEffectiveAction } from "./pushscan.js";
-import { startScanSession } from "./scanner.js";
 import { createHealthServer, setLastScanTime } from "./health.js";
 import { createInflightTracker, shutdown as runShutdown } from "./lifecycle.js";
 import {
@@ -9,6 +8,7 @@ import {
   startPrinterDiscovery,
   installCrashHandlers,
   buildPaperlessOptions,
+  dispatchScanSession,
 } from "./startup.js";
 
 const log = createLogger("main");
@@ -34,16 +34,11 @@ async function main() {
     );
     setLastScanTime(new Date().toISOString());
 
-    const scanPromise = startScanSession({
-      printerIp: config.printerIp,
-      port: 1865,
-      destId: config.scanDestId,
-      outputDir: config.outputDir,
-      tempDir: config.tempDir,
+    const scanPromise = dispatchScanSession({
+      config,
       duplex: info.duplex,
       action: effective,
       paperless: buildPaperlessOptions(config),
-      printerCertFingerprint: config.printerCertFingerprint,
     });
     void inflight.track(scanPromise);
   });

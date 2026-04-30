@@ -19,6 +19,7 @@ const configSchema = z
     language: z.string().length(2).default("en"),
     jpegQuality: z.coerce.number().int().min(1).max(100).default(90),
     previewAction: z.enum(["reject", "jpg", "pdf"]).default("reject"),
+    legacyForceSource: z.enum(["flatbed", "adf-simplex", "adf-duplex"]).optional(),
     printerProtocol: z.enum(["auto", "esci2", "legacy"]).default("auto"),
     tempDir: z.string().default(""),
     shutdownTimeoutMs: z.coerce.number().int().min(100).default(30000),
@@ -83,6 +84,7 @@ export function loadConfig(): Config {
       process.env.PAPERLESS_DELETE_AFTER_UPLOAD === undefined
         ? undefined
         : process.env.PAPERLESS_DELETE_AFTER_UPLOAD === "true",
+    legacyForceSource: process.env.LEGACY_FORCE_SOURCE || undefined,
     printerCertFingerprint: process.env.PRINTER_CERT_FINGERPRINT || undefined,
     printerProtocol: process.env.PRINTER_PROTOCOL || undefined,
   };
