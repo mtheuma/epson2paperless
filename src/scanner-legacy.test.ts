@@ -1,0 +1,68 @@
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { mkdtempSync, rmSync, readdirSync, readFileSync } from "node:fs";
+import path from "node:path";
+import os from "node:os";
+import { fileURLToPath } from "node:url";
+import { startScanSessionLegacy } from "./scanner-legacy.js";
+import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
+import { loadFixture, synthesiseImageStream } from "./test-support/legacy-replay.js";
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const FIXTURES = path.join(__dirname, "..", "tools", "pcap-extract", "captures", "wf-3620");
+
+describe("scanner-legacy", () => {
+  let outputDir: string;
+  let tempDir: string;
+
+  beforeEach(() => {
+    outputDir = mkdtempSync(path.join(os.tmpdir(), "leg-out-"));
+    tempDir = mkdtempSync(path.join(os.tmpdir(), "leg-tmp-"));
+  });
+
+  afterEach(() => {
+    rmSync(outputDir, { recursive: true, force: true });
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("flatbed-single-page-jpeg: replays driver bytes and writes one JPG", async () => {
+    const fixture = loadFixture(path.join(FIXTURES, "flatbed-single-page-jpeg.jsonl"));
+    const fake = new FakeTcpSocket();
+
+    const sessionPromise = startScanSessionLegacy(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        outputDir,
+        tempDir,
+        source: "flatbed",
+        format: "jpg",
+        jpegQuality: 90,
+      },
+      fake.asFactory(),
+    );
+    fake.simulateConnect();
+
+    // Drive the protocol by feeding each "p>h" event in fixture order
+    // (the scanner's state machine emits the matching "h>p" command in response).
+    for (const event of fixture) {
+      if (event.dir !== "p>h") continue;
+      await new Promise((r) => setImmediate(r));
+      if ("hex" in event) {
+        fake.feed(Buffer.from(event.hex, "hex"));
+      } else if (event.summary === "image-stream") {
+        for (const packet of synthesiseImageStream(event.totalBytes, event.chunkSize)) {
+          fake.feed(packet);
+        }
+      }
+    }
+    await sessionPromise;
+
+    const files = readdirSync(outputDir);
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/^scan_.+\.jpg$/);
+    const jpegBytes = readFileSync(path.join(outputDir, files[0]));
+    // SOI marker
+    expect(jpegBytes[0]).toBe(0xff);
+    expect(jpegBytes[1]).toBe(0xd8);
+  }, 60_000); // Sharp encodes ~104 MB raw RGB; allow up to 60 s on slow machines / CI
+});

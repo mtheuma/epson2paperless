@@ -35,6 +35,11 @@ export function buildFsG(): Buffer {
   return Buffer.from([0x1c, 0x47]);
 }
 
+/** ESC ( — sent before source-set to check if scanner is ready; returns 0x06 (ready) or 0x80 (busy). */
+export function buildEscParen(): Buffer {
+  return Buffer.from([0x1b, 0x28]);
+}
+
 export function buildEscCleanup(): Buffer {
   return Buffer.from([0x1b, 0x29]);
 }
