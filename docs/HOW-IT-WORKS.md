@@ -291,6 +291,14 @@ is empty (proceed to cleanup). This handles arbitrary page counts —
 3-sheet simplex, 4-sheet duplex, and 1-sheet duplex all share the same
 state-machine path.
 
+The first `FS G` of an ADF session sometimes returns a 14-byte reply with
+`chunkSize = 0` — the printer is still threading paper from the tray and
+isn't ready to start streaming. The state machine handles this with a
+small retry loop: `START_POLL` polls `FS F` until status byte 0 is `0x01`,
+then `START_POLL_READY` does one more `FS F` for confirmation, then
+re-issues `FS G`. This pattern was captured in `adf-4-page-duplex-pdf` and
+mirrors the Windows driver's behaviour.
+
 ---
 
 ## Reverse engineering: how this was built

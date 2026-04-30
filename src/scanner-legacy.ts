@@ -151,6 +151,9 @@ export function startScanSessionLegacy(
     const backPageIndices: number[] = [];
     // Set to true when looping back for the back side of a duplex sheet; controls
     // STATUS_1B and ADF_IDENTITY_B to skip the initial source-set / PDF ESC e steps.
+    // Cleared at:
+    //   - STATUS_1A's 0x81 branch (ADF empty → cleanup)
+    //   - ADF_IDENTITY_B's enter-gamma transition
     let inInterPageLoop = false;
     // Non-image packets that arrive during PAGE_ENCODING are deferred and replayed after encoding.
     const encodingDeferred: Array<{ type: number; payload: Buffer }> = [];
@@ -595,11 +598,14 @@ export function startScanSessionLegacy(
             return fail(`expected 1-byte page-eject ACK, got ${pkt.payload.length}`);
           }
           log.debug(`PAGE_EJECT_WAIT: eject ACK 0x${pkt.payload[0].toString(16)}`);
-          // Duplex: every odd-indexed completed page means the next page is a back page.
+          // Duplex: after an odd-numbered completed page (1, 3, ...), the next page
+          // is the back side of the same sheet.
           // Pages are 1-indexed: 1 (front), 2 (back), 3 (front), 4 (back) ... so back-pages
           // are even indices. We push them as we discover them.
           if (session.source === "adf-duplex" && pageJpegPaths.length % 2 === 1) {
             backPageIndices.push(pageJpegPaths.length + 1);
+            // We push speculatively (next page may not arrive on hardware fault).
+            // composePdfFromJpegs uses Set.has() so a dangling index is benign.
           }
           // Always probe ADF status. STATUS_1A's handler decides whether to continue
           // the inter-page loop (status byte 0 = 0x01) or wrap up (0x81 = ADF empty).
