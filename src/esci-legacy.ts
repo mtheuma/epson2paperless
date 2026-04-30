@@ -23,7 +23,7 @@ export function buildEscE(): Buffer {
   return Buffer.from([0x1b, 0x65]);
 }
 
-export function buildFsZ(): Buffer {
+export function buildEscZ(): Buffer {
   return Buffer.from([0x1b, 0x7a]);
 }
 
@@ -62,7 +62,7 @@ const FORMAT_BYTE: Record<Format, number> = {
   pdf: 0x08,
 };
 
-interface ScanGeometry {
+export interface ScanGeometry {
   dpi: number;
   widthPx: number;
   heightPx: number;
@@ -150,26 +150,24 @@ export function parseFsGReply(buf: Buffer): FsGReply {
 
 /**
  * The 38-byte payload of the IS-0x2200 packet the host sends immediately
- * after FS G's reply. Structure verified byte-for-byte against the pcap
- * captures (frames 210+212 for JPEG, frames 198+200 for PDF):
+ * after FS G's reply.
  *
- *   bytes  0-3 : BE u32 = 0x0000001e (constant = 30; meaning unknown)
- *   bytes  4-7 : zero
- *   bytes  8-9 : zero
- *   bytes 10-11: BE u16 = bytesPerLine low 16 (0x06d6 JPEG / 0x01b5 PDF)
- *   bytes 12-15: zero
- *   bytes 16-19: BE u32 = chunkSize + 1 (0xe851 in all six captures)
- *   bytes 20-23: BE u32 = 1
- *   bytes 24-27: BE u32 = chunkSize + 1 (duplicate)
- *   bytes 28-31: LE u32 = 6 (constant; meaning unknown)
- *   bytes 32-33: 0x01 0x00 (constant; observed across all six captures)
- *   bytes 34-37: format-keyed empirical constant
- *                 JPEG: 00 74 29 06 (LE u32 = 0x06297400)
- *                 PDF:  00 91 33 06 (LE u32 = 0x06339100)
- *
- * NOTE: The 0x1e constant is at byte index 3 (BE u32 at offset 0), not byte
- * index 6 as an earlier plan draft suggested. Bytes 32-33 are 0x01 0x00,
- * not zeros. Both corrected by cross-checking the pcap capture directly.
+ * Layout:
+ *   bytes 0-3   : BE u32 = 30 (length of the trailing sub-payload, bytes 8-37)
+ *   bytes 4-7   : zero
+ *   --- end of 8-byte preamble ---
+ *   bytes 8-9   : zero
+ *   bytes 10-11 : BE u16 = bytesPerLine low 16 (0x06d6 JPEG / 0x01b5 PDF)
+ *   bytes 12-15 : zero
+ *   bytes 16-19 : BE u32 = chunkSize + 1 (0xe851 in all six captures)
+ *   bytes 20-23 : BE u32 = 1
+ *   bytes 24-27 : BE u32 = chunkSize + 1 (duplicate)
+ *   bytes 28-31 : LE u32 = 6 (constant; meaning unknown)
+ *   byte 32     : 0x01 (constant — purpose unknown but consistent across captures)
+ *   byte 33     : 0x00
+ *   bytes 34-37 : LE u32 = format-keyed empirical constant
+ *                  JPEG: 0x06297400 (wire bytes 00 74 29 06)
+ *                  PDF:  0x06339100 (wire bytes 00 91 33 06)
  *
  * The format-keyed constant matches across flatbed/ADF/duplex captures
  * (only format affects it). We have not derived an algorithmic formula

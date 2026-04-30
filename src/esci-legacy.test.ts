@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { createHash } from "node:crypto";
 import { GAMMA_LUT_R, GAMMA_LUT_G, GAMMA_LUT_B } from "./esci-legacy-luts.js";
 
 describe("esci-legacy gamma LUTs", () => {
@@ -8,11 +9,17 @@ describe("esci-legacy gamma LUTs", () => {
     expect(GAMMA_LUT_B.length).toBe(256);
   });
 
-  it("each LUT starts with 0x00 and ends with 0xff (near-identity ramp)", () => {
-    for (const lut of [GAMMA_LUT_R, GAMMA_LUT_G, GAMMA_LUT_B]) {
-      expect(lut[0]).toBe(0x00);
-      expect(lut[255]).toBe(0xff);
-    }
+  it("each LUT matches its captured bytes (sha256-pinned)", () => {
+    // If a LUT looks like it has a typo, it isn't — these are the firmware's
+    // intentional perturbations and the printer accepts them verbatim.
+    // Re-derive from .reference/wireshark-captures/wf-3620/flatbed-single-page-jpeg.pcap
+    // before changing.
+    const r = createHash("sha256").update(GAMMA_LUT_R).digest("hex");
+    const g = createHash("sha256").update(GAMMA_LUT_G).digest("hex");
+    const b = createHash("sha256").update(GAMMA_LUT_B).digest("hex");
+    expect(r).toBe("50ac30203a5e8fe992581443ee85b9ac84aef9e1d6a386b6c7c59fc9c5a3c040");
+    expect(g).toBe("6c94050b612bf6c2e325179f23c98fa950ffdfc01c25aa5fbd921343ba1f8636");
+    expect(b).toBe("40aff2e9d2d8922e47afd4648e6967497158785fbd1da870e7110266bf944880");
   });
 });
 
@@ -24,7 +31,7 @@ import {
   buildFsG,
   buildEscCleanup,
   buildPageEject,
-  buildFsZ,
+  buildEscZ,
 } from "./esci-legacy.js";
 
 describe("esci-legacy command builders", () => {
@@ -56,8 +63,8 @@ describe("esci-legacy command builders", () => {
     expect(buildPageEject()).toEqual(Buffer.from([0x0c, 0x00]));
   });
 
-  it("FS Z (gamma load command, channel R) is 2 bytes 1b 7a", () => {
-    expect(buildFsZ()).toEqual(Buffer.from([0x1b, 0x7a]));
+  it("ESC z (gamma load command, channel R) is 2 bytes 1b 7a", () => {
+    expect(buildEscZ()).toEqual(Buffer.from([0x1b, 0x7a]));
   });
 });
 
