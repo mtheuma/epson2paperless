@@ -25,6 +25,7 @@ export type FixtureEvent =
 const TSHARK_DEFAULT = "tshark";
 const IS_HEADER_HEX_PREFIX = "4953";
 const IS_TYPE_A200_PREFIX = "a200";
+const IS_IMAGE_CHUNK_HEX = IS_HEADER_HEX_PREFIX + IS_TYPE_A200_PREFIX;
 
 export async function extract(opts: ExtractOptions): Promise<FixtureEvent[]> {
   const tshark = opts.tsharkPath ?? process.env.TSHARK_PATH ?? TSHARK_DEFAULT;
@@ -135,9 +136,23 @@ function foldImageChunks(events: FixtureEvent[]): FixtureEvent[] {
       continue;
     }
     if (runStart && isImageContinuation(e) && "hex" in e) {
-      // TCP continuation of the current image chunk
-      runTotalBytes += e.hex.length / 2;
+      // TCP continuation frame: may carry the tail of the current chunk AND the IS-0xa200
+      // header(s) of subsequent chunks packed into the same TCP segment. Scan for any
+      // embedded IS-0xa200 headers and accumulate only their declared payloadSize —
+      // do NOT add raw frame bytes, which would double-count data already declared by
+      // the IS headers.
       runFrameCount++;
+      let offset = 0;
+      while (true) {
+        const pos = e.hex.indexOf(IS_IMAGE_CHUNK_HEX, offset);
+        if (pos === -1) break;
+        // IS header layout: magic(4) type(4) flags(4) payloadSize(8) = 20 hex chars total
+        const payloadHex = e.hex.slice(pos + 12, pos + 20);
+        if (payloadHex.length === 8) {
+          runTotalBytes += parseInt(payloadHex, 16);
+        }
+        offset = pos + 8;
+      }
       continue;
     }
     flushRun();
