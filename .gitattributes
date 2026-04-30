@@ -4,6 +4,3 @@
 
 # Binary captures — prevent Git from line-ending-mangling pcap files.
 *.pcap binary
-
-# Committed PDF artifacts — also binary.
-*.pdf binary
