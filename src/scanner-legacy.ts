@@ -433,6 +433,9 @@ export function startScanSessionLegacy(
             sendCmd(buildEscE(), 1);
             sendCmd(Buffer.from([sourceByte(session.source)]), 1);
           } else {
+            // Inter-page loop: flag has been consumed by STATUS_1B and now here;
+            // reset it so it's not stuck true for any future multi-sheet iterations.
+            inInterPageLoop = false;
             enterGammaPhase();
           }
           return;

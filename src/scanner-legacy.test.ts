@@ -241,19 +241,31 @@ describe("scanner-legacy", () => {
     const files = readdirSync(outputDir).sort();
     expect(files).toHaveLength(2);
     expect(files.every((f) => /\.jpg$/.test(f))).toBe(true);
-    // Verify back-page (page 2) has EXIF Orientation=3.
-    // The EXIF APP1 IFD entry for tag 0x0112 (Orientation) is: 01 12 00 03 00 00 00 01 00 03 00 00
-    // The tag ID bytes 01 12 appear in the inserted APP1 segment.
+
+    const front = readFileSync(path.join(outputDir, files[0]));
     const back = readFileSync(path.join(outputDir, files[1]));
-    const orientationTagId = Buffer.from([0x01, 0x12]);
-    let foundOrientationTag = false;
-    for (let i = 0; i <= back.length - 2; i++) {
-      if (back[i] === orientationTagId[0] && back[i + 1] === orientationTagId[1]) {
-        foundOrientationTag = true;
-        break;
-      }
-    }
-    expect(foundOrientationTag).toBe(true);
+
+    // Front (page 1): valid JPEG SOI, NOT followed by APP1 (no EXIF inserted).
+    expect(front[0]).toBe(0xff);
+    expect(front[1]).toBe(0xd8);
+    expect(Buffer.from([front[2], front[3]]).equals(Buffer.from([0xff, 0xe1]))).toBe(false);
+
+    // Back (page 2): SOI immediately followed by APP1 segment inserted by setJpegOrientation.
+    // Layout of the 36-byte APP1 block prepended at offset 2:
+    //   [0-1]  ff e1          APP1 marker
+    //   [2-3]  00 22          segment length = 34
+    //   [4-9]  Exif\0\0       identifier
+    //   [10-13] 4d 4d 00 2a   TIFF big-endian header + magic 42
+    //   [14-17] 00 00 00 08   IFD0 offset (8 bytes from start of TIFF header)
+    //   [18-19] 00 01         IFD entry count = 1
+    //   [20-27] 01 12 00 03 00 00 00 01  tag=0x0112, type=SHORT, count=1
+    //   [28-31] 00 [orientation] 00 00   value (big-endian SHORT in 4-byte field)
+    //   [32-35] 00 00 00 00   next-IFD terminator
+    // In the output buffer the APP1 block starts at byte 2 (after the SOI), so:
+    //   orientation value byte = 2 + 29 = 31
+    const ORIENTATION_VALUE_OFFSET = 31;
+    expect(back.subarray(0, 4)).toEqual(Buffer.from([0xff, 0xd8, 0xff, 0xe1]));
+    expect(back[ORIENTATION_VALUE_OFFSET]).toBe(0x03);
   }, 120_000); // 2 pages × ~8s sharp encode each = 16s + slack
 
   it("adf-2-page-pdf (duplex): writes one PDF with back page rotated 180", async () => {
