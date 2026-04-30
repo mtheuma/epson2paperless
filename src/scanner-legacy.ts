@@ -25,6 +25,7 @@ import {
   buildStreamConfigPayload,
   parseFsGReply,
   geometry,
+  SOURCE_BYTE,
   type Source,
   type Format,
 } from "./esci-legacy.js";
@@ -36,6 +37,12 @@ import { finalizeSession } from "./output-tail.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 
 const log = createLogger("scanner-legacy");
+
+const GAMMA_CHANNELS = [
+  { tag: 0x52, lut: GAMMA_LUT_R },
+  { tag: 0x47, lut: GAMMA_LUT_G },
+  { tag: 0x42, lut: GAMMA_LUT_B },
+] as const;
 
 // The Windows driver always sends source byte 0x01 (ADF-simplex) as the initial probe,
 // regardless of the user's intended source. It gets a 0x81 busy reply, resets, then
@@ -87,12 +94,8 @@ type State =
   // (fixture: adf-single-page-pdf.jsonl lines 72-79)
   | "ADF_PDF_SRC_CMD"
   | "ADF_PDF_SRC_PARAM"
-  | "GAMMA_R_CMD"
-  | "GAMMA_R_DATA"
-  | "GAMMA_G_CMD"
-  | "GAMMA_G_DATA"
-  | "GAMMA_B_CMD"
-  | "GAMMA_B_DATA"
+  | "GAMMA_CMD"
+  | "GAMMA_DATA"
   | "WINDOW_CMD"
   | "WINDOW_DATA"
   | "STATUS_PRESCAN"
@@ -116,7 +119,6 @@ type State =
 
 const TIMEOUT_MS = 60_000;
 const ACK_BYTE = 0x06;
-const NAK_BYTE = 0x80;
 
 export function startScanSessionLegacy(
   session: LegacyScanSession,
@@ -135,8 +137,10 @@ export function startScanSessionLegacy(
 
     let fsGReply: ReturnType<typeof parseFsGReply> | null = null;
     let imageBuffer = Buffer.alloc(0);
+    let imageBufferOffset = 0;
     let expectedBytes = 0;
     const pageJpegPaths: string[] = [];
+    let gammaChannelIdx = 0;
     const backPageIndices: number[] = [];
     // Set to true when looping back for the back side of a duplex sheet; controls
     // STATUS_1B and ADF_IDENTITY_B to skip the initial source-set / PDF ESC e steps.
@@ -222,7 +226,8 @@ export function startScanSessionLegacy(
     }
 
     function enterGammaPhase(): void {
-      state = "GAMMA_R_CMD";
+      gammaChannelIdx = 0;
+      state = "GAMMA_CMD";
       sendCmd(buildEscZ(), 1);
     }
 
@@ -308,7 +313,6 @@ export function startScanSessionLegacy(
           // - 0x81: scanner busy/probing ADF (flatbed fixture) → standard reset cycle.
           // - Other (e.g. 0x01 for ADF simplex): ADF extended setup — re-probe source,
           //   check status again, then do the ESC ( reset cycle, then read identity twice.
-          //   (fixture: adf-single-page-jpeg.jsonl lines 32-71 vs flatbed path)
           if (pkt.payload.length !== 16) {
             return fail(`expected 16-byte status in STATUS_2, got ${pkt.payload.length}`);
           }
@@ -340,14 +344,12 @@ export function startScanSessionLegacy(
 
         case "ADF_PRESRC_CMD":
           // ACK for the re-probe ESC e opcode sent in the ADF branch of STATUS_2.
-          // (fixture: adf-single-page-jpeg.jsonl line 35)
           if (!isAck(pkt)) return fail(`expected ACK for ADF pre-reset ESC e opcode`);
           state = "ADF_PRESRC_PARAM";
           return;
 
         case "ADF_PRESRC_PARAM":
           // ACK for the re-probe source param byte (0x01).
-          // (fixture: adf-single-page-jpeg.jsonl line 39)
           if (!isAck(pkt)) return fail(`expected ACK for ADF pre-reset source param`);
           state = "ADF_STATUS_3";
           sendCmd(buildFsF(), 16);
@@ -355,7 +357,6 @@ export function startScanSessionLegacy(
 
         case "ADF_STATUS_3":
           // Third FS F status check (ADF only); flows into the ESC ( reset cycle.
-          // (fixture: adf-single-page-jpeg.jsonl line 43)
           if (pkt.payload.length !== 16) {
             return fail(`expected 16-byte status in ADF_STATUS_3, got ${pkt.payload.length}`);
           }
@@ -378,7 +379,7 @@ export function startScanSessionLegacy(
           if (!isAck(pkt)) return fail(`expected ESC @ ack in reset cycle`);
           state = "RESET_SRC_CMD";
           sendCmd(buildEscE(), 1);
-          sendCmd(Buffer.from([sourceByte(session.source)]), 1);
+          sendCmd(Buffer.from([SOURCE_BYTE[session.source]]), 1);
           return;
 
         case "RESET_SRC_CMD":
@@ -394,8 +395,7 @@ export function startScanSessionLegacy(
 
         case "STATUS_READY":
           // Status after reset cycle; should be ready now.
-          // ADF sources read identity (FS I) twice before entering gamma phase
-          // (fixture: adf-single-page-jpeg.jsonl lines 64-71); flatbed goes straight to gamma.
+          // ADF sources read identity (FS I) twice before entering gamma phase; flatbed goes straight to gamma.
           if (pkt.payload.length !== 16) {
             return fail(`expected 16-byte status in STATUS_READY, got ${pkt.payload.length}`);
           }
@@ -410,7 +410,6 @@ export function startScanSessionLegacy(
 
         case "ADF_IDENTITY_A":
           // First FS I identity read after ADF reset cycle.
-          // (fixture: adf-single-page-jpeg.jsonl line 67)
           if (pkt.payload.length !== 80) {
             return fail(`expected 80-byte identity in ADF_IDENTITY_A, got ${pkt.payload.length}`);
           }
@@ -421,17 +420,15 @@ export function startScanSessionLegacy(
         case "ADF_IDENTITY_B":
           // Second FS I identity read after ADF reset cycle (or inter-page loop).
           // JPEG initial setup: proceed directly to gamma phase.
-          // PDF initial setup: an extra ESC e + source param follows before gamma
-          //   (fixture: adf-single-page-pdf.jsonl lines 72-79 vs adf-single-page-jpeg.jsonl line 71).
-          // Inter-page loop (duplex): always enter gamma directly — no ESC e for PDF here
-          //   (fixture: adf-2-page-pdf.jsonl shows FS I × 2 → ESC z with no ESC e in between).
+          // PDF initial setup: an extra ESC e + source param follows before gamma.
+          // Inter-page loop (duplex): always enter gamma directly — no ESC e for PDF here.
           if (pkt.payload.length !== 80) {
             return fail(`expected 80-byte identity in ADF_IDENTITY_B, got ${pkt.payload.length}`);
           }
           if (session.format === "pdf" && !inInterPageLoop) {
             state = "ADF_PDF_SRC_CMD";
             sendCmd(buildEscE(), 1);
-            sendCmd(Buffer.from([sourceByte(session.source)]), 1);
+            sendCmd(Buffer.from([SOURCE_BYTE[session.source]]), 1);
           } else {
             // Inter-page loop: flag has been consumed by STATUS_1B and now here;
             // reset it so it's not stuck true for any future multi-sheet iterations.
@@ -442,52 +439,35 @@ export function startScanSessionLegacy(
 
         case "ADF_PDF_SRC_CMD":
           // ACK for ESC e opcode in the ADF+PDF post-identity source re-set.
-          // (fixture: adf-single-page-pdf.jsonl line 74-75)
           if (!isAck(pkt)) return fail(`expected ACK for ADF+PDF post-identity ESC e opcode`);
           state = "ADF_PDF_SRC_PARAM";
           return;
 
         case "ADF_PDF_SRC_PARAM":
           // ACK for source param byte in the ADF+PDF post-identity source re-set.
-          // (fixture: adf-single-page-pdf.jsonl line 78-79)
           if (!isAck(pkt)) return fail(`expected ACK for ADF+PDF post-identity source param`);
           enterGammaPhase();
           return;
 
-        case "GAMMA_R_CMD":
-          if (!isAck(pkt)) return fail(`expected ESC z ack (R)`);
-          state = "GAMMA_R_DATA";
-          sendCmd(Buffer.concat([Buffer.from([0x52]), GAMMA_LUT_R]), 1);
+        case "GAMMA_CMD": {
+          if (!isAck(pkt)) return fail(`expected ESC z ack (channel ${gammaChannelIdx})`);
+          const ch = GAMMA_CHANNELS[gammaChannelIdx];
+          state = "GAMMA_DATA";
+          sendCmd(Buffer.concat([Buffer.from([ch.tag]), ch.lut]), 1);
           return;
+        }
 
-        case "GAMMA_R_DATA":
-          if (!isAck(pkt)) return fail(`expected gamma R LUT ack`);
-          state = "GAMMA_G_CMD";
-          sendCmd(buildEscZ(), 1);
-          return;
-
-        case "GAMMA_G_CMD":
-          if (!isAck(pkt)) return fail(`expected ESC z ack (G)`);
-          state = "GAMMA_G_DATA";
-          sendCmd(Buffer.concat([Buffer.from([0x47]), GAMMA_LUT_G]), 1);
-          return;
-
-        case "GAMMA_G_DATA":
-          if (!isAck(pkt)) return fail(`expected gamma G LUT ack`);
-          state = "GAMMA_B_CMD";
-          sendCmd(buildEscZ(), 1);
-          return;
-
-        case "GAMMA_B_CMD":
-          if (!isAck(pkt)) return fail(`expected ESC z ack (B)`);
-          state = "GAMMA_B_DATA";
-          sendCmd(Buffer.concat([Buffer.from([0x42]), GAMMA_LUT_B]), 1);
-          return;
-
-        case "GAMMA_B_DATA":
-          if (!isAck(pkt)) return fail(`expected gamma B LUT ack`);
-          state = "WINDOW_CMD";
-          sendCmd(buildFsW(), 1);
+        case "GAMMA_DATA":
+          if (!isAck(pkt)) return fail(`expected gamma LUT ack (channel ${gammaChannelIdx})`);
+          if (gammaChannelIdx + 1 < GAMMA_CHANNELS.length) {
+            gammaChannelIdx++;
+            state = "GAMMA_CMD";
+            sendCmd(buildEscZ(), 1);
+          } else {
+            gammaChannelIdx = 0;
+            state = "WINDOW_CMD";
+            sendCmd(buildFsW(), 1);
+          }
           return;
 
         case "WINDOW_CMD":
@@ -518,7 +498,8 @@ export function startScanSessionLegacy(
           }
           fsGReply = parseFsGReply(pkt.payload);
           expectedBytes = computeExpectedBytes(session.source, session.format);
-          imageBuffer = Buffer.alloc(0);
+          imageBuffer = Buffer.alloc(expectedBytes);
+          imageBufferOffset = 0;
           log.debug(`START: expectedBytes=${expectedBytes}, chunkSize=${fsGReply.chunkSize}`);
           // Send stream-config IS-0x2200 immediately; no reply expected before image stream starts
           send(buildIsPacket(0x2200, buildStreamConfigPayload(fsGReply, session.format)));
@@ -532,8 +513,9 @@ export function startScanSessionLegacy(
               `expected IS-0xa200 image chunk, got 0x${pkt.type.toString(16)} in state IMG_RECEIVING`,
             );
           }
-          imageBuffer = Buffer.concat([imageBuffer, pkt.payload]);
-          if (imageBuffer.length >= expectedBytes) {
+          pkt.payload.copy(imageBuffer, imageBufferOffset);
+          imageBufferOffset += pkt.payload.length;
+          if (imageBufferOffset >= expectedBytes) {
             // Transition to PAGE_ENCODING immediately to absorb any trailing image chunks
             // while the async JPEG encoding runs in the background.
             state = "PAGE_ENCODING";
@@ -555,7 +537,6 @@ export function startScanSessionLegacy(
         case "PAGE_EJECT_WAIT":
           // ACK for the ADF page-eject command (0x0c 0x00) sent after image stream ends.
           // After ACK, either loop back for the back side (duplex) or proceed to FS F (simplex).
-          // (fixture: adf-single-page-jpeg.jsonl lines 117-120)
           if (pkt.payload.length !== 1) {
             return fail(`expected 1-byte page-eject ACK, got ${pkt.payload.length}`);
           }
@@ -585,8 +566,7 @@ export function startScanSessionLegacy(
 
         case "CLEANUP_1":
           // ESC ) may return 0x80 (NAK) or 0x06 (ACK).
-          // ADF: after first ESC ), re-set source (ESC e + param + FS F) before 2nd ESC )
-          // (fixture: adf-single-page-jpeg.jsonl lines 127-138).
+          // ADF: after first ESC ), re-set source (ESC e + param + FS F) before 2nd ESC ).
           // Flatbed: send second ESC ) directly.
           if (pkt.payload.length !== 1) {
             return fail(`expected 1-byte CLEANUP_1 reply, got ${pkt.payload.length}`);
@@ -595,7 +575,7 @@ export function startScanSessionLegacy(
           if (session.source !== "flatbed") {
             state = "ADF_CLEANUP_SRC_CMD";
             sendCmd(buildEscE(), 1);
-            sendCmd(Buffer.from([sourceByte(session.source)]), 1);
+            sendCmd(Buffer.from([SOURCE_BYTE[session.source]]), 1);
           } else {
             state = "CLEANUP_2";
             sendCmd(buildEscCleanup(), 1);
@@ -604,14 +584,12 @@ export function startScanSessionLegacy(
 
         case "ADF_CLEANUP_SRC_CMD":
           // ACK for ESC e opcode during ADF post-scan cleanup.
-          // (fixture: adf-single-page-jpeg.jsonl line 130)
           if (!isAck(pkt)) return fail(`expected ACK for ADF cleanup ESC e opcode`);
           state = "ADF_CLEANUP_SRC_PARAM";
           return;
 
         case "ADF_CLEANUP_SRC_PARAM":
           // ACK for source param byte during ADF post-scan cleanup.
-          // (fixture: adf-single-page-jpeg.jsonl line 134)
           if (!isAck(pkt)) return fail(`expected ACK for ADF cleanup source param`);
           state = "ADF_CLEANUP_STATUS";
           sendCmd(buildFsF(), 16);
@@ -619,7 +597,6 @@ export function startScanSessionLegacy(
 
         case "ADF_CLEANUP_STATUS":
           // FS F status check during ADF post-scan cleanup; then send second ESC ).
-          // (fixture: adf-single-page-jpeg.jsonl line 138)
           if (pkt.payload.length !== 16) {
             return fail(`expected 16-byte status in ADF_CLEANUP_STATUS, got ${pkt.payload.length}`);
           }
@@ -661,7 +638,7 @@ export function startScanSessionLegacy(
       const geom = geometry({ source: session.source, format: session.format });
       try {
         let jpg = await encodeRawRgbToJpeg(
-          imageBuffer.subarray(0, geom.widthPx * geom.heightPx * 3),
+          imageBuffer,
           geom.widthPx,
           geom.heightPx,
           session.jpegQuality,
@@ -673,7 +650,7 @@ export function startScanSessionLegacy(
         if (session.source === "adf-duplex" && pageNum % 2 === 0) {
           jpg = setJpegOrientation(jpg, 3);
         }
-        const jpgPath = path.join(sessionTempDir, `page_${String(pageNum).padStart(3, "0")}.jpg`);
+        const jpgPath = path.join(sessionTempDir, `page_${String(pageNum).padStart(2, "0")}.jpg`);
         fs.writeFileSync(jpgPath, jpg);
         pageJpegPaths.push(jpgPath);
         log.debug(`Page ${pageNum} encoded, ${jpg.length} bytes -> ${jpgPath}`);
@@ -686,7 +663,6 @@ export function startScanSessionLegacy(
 
       // Flatbed: skip eject; go straight to POST_STATUS.
       // ADF: send 0x0c 0x00 page-eject, wait for ACK, then FS F in PAGE_EJECT_WAIT handler.
-      // (fixture: adf-single-page-jpeg.jsonl lines 117-120)
       if (session.source !== "flatbed") {
         state = "PAGE_EJECT_WAIT";
         sendCmd(buildPageEject(), 1);
@@ -728,8 +704,9 @@ export function startScanSessionLegacy(
         const imageChunks = deferredImageChunks.splice(0);
         for (const chunk of imageChunks) {
           if (getState() !== "IMG_RECEIVING") break;
-          imageBuffer = Buffer.concat([imageBuffer, chunk]);
-          if (imageBuffer.length >= expectedBytes) {
+          chunk.copy(imageBuffer, imageBufferOffset);
+          imageBufferOffset += chunk.length;
+          if (imageBufferOffset >= expectedBytes) {
             state = "PAGE_ENCODING";
             void onPageComplete();
             break;
@@ -749,7 +726,7 @@ export function startScanSessionLegacy(
           sessionTempDir,
           outputDir: session.outputDir,
           sessionTs,
-          action: session.format === "jpg" ? "jpg" : "pdf",
+          action: session.format,
           backPageIndices,
           paperless: session.paperless,
         })
@@ -766,16 +743,9 @@ export function startScanSessionLegacy(
   });
 }
 
-function sourceByte(s: Source): number {
-  return s === "flatbed" ? 0x00 : s === "adf-simplex" ? 0x01 : 0x02;
-}
-
 function isAck(pkt: { payload: Buffer }): boolean {
   return pkt.payload.length === 1 && pkt.payload[0] === ACK_BYTE;
 }
-
-// NAK_BYTE is defined but only used via log.debug — keep the constant for documentation.
-void NAK_BYTE;
 
 function computeExpectedBytes(source: Source, format: Format): number {
   const geom = geometry({ source, format });

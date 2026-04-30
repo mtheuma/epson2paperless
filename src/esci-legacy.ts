@@ -56,7 +56,7 @@ export interface ScanMode {
   format: Format;
 }
 
-const SOURCE_BYTE: Record<Source, number> = {
+export const SOURCE_BYTE: Record<Source, number> = {
   flatbed: 0x00,
   "adf-simplex": 0x01,
   "adf-duplex": 0x02,

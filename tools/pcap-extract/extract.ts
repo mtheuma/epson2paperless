@@ -112,7 +112,7 @@ function foldImageChunks(events: FixtureEvent[]): FixtureEvent[] {
 
   const isImageChunkHeader = (e: FixtureEvent): boolean => {
     if (e.dir !== "p>h" || !("hex" in e)) return false;
-    return e.hex.startsWith(IS_HEADER_HEX_PREFIX + IS_TYPE_A200_PREFIX);
+    return e.hex.startsWith(IS_IMAGE_CHUNK_HEX);
   };
 
   /** A continuation frame: printer→host, does NOT start with IS magic "4953". */

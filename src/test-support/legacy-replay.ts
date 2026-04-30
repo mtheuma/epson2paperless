@@ -1,16 +1,7 @@
 import { readFileSync } from "node:fs";
 import { buildIsPacket } from "../protocol.js";
 
-export type FixtureEvent =
-  | { dir: "h>p" | "p>h"; ts: number; hex: string }
-  | {
-      dir: "p>h";
-      ts: number;
-      summary: "image-stream";
-      frameCount: number;
-      totalBytes: number;
-      chunkSize: number;
-    };
+export type { FixtureEvent } from "../../tools/pcap-extract/extract.js";
 
 export function loadFixture(path: string): FixtureEvent[] {
   const text = readFileSync(path, "utf8");
@@ -19,6 +10,9 @@ export function loadFixture(path: string): FixtureEvent[] {
     .filter((l) => l.trim().length > 0)
     .map((l) => JSON.parse(l) as FixtureEvent);
 }
+
+const MAX_CHUNK_SIZE = 65536;
+const FILL_BUFFER = Buffer.alloc(MAX_CHUNK_SIZE, 0xb0);
 
 /**
  * Synthesise an IS-0xa200 image stream of `totalBytes` total bytes from
@@ -30,12 +24,14 @@ export function loadFixture(path: string): FixtureEvent[] {
  * eyeballing test failures).
  */
 export function synthesiseImageStream(totalBytes: number, chunkSize: number): Buffer[] {
+  if (chunkSize > MAX_CHUNK_SIZE) {
+    throw new Error(`synthesiseImageStream: chunkSize ${chunkSize} exceeds MAX_CHUNK_SIZE`);
+  }
   const out: Buffer[] = [];
   let remaining = totalBytes;
   while (remaining > 0) {
     const size = Math.min(chunkSize, remaining);
-    const payload = Buffer.alloc(size, 0xb0);
-    out.push(buildIsPacket(0xa200, payload));
+    out.push(buildIsPacket(0xa200, FILL_BUFFER.subarray(0, size)));
     remaining -= size;
   }
   return out;
