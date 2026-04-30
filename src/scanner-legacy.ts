@@ -20,6 +20,7 @@ import {
   buildFsW,
   buildFsG,
   buildEscCleanup,
+  buildPageEject,
   buildFsWBlock,
   buildStreamConfigPayload,
   parseFsGReply,
@@ -66,11 +67,21 @@ type State =
   | "SOURCE_CMD"
   | "SOURCE_PARAM"
   | "STATUS_2"
+  // ADF-only pre-reset cycle: re-probe source before ESC ( reset
+  // (fixture: adf-single-page-jpeg.jsonl lines 32-43; STATUS_2 returns 0x01 for ADF,
+  //  driver re-sends ESC e + source param + FS F before entering the ESC ( reset cycle)
+  | "ADF_PRESRC_CMD"
+  | "ADF_PRESRC_PARAM"
+  | "ADF_STATUS_3"
   | "RESET_PAREN"
   | "RESET_INIT"
   | "RESET_SRC_CMD"
   | "RESET_SRC_PARAM"
   | "STATUS_READY"
+  // ADF-only post-reset identity reads: FS I is sent twice after STATUS_READY for ADF
+  // (fixture: adf-single-page-jpeg.jsonl lines 64-71)
+  | "ADF_IDENTITY_A"
+  | "ADF_IDENTITY_B"
   | "GAMMA_R_CMD"
   | "GAMMA_R_DATA"
   | "GAMMA_G_CMD"
@@ -83,8 +94,16 @@ type State =
   | "START"
   | "IMG_RECEIVING"
   | "PAGE_ENCODING"  // async JPEG encoding in progress; absorbs trailing image chunks
+  // ADF-only page eject: 0x0c 0x00 sent after image stream, before FS F status check
+  // (fixture: adf-single-page-jpeg.jsonl lines 115-118)
+  | "PAGE_EJECT_WAIT"
   | "POST_STATUS"
   | "CLEANUP_1"
+  // ADF-only cleanup: after ESC ) NAK, driver re-sends ESC e + source + FS F before 2nd ESC )
+  // (fixture: adf-single-page-jpeg.jsonl lines 127-138)
+  | "ADF_CLEANUP_SRC_CMD"
+  | "ADF_CLEANUP_SRC_PARAM"
+  | "ADF_CLEANUP_STATUS"
   | "CLEANUP_2"
   | "UNLOCKING"
   | "DONE"
@@ -265,8 +284,11 @@ export function startScanSessionLegacy(
           return;
 
         case "STATUS_2": {
-          // Status after source-set. If first byte is 0x81, scanner is busy/probing ADF;
-          // do a reset cycle (ESC ( + ESC @ + re-send ESC e with final source byte).
+          // Status after source-set probe.
+          // - 0x81: scanner busy/probing ADF (flatbed fixture) → standard reset cycle.
+          // - Other (e.g. 0x01 for ADF simplex): ADF extended setup — re-probe source,
+          //   check status again, then do the ESC ( reset cycle, then read identity twice.
+          //   (fixture: adf-single-page-jpeg.jsonl lines 32-71 vs flatbed path)
           if (pkt.payload.length !== 16) {
             return fail(`expected 16-byte status in STATUS_2, got ${pkt.payload.length}`);
           }
@@ -276,8 +298,18 @@ export function startScanSessionLegacy(
             log.debug("STATUS_2: scanner busy (0x81), starting reset cycle");
             state = "RESET_PAREN";
             sendCmd(buildEscParen(), 1);
+          } else if (session.source !== "flatbed") {
+            // ADF source: re-probe with ESC e before entering the reset cycle.
+            // The ADF fixture shows an extra ESC e + source-param + FS F sequence
+            // before ESC ( / ESC @ (lines 32-43 of adf-single-page-jpeg.jsonl).
+            log.debug(
+              `STATUS_2: ADF status 0x${statusByte.toString(16)}, starting ADF pre-reset probe`,
+            );
+            state = "ADF_PRESRC_CMD";
+            sendCmd(buildEscE(), 1);
+            sendCmd(Buffer.from([PROBE_SOURCE_BYTE]), 1);
           } else {
-            // Scanner ready — proceed to gamma phase
+            // Flatbed scanner ready — proceed to gamma phase
             log.debug(
               `STATUS_2: scanner ready (0x${statusByte.toString(16)}), entering gamma phase`,
             );
@@ -285,6 +317,32 @@ export function startScanSessionLegacy(
           }
           return;
         }
+
+        case "ADF_PRESRC_CMD":
+          // ACK for the re-probe ESC e opcode sent in the ADF branch of STATUS_2.
+          // (fixture: adf-single-page-jpeg.jsonl line 35)
+          if (!isAck(pkt)) return fail(`expected ACK for ADF pre-reset ESC e opcode`);
+          state = "ADF_PRESRC_PARAM";
+          return;
+
+        case "ADF_PRESRC_PARAM":
+          // ACK for the re-probe source param byte (0x01).
+          // (fixture: adf-single-page-jpeg.jsonl line 39)
+          if (!isAck(pkt)) return fail(`expected ACK for ADF pre-reset source param`);
+          state = "ADF_STATUS_3";
+          sendCmd(buildFsF(), 16);
+          return;
+
+        case "ADF_STATUS_3":
+          // Third FS F status check (ADF only); flows into the ESC ( reset cycle.
+          // (fixture: adf-single-page-jpeg.jsonl line 43)
+          if (pkt.payload.length !== 16) {
+            return fail(`expected 16-byte status in ADF_STATUS_3, got ${pkt.payload.length}`);
+          }
+          log.debug(`ADF_STATUS_3: status byte 0x${pkt.payload[0].toString(16)}`);
+          state = "RESET_PAREN";
+          sendCmd(buildEscParen(), 1);
+          return;
 
         case "RESET_PAREN":
           // ESC ( returns 0x06 (ready) or 0x80 (busy); either way, proceed with reset
@@ -315,11 +373,37 @@ export function startScanSessionLegacy(
           return;
 
         case "STATUS_READY":
-          // Status after reset cycle; should be ready now
+          // Status after reset cycle; should be ready now.
+          // ADF sources read identity (FS I) twice before entering gamma phase
+          // (fixture: adf-single-page-jpeg.jsonl lines 64-71); flatbed goes straight to gamma.
           if (pkt.payload.length !== 16) {
             return fail(`expected 16-byte status in STATUS_READY, got ${pkt.payload.length}`);
           }
           log.debug(`STATUS_READY: status byte 0x${pkt.payload[0].toString(16)}`);
+          if (session.source !== "flatbed") {
+            state = "ADF_IDENTITY_A";
+            sendCmd(buildFsI(), 80);
+          } else {
+            enterGammaPhase();
+          }
+          return;
+
+        case "ADF_IDENTITY_A":
+          // First FS I identity read after ADF reset cycle.
+          // (fixture: adf-single-page-jpeg.jsonl line 67)
+          if (pkt.payload.length !== 80) {
+            return fail(`expected 80-byte identity in ADF_IDENTITY_A, got ${pkt.payload.length}`);
+          }
+          state = "ADF_IDENTITY_B";
+          sendCmd(buildFsI(), 80);
+          return;
+
+        case "ADF_IDENTITY_B":
+          // Second FS I identity read after ADF reset cycle; proceed to gamma phase.
+          // (fixture: adf-single-page-jpeg.jsonl line 71)
+          if (pkt.payload.length !== 80) {
+            return fail(`expected 80-byte identity in ADF_IDENTITY_B, got ${pkt.payload.length}`);
+          }
           enterGammaPhase();
           return;
 
@@ -418,6 +502,18 @@ export function startScanSessionLegacy(
           }
           return;
 
+        case "PAGE_EJECT_WAIT":
+          // ACK for the ADF page-eject command (0x0c 0x00) sent after image stream ends.
+          // After ACK, proceed to FS F status poll (POST_STATUS).
+          // (fixture: adf-single-page-jpeg.jsonl lines 117-120)
+          if (pkt.payload.length !== 1) {
+            return fail(`expected 1-byte page-eject ACK, got ${pkt.payload.length}`);
+          }
+          log.debug(`PAGE_EJECT_WAIT: eject ACK 0x${pkt.payload[0].toString(16)}`);
+          state = "POST_STATUS";
+          sendCmd(buildFsF(), 16);
+          return;
+
         case "POST_STATUS":
           // FS F status after image stream; proceed to cleanup
           if (pkt.payload.length !== 16) {
@@ -428,11 +524,46 @@ export function startScanSessionLegacy(
           return;
 
         case "CLEANUP_1":
-          // ESC ) may return 0x80 (NAK) or 0x06 (ACK); either way send second cleanup
+          // ESC ) may return 0x80 (NAK) or 0x06 (ACK).
+          // ADF: after first ESC ), re-set source (ESC e + param + FS F) before 2nd ESC )
+          // (fixture: adf-single-page-jpeg.jsonl lines 127-138).
+          // Flatbed: send second ESC ) directly.
           if (pkt.payload.length !== 1) {
             return fail(`expected 1-byte CLEANUP_1 reply, got ${pkt.payload.length}`);
           }
           log.debug(`CLEANUP_1: ESC ) returned 0x${pkt.payload[0].toString(16)}`);
+          if (session.source !== "flatbed") {
+            state = "ADF_CLEANUP_SRC_CMD";
+            sendCmd(buildEscE(), 1);
+            sendCmd(Buffer.from([sourceByte(session.source)]), 1);
+          } else {
+            state = "CLEANUP_2";
+            sendCmd(buildEscCleanup(), 1);
+          }
+          return;
+
+        case "ADF_CLEANUP_SRC_CMD":
+          // ACK for ESC e opcode during ADF post-scan cleanup.
+          // (fixture: adf-single-page-jpeg.jsonl line 130)
+          if (!isAck(pkt)) return fail(`expected ACK for ADF cleanup ESC e opcode`);
+          state = "ADF_CLEANUP_SRC_PARAM";
+          return;
+
+        case "ADF_CLEANUP_SRC_PARAM":
+          // ACK for source param byte during ADF post-scan cleanup.
+          // (fixture: adf-single-page-jpeg.jsonl line 134)
+          if (!isAck(pkt)) return fail(`expected ACK for ADF cleanup source param`);
+          state = "ADF_CLEANUP_STATUS";
+          sendCmd(buildFsF(), 16);
+          return;
+
+        case "ADF_CLEANUP_STATUS":
+          // FS F status check during ADF post-scan cleanup; then send second ESC ).
+          // (fixture: adf-single-page-jpeg.jsonl line 138)
+          if (pkt.payload.length !== 16) {
+            return fail(`expected 16-byte status in ADF_CLEANUP_STATUS, got ${pkt.payload.length}`);
+          }
+          log.debug(`ADF_CLEANUP_STATUS: status byte 0x${pkt.payload[0].toString(16)}`);
           state = "CLEANUP_2";
           sendCmd(buildEscCleanup(), 1);
           return;
@@ -489,9 +620,15 @@ export function startScanSessionLegacy(
       if (getState() === "ERROR") return; // also bail before transitioning
 
       // Flatbed: skip eject; go straight to POST_STATUS.
-      // ADF: would send page-eject here (not implemented yet — flatbed-only for now).
-      state = "POST_STATUS";
-      sendCmd(buildFsF(), 16);
+      // ADF: send 0x0c 0x00 page-eject, wait for ACK, then FS F in PAGE_EJECT_WAIT handler.
+      // (fixture: adf-single-page-jpeg.jsonl lines 115-120)
+      if (session.source !== "flatbed") {
+        state = "PAGE_EJECT_WAIT";
+        sendCmd(buildPageEject(), 1);
+      } else {
+        state = "POST_STATUS";
+        sendCmd(buildFsF(), 16);
+      }
 
       // Replay any packets that were buffered during PAGE_ENCODING.
       const deferred = encodingDeferred.splice(0);

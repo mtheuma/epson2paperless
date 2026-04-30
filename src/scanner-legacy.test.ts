@@ -24,6 +24,73 @@ describe("scanner-legacy", () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
+  it("adf-single-page-jpeg: replays driver bytes and writes one JPG", async () => {
+    const fixture = loadFixture(path.join(FIXTURES, "adf-single-page-jpeg.jsonl"));
+    const fake = new FakeTcpSocket();
+
+    const sessionPromise = startScanSessionLegacy(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        outputDir,
+        tempDir,
+        source: "adf-simplex",
+        format: "jpg",
+        jpegQuality: 90,
+      },
+      fake.asFactory(),
+    );
+    fake.simulateConnect();
+
+    for (const event of fixture) {
+      if (event.dir !== "p>h") continue;
+      await new Promise((r) => setImmediate(r));
+      if ("hex" in event) {
+        fake.feed(Buffer.from(event.hex, "hex"));
+      } else {
+        for (const packet of synthesiseImageStream(event.totalBytes, event.chunkSize)) {
+          fake.feed(packet);
+        }
+      }
+    }
+    await sessionPromise;
+
+    const files = readdirSync(outputDir);
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/^scan_.+\.jpg$/);
+  }, 60_000);
+
+  it("adf-single-page-jpeg: emits the 0x0c 0x00 page-eject after the image stream", async () => {
+    const fixture = loadFixture(path.join(FIXTURES, "adf-single-page-jpeg.jsonl"));
+    const fake = new FakeTcpSocket();
+
+    const sessionPromise = startScanSessionLegacy(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        outputDir,
+        tempDir,
+        source: "adf-simplex",
+        format: "jpg",
+        jpegQuality: 90,
+      },
+      fake.asFactory(),
+    );
+    fake.simulateConnect();
+    for (const event of fixture) {
+      if (event.dir !== "p>h") continue;
+      await new Promise((r) => setImmediate(r));
+      if ("hex" in event) fake.feed(Buffer.from(event.hex, "hex"));
+      else for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) fake.feed(p);
+    }
+    await sessionPromise;
+
+    // Flatten all writes and look for `0c 00` inside an IS-0x2000 passthru
+    const allWrites = Buffer.concat(fake.writes);
+    const ejectByteIndex = allWrites.indexOf(Buffer.from([0x0c, 0x00]));
+    expect(ejectByteIndex).toBeGreaterThan(0);
+  }, 60_000);
+
   it("flatbed-single-page-jpeg: replays driver bytes and writes one JPG", async () => {
     const fixture = loadFixture(path.join(FIXTURES, "flatbed-single-page-jpeg.jsonl"));
     const fake = new FakeTcpSocket();
