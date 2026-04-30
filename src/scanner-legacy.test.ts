@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
+import { PDFDocument } from "pdf-lib";
 import { startScanSessionLegacy } from "./scanner-legacy.js";
 import { parseIsPacket } from "./protocol.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
@@ -211,4 +212,85 @@ describe("scanner-legacy", () => {
     expect(files).toHaveLength(1);
     expect(files[0]).toMatch(/\.pdf$/);
   }, 60_000);
+
+  it("adf-2-page-jpeg (duplex): writes 2 JPGs with back-page Orientation=3", async () => {
+    const fixture = loadFixture(path.join(FIXTURES, "adf-2-page-jpeg.jsonl"));
+    const fake = new FakeTcpSocket();
+
+    const sessionPromise = startScanSessionLegacy(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        outputDir,
+        tempDir,
+        source: "adf-duplex",
+        format: "jpg",
+        jpegQuality: 90,
+      },
+      fake.asFactory(),
+    );
+    fake.simulateConnect();
+    for (const event of fixture) {
+      if (event.dir !== "p>h") continue;
+      await new Promise((r) => setImmediate(r));
+      if ("hex" in event) fake.feed(Buffer.from(event.hex, "hex"));
+      else for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) fake.feed(p);
+    }
+    await sessionPromise;
+
+    const files = readdirSync(outputDir).sort();
+    expect(files).toHaveLength(2);
+    expect(files.every((f) => /\.jpg$/.test(f))).toBe(true);
+    // Verify back-page (page 2) has EXIF Orientation=3.
+    // The EXIF APP1 IFD entry for tag 0x0112 (Orientation) is: 01 12 00 03 00 00 00 01 00 03 00 00
+    // The tag ID bytes 01 12 appear in the inserted APP1 segment.
+    const back = readFileSync(path.join(outputDir, files[1]));
+    const orientationTagId = Buffer.from([0x01, 0x12]);
+    let foundOrientationTag = false;
+    for (let i = 0; i <= back.length - 2; i++) {
+      if (back[i] === orientationTagId[0] && back[i + 1] === orientationTagId[1]) {
+        foundOrientationTag = true;
+        break;
+      }
+    }
+    expect(foundOrientationTag).toBe(true);
+  }, 120_000); // 2 pages × ~8s sharp encode each = 16s + slack
+
+  it("adf-2-page-pdf (duplex): writes one PDF with back page rotated 180", async () => {
+    const fixture = loadFixture(path.join(FIXTURES, "adf-2-page-pdf.jsonl"));
+    const fake = new FakeTcpSocket();
+
+    const sessionPromise = startScanSessionLegacy(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        outputDir,
+        tempDir,
+        source: "adf-duplex",
+        format: "pdf",
+        jpegQuality: 90,
+      },
+      fake.asFactory(),
+    );
+    fake.simulateConnect();
+    for (const event of fixture) {
+      if (event.dir !== "p>h") continue;
+      await new Promise((r) => setImmediate(r));
+      if ("hex" in event) fake.feed(Buffer.from(event.hex, "hex"));
+      else for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) fake.feed(p);
+    }
+    await sessionPromise;
+
+    const files = readdirSync(outputDir);
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/\.pdf$/);
+    // Verify the PDF has 2 pages and the second (back) page has /Rotate 180.
+    // pdf-lib uses object streams (compressed by default), so plain-text search is unreliable;
+    // load the document and query the rotation programmatically.
+    const pdfBytes = readFileSync(path.join(outputDir, files[0]));
+    const doc = await PDFDocument.load(pdfBytes);
+    expect(doc.getPageCount()).toBe(2);
+    expect(doc.getPage(0).getRotation().angle).toBe(0);
+    expect(doc.getPage(1).getRotation().angle).toBe(180);
+  }, 120_000);
 });

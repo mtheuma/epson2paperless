@@ -30,6 +30,7 @@ import {
 } from "./esci-legacy.js";
 import { GAMMA_LUT_R, GAMMA_LUT_G, GAMMA_LUT_B } from "./esci-legacy-luts.js";
 import { encodeRawRgbToJpeg } from "./raw-to-jpeg.js";
+import { setJpegOrientation } from "./exif.js";
 import { resolveSessionTimestamp } from "./output.js";
 import { finalizeSession } from "./output-tail.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
@@ -137,8 +138,16 @@ export function startScanSessionLegacy(
     let expectedBytes = 0;
     const pageJpegPaths: string[] = [];
     const backPageIndices: number[] = [];
-    // Packets that arrive during PAGE_ENCODING are deferred and replayed after encoding.
+    // Set to true when looping back for the back side of a duplex sheet; controls
+    // STATUS_1B and ADF_IDENTITY_B to skip the initial source-set / PDF ESC e steps.
+    let inInterPageLoop = false;
+    // Non-image packets that arrive during PAGE_ENCODING are deferred and replayed after encoding.
     const encodingDeferred: Array<{ type: number; payload: Buffer }> = [];
+    // IS-0xa200 image chunks that arrive during PAGE_ENCODING are buffered here and fed into
+    // imageBuffer when the state machine re-enters IMG_RECEIVING for the next page.
+    // (In single-page scans these are trailing overflow chunks and are harmless to buffer;
+    // in duplex scans they carry the second page's pixel data.)
+    const deferredImageChunks: Buffer[] = [];
 
     const socket = socketFactory(session.printerIp, session.port, () => {
       log.info(`Connected (TCP) to ${session.printerIp}:${session.port}`);
@@ -262,9 +271,16 @@ export function startScanSessionLegacy(
           return;
 
         case "STATUS_1B":
-          // Second FS F status reply; now initiate source-set
+          // Second FS F status reply.
+          // Initial setup: initiate source-set (ESC e + probe param).
+          // Inter-page loop (duplex back side): skip source-set; go straight to ADF identity reads.
           if (pkt.payload.length !== 16) {
             return fail(`expected 16-byte status, got ${pkt.payload.length}`);
+          }
+          if (inInterPageLoop) {
+            state = "ADF_IDENTITY_A";
+            sendCmd(buildFsI(), 80);
+            return;
           }
           state = "SOURCE_CMD";
           sendCmd(buildEscE(), 1);
@@ -403,14 +419,16 @@ export function startScanSessionLegacy(
           return;
 
         case "ADF_IDENTITY_B":
-          // Second FS I identity read after ADF reset cycle.
-          // JPEG: proceed directly to gamma phase.
-          // PDF: an extra ESC e + source param follows before gamma
-          // (fixture: adf-single-page-pdf.jsonl lines 72-79 vs adf-single-page-jpeg.jsonl line 71)
+          // Second FS I identity read after ADF reset cycle (or inter-page loop).
+          // JPEG initial setup: proceed directly to gamma phase.
+          // PDF initial setup: an extra ESC e + source param follows before gamma
+          //   (fixture: adf-single-page-pdf.jsonl lines 72-79 vs adf-single-page-jpeg.jsonl line 71).
+          // Inter-page loop (duplex): always enter gamma directly — no ESC e for PDF here
+          //   (fixture: adf-2-page-pdf.jsonl shows FS I × 2 → ESC z with no ESC e in between).
           if (pkt.payload.length !== 80) {
             return fail(`expected 80-byte identity in ADF_IDENTITY_B, got ${pkt.payload.length}`);
           }
-          if (session.format === "pdf") {
+          if (session.format === "pdf" && !inInterPageLoop) {
             state = "ADF_PDF_SRC_CMD";
             sendCmd(buildEscE(), 1);
             sendCmd(Buffer.from([sourceByte(session.source)]), 1);
@@ -521,21 +539,34 @@ export function startScanSessionLegacy(
           return;
 
         case "PAGE_ENCODING":
-          // Absorb trailing IS-0xa200 image chunks silently.
+          // Buffer IS-0xa200 image chunks for the next page (duplex) or trailing overflow
+          // (single-page); they will be replayed into imageBuffer when IMG_RECEIVING re-opens.
           // Buffer all other packets and replay them once encoding completes.
-          if (pkt.type !== 0xa200) {
+          if (pkt.type === 0xa200) {
+            deferredImageChunks.push(pkt.payload);
+          } else {
             encodingDeferred.push({ type: pkt.type, payload: pkt.payload });
           }
           return;
 
         case "PAGE_EJECT_WAIT":
           // ACK for the ADF page-eject command (0x0c 0x00) sent after image stream ends.
-          // After ACK, proceed to FS F status poll (POST_STATUS).
+          // After ACK, either loop back for the back side (duplex) or proceed to FS F (simplex).
           // (fixture: adf-single-page-jpeg.jsonl lines 117-120)
           if (pkt.payload.length !== 1) {
             return fail(`expected 1-byte page-eject ACK, got ${pkt.payload.length}`);
           }
           log.debug(`PAGE_EJECT_WAIT: eject ACK 0x${pkt.payload[0].toString(16)}`);
+          if (session.source === "adf-duplex" && pageJpegPaths.length < 2) {
+            // Loop back to scan the back side of the sheet.
+            // The next page (index pageJpegPaths.length, 0-based) is a back page;
+            // pdf-lib uses 1-based indices, so push pageJpegPaths.length + 1.
+            backPageIndices.push(pageJpegPaths.length + 1);
+            inInterPageLoop = true;
+            state = "STATUS_1A";
+            sendCmd(buildFsF(), 16);
+            return;
+          }
           state = "POST_STATUS";
           sendCmd(buildFsF(), 16);
           return;
@@ -626,7 +657,7 @@ export function startScanSessionLegacy(
       if (!fsGReply) return fail("page complete with no FS G reply");
       const geom = geometry({ source: session.source, format: session.format });
       try {
-        const jpg = await encodeRawRgbToJpeg(
+        let jpg = await encodeRawRgbToJpeg(
           imageBuffer.subarray(0, geom.widthPx * geom.heightPx * 3),
           geom.widthPx,
           geom.heightPx,
@@ -634,6 +665,11 @@ export function startScanSessionLegacy(
         );
         if (getState() === "ERROR") return; // bail if fail() ran during the ~8s encode
         const pageNum = pageJpegPaths.length + 1;
+        // Duplex: even-numbered pages (2, 4, …) are back pages and come out rotated 180° due to
+        // the ADF U-turn path. Insert EXIF Orientation=3 so viewers render them right-side up.
+        if (session.source === "adf-duplex" && pageNum % 2 === 0) {
+          jpg = setJpegOrientation(jpg, 3);
+        }
         const jpgPath = path.join(sessionTempDir, `page_${String(pageNum).padStart(3, "0")}.jpg`);
         fs.writeFileSync(jpgPath, jpg);
         pageJpegPaths.push(jpgPath);
@@ -656,18 +692,49 @@ export function startScanSessionLegacy(
         sendCmd(buildFsF(), 16);
       }
 
-      // Replay any packets that were buffered during PAGE_ENCODING.
+      // Replay non-image packets that were buffered during PAGE_ENCODING.
+      // Stop as soon as the state transitions to IMG_RECEIVING — the remaining items belong
+      // to the next page's post-scan phase and must wait until that page's image stream
+      // has been received. Re-queue them into encodingDeferred so that the next
+      // onPageComplete invocation picks them up.
       const deferred = encodingDeferred.splice(0);
-      for (const pkt of deferred) {
+      for (let i = 0; i < deferred.length; i++) {
         if (getState() === "ERROR" || getState() === "DONE") return;
         try {
-          handle(pkt);
+          handle(deferred[i]);
         } catch (err) {
           fail(
             `deferred packet handler threw: ${err instanceof Error ? err.message : String(err)}`,
           );
           return;
         }
+        // After handle(), if we transitioned to IMG_RECEIVING, the next-page image data has not
+        // arrived yet. Re-queue remaining items for the next onPageComplete deferred replay.
+        if (getState() === "IMG_RECEIVING") {
+          for (let j = i + 1; j < deferred.length; j++) {
+            encodingDeferred.push(deferred[j]);
+          }
+          break;
+        }
+      }
+
+      // If deferred control replay brought us into IMG_RECEIVING (duplex second page),
+      // drain any IS-0xa200 image chunks that arrived while we were encoding page 1.
+      // Single-page: deferredImageChunks are trailing overflow and are discarded.
+      if (getState() === "IMG_RECEIVING" && deferredImageChunks.length > 0) {
+        const imageChunks = deferredImageChunks.splice(0);
+        for (const chunk of imageChunks) {
+          if (getState() !== "IMG_RECEIVING") break;
+          imageBuffer = Buffer.concat([imageBuffer, chunk]);
+          if (imageBuffer.length >= expectedBytes) {
+            state = "PAGE_ENCODING";
+            void onPageComplete();
+            break;
+          }
+        }
+      } else {
+        // Discard any lingering image chunks (e.g. trailing overflow on the final page).
+        deferredImageChunks.length = 0;
       }
     }
 
