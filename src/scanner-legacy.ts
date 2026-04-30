@@ -35,6 +35,12 @@ import type { PaperlessUploadOptions } from "./paperless-upload.js";
 
 const log = createLogger("scanner-legacy");
 
+// The Windows driver always sends source byte 0x01 (ADF-simplex) as the initial probe,
+// regardless of the user's intended source. It gets a 0x81 busy reply, resets, then
+// sends the actual source byte. Matching this behaviour ensures the busy cycle fires on
+// real flatbed hardware where sending 0x00 as the probe could skip the reset entirely.
+const PROBE_SOURCE_BYTE = 0x01;
+
 export interface LegacyScanSession {
   printerIp: string;
   port: number;
@@ -161,6 +167,11 @@ export function startScanSessionLegacy(
       send(buildPassthruPacket(cmd, replySize));
     }
 
+    // Defeat TypeScript's control-flow narrowing: after `state = "POST_STATUS"`, tsc infers
+    // state is literally "POST_STATUS" and flags subsequent `state === "ERROR"` checks as
+    // impossible. The accessor opaque-ifies the read so narrowing doesn't apply.
+    const getState = (): State => state;
+
     function onData(chunk: Buffer): void {
       buffer = Buffer.concat([buffer, chunk]);
       armTimeout();
@@ -234,8 +245,10 @@ export function startScanSessionLegacy(
           }
           state = "SOURCE_CMD";
           sendCmd(buildEscE(), 1);
-          // Send param in same tick as separate passthru (driver sends opcode + param as two writes)
-          sendCmd(Buffer.from([sourceByte(session.source)]), 1);
+          // Send param in same tick as separate passthru (driver sends opcode + param as two writes).
+          // Always probe with PROBE_SOURCE_BYTE (0x01/ADF-simplex) regardless of intended source —
+          // this matches the Windows driver's behaviour and ensures the 0x81 busy cycle fires.
+          sendCmd(Buffer.from([PROBE_SOURCE_BYTE]), 1);
           return;
 
         case "SOURCE_CMD":
@@ -480,7 +493,7 @@ export function startScanSessionLegacy(
       // Replay any packets that were buffered during PAGE_ENCODING.
       const deferred = encodingDeferred.splice(0);
       for (const pkt of deferred) {
-        if (state === "ERROR" || state === "DONE") return;
+        if (getState() === "ERROR" || getState() === "DONE") return;
         try {
           handle(pkt);
         } catch (err) {
