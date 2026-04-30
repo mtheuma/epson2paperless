@@ -33,7 +33,9 @@ export async function extract(opts: ExtractOptions): Promise<FixtureEvent[]> {
     "-r",
     opts.pcapPath,
     "-Y",
-    `tcp.port==${opts.scanPort} && tcp.len>0`,
+    `tcp.port==${opts.scanPort} && tcp.len>0 && ` +
+      `((ip.src==${opts.hostIp} && ip.dst==${opts.printerIp}) || ` +
+      `(ip.src==${opts.printerIp} && ip.dst==${opts.hostIp}))`,
     "-T",
     "fields",
     "-E",
@@ -46,7 +48,15 @@ export async function extract(opts: ExtractOptions): Promise<FixtureEvent[]> {
     "tcp.payload",
   ];
   const stdout = await runTshark(tshark, args);
-  return foldImageChunks(parseLines(stdout, opts.hostIp));
+  const events = foldImageChunks(parseLines(stdout, opts.hostIp));
+  const dirs = new Set(events.map((e) => e.dir));
+  if (events.length > 0 && (!dirs.has("h>p") || !dirs.has("p>h"))) {
+    throw new Error(
+      `pcap-extract: no bidirectional traffic on tcp.port==${opts.scanPort} ` +
+        `between ${opts.hostIp} and ${opts.printerIp}. Verify the IPs and pcap.`,
+    );
+  }
+  return events;
 }
 
 function runTshark(bin: string, args: string[]): Promise<string> {
