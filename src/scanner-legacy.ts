@@ -100,6 +100,13 @@ type State =
   | "WINDOW_DATA"
   | "STATUS_PRESCAN"
   | "START"
+  // PDF-only FS G not-ready retry: when FS G returns chunkSize=0, poll FS F until ready,
+  // then re-send FS G. Seen only in the 4-page duplex PDF capture where the ADF had not
+  // finished feeding paper by the time the host issued FS G.
+  // START_POLL: keep sending FS F; on first status=0x01 → START_POLL_READY.
+  // START_POLL_READY: send one more FS F confirmation; then send FS G and go to START.
+  | "START_POLL"
+  | "START_POLL_READY"
   | "IMG_RECEIVING"
   | "PAGE_ENCODING"  // async JPEG encoding in progress; absorbs trailing image chunks
   // ADF-only page eject: 0x0c 0x00 sent after image stream, before FS F status check
@@ -267,9 +274,18 @@ export function startScanSessionLegacy(
           return;
 
         case "STATUS_1A":
-          // First FS F status reply (16 bytes); driver reads it twice
+          // First FS F status reply (16 bytes); driver reads it twice.
+          // In the inter-page loop, byte 0 of the status reply discriminates:
+          //   0x01 → ADF still has paper, continue setup for next page
+          //   0x81 → ADF empty, skip identity/gamma/window and go to cleanup
           if (pkt.payload.length !== 16) {
             return fail(`expected 16-byte status, got ${pkt.payload.length}`);
+          }
+          if (inInterPageLoop && pkt.payload[0] === 0x81) {
+            inInterPageLoop = false;
+            state = "CLEANUP_1";
+            sendCmd(buildEscCleanup(), 1);
+            return;
           }
           state = "STATUS_1B";
           sendCmd(buildFsF(), 16);
@@ -497,6 +513,14 @@ export function startScanSessionLegacy(
             return fail(`expected 14-byte FS G reply, got ${pkt.payload.length}`);
           }
           fsGReply = parseFsGReply(pkt.payload);
+          // If chunkSize=0, the scanner is not yet ready (ADF still feeding paper).
+          // Poll FS F until status byte[0]=0x01 (ready), then re-send FS G.
+          if (fsGReply.chunkSize === 0) {
+            log.debug("START: FS G returned chunkSize=0, entering not-ready poll loop");
+            state = "START_POLL";
+            sendCmd(buildFsF(), 16);
+            return;
+          }
           expectedBytes = computeExpectedBytes(session.source, session.format);
           imageBuffer = Buffer.alloc(expectedBytes);
           imageBufferOffset = 0;
@@ -506,6 +530,35 @@ export function startScanSessionLegacy(
           state = "IMG_RECEIVING";
           return;
         }
+
+        case "START_POLL":
+          // FS F status poll during FS G not-ready retry loop.
+          // Keep polling until status byte[0]=0x01 (scanner ready), then do one more confirmation poll.
+          if (pkt.payload.length !== 16) {
+            return fail(`expected 16-byte status in START_POLL, got ${pkt.payload.length}`);
+          }
+          log.debug(`START_POLL: status byte 0x${pkt.payload[0].toString(16)}`);
+          if (pkt.payload[0] === 0x01) {
+            // Ready — send one more FS F confirmation before re-issuing FS G.
+            state = "START_POLL_READY";
+            sendCmd(buildFsF(), 16);
+          } else {
+            // Not ready yet — keep polling.
+            sendCmd(buildFsF(), 16);
+          }
+          return;
+
+        case "START_POLL_READY":
+          // Final FS F reply after seeing status=0x01; now re-send FS G.
+          if (pkt.payload.length !== 16) {
+            return fail(`expected 16-byte status in START_POLL_READY, got ${pkt.payload.length}`);
+          }
+          log.debug(
+            `START_POLL_READY: status byte 0x${pkt.payload[0].toString(16)}, re-sending FS G`,
+          );
+          state = "START";
+          sendCmd(buildFsG(), 14);
+          return;
 
         case "IMG_RECEIVING":
           if (pkt.type !== 0xa200) {
@@ -536,22 +589,22 @@ export function startScanSessionLegacy(
 
         case "PAGE_EJECT_WAIT":
           // ACK for the ADF page-eject command (0x0c 0x00) sent after image stream ends.
-          // After ACK, either loop back for the back side (duplex) or proceed to FS F (simplex).
+          // Always poll ADF status after eject; STATUS_1A's handler decides whether to
+          // continue the inter-page loop (status byte 0 = 0x01) or wrap up (0x81 = ADF empty).
           if (pkt.payload.length !== 1) {
             return fail(`expected 1-byte page-eject ACK, got ${pkt.payload.length}`);
           }
           log.debug(`PAGE_EJECT_WAIT: eject ACK 0x${pkt.payload[0].toString(16)}`);
-          if (session.source === "adf-duplex" && pageJpegPaths.length < 2) {
-            // Loop back to scan the back side of the sheet.
-            // The next page (index pageJpegPaths.length, 0-based) is a back page;
-            // pdf-lib uses 1-based indices, so push pageJpegPaths.length + 1.
+          // Duplex: every odd-indexed completed page means the next page is a back page.
+          // Pages are 1-indexed: 1 (front), 2 (back), 3 (front), 4 (back) ... so back-pages
+          // are even indices. We push them as we discover them.
+          if (session.source === "adf-duplex" && pageJpegPaths.length % 2 === 1) {
             backPageIndices.push(pageJpegPaths.length + 1);
-            inInterPageLoop = true;
-            state = "STATUS_1A";
-            sendCmd(buildFsF(), 16);
-            return;
           }
-          state = "POST_STATUS";
+          // Always probe ADF status. STATUS_1A's handler decides whether to continue
+          // the inter-page loop (status byte 0 = 0x01) or wrap up (0x81 = ADF empty).
+          inInterPageLoop = true;
+          state = "STATUS_1A";
           sendCmd(buildFsF(), 16);
           return;
 
@@ -697,16 +750,22 @@ export function startScanSessionLegacy(
         }
       }
 
-      // If deferred control replay brought us into IMG_RECEIVING (duplex second page),
-      // drain any IS-0xa200 image chunks that arrived while we were encoding page 1.
-      // Single-page: deferredImageChunks are trailing overflow and are discarded.
+      // If deferred control replay brought us into IMG_RECEIVING (next page in multi-page run),
+      // drain any IS-0xa200 image chunks that arrived while we were encoding the previous page.
+      // Single-page final: deferredImageChunks are trailing overflow and are discarded.
       if (getState() === "IMG_RECEIVING" && deferredImageChunks.length > 0) {
         const imageChunks = deferredImageChunks.splice(0);
-        for (const chunk of imageChunks) {
+        for (let i = 0; i < imageChunks.length; i++) {
           if (getState() !== "IMG_RECEIVING") break;
+          const chunk = imageChunks[i];
           chunk.copy(imageBuffer, imageBufferOffset);
           imageBufferOffset += chunk.length;
           if (imageBufferOffset >= expectedBytes) {
+            // Page filled. Any remaining chunks in imageChunks belong to a subsequent page —
+            // put them back into deferredImageChunks so the next onPageComplete can drain them.
+            for (let j = i + 1; j < imageChunks.length; j++) {
+              deferredImageChunks.push(imageChunks[j]);
+            }
             state = "PAGE_ENCODING";
             void onPageComplete();
             break;

@@ -282,6 +282,15 @@ overrides the mapping. **Future work**: mirror the driver's probe-and-
 fallback (ESC e 0x01 → FS F → bit-7 of byte 0 selects ADF vs flatbed)
 so the panel button auto-detects without env-var configuration.
 
+### Multi-page termination
+
+After every page-eject, the host polls `FS F`. The 16-byte status reply's
+byte 0 is the discriminator: `0x01` means the ADF still has paper (loop
+back through gamma/window/start for the next page); `0x81` means the ADF
+is empty (proceed to cleanup). This handles arbitrary page counts —
+3-sheet simplex, 4-sheet duplex, and 1-sheet duplex all share the same
+state-machine path.
+
 ---
 
 ## Reverse engineering: how this was built

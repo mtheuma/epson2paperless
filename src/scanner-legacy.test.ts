@@ -268,6 +268,155 @@ describe("scanner-legacy", () => {
     expect(back[ORIENTATION_VALUE_OFFSET]).toBe(0x03);
   }, 120_000); // 2 pages × ~8s sharp encode each = 16s + slack
 
+  it("adf-3-page-simplex-jpeg: writes 3 JPGs, no rotation", async () => {
+    const fixture = loadFixture(path.join(FIXTURES, "adf-3-page-simplex-jpeg.jsonl"));
+    const fake = new FakeTcpSocket();
+
+    const sessionPromise = startScanSessionLegacy(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        outputDir,
+        tempDir,
+        source: "adf-simplex",
+        format: "jpg",
+        jpegQuality: 90,
+      },
+      fake.asFactory(),
+    );
+    fake.simulateConnect();
+    for (const event of fixture) {
+      if (event.dir !== "p>h") continue;
+      await new Promise((r) => setImmediate(r));
+      if ("hex" in event) fake.feed(Buffer.from(event.hex, "hex"));
+      else for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) fake.feed(p);
+    }
+    await sessionPromise;
+
+    const files = readdirSync(outputDir).sort();
+    expect(files).toHaveLength(3);
+    expect(files.every((f) => /\.jpg$/.test(f))).toBe(true);
+    // None of the JPGs should have an APP1 EXIF segment (no rotation in simplex)
+    for (const f of files) {
+      const bytes = readFileSync(path.join(outputDir, f));
+      expect(Buffer.from([bytes[2], bytes[3]]).equals(Buffer.from([0xff, 0xe1]))).toBe(false);
+    }
+  }, 180_000);
+
+  it("adf-3-page-simplex-pdf: writes one PDF with 3 pages, no rotation", async () => {
+    const fixture = loadFixture(path.join(FIXTURES, "adf-3-page-simplex-pdf.jsonl"));
+    const fake = new FakeTcpSocket();
+
+    const sessionPromise = startScanSessionLegacy(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        outputDir,
+        tempDir,
+        source: "adf-simplex",
+        format: "pdf",
+        jpegQuality: 90,
+      },
+      fake.asFactory(),
+    );
+    fake.simulateConnect();
+    for (const event of fixture) {
+      if (event.dir !== "p>h") continue;
+      await new Promise((r) => setImmediate(r));
+      if ("hex" in event) fake.feed(Buffer.from(event.hex, "hex"));
+      else for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) fake.feed(p);
+    }
+    await sessionPromise;
+
+    const files = readdirSync(outputDir);
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/\.pdf$/);
+    const pdf = await PDFDocument.load(readFileSync(path.join(outputDir, files[0])));
+    expect(pdf.getPageCount()).toBe(3);
+    // Simplex: no page should have rotation
+    for (let i = 0; i < pdf.getPageCount(); i++) {
+      expect(pdf.getPage(i).getRotation().angle).toBe(0);
+    }
+  }, 180_000);
+
+  it("adf-4-page-duplex-jpeg: writes 4 JPGs, even pages have Orientation=3", async () => {
+    const fixture = loadFixture(path.join(FIXTURES, "adf-4-page-duplex-jpeg.jsonl"));
+    const fake = new FakeTcpSocket();
+
+    const sessionPromise = startScanSessionLegacy(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        outputDir,
+        tempDir,
+        source: "adf-duplex",
+        format: "jpg",
+        jpegQuality: 90,
+      },
+      fake.asFactory(),
+    );
+    fake.simulateConnect();
+    for (const event of fixture) {
+      if (event.dir !== "p>h") continue;
+      await new Promise((r) => setImmediate(r));
+      if ("hex" in event) fake.feed(Buffer.from(event.hex, "hex"));
+      else for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) fake.feed(p);
+    }
+    await sessionPromise;
+
+    const files = readdirSync(outputDir).sort();
+    expect(files).toHaveLength(4);
+    // Front pages (1, 3): no APP1 segment.
+    // Back pages (2, 4): APP1 with Orientation=3.
+    for (let i = 0; i < 4; i++) {
+      const bytes = readFileSync(path.join(outputDir, files[i]));
+      const isBack = (i + 1) % 2 === 0;
+      if (isBack) {
+        expect(bytes.subarray(0, 4)).toEqual(Buffer.from([0xff, 0xd8, 0xff, 0xe1]));
+        // Orientation value at offset 31 (per the APP1 layout setJpegOrientation produces)
+        expect(bytes[31]).toBe(0x03);
+      } else {
+        expect(Buffer.from([bytes[2], bytes[3]]).equals(Buffer.from([0xff, 0xe1]))).toBe(false);
+      }
+    }
+  }, 240_000);
+
+  it("adf-4-page-duplex-pdf: writes one PDF with 4 pages, even pages /Rotate 180", async () => {
+    const fixture = loadFixture(path.join(FIXTURES, "adf-4-page-duplex-pdf.jsonl"));
+    const fake = new FakeTcpSocket();
+
+    const sessionPromise = startScanSessionLegacy(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        outputDir,
+        tempDir,
+        source: "adf-duplex",
+        format: "pdf",
+        jpegQuality: 90,
+      },
+      fake.asFactory(),
+    );
+    fake.simulateConnect();
+    for (const event of fixture) {
+      if (event.dir !== "p>h") continue;
+      await new Promise((r) => setImmediate(r));
+      if ("hex" in event) fake.feed(Buffer.from(event.hex, "hex"));
+      else for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) fake.feed(p);
+    }
+    await sessionPromise;
+
+    const files = readdirSync(outputDir);
+    expect(files).toHaveLength(1);
+    const pdf = await PDFDocument.load(readFileSync(path.join(outputDir, files[0])));
+    expect(pdf.getPageCount()).toBe(4);
+    // Front pages 1, 3 → 0; back pages 2, 4 → 180
+    expect(pdf.getPage(0).getRotation().angle).toBe(0);
+    expect(pdf.getPage(1).getRotation().angle).toBe(180);
+    expect(pdf.getPage(2).getRotation().angle).toBe(0);
+    expect(pdf.getPage(3).getRotation().angle).toBe(180);
+  }, 240_000);
+
   it("adf-2-page-pdf (duplex): writes one PDF with back page rotated 180", async () => {
     const fixture = loadFixture(path.join(FIXTURES, "adf-2-page-pdf.jsonl"));
     const fake = new FakeTcpSocket();
