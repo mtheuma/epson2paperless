@@ -13,6 +13,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "pcap:extract": "tsx tools/pcap-extract/extract.ts",
+    "pcap:render": "tsx tools/pcap-render/render.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

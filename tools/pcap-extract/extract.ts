@@ -74,7 +74,11 @@ export async function extract(opts: ExtractOptions): Promise<FixtureEvent[]> {
  * Stream tshark stdout line-by-line. Buffering the full output ran into Node's
  * 0x1fffffe8-character string-length limit on multi-hundred-megabyte pcaps.
  */
-function runTshark(bin: string, args: string[], onLine: (line: string) => void): Promise<void> {
+export function runTshark(
+  bin: string,
+  args: string[],
+  onLine: (line: string) => void,
+): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
     const err: Buffer[] = [];
