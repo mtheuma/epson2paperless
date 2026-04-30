@@ -110,29 +110,29 @@ the v1 matrix is:
 
 ## 4. Protocol layers — what stays, what changes
 
-| Layer | ET-4950 (current) | WF-3620 (new) | Implementation |
-|-------|-------------------|---------------|----------------|
-| Multicast discovery `239.255.255.253:2968` | `keepalive.ts` + `network.ts` | byte-identical | shared, no change |
-| Push-scan trigger TCP 2968 SOAP | `pushscan.ts` | byte-identical envelope, same `PushScanIDIn` semantics | shared, no change |
-| Transport (port 1865) | TLS 1.2 | plain TCP | per-variant |
-| IS framing (12-byte header, magic `IS`) | `protocol.ts` | byte-identical | shared, no change |
-| Welcome packet | `49538000300c0000000500000102000000` | identical | shared |
-| LOCK / UNLOCK | IS types `0x2100` / `0x2101` | identical | shared |
-| Passthru envelope | `[cmd_size][reply_size][cmd]` | identical | shared |
-| Init | `FS Y` (`1c 59`) → ESC/I-2 mode | `ESC @` (`1b 40`) → legacy | per-variant |
-| Capability discovery | `INFO` / `CAPA` / `RESA` two-phase reads | `FS I` 80-byte fixed reply | per-variant |
-| Source select | encoded in PARA tokens | `ESC e <0\|1\|2>` separate command, plus duplicated as a byte at FS W offset 26 | per-variant |
-| Gamma curves | none (handled by printer firmware) | 3× `ESC z` + 256-byte LUT per channel | per-variant |
-| Scan parameters | PARA: ~936-byte ASCII `#KEY` token blob | `FS W` + 64-byte binary block | per-variant |
-| Start scan | `TRDT` ESC/I-2 cmd | `FS G` (returns 14-byte image-spec) | per-variant |
-| Image transport | host-pull `@IMG` loop, JPEG-encoded chunks | printer-push `IS 0xa200` chunks of 59473-byte raw 24-bit RGB | per-variant |
-| Per-page output | already JPEG, write to temp | sharp encode raw RGB → JPEG, write to temp | per-variant; sharp wrapper inside `scanner-legacy.ts` |
-| Per-page eject (ADF) | n/a | host sends `0x0c 0x00` after each page's stream completes | per-variant |
-| Post-scan drain | `FS Y / STAT / pure-read / FIN` × 2 | `FS F` once + `ESC )` × 2 | per-variant |
-| EXIF orientation, PDF compose, Paperless upload, temp cleanup | inline in `scanner.ts`'s `finalizeScan` | same outputs needed | shared (extract to `output-tail.ts`) |
-| Health check | `health.ts` | unchanged | shared |
-| Lifecycle / shutdown | `lifecycle.ts` | unchanged | shared |
-| Logging / config | `logger.ts` / `config.ts` | unchanged + 1 new env var + 1 optional | shared, additive |
+| Layer                                                         | ET-4950 (current)                          | WF-3620 (new)                                                                   | Implementation                                        |
+| ------------------------------------------------------------- | ------------------------------------------ | ------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| Multicast discovery `239.255.255.253:2968`                    | `keepalive.ts` + `network.ts`              | byte-identical                                                                  | shared, no change                                     |
+| Push-scan trigger TCP 2968 SOAP                               | `pushscan.ts`                              | byte-identical envelope, same `PushScanIDIn` semantics                          | shared, no change                                     |
+| Transport (port 1865)                                         | TLS 1.2                                    | plain TCP                                                                       | per-variant                                           |
+| IS framing (12-byte header, magic `IS`)                       | `protocol.ts`                              | byte-identical                                                                  | shared, no change                                     |
+| Welcome packet                                                | `49538000300c0000000500000102000000`       | identical                                                                       | shared                                                |
+| LOCK / UNLOCK                                                 | IS types `0x2100` / `0x2101`               | identical                                                                       | shared                                                |
+| Passthru envelope                                             | `[cmd_size][reply_size][cmd]`              | identical                                                                       | shared                                                |
+| Init                                                          | `FS Y` (`1c 59`) → ESC/I-2 mode            | `ESC @` (`1b 40`) → legacy                                                      | per-variant                                           |
+| Capability discovery                                          | `INFO` / `CAPA` / `RESA` two-phase reads   | `FS I` 80-byte fixed reply                                                      | per-variant                                           |
+| Source select                                                 | encoded in PARA tokens                     | `ESC e <0\|1\|2>` separate command, plus duplicated as a byte at FS W offset 26 | per-variant                                           |
+| Gamma curves                                                  | none (handled by printer firmware)         | 3× `ESC z` + 256-byte LUT per channel                                           | per-variant                                           |
+| Scan parameters                                               | PARA: ~936-byte ASCII `#KEY` token blob    | `FS W` + 64-byte binary block                                                   | per-variant                                           |
+| Start scan                                                    | `TRDT` ESC/I-2 cmd                         | `FS G` (returns 14-byte image-spec)                                             | per-variant                                           |
+| Image transport                                               | host-pull `@IMG` loop, JPEG-encoded chunks | printer-push `IS 0xa200` chunks of 59473-byte raw 24-bit RGB                    | per-variant                                           |
+| Per-page output                                               | already JPEG, write to temp                | sharp encode raw RGB → JPEG, write to temp                                      | per-variant; sharp wrapper inside `scanner-legacy.ts` |
+| Per-page eject (ADF)                                          | n/a                                        | host sends `0x0c 0x00` after each page's stream completes                       | per-variant                                           |
+| Post-scan drain                                               | `FS Y / STAT / pure-read / FIN` × 2        | `FS F` once + `ESC )` × 2                                                       | per-variant                                           |
+| EXIF orientation, PDF compose, Paperless upload, temp cleanup | inline in `scanner.ts`'s `finalizeScan`    | same outputs needed                                                             | shared (extract to `output-tail.ts`)                  |
+| Health check                                                  | `health.ts`                                | unchanged                                                                       | shared                                                |
+| Lifecycle / shutdown                                          | `lifecycle.ts`                             | unchanged                                                                       | shared                                                |
+| Logging / config                                              | `logger.ts` / `config.ts`                  | unchanged + 1 new env var + 1 optional                                          | shared, additive                                      |
 
 ## 5. Variant detection (`protocol-probe.ts`)
 
@@ -310,29 +310,29 @@ If we ever support 1200 DPI we revisit and stream into sharp's
 
 ### New
 
-| Path | Purpose | Approx LOC |
-|------|---------|------------|
-| `src/protocol-probe.ts` | TLS probe + env override | ~60 |
-| `src/scanner-legacy.ts` | Legacy state machine | ~500 |
-| `src/esci-legacy.ts` | Command builders, FS W blob, FS G reply parser | ~150 |
-| `src/output-tail.ts` | Extracted post-IMG-loop pipeline | ~80 |
-| `tools/pcap-extract/` | One-shot CLI: `.pcapng` → JSONL fixture | ~80 |
+| Path                    | Purpose                                        | Approx LOC |
+| ----------------------- | ---------------------------------------------- | ---------- |
+| `src/protocol-probe.ts` | TLS probe + env override                       | ~60        |
+| `src/scanner-legacy.ts` | Legacy state machine                           | ~500       |
+| `src/esci-legacy.ts`    | Command builders, FS W blob, FS G reply parser | ~150       |
+| `src/output-tail.ts`    | Extracted post-IMG-loop pipeline               | ~80        |
+| `tools/pcap-extract/`   | One-shot CLI: `.pcapng` → JSONL fixture        | ~80        |
 
 ### Modified
 
-| Path | Change |
-|------|--------|
-| `src/scanner.ts` | Replace inline `finalizeScan` body with a call into `output-tail.ts`. No state machine changes. |
+| Path                                                  | Change                                                                                                                    |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
+| `src/scanner.ts`                                      | Replace inline `finalizeScan` body with a call into `output-tail.ts`. No state machine changes.                           |
 | `src/index.ts` / `src/one-shot.ts` / `src/startup.ts` | Call `protocol-probe` after PushScan trigger arrives, dispatch to `startScanSession` (esci2) or `startScanSessionLegacy`. |
-| `src/config.ts` | Add `PRINTER_PROTOCOL` and `JPEG_QUALITY`, Zod-validated. |
-| `package.json` | Add `sharp` dep. |
+| `src/config.ts`                                       | Add `PRINTER_PROTOCOL` and `JPEG_QUALITY`, Zod-validated.                                                                 |
+| `package.json`                                        | Add `sharp` dep.                                                                                                          |
 
 ## 9. Configuration surface
 
-| Var | Values | Default | Effect |
-|-----|--------|---------|--------|
-| `PRINTER_PROTOCOL` | `auto` / `esci2` / `legacy` | `auto` | `auto` probes TLS; explicit values bypass the probe |
-| `JPEG_QUALITY` | `1`–`100` | `90` | sharp encoder quality (legacy variant only) |
+| Var                | Values                      | Default | Effect                                              |
+| ------------------ | --------------------------- | ------- | --------------------------------------------------- |
+| `PRINTER_PROTOCOL` | `auto` / `esci2` / `legacy` | `auto`  | `auto` probes TLS; explicit values bypass the probe |
+| `JPEG_QUALITY`     | `1`–`100`                   | `90`    | sharp encoder quality (legacy variant only)         |
 
 **Compatibility constraints:**
 
@@ -363,30 +363,30 @@ JSONL fixtures are committed under `tests/fixtures/legacy/` (parallel to
 
 Resolved by the 2026-04-30 capture matrix:
 
-| Item | Resolution |
-|------|------------|
-| Multi-page boundary signalling | Each page = its own GAMMA → WINDOW → START → STREAM cycle, separated by host-sent `0x0c 0x00` page-eject (ADF only) |
-| PDF wire effect | Format choice changes the FS W block's format byte (0x04 → 0x08) **and** the scan resolution (600 → 300 DPI). Cannot post-process between formats; must honour panel choice |
-| Pixel format | Confirmed 24-bit RGB at panel-selected DPI; channel count and bit depth determined arithmetically from stream byte counts in all six captures |
-| ADF source path | Confirmed `ESC e 0x01` = ADF simplex, `ESC e 0x02` = ADF duplex (matches FS W byte 26) |
-| "2-paged" semantics | Confirmed duplex (single-sided / double-sided toggle), not a multi-page hint. WF-3620 spec sheet calls it "Auto 2-Sided Scanning" |
+| Item                           | Resolution                                                                                                                                                                  |
+| ------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Multi-page boundary signalling | Each page = its own GAMMA → WINDOW → START → STREAM cycle, separated by host-sent `0x0c 0x00` page-eject (ADF only)                                                         |
+| PDF wire effect                | Format choice changes the FS W block's format byte (0x04 → 0x08) **and** the scan resolution (600 → 300 DPI). Cannot post-process between formats; must honour panel choice |
+| Pixel format                   | Confirmed 24-bit RGB at panel-selected DPI; channel count and bit depth determined arithmetically from stream byte counts in all six captures                               |
+| ADF source path                | Confirmed `ESC e 0x01` = ADF simplex, `ESC e 0x02` = ADF duplex (matches FS W byte 26)                                                                                      |
+| "2-paged" semantics            | Confirmed duplex (single-sided / double-sided toggle), not a multi-page hint. WF-3620 spec sheet calls it "Auto 2-Sided Scanning"                                           |
 
 Still open:
 
-| Item | Effect |
-|------|--------|
+| Item                                                   | Effect                                                                                                                                                                        |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Multi-sheet ADF capture (3+ sheets, simplex or duplex) | Confirms the inter-sheet command path matches the inter-side command path we've seen. v1 assumes they match; first multi-sheet user gets asked to capture if they hit a stall |
-| Panel photo of the destination/format/2-paged screen | README compatibility-table labels |
-| Email format | Out of v1 scope; would need a capture |
-| Paper sizes other than A4 | Hardcoded table covers A4 only; first user to scan US Letter or anything else triggers a capture request |
+| Panel photo of the destination/format/2-paged screen   | README compatibility-table labels                                                                                                                                             |
+| Email format                                           | Out of v1 scope; would need a capture                                                                                                                                         |
+| Paper sizes other than A4                              | Hardcoded table covers A4 only; first user to scan US Letter or anything else triggers a capture request                                                                      |
 
 ## 12. Risks and mitigations
 
-| Risk | Mitigation |
-|------|------------|
-| sharp native dep breaks Docker multi-arch build | sharp publishes prebuilt binaries for x64 / arm64 on Linux / macOS / Windows; CI catches install failures pre-merge |
-| `output-tail.ts` extraction breaks ET-4950 path | `scanner.test.ts` is the regression shield — full Frida replay matrix has to keep passing pre-merge |
-| Probe latency on first connect | Result cached for daemon lifetime. Probe socket is closed and the scanner reconnects — adds ~50 ms on first scan, simpler API |
-| Probe spuriously classifies a slow ESC/I-2 printer as legacy | 3 s probe timeout plus explicit env-var override (`PRINTER_PROTOCOL=esci2`) when the user knows their model |
-| Multi-sheet ADF run stalls because the inter-sheet command differs from the inter-side command | First user reports it, capture, fix; v1's failure mode is "first sheet succeeds, second times out" rather than data loss |
-| Memory pressure at 600 DPI A4 (~108 MB per page in Buffer) | Acceptable for the dedicated-container deployment shape; revisit with `sharp.pipeline()` streaming if 1200 DPI ever lands |
+| Risk                                                                                           | Mitigation                                                                                                                    |
+| ---------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| sharp native dep breaks Docker multi-arch build                                                | sharp publishes prebuilt binaries for x64 / arm64 on Linux / macOS / Windows; CI catches install failures pre-merge           |
+| `output-tail.ts` extraction breaks ET-4950 path                                                | `scanner.test.ts` is the regression shield — full Frida replay matrix has to keep passing pre-merge                           |
+| Probe latency on first connect                                                                 | Result cached for daemon lifetime. Probe socket is closed and the scanner reconnects — adds ~50 ms on first scan, simpler API |
+| Probe spuriously classifies a slow ESC/I-2 printer as legacy                                   | 3 s probe timeout plus explicit env-var override (`PRINTER_PROTOCOL=esci2`) when the user knows their model                   |
+| Multi-sheet ADF run stalls because the inter-sheet command differs from the inter-side command | First user reports it, capture, fix; v1's failure mode is "first sheet succeeds, second times out" rather than data loss      |
+| Memory pressure at 600 DPI A4 (~108 MB per page in Buffer)                                     | Acceptable for the dedicated-container deployment shape; revisit with `sharp.pipeline()` streaming if 1200 DPI ever lands     |
