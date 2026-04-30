@@ -21,15 +21,10 @@ import {
   parseEsci2ReplyHeader,
   parseTokens,
 } from "./esci.js";
-import {
-  generateFilename,
-  resolveSessionTimestamp,
-  writeOutputFile,
-  promoteTempPagesToOutput,
-} from "./output.js";
+import { resolveSessionTimestamp } from "./output.js";
 import { setJpegOrientation } from "./exif.js";
-import { composePdfFromJpegs } from "./pdf.js";
-import { uploadAllToPaperless, type PaperlessUploadOptions } from "./paperless-upload.js";
+import { type PaperlessUploadOptions } from "./paperless-upload.js";
+import { finalizeSession } from "./output-tail.js";
 
 const log = createLogger("scanner");
 
@@ -984,58 +979,23 @@ export function startScanSession(
         log.error("Scan completed with zero image chunks");
         return;
       }
-      const writeSessionOutput = async (): Promise<void> => {
-        flushCurrentPage();
-        try {
-          if (session.action === "jpg") {
-            const saved = promoteTempPagesToOutput(
-              sessionTempDir,
-              session.outputDir,
-              sessionTs,
-              "jpg",
-            );
-            log.info(`Scan complete — wrote ${saved.length} JPG file(s); first: ${saved[0]}`);
-            if (session.paperless) {
-              await uploadAllToPaperless(saved, session.paperless);
-            }
-          } else {
-            // PDF branch
-            try {
-              const pdfBuf = await composePdfFromJpegs(sessionTempDir, {
-                backPages: backPageIndices,
-              });
-              const pdfName = generateFilename(sessionTs, "pdf");
-              const savedPath = writeOutputFile(session.outputDir, pdfName, pdfBuf);
-              log.info(`Scan complete — saved PDF to ${savedPath}`);
-              if (session.paperless) {
-                await uploadAllToPaperless([savedPath], session.paperless);
-              }
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              log.error(`PDF composition failed: ${msg}. Falling back to JPG output.`);
-              const saved = promoteTempPagesToOutput(
-                sessionTempDir,
-                session.outputDir,
-                sessionTs,
-                "jpg",
-              );
-              log.info(`Saved ${saved.length} JPG file(s) as fallback`);
-              if (session.paperless) {
-                await uploadAllToPaperless(saved, session.paperless);
-              }
-            }
-          }
-        } finally {
-          fs.rmSync(sessionTempDir, { recursive: true, force: true });
-          resolveOnce();
-        }
-      };
+      flushCurrentPage();
       setImmediate(() => {
-        writeSessionOutput().catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.error(`Unexpected finalizeScan failure: ${msg}`);
-          resolveOnce();
-        });
+        finalizeSession({
+          sessionTempDir,
+          outputDir: session.outputDir,
+          sessionTs,
+          action: session.action,
+          backPageIndices,
+          paperless: session.paperless,
+        })
+          .catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error(`Unexpected finalizeScan failure: ${msg}`);
+          })
+          .finally(() => {
+            resolveOnce();
+          });
       });
     }
   }); // end Promise executor
