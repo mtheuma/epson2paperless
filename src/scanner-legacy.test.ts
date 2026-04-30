@@ -151,4 +151,64 @@ describe("scanner-legacy", () => {
     expect(jpegBytes[0]).toBe(0xff);
     expect(jpegBytes[1]).toBe(0xd8);
   }, 60_000); // Sharp encodes ~104 MB raw RGB; allow up to 60 s on slow machines / CI
+
+  it("flatbed-single-page-pdf: produces one PDF in the output dir", async () => {
+    const fixture = loadFixture(path.join(FIXTURES, "flatbed-single-page-pdf.jsonl"));
+    const fake = new FakeTcpSocket();
+
+    const sessionPromise = startScanSessionLegacy(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        outputDir,
+        tempDir,
+        source: "flatbed",
+        format: "pdf",
+        jpegQuality: 90,
+      },
+      fake.asFactory(),
+    );
+    fake.simulateConnect();
+    for (const event of fixture) {
+      if (event.dir !== "p>h") continue;
+      await new Promise((r) => setImmediate(r));
+      if ("hex" in event) fake.feed(Buffer.from(event.hex, "hex"));
+      else for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) fake.feed(p);
+    }
+    await sessionPromise;
+
+    const files = readdirSync(outputDir);
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/\.pdf$/);
+  }, 60_000);
+
+  it("adf-single-page-pdf: produces one PDF in the output dir", async () => {
+    const fixture = loadFixture(path.join(FIXTURES, "adf-single-page-pdf.jsonl"));
+    const fake = new FakeTcpSocket();
+
+    const sessionPromise = startScanSessionLegacy(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        outputDir,
+        tempDir,
+        source: "adf-simplex",
+        format: "pdf",
+        jpegQuality: 90,
+      },
+      fake.asFactory(),
+    );
+    fake.simulateConnect();
+    for (const event of fixture) {
+      if (event.dir !== "p>h") continue;
+      await new Promise((r) => setImmediate(r));
+      if ("hex" in event) fake.feed(Buffer.from(event.hex, "hex"));
+      else for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) fake.feed(p);
+    }
+    await sessionPromise;
+
+    const files = readdirSync(outputDir);
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/\.pdf$/);
+  }, 60_000);
 });

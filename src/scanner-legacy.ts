@@ -82,6 +82,10 @@ type State =
   // (fixture: adf-single-page-jpeg.jsonl lines 64-71)
   | "ADF_IDENTITY_A"
   | "ADF_IDENTITY_B"
+  // ADF+PDF only: extra ESC e + source param after ADF_IDENTITY_B, before gamma phase
+  // (fixture: adf-single-page-pdf.jsonl lines 72-79)
+  | "ADF_PDF_SRC_CMD"
+  | "ADF_PDF_SRC_PARAM"
   | "GAMMA_R_CMD"
   | "GAMMA_R_DATA"
   | "GAMMA_G_CMD"
@@ -399,11 +403,33 @@ export function startScanSessionLegacy(
           return;
 
         case "ADF_IDENTITY_B":
-          // Second FS I identity read after ADF reset cycle; proceed to gamma phase.
-          // (fixture: adf-single-page-jpeg.jsonl line 71)
+          // Second FS I identity read after ADF reset cycle.
+          // JPEG: proceed directly to gamma phase.
+          // PDF: an extra ESC e + source param follows before gamma
+          // (fixture: adf-single-page-pdf.jsonl lines 72-79 vs adf-single-page-jpeg.jsonl line 71)
           if (pkt.payload.length !== 80) {
             return fail(`expected 80-byte identity in ADF_IDENTITY_B, got ${pkt.payload.length}`);
           }
+          if (session.format === "pdf") {
+            state = "ADF_PDF_SRC_CMD";
+            sendCmd(buildEscE(), 1);
+            sendCmd(Buffer.from([sourceByte(session.source)]), 1);
+          } else {
+            enterGammaPhase();
+          }
+          return;
+
+        case "ADF_PDF_SRC_CMD":
+          // ACK for ESC e opcode in the ADF+PDF post-identity source re-set.
+          // (fixture: adf-single-page-pdf.jsonl line 74-75)
+          if (!isAck(pkt)) return fail(`expected ACK for ADF+PDF post-identity ESC e opcode`);
+          state = "ADF_PDF_SRC_PARAM";
+          return;
+
+        case "ADF_PDF_SRC_PARAM":
+          // ACK for source param byte in the ADF+PDF post-identity source re-set.
+          // (fixture: adf-single-page-pdf.jsonl line 78-79)
+          if (!isAck(pkt)) return fail(`expected ACK for ADF+PDF post-identity source param`);
           enterGammaPhase();
           return;
 
