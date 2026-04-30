@@ -1,3 +1,6 @@
 # Shell hooks must use LF regardless of local autocrlf settings — Git Bash
 # on Windows refuses to run scripts with CRLF line endings.
 .githooks/* text eol=lf
+
+# Committed PDF artifacts — binary, no line-ending mangling.
+*.pdf binary
