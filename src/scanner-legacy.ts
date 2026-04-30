@@ -95,7 +95,7 @@ type State =
   | "IMG_RECEIVING"
   | "PAGE_ENCODING"  // async JPEG encoding in progress; absorbs trailing image chunks
   // ADF-only page eject: 0x0c 0x00 sent after image stream, before FS F status check
-  // (fixture: adf-single-page-jpeg.jsonl lines 115-118)
+  // (fixture: adf-single-page-jpeg.jsonl lines 117-120)
   | "PAGE_EJECT_WAIT"
   | "POST_STATUS"
   | "CLEANUP_1"
@@ -621,7 +621,7 @@ export function startScanSessionLegacy(
 
       // Flatbed: skip eject; go straight to POST_STATUS.
       // ADF: send 0x0c 0x00 page-eject, wait for ACK, then FS F in PAGE_EJECT_WAIT handler.
-      // (fixture: adf-single-page-jpeg.jsonl lines 115-120)
+      // (fixture: adf-single-page-jpeg.jsonl lines 117-120)
       if (session.source !== "flatbed") {
         state = "PAGE_EJECT_WAIT";
         sendCmd(buildPageEject(), 1);

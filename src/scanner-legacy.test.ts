@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { startScanSessionLegacy } from "./scanner-legacy.js";
+import { parseIsPacket } from "./protocol.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
 import { loadFixture, synthesiseImageStream } from "./test-support/legacy-replay.js";
 
@@ -87,8 +88,26 @@ describe("scanner-legacy", () => {
 
     // Flatten all writes and look for `0c 00` inside an IS-0x2000 passthru
     const allWrites = Buffer.concat(fake.writes);
-    const ejectByteIndex = allWrites.indexOf(Buffer.from([0x0c, 0x00]));
-    expect(ejectByteIndex).toBeGreaterThan(0);
+    let pos = 0;
+    let foundEject = false;
+    while (pos < allWrites.length) {
+      const pkt = parseIsPacket(allWrites.subarray(pos));
+      if (!pkt) break;
+      // IS-0x2000 passthru envelope: payload starts with 8-byte preamble (cmd_size + reply_size BE u32),
+      // followed by the actual command bytes. The page-eject command body is `0c 00`.
+      if (pkt.type === 0x2000 && pkt.payload.length >= 10) {
+        const cmdSize = pkt.payload.readUInt32BE(0);
+        if (cmdSize === 2) {
+          const cmd = pkt.payload.subarray(8, 8 + 2);
+          if (cmd[0] === 0x0c && cmd[1] === 0x00) {
+            foundEject = true;
+            break;
+          }
+        }
+      }
+      pos += pkt.totalSize;
+    }
+    expect(foundEject).toBe(true);
   }, 60_000);
 
   it("flatbed-single-page-jpeg: replays driver bytes and writes one JPG", async () => {
