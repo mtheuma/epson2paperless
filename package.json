@@ -12,6 +12,7 @@
     "kill-dev": "node scripts/kill-dev.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "pcap:extract": "tsx tools/pcap-extract/extract.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
