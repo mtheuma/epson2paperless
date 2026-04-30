@@ -57,6 +57,7 @@ function probeTls(host: string, port: number, timeoutMs: number): Promise<Varian
     const timer = setTimeout(() => {
       settle(() => {
         socket.destroy();
+        log.error(`Probe timeout against ${host}:${port}`);
         reject(new Error(`protocol-probe timeout against ${host}:${port}`));
       });
     }, timeoutMs);
@@ -76,6 +77,7 @@ function probeTls(host: string, port: number, timeoutMs: number): Promise<Varian
           resolve("legacy");
           return;
         }
+        log.error(`Probe failed against ${host}:${port}: ${err.code ?? err.message}`);
         reject(err);
       });
     });

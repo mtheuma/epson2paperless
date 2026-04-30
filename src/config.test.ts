@@ -272,6 +272,13 @@ describe("loadConfig", () => {
     process.env.LEGACY_FORCE_SOURCE = "garbage";
     expect(() => loadConfig()).toThrow();
   });
+
+  it("rejects LEGACY_FORCE_SOURCE with PRINTER_PROTOCOL=esci2", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.PRINTER_PROTOCOL = "esci2";
+    process.env.LEGACY_FORCE_SOURCE = "flatbed";
+    expect(() => loadConfig()).toThrow(/no effect/i);
+  });
 });
 
 describe("buildPaperlessOptions", () => {

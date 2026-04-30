@@ -44,6 +44,14 @@ const configSchema = z
         path: ["printerCertFingerprint"],
       });
     }
+    if (cfg.printerProtocol === "esci2" && cfg.legacyForceSource) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "LEGACY_FORCE_SOURCE has no effect with PRINTER_PROTOCOL=esci2; remove one or the other.",
+        path: ["legacyForceSource"],
+      });
+    }
   });
 
 export type Config = z.infer<typeof configSchema>;
