@@ -7,7 +7,7 @@ import { PDFDocument } from "pdf-lib";
 import { startScanSessionLegacy } from "./scanner-legacy.js";
 import { parseIsPacket } from "./protocol.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
-import { loadFixture, synthesiseImageStream } from "./test-support/legacy-replay.js";
+import { loadFixture, driveFixture } from "./test-support/legacy-replay.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(__dirname, "..", "tools", "pcap-extract", "captures", "wf-3620");
@@ -42,20 +42,7 @@ describe("scanner-legacy", () => {
       },
       fake.asFactory(),
     );
-    fake.simulateConnect();
-
-    for (const event of fixture) {
-      if (event.dir !== "p>h") continue;
-      await new Promise((r) => setImmediate(r));
-      if ("hex" in event) {
-        fake.feed(Buffer.from(event.hex, "hex"));
-      } else {
-        for (const packet of synthesiseImageStream(event.totalBytes, event.chunkSize)) {
-          fake.feed(packet);
-        }
-      }
-    }
-    await sessionPromise;
+    await driveFixture(fixture, fake, sessionPromise);
 
     const files = readdirSync(outputDir);
     expect(files).toHaveLength(1);
@@ -78,14 +65,7 @@ describe("scanner-legacy", () => {
       },
       fake.asFactory(),
     );
-    fake.simulateConnect();
-    for (const event of fixture) {
-      if (event.dir !== "p>h") continue;
-      await new Promise((r) => setImmediate(r));
-      if ("hex" in event) fake.feed(Buffer.from(event.hex, "hex"));
-      else for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) fake.feed(p);
-    }
-    await sessionPromise;
+    await driveFixture(fixture, fake, sessionPromise);
 
     // Flatten all writes and look for `0c 00` inside an IS-0x2000 passthru
     const allWrites = Buffer.concat(fake.writes);
@@ -127,22 +107,7 @@ describe("scanner-legacy", () => {
       },
       fake.asFactory(),
     );
-    fake.simulateConnect();
-
-    // Drive the protocol by feeding each "p>h" event in fixture order
-    // (the scanner's state machine emits the matching "h>p" command in response).
-    for (const event of fixture) {
-      if (event.dir !== "p>h") continue;
-      await new Promise((r) => setImmediate(r));
-      if ("hex" in event) {
-        fake.feed(Buffer.from(event.hex, "hex"));
-      } else if (event.summary === "image-stream") {
-        for (const packet of synthesiseImageStream(event.totalBytes, event.chunkSize)) {
-          fake.feed(packet);
-        }
-      }
-    }
-    await sessionPromise;
+    await driveFixture(fixture, fake, sessionPromise);
 
     const files = readdirSync(outputDir);
     expect(files).toHaveLength(1);
@@ -169,14 +134,7 @@ describe("scanner-legacy", () => {
       },
       fake.asFactory(),
     );
-    fake.simulateConnect();
-    for (const event of fixture) {
-      if (event.dir !== "p>h") continue;
-      await new Promise((r) => setImmediate(r));
-      if ("hex" in event) fake.feed(Buffer.from(event.hex, "hex"));
-      else for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) fake.feed(p);
-    }
-    await sessionPromise;
+    await driveFixture(fixture, fake, sessionPromise);
 
     const files = readdirSync(outputDir);
     expect(files).toHaveLength(1);
@@ -199,14 +157,7 @@ describe("scanner-legacy", () => {
       },
       fake.asFactory(),
     );
-    fake.simulateConnect();
-    for (const event of fixture) {
-      if (event.dir !== "p>h") continue;
-      await new Promise((r) => setImmediate(r));
-      if ("hex" in event) fake.feed(Buffer.from(event.hex, "hex"));
-      else for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) fake.feed(p);
-    }
-    await sessionPromise;
+    await driveFixture(fixture, fake, sessionPromise);
 
     const files = readdirSync(outputDir);
     expect(files).toHaveLength(1);
@@ -229,14 +180,7 @@ describe("scanner-legacy", () => {
       },
       fake.asFactory(),
     );
-    fake.simulateConnect();
-    for (const event of fixture) {
-      if (event.dir !== "p>h") continue;
-      await new Promise((r) => setImmediate(r));
-      if ("hex" in event) fake.feed(Buffer.from(event.hex, "hex"));
-      else for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) fake.feed(p);
-    }
-    await sessionPromise;
+    await driveFixture(fixture, fake, sessionPromise);
 
     const files = readdirSync(outputDir).sort();
     expect(files).toHaveLength(2);
@@ -284,14 +228,7 @@ describe("scanner-legacy", () => {
       },
       fake.asFactory(),
     );
-    fake.simulateConnect();
-    for (const event of fixture) {
-      if (event.dir !== "p>h") continue;
-      await new Promise((r) => setImmediate(r));
-      if ("hex" in event) fake.feed(Buffer.from(event.hex, "hex"));
-      else for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) fake.feed(p);
-    }
-    await sessionPromise;
+    await driveFixture(fixture, fake, sessionPromise);
 
     const files = readdirSync(outputDir).sort();
     expect(files).toHaveLength(3);
@@ -319,14 +256,7 @@ describe("scanner-legacy", () => {
       },
       fake.asFactory(),
     );
-    fake.simulateConnect();
-    for (const event of fixture) {
-      if (event.dir !== "p>h") continue;
-      await new Promise((r) => setImmediate(r));
-      if ("hex" in event) fake.feed(Buffer.from(event.hex, "hex"));
-      else for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) fake.feed(p);
-    }
-    await sessionPromise;
+    await driveFixture(fixture, fake, sessionPromise);
 
     const files = readdirSync(outputDir);
     expect(files).toHaveLength(1);
@@ -355,14 +285,7 @@ describe("scanner-legacy", () => {
       },
       fake.asFactory(),
     );
-    fake.simulateConnect();
-    for (const event of fixture) {
-      if (event.dir !== "p>h") continue;
-      await new Promise((r) => setImmediate(r));
-      if ("hex" in event) fake.feed(Buffer.from(event.hex, "hex"));
-      else for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) fake.feed(p);
-    }
-    await sessionPromise;
+    await driveFixture(fixture, fake, sessionPromise);
 
     const files = readdirSync(outputDir).sort();
     expect(files).toHaveLength(4);
@@ -397,14 +320,7 @@ describe("scanner-legacy", () => {
       },
       fake.asFactory(),
     );
-    fake.simulateConnect();
-    for (const event of fixture) {
-      if (event.dir !== "p>h") continue;
-      await new Promise((r) => setImmediate(r));
-      if ("hex" in event) fake.feed(Buffer.from(event.hex, "hex"));
-      else for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) fake.feed(p);
-    }
-    await sessionPromise;
+    await driveFixture(fixture, fake, sessionPromise);
 
     const files = readdirSync(outputDir);
     expect(files).toHaveLength(1);
@@ -433,14 +349,7 @@ describe("scanner-legacy", () => {
       },
       fake.asFactory(),
     );
-    fake.simulateConnect();
-    for (const event of fixture) {
-      if (event.dir !== "p>h") continue;
-      await new Promise((r) => setImmediate(r));
-      if ("hex" in event) fake.feed(Buffer.from(event.hex, "hex"));
-      else for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) fake.feed(p);
-    }
-    await sessionPromise;
+    await driveFixture(fixture, fake, sessionPromise);
 
     const files = readdirSync(outputDir);
     expect(files).toHaveLength(1);

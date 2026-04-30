@@ -138,16 +138,19 @@ function createImageChunkFolder(): ImageChunkFolder {
 
   return {
     feed(e) {
-      const isPrinter = e.dir === "p>h";
-      const isImageChunkHeader = isPrinter && e.hex.startsWith(IS_IMAGE_CHUNK_HEX);
+      if (e.dir !== "p>h") {
+        flushRun();
+        out.push(e);
+        return;
+      }
+      const isImageChunkHeader = e.hex.startsWith(IS_IMAGE_CHUNK_HEX);
       // During an image-stream run, anything from the printer that does NOT
       // start with the IS-0xa200 magic is a continuation frame — including raw
       // pixel data that happens to begin with bytes 0x49 0x53 ("IS"). The
       // earlier check on just `4953` was too permissive: pixel bytes coincide
       // with that 2-byte prefix often enough on multi-MB streams to falsely
       // terminate runs and inflate frame counts.
-      const isContinuation =
-        isPrinter && runStart !== null && !e.hex.startsWith(IS_IMAGE_CHUNK_HEX);
+      const isContinuation = runStart !== null && !e.hex.startsWith(IS_IMAGE_CHUNK_HEX);
 
       if (isImageChunkHeader) {
         // IS header bytes 6-9 (hex chars 12-20) are the payload size (BE uint32)
@@ -172,7 +175,7 @@ function createImageChunkFolder(): ImageChunkFolder {
           if (payloadHex.length === 8) {
             runTotalBytes += parseInt(payloadHex, 16);
           }
-          offset = pos + 8;
+          offset = pos + IS_IMAGE_CHUNK_HEX.length;
         }
         return;
       }

@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { buildIsPacket } from "../protocol.js";
+import type { FakeTcpSocket } from "./fake-tcp-socket.js";
 
 export type { FixtureEvent } from "../../tools/pcap-extract/extract.js";
 
@@ -23,6 +24,31 @@ const FILL_BUFFER = Buffer.alloc(MAX_CHUNK_SIZE, 0xb0);
  * that yields a recognisable JPEG when sharp encodes it (useful for
  * eyeballing test failures).
  */
+/**
+ * Drive a fixture replay: connect the fake socket, feed all printer→host events in
+ * order (with a setImmediate yield before each to let the state machine process the
+ * previous reply), then await the session promise.
+ */
+export async function driveFixture(
+  fixture: FixtureEvent[],
+  fake: FakeTcpSocket,
+  sessionPromise: Promise<void>,
+): Promise<void> {
+  fake.simulateConnect();
+  for (const event of fixture) {
+    if (event.dir !== "p>h") continue;
+    await new Promise((r) => setImmediate(r));
+    if ("hex" in event) {
+      fake.feed(Buffer.from(event.hex, "hex"));
+    } else {
+      for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) {
+        fake.feed(p);
+      }
+    }
+  }
+  await sessionPromise;
+}
+
 export function synthesiseImageStream(totalBytes: number, chunkSize: number): Buffer[] {
   if (chunkSize > MAX_CHUNK_SIZE) {
     throw new Error(`synthesiseImageStream: chunkSize ${chunkSize} exceeds MAX_CHUNK_SIZE`);

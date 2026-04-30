@@ -100,8 +100,8 @@ type State =
   | "WINDOW_DATA"
   | "STATUS_PRESCAN"
   | "START"
-  // PDF-only FS G not-ready retry: when FS G returns chunkSize=0, poll FS F until ready,
-  // then re-send FS G. Seen only in the 4-page duplex PDF capture where the ADF had not
+  // ADF FS G not-ready retry: when FS G returns chunkSize=0, poll FS F until ready,
+  // then re-send FS G. Seen in the 4-page duplex PDF capture where the ADF had not
   // finished feeding paper by the time the host issued FS G.
   // START_POLL: keep sending FS F; on first status=0x01 → START_POLL_READY.
   // START_POLL_READY: send one more FS F confirmation; then send FS G and go to START.
@@ -541,14 +541,8 @@ export function startScanSessionLegacy(
             return fail(`expected 16-byte status in START_POLL, got ${pkt.payload.length}`);
           }
           log.debug(`START_POLL: status byte 0x${pkt.payload[0].toString(16)}`);
-          if (pkt.payload[0] === 0x01) {
-            // Ready — send one more FS F confirmation before re-issuing FS G.
-            state = "START_POLL_READY";
-            sendCmd(buildFsF(), 16);
-          } else {
-            // Not ready yet — keep polling.
-            sendCmd(buildFsF(), 16);
-          }
+          state = pkt.payload[0] === 0x01 ? "START_POLL_READY" : "START_POLL";
+          sendCmd(buildFsF(), 16);
           return;
 
         case "START_POLL_READY":
@@ -607,8 +601,6 @@ export function startScanSessionLegacy(
             // We push speculatively (next page may not arrive on hardware fault).
             // composePdfFromJpegs uses Set.has() so a dangling index is benign.
           }
-          // Always probe ADF status. STATUS_1A's handler decides whether to continue
-          // the inter-page loop (status byte 0 = 0x01) or wrap up (0x81 = ADF empty).
           inInterPageLoop = true;
           state = "STATUS_1A";
           sendCmd(buildFsF(), 16);
@@ -655,7 +647,6 @@ export function startScanSessionLegacy(
           return;
 
         case "ADF_CLEANUP_STATUS":
-          // FS F status check during ADF post-scan cleanup; then send second ESC ).
           if (pkt.payload.length !== 16) {
             return fail(`expected 16-byte status in ADF_CLEANUP_STATUS, got ${pkt.payload.length}`);
           }
@@ -665,7 +656,7 @@ export function startScanSessionLegacy(
           return;
 
         case "CLEANUP_2":
-          // Second ESC ) — also may return 0x80; then unlock
+          // May return 0x80 (NAK); both values are acceptable.
           if (pkt.payload.length !== 1) {
             return fail(`expected 1-byte CLEANUP_2 reply, got ${pkt.payload.length}`);
           }
