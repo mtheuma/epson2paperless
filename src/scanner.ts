@@ -979,8 +979,8 @@ export function startScanSession(
         log.error("Scan completed with zero image chunks");
         return;
       }
-      flushCurrentPage();
       setImmediate(() => {
+        flushCurrentPage();
         finalizeSession({
           sessionTempDir,
           outputDir: session.outputDir,
