@@ -24,6 +24,7 @@ describe("loadConfig", () => {
     delete process.env.PAPERLESS_TOKEN_FILE;
     delete process.env.PAPERLESS_DELETE_AFTER_UPLOAD;
     delete process.env.PRINTER_CERT_FINGERPRINT;
+    delete process.env.JPEG_QUALITY;
   });
 
   it("throws if PRINTER_IP is missing", () => {
@@ -137,6 +138,24 @@ describe("loadConfig", () => {
   it("rejects invalid SHUTDOWN_TIMEOUT_MS", () => {
     process.env.PRINTER_IP = "192.0.2.58";
     process.env.SHUTDOWN_TIMEOUT_MS = "not-a-number";
+    expect(() => loadConfig()).toThrow();
+  });
+
+  it("defaults JPEG_QUALITY to 90", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    delete process.env.JPEG_QUALITY;
+    expect(loadConfig().jpegQuality).toBe(90);
+  });
+
+  it("accepts a JPEG_QUALITY override", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.JPEG_QUALITY = "75";
+    expect(loadConfig().jpegQuality).toBe(75);
+  });
+
+  it("rejects JPEG_QUALITY out of range", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.JPEG_QUALITY = "150";
     expect(() => loadConfig()).toThrow();
   });
 
