@@ -84,6 +84,41 @@ describe("protocol-probe", () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
+  it("does NOT cache legacy results (avoids pinning a misclassified ECONNRESET)", async () => {
+    const fakeSocket = {
+      destroy: vi.fn(),
+      once: (ev: string, cb: (e: Error) => void) => {
+        if (ev === "error") {
+          setImmediate(() => {
+            const err = new Error("conn reset") as Error & { code?: string };
+            err.code = "ECONNRESET";
+            cb(err);
+          });
+        }
+        return fakeSocket;
+      },
+      on: () => fakeSocket,
+      setTimeout: () => fakeSocket,
+    };
+    const spy = vi.spyOn(tls, "connect").mockReturnValue(fakeSocket as unknown as tls.TLSSocket);
+
+    const a = await detectVariant({
+      printerIp: "10.0.0.6",
+      port: 1865,
+      override: "auto",
+      timeoutMs: 100,
+    });
+    const b = await detectVariant({
+      printerIp: "10.0.0.6",
+      port: 1865,
+      override: "auto",
+      timeoutMs: 100,
+    });
+    expect(a).toBe("legacy");
+    expect(b).toBe("legacy");
+    expect(spy).toHaveBeenCalledTimes(2);
+  });
+
   it("rejects on timeout", async () => {
     vi.spyOn(tls, "connect").mockReturnValue({
       destroy: vi.fn(),

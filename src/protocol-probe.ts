@@ -25,7 +25,15 @@ export async function detectVariant(opts: DetectOptions): Promise<Variant> {
   if (cached) return cached;
 
   const variant = await probeTls(opts.printerIp, opts.port, opts.timeoutMs);
-  cache.set(opts.printerIp, variant);
+  // Cache positive evidence only. ECONNRESET — which classifies as "legacy" —
+  // can also be triggered by a transient network blip mid-handshake against
+  // a real ET-4950. Caching that misclassification would pin every subsequent
+  // scan to the wrong scanner. Re-probing on each scan when the result is
+  // "legacy" is cheap (real WF-3620 RSTs back fast), and self-heals once the
+  // network blip clears.
+  if (variant === "esci2") {
+    cache.set(opts.printerIp, variant);
+  }
   log.info(`Detected protocol variant for ${opts.printerIp}: ${variant}`);
   return variant;
 }
