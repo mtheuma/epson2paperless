@@ -47,8 +47,19 @@ export async function extract(opts: ExtractOptions): Promise<FixtureEvent[]> {
     "-e",
     "tcp.payload",
   ];
-  const stdout = await runTshark(tshark, args);
-  const events = foldImageChunks(parseLines(stdout, opts.hostIp));
+  const folder = createImageChunkFolder();
+  await runTshark(tshark, args, (line) => {
+    const trimmed = line.trim();
+    if (!trimmed) return;
+    const [tsStr, src, hex] = trimmed.split("|");
+    if (!hex) return;
+    folder.feed({
+      dir: src === opts.hostIp ? "h>p" : "p>h",
+      ts: parseFloat(tsStr ?? "0"),
+      hex,
+    });
+  });
+  const events = folder.finish();
   const dirs = new Set(events.map((e) => e.dir));
   if (events.length > 0 && (!dirs.has("h>p") || !dirs.has("p>h"))) {
     throw new Error(
@@ -59,67 +70,56 @@ export async function extract(opts: ExtractOptions): Promise<FixtureEvent[]> {
   return events;
 }
 
-function runTshark(bin: string, args: string[]): Promise<string> {
+/**
+ * Stream tshark stdout line-by-line. Buffering the full output ran into Node's
+ * 0x1fffffe8-character string-length limit on multi-hundred-megabyte pcaps.
+ */
+function runTshark(bin: string, args: string[], onLine: (line: string) => void): Promise<void> {
   return new Promise((resolve, reject) => {
     const child = spawn(bin, args, { stdio: ["ignore", "pipe", "pipe"] });
-    const out: Buffer[] = [];
     const err: Buffer[] = [];
-    child.stdout.on("data", (d: Buffer) => out.push(d));
+    let leftover = "";
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      const text = leftover + chunk;
+      const lines = text.split(/\r?\n/);
+      leftover = lines.pop() ?? "";
+      for (const line of lines) onLine(line);
+    });
     child.stderr.on("data", (d: Buffer) => err.push(d));
     child.on("error", reject);
     child.on("close", (code) => {
+      if (leftover) onLine(leftover);
       if (code !== 0) {
         reject(new Error(`tshark exited ${code}: ${Buffer.concat(err).toString()}`));
         return;
       }
-      resolve(Buffer.concat(out).toString());
+      resolve();
     });
   });
 }
 
-function parseLines(stdout: string, hostIp: string): FixtureEvent[] {
-  const events: FixtureEvent[] = [];
-  for (const line of stdout.split(/\r?\n/)) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    const [tsStr, src, hex] = trimmed.split("|");
-    if (!hex) continue;
-    events.push({
-      dir: src === hostIp ? "h>p" : "p>h",
-      ts: parseFloat(tsStr ?? "0"),
-      hex,
-    });
-  }
-  return events;
-}
-
 /**
- * Replace runs of IS-0xa200 image chunks (and their TCP continuation frames)
- * with a single summary record. Keeps the JSONL small (a few KB instead of
- * the original hundreds of MB).
+ * Streaming version of the image-chunk folder. Replace runs of IS-0xa200 image
+ * chunks (and their TCP continuation frames) with a single summary record.
  *
  * Large image payloads are typically split across many TCP frames. The first
  * frame of each IS chunk starts with the IS header "4953a200". Subsequent
  * frames in the same TCP stream carry raw continuation bytes with no IS
- * header. We fold the entire run (header frame + all continuations) into one
- * summary record.
+ * header. The folder accumulates run state across feed() calls; finish()
+ * flushes any in-progress run and returns the full event list.
  */
-function foldImageChunks(events: FixtureEvent[]): FixtureEvent[] {
+interface ImageChunkFolder {
+  feed(e: { dir: "h>p" | "p>h"; ts: number; hex: string }): void;
+  finish(): FixtureEvent[];
+}
+
+function createImageChunkFolder(): ImageChunkFolder {
   const out: FixtureEvent[] = [];
   let runStart: { ts: number; chunkSize: number } | null = null;
   let runFrameCount = 0;
   let runTotalBytes = 0;
-
-  const isImageChunkHeader = (e: FixtureEvent): boolean => {
-    if (e.dir !== "p>h" || !("hex" in e)) return false;
-    return e.hex.startsWith(IS_IMAGE_CHUNK_HEX);
-  };
-
-  /** A continuation frame: printer→host, does NOT start with IS magic "4953". */
-  const isImageContinuation = (e: FixtureEvent): boolean => {
-    if (e.dir !== "p>h" || !("hex" in e)) return false;
-    return !e.hex.startsWith(IS_HEADER_HEX_PREFIX);
-  };
 
   const flushRun = (): void => {
     if (!runStart) return;
@@ -136,40 +136,54 @@ function foldImageChunks(events: FixtureEvent[]): FixtureEvent[] {
     runTotalBytes = 0;
   };
 
-  for (const e of events) {
-    if (isImageChunkHeader(e) && "hex" in e) {
-      // IS header bytes 6-9 (hex chars 12-20) are the payload size (BE uint32)
-      const payloadSize = parseInt(e.hex.slice(12, 20), 16);
-      if (!runStart) runStart = { ts: e.ts, chunkSize: payloadSize };
-      runFrameCount++;
-      runTotalBytes += payloadSize;
-      continue;
-    }
-    if (runStart && isImageContinuation(e) && "hex" in e) {
-      // TCP continuation frame: may carry the tail of the current chunk AND the IS-0xa200
-      // header(s) of subsequent chunks packed into the same TCP segment. Scan for any
-      // embedded IS-0xa200 headers and accumulate only their declared payloadSize —
-      // do NOT add raw frame bytes, which would double-count data already declared by
-      // the IS headers.
-      runFrameCount++;
-      let offset = 0;
-      while (true) {
-        const pos = e.hex.indexOf(IS_IMAGE_CHUNK_HEX, offset);
-        if (pos === -1) break;
-        // IS header layout: magic(4) type(4) flags(4) payloadSize(8) = 20 hex chars total
-        const payloadHex = e.hex.slice(pos + 12, pos + 20);
-        if (payloadHex.length === 8) {
-          runTotalBytes += parseInt(payloadHex, 16);
-        }
-        offset = pos + 8;
+  return {
+    feed(e) {
+      const isPrinter = e.dir === "p>h";
+      const isImageChunkHeader = isPrinter && e.hex.startsWith(IS_IMAGE_CHUNK_HEX);
+      // During an image-stream run, anything from the printer that does NOT
+      // start with the IS-0xa200 magic is a continuation frame — including raw
+      // pixel data that happens to begin with bytes 0x49 0x53 ("IS"). The
+      // earlier check on just `4953` was too permissive: pixel bytes coincide
+      // with that 2-byte prefix often enough on multi-MB streams to falsely
+      // terminate runs and inflate frame counts.
+      const isContinuation =
+        isPrinter && runStart !== null && !e.hex.startsWith(IS_IMAGE_CHUNK_HEX);
+
+      if (isImageChunkHeader) {
+        // IS header bytes 6-9 (hex chars 12-20) are the payload size (BE uint32)
+        const payloadSize = parseInt(e.hex.slice(12, 20), 16);
+        if (!runStart) runStart = { ts: e.ts, chunkSize: payloadSize };
+        runFrameCount++;
+        runTotalBytes += payloadSize;
+        return;
       }
-      continue;
-    }
-    flushRun();
-    out.push(e);
-  }
-  flushRun();
-  return out;
+      if (isContinuation) {
+        // TCP continuation frame: may carry the tail of the current chunk AND
+        // the IS-0xa200 header(s) of subsequent chunks packed into the same TCP
+        // segment. Scan for embedded IS-0xa200 headers and accumulate only their
+        // declared payloadSize — adding raw frame bytes would double-count data
+        // already declared by the IS headers.
+        runFrameCount++;
+        let offset = 0;
+        while (true) {
+          const pos = e.hex.indexOf(IS_IMAGE_CHUNK_HEX, offset);
+          if (pos === -1) break;
+          const payloadHex = e.hex.slice(pos + 12, pos + 20);
+          if (payloadHex.length === 8) {
+            runTotalBytes += parseInt(payloadHex, 16);
+          }
+          offset = pos + 8;
+        }
+        return;
+      }
+      flushRun();
+      out.push(e);
+    },
+    finish() {
+      flushRun();
+      return out;
+    },
+  };
 }
 
 async function main(): Promise<void> {
