@@ -235,6 +235,72 @@ The temp directory is removed in a `finally` block regardless of outcome.
 
 ---
 
+## Legacy variant (WF-3620)
+
+The WF-3620 (and other 2014-era Epson printers using the same firmware
+generation) speaks **plain TCP on port 1865** with **legacy ESC/I commands**
+inside the same IS framing the ET-4950 uses. The protocol is decided per
+session by `protocol-probe.ts`: a quick TLS handshake against port 1865
+distinguishes the two — TLS success means esci2, `ERR_SSL_WRONG_VERSION_NUMBER`
+or `ECONNRESET` means legacy. Successful esci2 probes are cached for the
+daemon's lifetime; legacy is never cached so a flaky network blip during a
+TLS handshake doesn't pin the wrong scanner.
+
+Key wire differences (full table in
+`.reference/wireshark-captures/wf-3620/protocol-decode.md`):
+
+- Init is `ESC @` (`1b 40`), not `FS Y`.
+- Source select is `ESC e <byte>` (0=flatbed, 1=ADF simplex, 2=ADF duplex)
+  separately from the FS W block, not encoded in PARA tokens.
+- Scan parameters fit in a 64-byte little-endian binary block after `FS W`,
+  not a 936-byte ASCII PARA blob.
+- The printer pushes raw 24-bit RGB pixels in IS-0xa200 chunks at
+  600 DPI (JPEG) / 300 DPI (PDF) — the firmware locks the resolution to
+  the panel's format choice.
+- ADF pages are terminated by a host-sent `0x0c 0x00` page-eject. Duplex
+  produces two cycles per sheet; the back side comes out 180°-rotated and
+  the host applies EXIF Orientation=3 / `/Rotate 180` accordingly.
+
+The legacy state machine lives in `src/scanner-legacy.ts`. Per-page raw
+pixel buffers are accumulated in memory (~104 MB at 600 DPI A4), encoded
+to JPEG via sharp, and handed off to `output-tail.ts`'s shared post-scan
+pipeline.
+
+### Source selection (legacy)
+
+The PushScan SOAP carries `duplex` and `action` (Sides + Format) but no
+explicit ADF-vs-flatbed selector. v1 ships a simpler mapping than the
+Windows driver's probe-and-fallback:
+
+| Panel selection | scanner-legacy source |
+| --------------- | --------------------- |
+| 2-paged: On     | `adf-duplex`          |
+| 2-paged: Off    | `adf-simplex`         |
+
+Setting `LEGACY_FORCE_SOURCE=flatbed` (or `adf-simplex` / `adf-duplex`)
+overrides the mapping. **Future work**: mirror the driver's probe-and-
+fallback (ESC e 0x01 → FS F → bit-7 of byte 0 selects ADF vs flatbed)
+so the panel button auto-detects without env-var configuration.
+
+### Multi-page termination
+
+After every page-eject, the host polls `FS F`. The 16-byte status reply's
+byte 0 is the discriminator: `0x01` means the ADF still has paper (loop
+back through gamma/window/start for the next page); `0x81` means the ADF
+is empty (proceed to cleanup). This handles arbitrary page counts —
+3-sheet simplex, 4-sheet duplex, and 1-sheet duplex all share the same
+state-machine path.
+
+The first `FS G` of an ADF session sometimes returns a 14-byte reply with
+`chunkSize = 0` — the printer is still threading paper from the tray and
+isn't ready to start streaming. The state machine handles this with a
+small retry loop: `START_POLL` polls `FS F` until status byte 0 is `0x01`,
+then `START_POLL_READY` does one more `FS F` for confirmation, then
+re-issues `FS G`. This pattern was captured in `adf-4-page-duplex-pdf` and
+mirrors the Windows driver's behaviour.
+
+---
+
 ## Reverse engineering: how this was built
 
 The implementation was developed in three phases, each using a different tool to peel back one layer of the protocol.
