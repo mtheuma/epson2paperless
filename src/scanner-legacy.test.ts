@@ -366,10 +366,6 @@ describe("scanner-legacy", () => {
 });
 
 describe("appendImageChunk", () => {
-  // The wire-format reality (fixture extraction confirmed): each IS-0xa200
-  // payload is 1 status byte followed by chunkSize pixel bytes. Accumulating
-  // the whole payload drifts the page buffer by 1 byte per chunk, which on a
-  // ~1750-chunk page renders as horizontal RGB stripes.
   it("strips the leading status byte and copies the pixel tail", () => {
     const dest = Buffer.alloc(8, 0x00);
     const offset = appendImageChunk(Buffer.from([0x01, 0xaa, 0xbb, 0xcc]), dest, 2);

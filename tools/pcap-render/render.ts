@@ -48,10 +48,7 @@ export async function render(opts: RenderOptions): Promise<{ pageCount: number }
   const pageSize = geom.widthPx * geom.heightPx * 3;
   const buffers: Buffer[] = [];
   let currentChunkRemaining = 0;
-  // Each IS-0xa200 chunk's payload starts with a 1-byte status marker before
-  // the pixel data. This flag tracks whether we still need to skip it for
-  // the current chunk; the marker may land in the same TCP segment as the
-  // header or be deferred to the next segment.
+  // IS-0xa200 chunks prefix pixels with a status byte; the marker may span TCP segments.
   let pendingStatusByte = false;
 
   await runTshark(tshark, args, (line) => {

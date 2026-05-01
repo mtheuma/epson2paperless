@@ -806,13 +806,9 @@ function computeExpectedBytes(source: Source, format: Format): number {
   return geom.widthPx * geom.heightPx * 3;
 }
 
-/**
- * Copy the pixel-byte tail of an IS-0xa200 chunk payload into `dest` at `offset`.
- * Each chunk's payload is [status, ...pixels]; the status byte is discarded.
- * Returns the new offset.
- */
+/** Strips the leading status byte from an IS-0xa200 chunk payload, then appends the pixel tail. */
 export function appendImageChunk(payload: Buffer, dest: Buffer, offset: number): number {
   if (payload.length === 0) return offset;
-  payload.copy(dest, offset, 1);
+  payload.subarray(1).copy(dest, offset);
   return offset + payload.length - 1;
 }
