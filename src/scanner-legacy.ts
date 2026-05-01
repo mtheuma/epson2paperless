@@ -30,7 +30,7 @@ import {
   type Format,
 } from "./esci-legacy.js";
 import { GAMMA_LUT_R, GAMMA_LUT_G, GAMMA_LUT_B } from "./esci-legacy-luts.js";
-import { encodeRawRgbToJpeg } from "./raw-to-jpeg.js";
+import { encodeRawGbrToJpeg } from "./raw-to-jpeg.js";
 import { setJpegOrientation } from "./exif.js";
 import { resolveSessionTimestamp } from "./output.js";
 import { finalizeSession } from "./output-tail.js";
@@ -687,7 +687,7 @@ export function startScanSessionLegacy(
       if (!fsGReply) return fail("page complete with no FS G reply");
       const geom = geometry({ source: session.source, format: session.format });
       try {
-        let jpg = await encodeRawRgbToJpeg(
+        let jpg = await encodeRawGbrToJpeg(
           imageBuffer,
           geom.widthPx,
           geom.heightPx,

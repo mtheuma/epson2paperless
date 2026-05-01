@@ -4,7 +4,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { runTshark, IS_IMAGE_CHUNK_HEX } from "../pcap-extract/extract.js";
 import { IS_HEADER_SIZE } from "../../src/protocol.js";
-import { encodeRawRgbToJpeg } from "../../src/raw-to-jpeg.js";
+import { encodeRawGbrToJpeg } from "../../src/raw-to-jpeg.js";
 import { setJpegOrientation } from "../../src/exif.js";
 import { geometry, type Source, type Format } from "../../src/esci-legacy.js";
 import { resolveSessionTimestamp } from "../../src/output.js";
@@ -79,12 +79,12 @@ export async function render(opts: RenderOptions): Promise<{ pageCount: number }
     }
   });
 
-  const allRgb = Buffer.concat(buffers);
-  const pageCount = Math.floor(allRgb.length / pageSize);
+  const allGbr = Buffer.concat(buffers);
+  const pageCount = Math.floor(allGbr.length / pageSize);
   if (pageCount === 0) {
     throw new Error(
       `pcap-render: no full pages extracted from ${opts.pcapPath} ` +
-        `(got ${allRgb.length} bytes, page size ${pageSize}). ` +
+        `(got ${allGbr.length} bytes, page size ${pageSize}). ` +
         `Verify --source and --format match the capture.`,
     );
   }
@@ -96,14 +96,14 @@ export async function render(opts: RenderOptions): Promise<{ pageCount: number }
 
   // Encode pages in parallel — sharp dispatches to a libuv worker pool, so
   // awaiting sequentially leaves cores idle. For a 4-page duplex JPEG run
-  // that's ~9s instead of ~36s. Memory tradeoff is bounded: the raw RGB
-  // pages already coexist in `allRgb` regardless of encode concurrency.
+  // that's ~9s instead of ~36s. Memory tradeoff is bounded: the raw GBR
+  // pages already coexist in `allGbr` regardless of encode concurrency.
   const encoded = await Promise.all(
     Array.from({ length: pageCount }, async (_, i) => {
-      const pageBytes = allRgb.subarray(i * pageSize, (i + 1) * pageSize);
+      const pageBytes = allGbr.subarray(i * pageSize, (i + 1) * pageSize);
       const pageNum = i + 1;
       const isBackPage = opts.source === "adf-duplex" && pageNum % 2 === 0;
-      const jpg = await encodeRawRgbToJpeg(pageBytes, geom.widthPx, geom.heightPx, 90);
+      const jpg = await encodeRawGbrToJpeg(pageBytes, geom.widthPx, geom.heightPx, 90);
       return { pageNum, isBackPage, jpg: isBackPage ? setJpegOrientation(jpg, 3) : jpg };
     }),
   );

@@ -1,8 +1,8 @@
 # pcap-render
 
 Dev-only CLI that takes a real Wireshark `.pcap` of a WF-3620 scan session
-and runs the captured raw RGB pixel data through the project's image
-pipeline (`encodeRawRgbToJpeg` → `output-tail.finalizeSession`), producing
+and runs the captured raw GBR pixel data through the project's image
+pipeline (`encodeRawGbrToJpeg` → `output-tail.finalizeSession`), producing
 viewable JPEGs / PDFs on disk.
 
 Used to eyeball real maltris captures end-to-end before merging WF-3620
