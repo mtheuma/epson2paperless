@@ -24,12 +24,7 @@ describe("raw-to-jpeg", () => {
     expect(meta.format).toBe("jpeg");
   });
 
-  // Regression for issue #24 / WF-3620 colour swap: bytes from the WF-3620 are
-  // GBR-interleaved per pixel. A direct sharp encode treats them as RGB and
-  // produces channel-swapped output (red→blue etc.). This test feeds a known
-  // GBR pattern and asserts the decoded JPEG actually has the right colours.
-  // Uses 16-px-wide patches so the JPEG MCU and chroma subsampling don't
-  // bleed neighbouring colours into the sampled centre pixel.
+  // 16-px patches keep JPEG MCU and chroma subsampling out of the sampled centre.
   it("permutes GBR pixel order to RGB so each colour decodes correctly", async () => {
     const patchPx = 16;
     const colours = [
@@ -47,7 +42,6 @@ describe("raw-to-jpeg", () => {
         for (let dx = 0; dx < patchPx; dx++) {
           const x = p * patchPx + dx;
           const off = (y * width + x) * 3;
-          // Wire bytes are [G, B, R] per pixel.
           raw[off] = g;
           raw[off + 1] = b;
           raw[off + 2] = r;
