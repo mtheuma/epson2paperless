@@ -4,7 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { PDFDocument } from "pdf-lib";
-import { startScanSessionLegacy } from "./scanner-legacy.js";
+import { startScanSessionLegacy, appendImageChunk } from "./scanner-legacy.js";
 import { parseIsPacket } from "./protocol.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
 import { loadFixture, driveFixture } from "./test-support/legacy-replay.js";
@@ -363,4 +363,33 @@ describe("scanner-legacy", () => {
     expect(doc.getPage(0).getRotation().angle).toBe(0);
     expect(doc.getPage(1).getRotation().angle).toBe(180);
   }, 120_000);
+});
+
+describe("appendImageChunk", () => {
+  // The wire-format reality (fixture extraction confirmed): each IS-0xa200
+  // payload is 1 status byte followed by chunkSize pixel bytes. Accumulating
+  // the whole payload drifts the page buffer by 1 byte per chunk, which on a
+  // ~1750-chunk page renders as horizontal RGB stripes.
+  it("strips the leading status byte and copies the pixel tail", () => {
+    const dest = Buffer.alloc(8, 0x00);
+    const offset = appendImageChunk(Buffer.from([0x01, 0xaa, 0xbb, 0xcc]), dest, 2);
+    expect(offset).toBe(5);
+    expect(Array.from(dest)).toEqual([0x00, 0x00, 0xaa, 0xbb, 0xcc, 0x00, 0x00, 0x00]);
+  });
+
+  it("concatenates pixel tails from multiple chunks contiguously", () => {
+    const dest = Buffer.alloc(6, 0x00);
+    let offset = 0;
+    offset = appendImageChunk(Buffer.from([0x01, 0x11, 0x22]), dest, offset);
+    offset = appendImageChunk(Buffer.from([0x01, 0x33, 0x44, 0x55, 0x66]), dest, offset);
+    expect(offset).toBe(6);
+    expect(Array.from(dest)).toEqual([0x11, 0x22, 0x33, 0x44, 0x55, 0x66]);
+  });
+
+  it("treats a 1-byte status-only chunk as zero pixels", () => {
+    const dest = Buffer.alloc(4, 0xee);
+    const offset = appendImageChunk(Buffer.from([0x01]), dest, 1);
+    expect(offset).toBe(1);
+    expect(Array.from(dest)).toEqual([0xee, 0xee, 0xee, 0xee]);
+  });
 });

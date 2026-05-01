@@ -563,8 +563,7 @@ export function startScanSessionLegacy(
               `expected IS-0xa200 image chunk, got 0x${pkt.type.toString(16)} in state IMG_RECEIVING`,
             );
           }
-          pkt.payload.copy(imageBuffer, imageBufferOffset);
-          imageBufferOffset += pkt.payload.length;
+          imageBufferOffset = appendImageChunk(pkt.payload, imageBuffer, imageBufferOffset);
           if (imageBufferOffset >= expectedBytes) {
             // Transition to PAGE_ENCODING immediately to absorb any trailing image chunks
             // while the async JPEG encoding runs in the background.
@@ -755,8 +754,7 @@ export function startScanSessionLegacy(
         for (let i = 0; i < imageChunks.length; i++) {
           if (getState() !== "IMG_RECEIVING") break;
           const chunk = imageChunks[i];
-          chunk.copy(imageBuffer, imageBufferOffset);
-          imageBufferOffset += chunk.length;
+          imageBufferOffset = appendImageChunk(chunk, imageBuffer, imageBufferOffset);
           if (imageBufferOffset >= expectedBytes) {
             // Page filled. Any remaining chunks in imageChunks belong to a subsequent page —
             // put them back into deferredImageChunks so the next onPageComplete can drain them.
@@ -806,4 +804,15 @@ function isAck(pkt: { payload: Buffer }): boolean {
 function computeExpectedBytes(source: Source, format: Format): number {
   const geom = geometry({ source, format });
   return geom.widthPx * geom.heightPx * 3;
+}
+
+/**
+ * Copy the pixel-byte tail of an IS-0xa200 chunk payload into `dest` at `offset`.
+ * Each chunk's payload is [status, ...pixels]; the status byte is discarded.
+ * Returns the new offset.
+ */
+export function appendImageChunk(payload: Buffer, dest: Buffer, offset: number): number {
+  if (payload.length === 0) return offset;
+  payload.copy(dest, offset, 1);
+  return offset + payload.length - 1;
 }

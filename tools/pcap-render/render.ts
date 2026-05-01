@@ -48,6 +48,11 @@ export async function render(opts: RenderOptions): Promise<{ pageCount: number }
   const pageSize = geom.widthPx * geom.heightPx * 3;
   const buffers: Buffer[] = [];
   let currentChunkRemaining = 0;
+  // Each IS-0xa200 chunk's payload starts with a 1-byte status marker before
+  // the pixel data. This flag tracks whether we still need to skip it for
+  // the current chunk; the marker may land in the same TCP segment as the
+  // header or be deferred to the next segment.
+  let pendingStatusByte = false;
 
   await runTshark(tshark, args, (line) => {
     const trimmed = line.trim();
@@ -57,6 +62,13 @@ export async function render(opts: RenderOptions): Promise<{ pageCount: number }
     let pos = 0;
     while (pos < hex.length) {
       if (currentChunkRemaining > 0) {
+        if (pendingStatusByte) {
+          if (pos + 2 > hex.length) break; // status byte split across segments — defer
+          pos += 2;
+          currentChunkRemaining -= 1;
+          pendingStatusByte = false;
+          if (currentChunkRemaining === 0) continue;
+        }
         const availableBytes = (hex.length - pos) / 2;
         const take = Math.min(availableBytes, currentChunkRemaining);
         buffers.push(Buffer.from(hex.slice(pos, pos + take * 2), "hex"));
@@ -69,13 +81,14 @@ export async function render(opts: RenderOptions): Promise<{ pageCount: number }
       // Stopping rather than skipping prevents silent pixel corruption from
       // misaligned reads.
       if (hex.slice(pos, pos + IS_IMAGE_CHUNK_HEX.length) !== IS_IMAGE_CHUNK_HEX) break;
-      if (pos + PAYLOAD_SIZE_HEX_OFFSET + 8 > hex.length) break; // truncated header in this segment
+      if (pos + PAYLOAD_SIZE_HEX_OFFSET + 8 > hex.length) break; // truncated header
       const size = parseInt(
         hex.slice(pos + PAYLOAD_SIZE_HEX_OFFSET, pos + PAYLOAD_SIZE_HEX_OFFSET + 8),
         16,
       );
       pos += IS_HEADER_HEX_LEN;
       currentChunkRemaining = size;
+      pendingStatusByte = true;
     }
   });
 
