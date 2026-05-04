@@ -34,11 +34,6 @@ export function buildPushScanResponse(xuid: string): string {
   return headers + "\r\n" + RESPONSE_BODY;
 }
 
-// Legacy fixed-x-uid response — kept for tests that assert the exact byte
-// layout of the default. The live server builds its response per-request
-// via buildPushScanResponse(echoedXuid).
-export const PUSHSCAN_RESPONSE = buildPushScanResponse("1");
-
 export type PushScanAction = "jpg" | "pdf" | "preview" | "unknown";
 
 export interface PushScanInfo {

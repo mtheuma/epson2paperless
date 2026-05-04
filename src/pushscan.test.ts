@@ -2,7 +2,6 @@ import net from "node:net";
 import type { AddressInfo } from "node:net";
 import { describe, it, expect } from "vitest";
 import {
-  PUSHSCAN_RESPONSE,
   buildPushScanResponse,
   parsePushScanRequest,
   createPushScanServer,
@@ -11,27 +10,29 @@ import {
   type PushScanInfo,
 } from "./pushscan.js";
 
-describe("PUSHSCAN_RESPONSE", () => {
+describe("buildPushScanResponse default x-uid (xuid=1)", () => {
+  const response = buildPushScanResponse("1");
+
   it("starts with HTTP/1.0 200 OK", () => {
-    expect(PUSHSCAN_RESPONSE.startsWith("HTTP/1.0 200 OK\r\n")).toBe(true);
+    expect(response.startsWith("HTTP/1.0 200 OK\r\n")).toBe(true);
   });
 
   it("contains the required Epson headers with spaces before colons", () => {
-    expect(PUSHSCAN_RESPONSE).toContain("Server : Epson Net Scan Monitor/2.0");
-    expect(PUSHSCAN_RESPONSE).toContain("x-protocol-name : Epson Network Service Protocol");
-    expect(PUSHSCAN_RESPONSE).toContain("x-protocol-version : 2.00");
-    expect(PUSHSCAN_RESPONSE).toContain("x-status : 0001");
+    expect(response).toContain("Server : Epson Net Scan Monitor/2.0");
+    expect(response).toContain("x-protocol-name : Epson Network Service Protocol");
+    expect(response).toContain("x-protocol-version : 2.00");
+    expect(response).toContain("x-status : 0001");
   });
 
   it("has correct Content-Length matching the body", () => {
-    const parts = PUSHSCAN_RESPONSE.split("\r\n\r\n");
+    const parts = response.split("\r\n\r\n");
     const body = parts[1];
     const bodyLength = Buffer.byteLength(body, "utf-8");
-    expect(PUSHSCAN_RESPONSE).toContain(`Content-Length : ${bodyLength}`);
+    expect(response).toContain(`Content-Length : ${bodyLength}`);
   });
 
   it("contains the SOAP PushScanResponse with StatusOut OK", () => {
-    expect(PUSHSCAN_RESPONSE).toContain("<StatusOut>OK</StatusOut>");
+    expect(response).toContain("<StatusOut>OK</StatusOut>");
   });
 });
 
@@ -46,10 +47,6 @@ describe("buildPushScanResponse", () => {
       const response = buildPushScanResponse(xuid);
       expect(response).toContain(`x-uid : ${xuid}\r\n`);
     }
-  });
-
-  it("produces PUSHSCAN_RESPONSE when called with the legacy default '1'", () => {
-    expect(buildPushScanResponse("1")).toBe(PUSHSCAN_RESPONSE);
   });
 
   it("still contains all the other required fixed headers regardless of x-uid", () => {
