@@ -251,6 +251,33 @@ describe("loadConfig", () => {
     expect(() => loadConfig()).toThrow(/incompatible/i);
   });
 
+  it("rejects PRINTER_CERT_FINGERPRINT with PRINTER_PROTOCOL=auto", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.PRINTER_PROTOCOL = "auto";
+    process.env.PRINTER_CERT_FINGERPRINT =
+      "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89";
+    expect(() => loadConfig()).toThrow(/PRINTER_PROTOCOL=esci2/);
+  });
+
+  it("accepts PRINTER_PROTOCOL=auto without a fingerprint", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.PRINTER_PROTOCOL = "auto";
+    expect(loadConfig().printerProtocol).toBe("auto");
+    expect(loadConfig().printerCertFingerprint).toBeUndefined();
+  });
+
+  it("accepts PRINTER_CERT_FINGERPRINT with PRINTER_PROTOCOL=esci2", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.PRINTER_PROTOCOL = "esci2";
+    process.env.PRINTER_CERT_FINGERPRINT =
+      "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89";
+    const config = loadConfig();
+    expect(config.printerProtocol).toBe("esci2");
+    expect(config.printerCertFingerprint).toBe(
+      "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89",
+    );
+  });
+
   it("LEGACY_FORCE_SOURCE defaults to undefined", () => {
     process.env.PRINTER_IP = "10.0.0.1";
     delete process.env.LEGACY_FORCE_SOURCE;
@@ -334,6 +361,7 @@ describe("PRINTER_CERT_FINGERPRINT", () => {
 
   it("accepts a 32-byte uppercase fingerprint", () => {
     process.env.PRINTER_IP = "192.0.2.58";
+    process.env.PRINTER_PROTOCOL = "esci2";
     process.env.PRINTER_CERT_FINGERPRINT =
       "AB:CD:EF:01:23:45:67:89:0A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78";
     const config = loadConfig();
@@ -344,6 +372,7 @@ describe("PRINTER_CERT_FINGERPRINT", () => {
 
   it("normalises lowercase to uppercase", () => {
     process.env.PRINTER_IP = "192.0.2.58";
+    process.env.PRINTER_PROTOCOL = "esci2";
     process.env.PRINTER_CERT_FINGERPRINT =
       "ab:cd:ef:01:23:45:67:89:0a:bc:de:f0:12:34:56:78:9a:bc:de:f0:12:34:56:78:9a:bc:de:f0:12:34:56:78";
     const config = loadConfig();
