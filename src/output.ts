@@ -89,16 +89,21 @@ export function resolveSessionTimestamp(base: Date, outputDir: string): Date {
  * If `ext` is provided, only files with that extension are kept; otherwise
  * any extension matches. Non-matching names are dropped silently.
  */
-export function sortedPageFiles(names: string[], ext?: string): string[] {
+export interface PageEntry {
+  name: string;
+  page: number;
+}
+
+export function sortedPageFiles(names: string[], ext?: string): PageEntry[] {
   const extPattern = ext ? ext.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") : "[^.]+";
   const re = new RegExp(`^page_(\\d+)\\.${extPattern}$`);
-  const matched: { name: string; page: number }[] = [];
+  const matched: PageEntry[] = [];
   for (const name of names) {
     const m = re.exec(name);
     if (m) matched.push({ name, page: parseInt(m[1], 10) });
   }
   matched.sort((a, b) => a.page - b.page);
-  return matched.map((e) => e.name);
+  return matched;
 }
 
 /**
@@ -117,14 +122,13 @@ export function promoteTempPagesToOutput(
   sessionTs: Date,
   extension: string,
 ): string[] {
-  const entries = sortedPageFiles(fs.readdirSync(tempDir));
+  const entries = sortedPageFiles(fs.readdirSync(tempDir), extension);
 
   const paths: string[] = [];
   for (const entry of entries) {
-    const src = path.join(tempDir, entry);
+    const src = path.join(tempDir, entry.name);
     const data = fs.readFileSync(src);
-    const pageNum = parseInt(entry.match(/^page_(\d+)/)![1], 10);
-    const pageIndex = entries.length > 1 ? pageNum : undefined;
+    const pageIndex = entries.length > 1 ? entry.page : undefined;
     const filename = generateFilename(sessionTs, extension, pageIndex);
     const out = writeOutputFile(outputDir, filename, data);
     fs.unlinkSync(src);
