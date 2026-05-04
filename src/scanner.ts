@@ -163,6 +163,7 @@ export function startScanSession(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error(`Failed to create session temp dir under ${tempBase}: ${msg}. Aborting scan.`);
+      // rejectOnce direct — no socket open yet, so no close cascade to drive.
       rejectOnce(new Error(`Failed to create session temp dir under ${tempBase}: ${msg}`));
       return; // never start the TLS session
     }
@@ -229,6 +230,9 @@ export function startScanSession(
               `Printer cert fingerprint mismatch — expected ${session.printerCertFingerprint}, ` +
               `got ${actual ?? "(none)"}`;
             log.error(`${msg} — aborting scan`);
+            // errorReason direct (not failOnce) — failOnce would call transitionToError,
+            // which sends UNLOCK; we never sent LOCK (abort at handshake), so we do the
+            // cleanup manually and let the close handler reject.
             errorReason = new Error(msg);
             state = "ERROR";
             clearTimeoutTimer();
@@ -268,6 +272,9 @@ export function startScanSession(
       state = "ERROR";
       if (inPostScan && imageChunks.length > 0) {
         log.warn(`Error during post-scan cleanup in ${priorState} — saving captured image anyway`);
+        // Cleanup-state error after the IMG loop succeeded is treated as success;
+        // clear any error captured during cleanup so the close handler resolves.
+        errorReason = null;
         finalizeScan();
         return;
       }
@@ -986,11 +993,18 @@ export function startScanSession(
       // Verified via Wireshark: the Windows driver FINs ~27 µs after the
       // UNLOCK ack; our earlier post-unlock blocking writeFileSync delayed
       // the FIN by ~1 ms, which was enough for the printer to RST first.
-      socket.end();
       if (imageChunks.length === 0) {
         log.error("Scan completed with zero image chunks");
+        // rejectOnce BEFORE socket.end(): on a real TLS socket end() is async, but
+        // FakeTlsSocket.end() emits "close" synchronously — the close handler
+        // would call resolveOnce() before we ever set errorReason. Reject up
+        // front; socket.end() afterwards just cleans up the socket (resolveOnce
+        // in the close handler will be a no-op via the `resolved` guard).
+        rejectOnce(new Error("Scan completed with zero image chunks"));
+        socket.end();
         return;
       }
+      socket.end();
       setImmediate(() => {
         flushCurrentPage();
         finalizeSession({
@@ -1004,8 +1018,11 @@ export function startScanSession(
           .catch((err: unknown) => {
             const msg = err instanceof Error ? err.message : String(err);
             log.error(`Unexpected finalizeScan failure: ${msg}`);
+            rejectOnce(new Error(`finalizeScan failure: ${msg}`));
           })
           .finally(() => {
+            // resolveOnce is a no-op if rejectOnce already ran (resolved guard);
+            // if finalize succeeded we resolve here.
             resolveOnce();
           });
       });
