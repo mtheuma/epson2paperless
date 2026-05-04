@@ -195,3 +195,23 @@ export function buildStreamConfigPayload(reply: FsGReply, format: Format): Buffe
   buf.writeUInt32LE(TOTAL_BYTES_FIELD[format], 34);
   return buf;
 }
+
+export type DetectSourceResult = { ok: true; source: Source } | { ok: false; byte: number };
+
+/**
+ * Map the legacy FS F status byte (byte 0 of the 16-byte STATUS_2 reply)
+ * to a scan source. The Windows driver's Wireshark captures show two known
+ * values:
+ *   - 0x81 → flatbed (no ADF paper / no ADF present)
+ *   - 0x01 → ADF has paper; duplex flag from the panel disambiguates
+ *            simplex vs duplex
+ * Other values (jam, mid-feed, panel-vs-paper conflict, empty-tray for
+ * ADF-equipped models with paperless trays) are not yet captured. Return
+ * { ok: false, byte } so the caller can route through fail() with a
+ * compatibility-issue message.
+ */
+export function legacyDetectSource(fsfByte: number, duplex: boolean): DetectSourceResult {
+  if (fsfByte === 0x81) return { ok: true, source: "flatbed" };
+  if (fsfByte === 0x01) return { ok: true, source: duplex ? "adf-duplex" : "adf-simplex" };
+  return { ok: false, byte: fsfByte };
+}
