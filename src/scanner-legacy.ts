@@ -141,6 +141,7 @@ export function startScanSessionLegacy(
     let buffer = Buffer.alloc(0);
     let timeoutTimer: NodeJS.Timeout | null = null;
     let resolved = false;
+    let errorReason: Error | null = null;
 
     let fsGReply: ReturnType<typeof parseFsGReply> | null = null;
     let imageBuffer = Buffer.alloc(0);
@@ -180,10 +181,12 @@ export function startScanSessionLegacy(
       resolve();
     }
 
-    function fail(reason: string): void {
+    function failOnce(err: Error): void {
+      if (errorReason) return;
+      errorReason = err;
       if (state === "ERROR") return;
       state = "ERROR";
-      log.error(`State machine error: ${reason}`);
+      log.error(`State machine error: ${err.message}`);
       if (timeoutTimer) clearTimeout(timeoutTimer);
       try {
         socket.destroy();
@@ -197,7 +200,10 @@ export function startScanSessionLegacy(
       }
       if (resolved) return;
       resolved = true;
-      reject(new Error(reason));
+      reject(err);
+    }
+    function fail(reason: string): void {
+      failOnce(new Error(reason));
     }
 
     function armTimeout(): void {
