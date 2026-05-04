@@ -128,12 +128,24 @@ export function startScanSession(
   session: ScanSession,
   socketFactory: TlsSocketFactory = tls.connect,
 ): Promise<void> {
-  return new Promise<void>((resolve) => {
+  return new Promise<void>((resolve, reject) => {
+    let errorReason: Error | null = null;
     let resolved = false;
     const resolveOnce = (): void => {
       if (resolved) return;
       resolved = true;
       resolve();
+    };
+    const rejectOnce = (err: Error): void => {
+      if (resolved) return;
+      resolved = true;
+      reject(err);
+    };
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
+    const failOnce = (err: Error): void => {
+      if (errorReason) return; // first-error wins
+      errorReason = err;
+      transitionToError(); // existing helper triggers the close cascade
     };
 
     let state: State = "CONNECTING";
@@ -152,7 +164,7 @@ export function startScanSession(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error(`Failed to create session temp dir under ${tempBase}: ${msg}. Aborting scan.`);
-      resolveOnce();
+      rejectOnce(new Error(`Failed to create session temp dir under ${tempBase}: ${msg}`));
       return; // never start the TLS session
     }
     log.debug(`Session temp dir: ${sessionTempDir}`);
@@ -213,10 +225,11 @@ export function startScanSession(
           const peer = socket.getPeerCertificate();
           const actual = peer?.fingerprint256;
           if (actual !== session.printerCertFingerprint) {
-            log.error(
+            const msg =
               `Printer cert fingerprint mismatch — expected ${session.printerCertFingerprint}, ` +
-                `got ${actual ?? "(none)"} — aborting scan`,
-            );
+              `got ${actual ?? "(none)"}`;
+            log.error(`${msg} — aborting scan`);
+            errorReason = new Error(msg);
             state = "ERROR";
             clearTimeoutTimer();
             try {
@@ -225,9 +238,7 @@ export function startScanSession(
               /* ignore — cleanup best-effort */
             }
             socket.destroy();
-            // Don't call transitionToError() — it sends an UNLOCK packet, but
-            // we never sent the LOCK (we're aborting at handshake). The
-            // socket's "close" handler resolves the outer promise.
+            // Close handler reads errorReason and rejects.
             return;
           }
           log.debug(`Printer cert fingerprint verified: ${actual}`);
@@ -304,7 +315,8 @@ export function startScanSession(
     socket.on("close", () => {
       clearTimeoutTimer();
       log.info("TLS connection closed");
-      resolveOnce();
+      if (errorReason) rejectOnce(errorReason);
+      else resolveOnce();
     });
 
     function processBuffer(): void {
