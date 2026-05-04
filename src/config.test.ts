@@ -11,7 +11,6 @@ describe("loadConfig", () => {
     delete process.env.SCAN_DEST_NAME;
     delete process.env.SCAN_DEST_ID;
     delete process.env.OUTPUT_DIR;
-    delete process.env.KEEPALIVE_INTERVAL;
     delete process.env.HEALTH_PORT;
     delete process.env.LOG_LEVEL;
     delete process.env.LOG_FORMAT;
@@ -40,7 +39,6 @@ describe("loadConfig", () => {
     expect(config.scanDestName).toBe("Paperless");
     expect(config.scanDestId).toBe(0x02);
     expect(config.outputDir).toBe("/output");
-    expect(config.keepaliveInterval).toBe(500);
     expect(config.healthPort).toBe(3000);
     expect(config.logLevel).toBe("info");
     expect(config.logFormat).toBe("text");
@@ -52,7 +50,6 @@ describe("loadConfig", () => {
     process.env.SCAN_DEST_NAME = "MyScanner";
     process.env.SCAN_DEST_ID = "05";
     process.env.OUTPUT_DIR = "/scans";
-    process.env.KEEPALIVE_INTERVAL = "1000";
     process.env.HEALTH_PORT = "8080";
     process.env.LOG_LEVEL = "debug";
     process.env.LANGUAGE = "de";
@@ -61,7 +58,6 @@ describe("loadConfig", () => {
     expect(config.scanDestName).toBe("MyScanner");
     expect(config.scanDestId).toBe(0x05);
     expect(config.outputDir).toBe("/scans");
-    expect(config.keepaliveInterval).toBe(1000);
     expect(config.healthPort).toBe(8080);
     expect(config.logLevel).toBe("debug");
     expect(config.language).toBe("de");
