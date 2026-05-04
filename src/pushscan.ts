@@ -20,7 +20,7 @@ const RESPONSE_BODY_LENGTH = Buffer.byteLength(RESPONSE_BODY, "utf-8");
 // counter it increments and expects to see echoed back in our 200 OK. When
 // the values mismatch, the printer surfaces "Scanning Error" on the panel
 // even though the scan itself completes. See
-// docs/notes/2026-04-19-panel-error-investigation.md.
+// `docs/HOW-IT-WORKS.md` (push-scan trigger section).
 export function buildPushScanResponse(xuid: string): string {
   const headers =
     `HTTP/1.0 200 OK\r\n` +
