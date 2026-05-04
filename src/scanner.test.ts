@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -496,6 +496,9 @@ describe("scanner targeted tests — error paths", () => {
       },
       fake.asFactory(),
     );
+    // Attach the rejection handler before feeding the fatal packet so the
+    // rejection isn't momentarily unhandled (FakeTlsSocket.destroy() is sync).
+    const rejectsAssertion = expect(sessionPromise).rejects.toThrow(/fatal/i);
     fake.simulateConnect();
     fake.feed(buildIsPacket(0x8000));
     await new Promise((r) => setImmediate(r));
@@ -505,8 +508,7 @@ describe("scanner targeted tests — error paths", () => {
     const lastWrite = fake.writes[fake.writes.length - 1];
     expect(lastWrite.readUInt16BE(2)).toBe(0x2101); // UNLOCK packet type
 
-    fake.emit("close");
-    await expect(sessionPromise).resolves.toBeUndefined();
+    await rejectsAssertion;
   });
 
   it("aborts on unexpected IS type received mid-session", async () => {
@@ -523,6 +525,8 @@ describe("scanner targeted tests — error paths", () => {
       },
       fake.asFactory(),
     );
+    // Attach the rejection handler before feeding the error-causing packet.
+    const rejectsAssertion = expect(sessionPromise).rejects.toThrow(/protocol error/i);
     fake.simulateConnect();
     fake.feed(buildIsPacket(0x8000));
     await new Promise((r) => setImmediate(r));
@@ -534,11 +538,10 @@ describe("scanner targeted tests — error paths", () => {
     const sawUnlock = postErrorWrites.some((w) => w.length >= 4 && w.readUInt16BE(2) === 0x2101);
     expect(sawUnlock).toBe(true);
 
-    fake.emit("close");
-    await expect(sessionPromise).resolves.toBeUndefined();
+    await rejectsAssertion;
   });
 
-  it("socket 'error' event triggers transitionToError and resolves the promise", async () => {
+  it("socket 'error' event triggers transitionToError and rejects the promise", async () => {
     const fake = new FakeTlsSocket();
     const sessionPromise = startScanSession(
       {
@@ -552,16 +555,17 @@ describe("scanner targeted tests — error paths", () => {
       },
       fake.asFactory(),
     );
+    // Attach the rejection handler before emitting the error so the
+    // rejection isn't momentarily unhandled (FakeTlsSocket.destroy() is sync).
+    const rejectsAssertion = expect(sessionPromise).rejects.toThrow(/TLS connection error/i);
     fake.simulateConnect();
     fake.feed(buildIsPacket(0x8000));
     await new Promise((r) => setImmediate(r));
     // Simulate a mid-scan socket error (e.g., printer reboots).
     fake.emit("error", Object.assign(new Error("EPIPE"), { code: "EPIPE" }));
     await new Promise((r) => setImmediate(r));
-    // Simulate the socket's subsequent close event.
-    fake.emit("close");
-    // The promise should resolve (not reject) after close.
-    await expect(sessionPromise).resolves.toBeUndefined();
+    // The promise should reject with a classified error message.
+    await rejectsAssertion;
     // Last write should be the UNLOCK packet, proving transitionToError ran.
     const lastWrite = fake.writes[fake.writes.length - 1];
     expect(lastWrite.readUInt16BE(2)).toBe(0x2101);
@@ -590,8 +594,13 @@ describe("scanner source detection from first @STAT reply", () => {
     if (!paraBodyWrite) {
       throw new Error("scanner hasn't written a PARA body yet");
     }
+    // Attach the rejection handler before feeding the fatal packet so the
+    // rejection isn't momentarily unhandled (FakeTlsSocket.destroy() is sync).
+    const settle = sessionPromise.catch(() => {
+      /* expected: async fatal triggers rejection */
+    });
     fake.feed(buildIsPacket(0x9000, Buffer.from([0xa0])));
-    await sessionPromise;
+    await settle;
     return paraBodyWrite;
   }
 
@@ -635,8 +644,12 @@ describe("scanner IMG-loop termination", () => {
     // name at bytes 20-23. @FIN = "FIN "; @IMG = "IMG ".
     const lastName = fake.writes[fake.writes.length - 1].subarray(20, 24).toString("ascii");
     expect(lastName).toBe("FIN ");
+    // Attach handler before feeding the fatal packet to avoid unhandled rejection.
+    const settle = sessionPromise.catch(() => {
+      /* expected: async fatal triggers rejection */
+    });
     fake.feed(buildIsPacket(0x9000, Buffer.from([0xa0])));
-    await sessionPromise;
+    await settle;
   });
 
   it("still treats #pen without #lft as a page boundary for ADF", async () => {
@@ -645,8 +658,12 @@ describe("scanner IMG-loop termination", () => {
     const { fake, sessionPromise } = await drivePastImgTerminator(outputDir, "STATx0000000");
     const lastName = fake.writes[fake.writes.length - 1].subarray(20, 24).toString("ascii");
     expect(lastName).toBe("IMG ");
+    // Attach handler before feeding the fatal packet to avoid unhandled rejection.
+    const settle = sessionPromise.catch(() => {
+      /* expected: async fatal triggers rejection */
+    });
     fake.feed(buildIsPacket(0x9000, Buffer.from([0xa0])));
-    await sessionPromise;
+    await settle;
   });
 });
 
@@ -779,5 +796,139 @@ describe("startScanSession failure-mode matrix", () => {
       fake.asFactory(),
     );
     await expect(scanPromise).rejects.toThrow(/temp dir/i);
+  });
+
+  it("rejects on timeout (no response in TIMEOUT_MS)", async () => {
+    // CRITICAL: install fake timers BEFORE startScanSession runs. The scanner
+    // schedules a setTimeout(TIMEOUT_MS) inside the connect callback fired by
+    // simulateConnect(); if useFakeTimers is called after, the real timer is
+    // already armed and advancing fake timers won't fire it.
+    vi.useFakeTimers();
+    try {
+      const fake = new FakeTlsSocket();
+      const scanPromise = startScanSession(
+        {
+          printerIp: "1.2.3.4",
+          port: 1865,
+          destId: 0x02,
+          outputDir: "/tmp",
+          tempDir: "/tmp",
+          duplex: false,
+          action: "jpg",
+          paperless: undefined,
+        },
+        fake.asFactory(),
+      );
+      fake.simulateConnect();
+      // Attach the rejection handler before advancing fake timers so the
+      // rejection isn't momentarily unhandled (FakeTlsSocket.destroy() is sync,
+      // so the close event fires inside advanceTimersByTimeAsync).
+      const rejectsAssertion = expect(scanPromise).rejects.toThrow(/timeout/i);
+      // TIMEOUT_MS is 30_000 in scanner.ts (line 113); 60_000 overshoots safely.
+      await vi.advanceTimersByTimeAsync(60_000);
+      await rejectsAssertion;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("rejects on socket error mid-session", async () => {
+    const fake = new FakeTlsSocket();
+    const scanPromise = startScanSession(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        destId: 0x02,
+        outputDir: "/tmp",
+        tempDir: "/tmp",
+        duplex: false,
+        action: "jpg",
+        paperless: undefined,
+      },
+      fake.asFactory(),
+    );
+    fake.simulateConnect();
+    // Attach handler before emitting the error — FakeTlsSocket.destroy() fires
+    // "close" synchronously, which rejects the promise inside the emit call.
+    const rejectsAssertion = expect(scanPromise).rejects.toThrow(/ECONNREFUSED/);
+    fake.emit("error", Object.assign(new Error("ECONNREFUSED"), { code: "ECONNREFUSED" }));
+    await rejectsAssertion;
+  });
+
+  it("rejects on async ScanCancel event mid-session", async () => {
+    const fake = new FakeTlsSocket();
+    const scanPromise = startScanSession(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        destId: 0x02,
+        outputDir: "/tmp",
+        tempDir: "/tmp",
+        duplex: false,
+        action: "jpg",
+        paperless: undefined,
+      },
+      fake.asFactory(),
+    );
+    fake.simulateConnect();
+    // Attach handler before feeding — FakeTlsSocket.destroy() fires "close"
+    // synchronously, rejecting the promise inside fake.feed().
+    const cancelPacket = buildIsPacket(0x9000, Buffer.from([0x03]));
+    const rejectsAssertion = expect(scanPromise).rejects.toThrow(/ScanCancel/);
+    fake.feed(cancelPacket);
+    await rejectsAssertion;
+  });
+
+  it("rejects on async fatal event mid-session", async () => {
+    const fake = new FakeTlsSocket();
+    const scanPromise = startScanSession(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        destId: 0x02,
+        outputDir: "/tmp",
+        tempDir: "/tmp",
+        duplex: false,
+        action: "jpg",
+        paperless: undefined,
+      },
+      fake.asFactory(),
+    );
+    fake.simulateConnect();
+    // ASYNC_FATAL in scanner.ts:124 contains 0x02 (Disconnect), 0x80 (Timeout),
+    // 0xa0 (ServerError). Use 0x02. (0x05 is "unknown" and falls through to
+    // log.warn with no rejection.)
+    const fatalPacket = buildIsPacket(0x9000, Buffer.from([0x02]));
+    // Attach handler before feeding — FakeTlsSocket.destroy() fires "close"
+    // synchronously, rejecting the promise inside fake.feed().
+    const rejectsAssertion = expect(scanPromise).rejects.toThrow(/fatal/i);
+    fake.feed(fatalPacket);
+    await rejectsAssertion;
+  });
+
+  it("rejects on per-state assertion failure (unexpected packet type)", async () => {
+    const fake = new FakeTlsSocket();
+    const scanPromise = startScanSession(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        destId: 0x02,
+        outputDir: "/tmp",
+        tempDir: "/tmp",
+        duplex: false,
+        action: "jpg",
+        paperless: undefined,
+      },
+      fake.asFactory(),
+    );
+    fake.simulateConnect();
+    // Feed a packet whose type doesn't match the WELCOME state's expectation.
+    // WELCOME expects type 0x8000. Feed type 0xa999 to force ensure(...) to fail.
+    const wrongTypePacket = buildIsPacket(0xa999, Buffer.alloc(0));
+    // Attach handler before feeding — FakeTlsSocket.destroy() fires "close"
+    // synchronously, rejecting the promise inside fake.feed().
+    const rejectsAssertion = expect(scanPromise).rejects.toThrow(/protocol error/i);
+    fake.feed(wrongTypePacket);
+    await rejectsAssertion;
   });
 });
