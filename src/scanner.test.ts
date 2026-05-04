@@ -735,7 +735,49 @@ describe("startScanSession — printer cert pinning", () => {
     );
 
     fake.simulateConnect();
-    await done;
+    await expect(done).rejects.toThrow(/fingerprint mismatch/i);
     expect(fake.writes.length).toBe(0);
+  });
+});
+
+describe("startScanSession failure-mode matrix", () => {
+  it("rejects when the printer cert fingerprint does not match the pin", async () => {
+    const fake = new FakeTlsSocket();
+    fake.setPeerCertificate("AA:BB:CC"); // FakeTlsSocket.setPeerCertificate takes a string
+    const scanPromise = startScanSession(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        destId: 0x02,
+        outputDir: "/tmp/out-doesnotmatter",
+        tempDir: "/tmp",
+        duplex: false,
+        action: "jpg",
+        paperless: undefined,
+        printerCertFingerprint: "DE:AD:BE:EF",
+      },
+      fake.asFactory(),
+    );
+    fake.simulateConnect();
+    await expect(scanPromise).rejects.toThrow(/fingerprint mismatch/i);
+  });
+
+  it("rejects when the session temp dir cannot be created", async () => {
+    const fake = new FakeTlsSocket();
+    // tempDir points at a path that mkdtempSync cannot resolve.
+    const scanPromise = startScanSession(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        destId: 0x02,
+        outputDir: "/tmp/out-doesnotmatter",
+        tempDir: "/this/path/definitely/does/not/exist",
+        duplex: false,
+        action: "jpg",
+        paperless: undefined,
+      },
+      fake.asFactory(),
+    );
+    await expect(scanPromise).rejects.toThrow(/temp dir/i);
   });
 });
