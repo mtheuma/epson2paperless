@@ -141,7 +141,6 @@ export function startScanSession(
       resolved = true;
       reject(err);
     };
-    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     const failOnce = (err: Error): void => {
       if (errorReason) return; // first-error wins
       errorReason = err;
@@ -197,8 +196,9 @@ export function startScanSession(
     const resetTimeout = () => {
       if (timeoutTimer) clearTimeout(timeoutTimer);
       timeoutTimer = setTimeout(() => {
-        log.error(`Timeout in state ${state} — no response in ${TIMEOUT_MS}ms`);
-        transitionToError();
+        const msg = `Timeout in state ${state} — no response in ${TIMEOUT_MS}ms`;
+        log.error(msg);
+        failOnce(new Error(msg));
       }, TIMEOUT_MS);
     };
 
@@ -308,7 +308,7 @@ export function startScanSession(
       log.error(`TLS connection error in state ${state}`, err);
       clearTimeoutTimer();
       if (state !== "DONE") {
-        transitionToError();
+        failOnce(new Error(`TLS connection error in state ${state}: ${err.message}`));
       }
     });
 
@@ -370,10 +370,10 @@ export function startScanSession(
         log.info("Async event: Stop (0x04)");
       } else if (ASYNC_CANCEL.has(dispatch)) {
         log.warn(`Async event: ScanCancel (0x${dispatch.toString(16)}) — aborting`);
-        transitionToError();
+        failOnce(new Error(`Async ScanCancel (0x${dispatch.toString(16)}) during state ${state}`));
       } else if (ASYNC_FATAL.has(dispatch)) {
         log.error(`Async event: fatal (0x${dispatch.toString(16)}) — aborting`);
-        transitionToError();
+        failOnce(new Error(`Async fatal event 0x${dispatch.toString(16)} during state ${state}`));
       } else {
         log.warn(`Async event: unknown dispatch byte 0x${dispatch.toString(16)}`);
       }
@@ -454,7 +454,7 @@ export function startScanSession(
     function ensure(condition: boolean, message: string): boolean {
       if (!condition) {
         log.error(message);
-        transitionToError();
+        failOnce(new Error(`Protocol error in state ${state}: ${message}`));
         return false;
       }
       return true;
