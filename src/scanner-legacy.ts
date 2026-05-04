@@ -146,7 +146,7 @@ export function startScanSessionLegacy(
     let imageBuffer = Buffer.alloc(0);
     let imageBufferOffset = 0;
     let expectedBytes = 0;
-    const pageJpegPaths: string[] = [];
+    let pageCount = 0;
     let gammaChannelIdx = 0;
     const backPageIndices: number[] = [];
     // Set to true when looping back for the back side of a duplex sheet; controls
@@ -595,8 +595,8 @@ export function startScanSessionLegacy(
           // is the back side of the same sheet.
           // Pages are 1-indexed: 1 (front), 2 (back), 3 (front), 4 (back) ... so back-pages
           // are even indices. We push them as we discover them.
-          if (session.source === "adf-duplex" && pageJpegPaths.length % 2 === 1) {
-            backPageIndices.push(pageJpegPaths.length + 1);
+          if (session.source === "adf-duplex" && pageCount % 2 === 1) {
+            backPageIndices.push(pageCount + 1);
             // We push speculatively (next page may not arrive on hardware fault).
             // composePdfFromJpegs uses Set.has() so a dangling index is benign.
           }
@@ -693,7 +693,7 @@ export function startScanSessionLegacy(
           session.jpegQuality,
         );
         if (getState() === "ERROR") return; // bail if fail() ran during the ~8s encode
-        const pageNum = pageJpegPaths.length + 1;
+        const pageNum = pageCount + 1;
         // Duplex: even-numbered pages (2, 4, …) are back pages and come out rotated 180° due to
         // the ADF U-turn path. Insert EXIF Orientation=3 so viewers render them right-side up.
         if (session.source === "adf-duplex" && pageNum % 2 === 0) {
@@ -701,7 +701,7 @@ export function startScanSessionLegacy(
         }
         const jpgPath = path.join(sessionTempDir, `page_${String(pageNum).padStart(2, "0")}.jpg`);
         fs.writeFileSync(jpgPath, jpg);
-        pageJpegPaths.push(jpgPath);
+        pageCount++;
         log.debug(`Page ${pageNum} encoded, ${jpg.length} bytes -> ${jpgPath}`);
       } catch (err) {
         fail(`raw-to-jpeg encoding failed: ${err instanceof Error ? err.message : String(err)}`);
