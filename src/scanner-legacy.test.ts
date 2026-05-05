@@ -5,7 +5,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { PDFDocument } from "pdf-lib";
 import { startScanSessionLegacy, appendImageChunk } from "./scanner-legacy.js";
-import { parseIsPacket, buildIsPacket } from "./protocol.js";
+import { parseIsPacket, buildIsPacket, IS_HEADER_SIZE } from "./protocol.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
 import { loadFixture, driveFixture } from "./test-support/legacy-replay.js";
 
@@ -402,8 +402,7 @@ describe("FS F unknown-byte handling", () => {
     const mutated = fixture.map((event) => {
       if (event.dir !== "p>h" || !("hex" in event)) return event;
       const buf = Buffer.from(event.hex, "hex");
-      // IS header is exactly 12 bytes with type at bytes 2-3 and payloadSize at 6-9.
-      if (buf.length === 12) {
+      if (buf.length === IS_HEADER_SIZE) {
         const type = buf.readUInt16BE(2);
         const length = buf.readUInt32BE(6);
         if (type === 0xa000 && length === 16) {

@@ -996,11 +996,11 @@ export function startScanSession(
       // the FIN by ~1 ms, which was enough for the printer to RST first.
       if (imageChunks.length === 0) {
         log.error("Scan completed with zero image chunks");
-        // rejectOnce BEFORE socket.end(): on a real TLS socket end() is async, but
-        // FakeTlsSocket.end() emits "close" synchronously — the close handler
-        // would call resolveOnce() before we ever set errorReason. Reject up
-        // front; socket.end() afterwards just cleans up the socket (resolveOnce
-        // in the close handler will be a no-op via the `resolved` guard).
+        // Reject immediately rather than via the close handler: clearTimeoutTimer
+        // already ran, so a stuck socket.end() (peer doesn't ack the FIN) would
+        // leave the promise pending forever. socket.end() afterwards is just
+        // socket cleanup; the close handler's resolveOnce() is a no-op via the
+        // resolved guard.
         rejectOnce(new Error("Scan completed with zero image chunks"));
         socket.end();
         return;
@@ -1022,8 +1022,6 @@ export function startScanSession(
             rejectOnce(new Error(`finalizeScan failure: ${msg}`));
           })
           .finally(() => {
-            // resolveOnce is a no-op if rejectOnce already ran (resolved guard);
-            // if finalize succeeded we resolve here.
             resolveOnce();
           });
       });
