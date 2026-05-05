@@ -86,7 +86,7 @@ Configuration is via environment variables. Only `PRINTER_IP` is required.
 | `LOG_LEVEL`        |          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                    |
 | `LOG_FORMAT`       |          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line — for `docker logs` + Loki / `jq`).                                                      |
 | `PREVIEW_ACTION`   |          | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen. |
-| `PRINTER_PROTOCOL` |          | `auto`           | `auto` (TLS-probe each session), `esci2` (force ET-4950 mode), `legacy` (force WF-3620 mode).                                                           |
+| `PRINTER_PROTOCOL` |          | `auto`           | `auto` (TLS-probe each session), `esci2` (force ESC/I-2 over TLS), `legacy` (force plain-TCP ESC/I).                                                    |
 | `JPEG_QUALITY`     |          | `90`             | JPEG encoder quality 1–100 for the legacy (WF-3620) path.                                                                                               |
 | `TEMP_DIR`         |          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                               |
 | `HEALTH_PORT`      |          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                   |
