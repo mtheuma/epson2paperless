@@ -34,7 +34,9 @@ export function logStartupBanner(config: Config, modeMessage: string): void {
       `Printer cert pinning: enabled (sha256 ${config.printerCertFingerprint.slice(0, 8)}…)`,
     );
   } else {
-    log.info("Printer cert pinning: disabled (set PRINTER_CERT_FINGERPRINT to enable)");
+    log.info(
+      "Printer cert pinning: disabled (set PRINTER_PROTOCOL=esci2 + PRINTER_CERT_FINGERPRINT to enable)",
+    );
   }
 
   log.info(

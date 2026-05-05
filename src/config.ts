@@ -51,6 +51,14 @@ const configSchema = z
         path: ["legacyForceSource"],
       });
     }
+    if (cfg.printerProtocol === "auto" && cfg.printerCertFingerprint) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          "PRINTER_CERT_FINGERPRINT requires PRINTER_PROTOCOL=esci2 explicitly. Under PRINTER_PROTOCOL=auto, a probe failure can downgrade silently to legacy (plain TCP, no TLS), which would bypass the pin.",
+        path: ["printerCertFingerprint"],
+      });
+    }
   });
 
 export type Config = z.infer<typeof configSchema>;
