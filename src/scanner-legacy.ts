@@ -790,7 +790,16 @@ export function startScanSessionLegacy(
           backPageIndices,
           paperless: session.paperless,
         })
-          .catch((err: unknown) => log.error(`finalizeSession failed: ${String(err)}`))
+          .catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error(`finalizeSession failed: ${msg}`);
+            // Symmetric with scanner.ts D.3: a finalize failure means no
+            // completed scan was saved, so reject — don't let the .finally
+            // resolveOnce silently mask it. failOnce sets errorReason and
+            // rejects via the resolved-guard; the .finally resolveOnce is
+            // then a no-op.
+            failOnce(new Error(`finalizeSession failure: ${msg}`));
+          })
           .finally(() => resolveOnce());
       });
     }
