@@ -1,6 +1,6 @@
 {
   "name": "epson2paperless",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "Epson Scan to Computer protocol emulator — delivers scans to Paperless-ngx",
   "main": "dist/index.js",
   "scripts": {
@@ -13,6 +13,8 @@
     "kill-dev": "node scripts/kill-dev.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "pcap:extract": "tsx tools/pcap-extract/extract.ts",
+    "pcap:render": "tsx tools/pcap-render/render.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
@@ -24,6 +26,7 @@
   },
   "dependencies": {
     "pdf-lib": "^1.17.1",
+    "sharp": "^0.34.5",
     "zod": "^4.3.6"
   },
   "devDependencies": {

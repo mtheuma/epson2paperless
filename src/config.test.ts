@@ -11,7 +11,6 @@ describe("loadConfig", () => {
     delete process.env.SCAN_DEST_NAME;
     delete process.env.SCAN_DEST_ID;
     delete process.env.OUTPUT_DIR;
-    delete process.env.KEEPALIVE_INTERVAL;
     delete process.env.HEALTH_PORT;
     delete process.env.LOG_LEVEL;
     delete process.env.LOG_FORMAT;
@@ -24,6 +23,9 @@ describe("loadConfig", () => {
     delete process.env.PAPERLESS_TOKEN_FILE;
     delete process.env.PAPERLESS_DELETE_AFTER_UPLOAD;
     delete process.env.PRINTER_CERT_FINGERPRINT;
+    delete process.env.JPEG_QUALITY;
+    delete process.env.PRINTER_PROTOCOL;
+    delete process.env.LEGACY_FORCE_SOURCE;
   });
 
   it("throws if PRINTER_IP is missing", () => {
@@ -37,7 +39,6 @@ describe("loadConfig", () => {
     expect(config.scanDestName).toBe("Paperless");
     expect(config.scanDestId).toBe(0x02);
     expect(config.outputDir).toBe("/output");
-    expect(config.keepaliveInterval).toBe(500);
     expect(config.healthPort).toBe(3000);
     expect(config.logLevel).toBe("info");
     expect(config.logFormat).toBe("text");
@@ -49,7 +50,6 @@ describe("loadConfig", () => {
     process.env.SCAN_DEST_NAME = "MyScanner";
     process.env.SCAN_DEST_ID = "05";
     process.env.OUTPUT_DIR = "/scans";
-    process.env.KEEPALIVE_INTERVAL = "1000";
     process.env.HEALTH_PORT = "8080";
     process.env.LOG_LEVEL = "debug";
     process.env.LANGUAGE = "de";
@@ -58,7 +58,6 @@ describe("loadConfig", () => {
     expect(config.scanDestName).toBe("MyScanner");
     expect(config.scanDestId).toBe(0x05);
     expect(config.outputDir).toBe("/scans");
-    expect(config.keepaliveInterval).toBe(1000);
     expect(config.healthPort).toBe(8080);
     expect(config.logLevel).toBe("debug");
     expect(config.language).toBe("de");
@@ -137,6 +136,24 @@ describe("loadConfig", () => {
   it("rejects invalid SHUTDOWN_TIMEOUT_MS", () => {
     process.env.PRINTER_IP = "192.0.2.58";
     process.env.SHUTDOWN_TIMEOUT_MS = "not-a-number";
+    expect(() => loadConfig()).toThrow();
+  });
+
+  it("defaults JPEG_QUALITY to 90", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    delete process.env.JPEG_QUALITY;
+    expect(loadConfig().jpegQuality).toBe(90);
+  });
+
+  it("accepts a JPEG_QUALITY override", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.JPEG_QUALITY = "75";
+    expect(loadConfig().jpegQuality).toBe(75);
+  });
+
+  it("rejects JPEG_QUALITY out of range", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.JPEG_QUALITY = "150";
     expect(() => loadConfig()).toThrow();
   });
 
@@ -219,6 +236,72 @@ describe("loadConfig", () => {
     config = loadConfig();
     expect(isPaperlessEnabled(config)).toBe(false);
   });
+
+  it("defaults PRINTER_PROTOCOL to auto", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    delete process.env.PRINTER_PROTOCOL;
+    expect(loadConfig().printerProtocol).toBe("auto");
+  });
+
+  it("rejects PRINTER_CERT_FINGERPRINT with PRINTER_PROTOCOL=legacy", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.PRINTER_PROTOCOL = "legacy";
+    process.env.PRINTER_CERT_FINGERPRINT =
+      "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89";
+    expect(() => loadConfig()).toThrow(/incompatible/i);
+  });
+
+  it("rejects PRINTER_CERT_FINGERPRINT with PRINTER_PROTOCOL=auto", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.PRINTER_PROTOCOL = "auto";
+    process.env.PRINTER_CERT_FINGERPRINT =
+      "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89";
+    expect(() => loadConfig()).toThrow(/PRINTER_PROTOCOL=esci2/);
+  });
+
+  it("accepts PRINTER_PROTOCOL=auto without a fingerprint", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.PRINTER_PROTOCOL = "auto";
+    expect(loadConfig().printerProtocol).toBe("auto");
+    expect(loadConfig().printerCertFingerprint).toBeUndefined();
+  });
+
+  it("accepts PRINTER_CERT_FINGERPRINT with PRINTER_PROTOCOL=esci2", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.PRINTER_PROTOCOL = "esci2";
+    process.env.PRINTER_CERT_FINGERPRINT =
+      "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89";
+    const config = loadConfig();
+    expect(config.printerProtocol).toBe("esci2");
+    expect(config.printerCertFingerprint).toBe(
+      "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89",
+    );
+  });
+
+  it("LEGACY_FORCE_SOURCE defaults to undefined", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    delete process.env.LEGACY_FORCE_SOURCE;
+    expect(loadConfig().legacyForceSource).toBeUndefined();
+  });
+
+  it("LEGACY_FORCE_SOURCE accepts flatbed", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.LEGACY_FORCE_SOURCE = "flatbed";
+    expect(loadConfig().legacyForceSource).toBe("flatbed");
+  });
+
+  it("LEGACY_FORCE_SOURCE rejects invalid values", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.LEGACY_FORCE_SOURCE = "garbage";
+    expect(() => loadConfig()).toThrow();
+  });
+
+  it("rejects LEGACY_FORCE_SOURCE with PRINTER_PROTOCOL=esci2", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.PRINTER_PROTOCOL = "esci2";
+    process.env.LEGACY_FORCE_SOURCE = "flatbed";
+    expect(() => loadConfig()).toThrow(/no effect/i);
+  });
 });
 
 describe("buildPaperlessOptions", () => {
@@ -228,6 +311,8 @@ describe("buildPaperlessOptions", () => {
     delete process.env.PAPERLESS_TOKEN;
     delete process.env.PAPERLESS_TOKEN_FILE;
     delete process.env.PAPERLESS_DELETE_AFTER_UPLOAD;
+    delete process.env.PRINTER_PROTOCOL;
+    delete process.env.LEGACY_FORCE_SOURCE;
   });
 
   it("returns undefined when either URL or token is missing", () => {
@@ -270,10 +355,13 @@ describe("PRINTER_CERT_FINGERPRINT", () => {
   beforeEach(() => {
     delete process.env.PRINTER_IP;
     delete process.env.PRINTER_CERT_FINGERPRINT;
+    delete process.env.PRINTER_PROTOCOL;
+    delete process.env.LEGACY_FORCE_SOURCE;
   });
 
   it("accepts a 32-byte uppercase fingerprint", () => {
     process.env.PRINTER_IP = "192.0.2.58";
+    process.env.PRINTER_PROTOCOL = "esci2";
     process.env.PRINTER_CERT_FINGERPRINT =
       "AB:CD:EF:01:23:45:67:89:0A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78";
     const config = loadConfig();
@@ -284,6 +372,7 @@ describe("PRINTER_CERT_FINGERPRINT", () => {
 
   it("normalises lowercase to uppercase", () => {
     process.env.PRINTER_IP = "192.0.2.58";
+    process.env.PRINTER_PROTOCOL = "esci2";
     process.env.PRINTER_CERT_FINGERPRINT =
       "ab:cd:ef:01:23:45:67:89:0a:bc:de:f0:12:34:56:78:9a:bc:de:f0:12:34:56:78:9a:bc:de:f0:12:34:56:78";
     const config = loadConfig();

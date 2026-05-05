@@ -3,6 +3,9 @@ import { createLogger } from "./logger.js";
 import { getLocalIpForTarget } from "./network.js";
 import { createKeepaliveResponder, type KeepaliveResponder } from "./keepalive.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
+import { detectVariant, type Variant } from "./protocol-probe.js";
+import { startScanSession } from "./scanner.js";
+import { startScanSessionLegacy } from "./scanner-legacy.js";
 
 const log = createLogger("startup");
 
@@ -30,8 +33,15 @@ export function logStartupBanner(config: Config, modeMessage: string): void {
       `Printer cert pinning: enabled (sha256 ${config.printerCertFingerprint.slice(0, 8)}…)`,
     );
   } else {
-    log.info("Printer cert pinning: disabled (set PRINTER_CERT_FINGERPRINT to enable)");
+    log.info(
+      "Printer cert pinning: disabled (set PRINTER_PROTOCOL=esci2 + PRINTER_CERT_FINGERPRINT to enable)",
+    );
   }
+
+  log.info(
+    `Protocol: ${config.printerProtocol}${config.printerProtocol === "auto" ? " (TLS-probe at first scan)" : ""}`,
+  );
+  log.info(`JPEG quality: ${config.jpegQuality}`);
 }
 
 export async function startPrinterDiscovery(config: Config): Promise<KeepaliveResponder> {
@@ -74,4 +84,47 @@ export function buildPaperlessOptions(config: Config): PaperlessUploadOptions | 
     token: config.paperlessToken,
     deleteAfterUpload: config.paperlessDeleteAfterUpload,
   };
+}
+
+export interface DispatchArgs {
+  config: Config;
+  duplex: boolean;
+  action: "jpg" | "pdf";
+  paperless: PaperlessUploadOptions | undefined;
+}
+
+export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
+  const variant: Variant = await detectVariant({
+    printerIp: args.config.printerIp,
+    port: 1865,
+    override: args.config.printerProtocol,
+    timeoutMs: 3000,
+  });
+  if (variant === "esci2") {
+    return startScanSession({
+      printerIp: args.config.printerIp,
+      port: 1865,
+      destId: args.config.scanDestId,
+      outputDir: args.config.outputDir,
+      tempDir: args.config.tempDir,
+      duplex: args.duplex,
+      action: args.action,
+      paperless: args.paperless,
+      printerCertFingerprint: args.config.printerCertFingerprint,
+    });
+  }
+  // Legacy. Source is autodetected from the FS F status byte (see scanner-legacy.ts
+  // STATUS_2). LEGACY_FORCE_SOURCE overrides the autodetection for users hitting
+  // edge cases the autodetect doesn't cover (yet).
+  return startScanSessionLegacy({
+    printerIp: args.config.printerIp,
+    port: 1865,
+    outputDir: args.config.outputDir,
+    tempDir: args.config.tempDir,
+    duplex: args.duplex,
+    forcedSource: args.config.legacyForceSource ?? null,
+    format: args.action,
+    jpegQuality: args.config.jpegQuality,
+    paperless: args.paperless,
+  });
 }

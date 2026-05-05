@@ -21,15 +21,10 @@ import {
   parseEsci2ReplyHeader,
   parseTokens,
 } from "./esci.js";
-import {
-  generateFilename,
-  resolveSessionTimestamp,
-  writeOutputFile,
-  promoteTempPagesToOutput,
-} from "./output.js";
+import { resolveSessionTimestamp } from "./output.js";
 import { setJpegOrientation } from "./exif.js";
-import { composePdfFromJpegs } from "./pdf.js";
-import { uploadAllToPaperless, type PaperlessUploadOptions } from "./paperless-upload.js";
+import { type PaperlessUploadOptions } from "./paperless-upload.js";
+import { finalizeSession } from "./output-tail.js";
 
 const log = createLogger("scanner");
 
@@ -133,12 +128,23 @@ export function startScanSession(
   session: ScanSession,
   socketFactory: TlsSocketFactory = tls.connect,
 ): Promise<void> {
-  return new Promise<void>((resolve) => {
+  return new Promise<void>((resolve, reject) => {
+    let errorReason: Error | null = null;
     let resolved = false;
     const resolveOnce = (): void => {
       if (resolved) return;
       resolved = true;
       resolve();
+    };
+    const rejectOnce = (err: Error): void => {
+      if (resolved) return;
+      resolved = true;
+      reject(err);
+    };
+    const failOnce = (err: Error): void => {
+      if (errorReason) return; // first-error wins
+      errorReason = err;
+      transitionToError(); // existing helper triggers the close cascade
     };
 
     let state: State = "CONNECTING";
@@ -157,7 +163,8 @@ export function startScanSession(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       log.error(`Failed to create session temp dir under ${tempBase}: ${msg}. Aborting scan.`);
-      resolveOnce();
+      // rejectOnce direct — no socket open yet, so no close cascade to drive.
+      rejectOnce(new Error(`Failed to create session temp dir under ${tempBase}: ${msg}`));
       return; // never start the TLS session
     }
     log.debug(`Session temp dir: ${sessionTempDir}`);
@@ -190,8 +197,9 @@ export function startScanSession(
     const resetTimeout = () => {
       if (timeoutTimer) clearTimeout(timeoutTimer);
       timeoutTimer = setTimeout(() => {
-        log.error(`Timeout in state ${state} — no response in ${TIMEOUT_MS}ms`);
-        transitionToError();
+        const msg = `Timeout in state ${state} — no response in ${TIMEOUT_MS}ms`;
+        log.error(msg);
+        failOnce(new Error(msg));
       }, TIMEOUT_MS);
     };
 
@@ -218,10 +226,14 @@ export function startScanSession(
           const peer = socket.getPeerCertificate();
           const actual = peer?.fingerprint256;
           if (actual !== session.printerCertFingerprint) {
-            log.error(
+            const msg =
               `Printer cert fingerprint mismatch — expected ${session.printerCertFingerprint}, ` +
-                `got ${actual ?? "(none)"} — aborting scan`,
-            );
+              `got ${actual ?? "(none)"}`;
+            log.error(`${msg} — aborting scan`);
+            // errorReason direct (not failOnce) — failOnce would call transitionToError,
+            // which sends UNLOCK; we never sent LOCK (abort at handshake), so we do the
+            // cleanup manually and let the close handler reject.
+            errorReason = new Error(msg);
             state = "ERROR";
             clearTimeoutTimer();
             try {
@@ -230,9 +242,7 @@ export function startScanSession(
               /* ignore — cleanup best-effort */
             }
             socket.destroy();
-            // Don't call transitionToError() — it sends an UNLOCK packet, but
-            // we never sent the LOCK (we're aborting at handshake). The
-            // socket's "close" handler resolves the outer promise.
+            // Close handler reads errorReason and rejects.
             return;
           }
           log.debug(`Printer cert fingerprint verified: ${actual}`);
@@ -262,6 +272,9 @@ export function startScanSession(
       state = "ERROR";
       if (inPostScan && imageChunks.length > 0) {
         log.warn(`Error during post-scan cleanup in ${priorState} — saving captured image anyway`);
+        // Cleanup-state error after the IMG loop succeeded is treated as success;
+        // clear any error captured during cleanup so the close handler resolves.
+        errorReason = null;
         finalizeScan();
         return;
       }
@@ -302,14 +315,15 @@ export function startScanSession(
       log.error(`TLS connection error in state ${state}`, err);
       clearTimeoutTimer();
       if (state !== "DONE") {
-        transitionToError();
+        failOnce(new Error(`TLS connection error in state ${state}: ${err.message}`));
       }
     });
 
     socket.on("close", () => {
       clearTimeoutTimer();
       log.info("TLS connection closed");
-      resolveOnce();
+      if (errorReason) rejectOnce(errorReason);
+      else resolveOnce();
     });
 
     function processBuffer(): void {
@@ -363,10 +377,10 @@ export function startScanSession(
         log.info("Async event: Stop (0x04)");
       } else if (ASYNC_CANCEL.has(dispatch)) {
         log.warn(`Async event: ScanCancel (0x${dispatch.toString(16)}) — aborting`);
-        transitionToError();
+        failOnce(new Error(`Async ScanCancel (0x${dispatch.toString(16)}) during state ${state}`));
       } else if (ASYNC_FATAL.has(dispatch)) {
         log.error(`Async event: fatal (0x${dispatch.toString(16)}) — aborting`);
-        transitionToError();
+        failOnce(new Error(`Async fatal event 0x${dispatch.toString(16)} during state ${state}`));
       } else {
         log.warn(`Async event: unknown dispatch byte 0x${dispatch.toString(16)}`);
       }
@@ -447,7 +461,7 @@ export function startScanSession(
     function ensure(condition: boolean, message: string): boolean {
       if (!condition) {
         log.error(message);
-        transitionToError();
+        failOnce(new Error(`Protocol error in state ${state}: ${message}`));
         return false;
       }
       return true;
@@ -600,7 +614,7 @@ export function startScanSession(
       // of the INIT_POLL loop: length 0 → ADF, length 12 → flatbed (payload is
       // filler `#---#---#---`). Later STATs (POSTSCAN cycles) can carry non-
       // zero lengths for unrelated reasons, so we only sample the first.
-      // See docs/notes/2026-04-21-flatbed-protocol-analysis.md.
+      // See `docs/HOW-IT-WORKS.md` (ESC/I-2 INIT_POLL section).
       const header = parseEsci2ReplyHeader(payload);
       if (initPollIteration === 0) {
         if (header) {
@@ -810,8 +824,9 @@ export function startScanSession(
       // Surface any error markers from the printer.
       for (const key of tokens.keys()) {
         if (key.startsWith("ERR") || key.startsWith("err")) {
-          log.error(`IMG_META: printer error token #${key}${tokens.get(key)}`);
-          transitionToError();
+          const msg = `IMG_META: printer error token #${key}${tokens.get(key)}`;
+          log.error(msg);
+          failOnce(new Error(msg));
           return;
         }
       }
@@ -820,7 +835,7 @@ export function startScanSession(
       // On flatbed, any #pen is terminal because the glass is inherently single-
       // page and the printer never emits #lftd000 on that path. On ADF, #lft
       // disambiguates "terminal" vs "page boundary, more coming".
-      // See docs/notes/2026-04-21-flatbed-protocol-analysis.md.
+      // See `docs/HOW-IT-WORKS.md` (ESC/I-2 IMG loop / page boundary section).
       pageEndKind = tokens.has("pen")
         ? source === "flatbed" || tokens.has("lft")
           ? "last"
@@ -979,63 +994,36 @@ export function startScanSession(
       // Verified via Wireshark: the Windows driver FINs ~27 µs after the
       // UNLOCK ack; our earlier post-unlock blocking writeFileSync delayed
       // the FIN by ~1 ms, which was enough for the printer to RST first.
-      socket.end();
       if (imageChunks.length === 0) {
         log.error("Scan completed with zero image chunks");
+        // Reject immediately rather than via the close handler: clearTimeoutTimer
+        // already ran, so a stuck socket.end() (peer doesn't ack the FIN) would
+        // leave the promise pending forever. socket.end() afterwards is just
+        // socket cleanup; the close handler's resolveOnce() is a no-op via the
+        // resolved guard.
+        rejectOnce(new Error("Scan completed with zero image chunks"));
+        socket.end();
         return;
       }
-      const writeSessionOutput = async (): Promise<void> => {
-        flushCurrentPage();
-        try {
-          if (session.action === "jpg") {
-            const saved = promoteTempPagesToOutput(
-              sessionTempDir,
-              session.outputDir,
-              sessionTs,
-              "jpg",
-            );
-            log.info(`Scan complete — wrote ${saved.length} JPG file(s); first: ${saved[0]}`);
-            if (session.paperless) {
-              await uploadAllToPaperless(saved, session.paperless);
-            }
-          } else {
-            // PDF branch
-            try {
-              const pdfBuf = await composePdfFromJpegs(sessionTempDir, {
-                backPages: backPageIndices,
-              });
-              const pdfName = generateFilename(sessionTs, "pdf");
-              const savedPath = writeOutputFile(session.outputDir, pdfName, pdfBuf);
-              log.info(`Scan complete — saved PDF to ${savedPath}`);
-              if (session.paperless) {
-                await uploadAllToPaperless([savedPath], session.paperless);
-              }
-            } catch (err) {
-              const msg = err instanceof Error ? err.message : String(err);
-              log.error(`PDF composition failed: ${msg}. Falling back to JPG output.`);
-              const saved = promoteTempPagesToOutput(
-                sessionTempDir,
-                session.outputDir,
-                sessionTs,
-                "jpg",
-              );
-              log.info(`Saved ${saved.length} JPG file(s) as fallback`);
-              if (session.paperless) {
-                await uploadAllToPaperless(saved, session.paperless);
-              }
-            }
-          }
-        } finally {
-          fs.rmSync(sessionTempDir, { recursive: true, force: true });
-          resolveOnce();
-        }
-      };
+      socket.end();
       setImmediate(() => {
-        writeSessionOutput().catch((err: unknown) => {
-          const msg = err instanceof Error ? err.message : String(err);
-          log.error(`Unexpected finalizeScan failure: ${msg}`);
-          resolveOnce();
-        });
+        flushCurrentPage();
+        finalizeSession({
+          sessionTempDir,
+          outputDir: session.outputDir,
+          sessionTs,
+          action: session.action,
+          backPageIndices,
+          paperless: session.paperless,
+        })
+          .catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error(`Unexpected finalizeScan failure: ${msg}`);
+            rejectOnce(new Error(`finalizeScan failure: ${msg}`));
+          })
+          .finally(() => {
+            resolveOnce();
+          });
       });
     }
   }); // end Promise executor

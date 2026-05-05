@@ -68,8 +68,8 @@ export function buildParaHeader(payloadLength: number): Buffer {
  *
  * `duplex` is ignored when `source === "flatbed"` (glass cannot duplex).
  * Caller sends as passthru with cmd_size=<returned.length>, reply_size=64.
- * See docs/notes/2026-04-20-multi-page-duplex-analysis.md (ADF variants)
- * and docs/notes/2026-04-21-flatbed-protocol-analysis.md (flatbed diff).
+ * See `docs/HOW-IT-WORKS.md` for the protocol layering and per-source
+ * variant rationale.
  */
 export function buildParaPayload(opts: { source: "adf" | "flatbed"; duplex: boolean }): Buffer {
   if (opts.source === "flatbed") {

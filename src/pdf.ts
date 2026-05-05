@@ -35,7 +35,9 @@ export async function composePdfFromJpegs(
   const backSet = new Set(options.backPages);
 
   // File reads are independent; embedJpg mutates `doc` so that stays sequential.
-  const buffers = await Promise.all(entries.map((entry) => fs.readFile(path.join(tempDir, entry))));
+  const buffers = await Promise.all(
+    entries.map((entry) => fs.readFile(path.join(tempDir, entry.name))),
+  );
 
   for (let i = 0; i < entries.length; i++) {
     const buf = buffers[i];

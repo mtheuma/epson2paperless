@@ -18,10 +18,11 @@ What you get:
 
 ## Compatible printers
 
-| Model                 | Status      | Notes                            |
-| --------------------- | ----------- | -------------------------------- |
-| **ET-3950**           | ✅ Verified |                                  |
-| **ET-4950 / ET-4956** | ✅ Verified | Same hardware, different colours |
+| Model                 | Status      | Notes                             |
+| --------------------- | ----------- | --------------------------------- |
+| **ET-3950**           | ✅ Verified |                                   |
+| **ET-4950 / ET-4956** | ✅ Verified | Same hardware, different colours  |
+| **WF-3620**           | ✅ Verified | Plain TCP scanner, no TLS pinning |
 
 Compatibility reports are welcome whether your model works or doesn't — [open an issue](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) using the compatibility template.
 
@@ -77,27 +78,29 @@ Within about 60 seconds, your destination (default `Paperless`) appears in the p
 
 Configuration is via environment variables. Only `PRINTER_IP` is required.
 
-| Variable         | Required | Default          | What it does                                                                                                                                            |
-| ---------------- | -------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PRINTER_IP`     | ✅       | —                | The printer's IPv4 address.                                                                                                                             |
-| `SCAN_DEST_NAME` |          | `Paperless`      | The label the printer shows on its panel.                                                                                                               |
-| `OUTPUT_DIR`     |          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                        |
-| `LOG_LEVEL`      |          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                    |
-| `LOG_FORMAT`     |          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line — for `docker logs` + Loki / `jq`).                                                      |
-| `PREVIEW_ACTION` |          | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen. |
-| `TEMP_DIR`       |          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                               |
-| `HEALTH_PORT`    |          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                   |
+| Variable           | Required | Default          | What it does                                                                                                                                            |
+| ------------------ | -------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PRINTER_IP`       | ✅       | —                | The printer's IPv4 address.                                                                                                                             |
+| `SCAN_DEST_NAME`   |          | `Paperless`      | The label the printer shows on its panel.                                                                                                               |
+| `OUTPUT_DIR`       |          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                        |
+| `LOG_LEVEL`        |          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                    |
+| `LOG_FORMAT`       |          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line — for `docker logs` + Loki / `jq`).                                                      |
+| `PREVIEW_ACTION`   |          | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen. |
+| `PRINTER_PROTOCOL` |          | `auto`           | `auto` (TLS-probe each session), `esci2` (force ESC/I-2 over TLS), `legacy` (force plain-TCP ESC/I).                                                    |
+| `JPEG_QUALITY`     |          | `90`             | JPEG encoder quality 1–100 for the legacy (WF-3620) path.                                                                                               |
+| `TEMP_DIR`         |          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                               |
+| `HEALTH_PORT`      |          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                   |
 
 <details>
 <summary>Advanced (leave as default unless you know why)</summary>
 
-| Variable                   | Default | What it does                                                                                                                   |
-| -------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `SCAN_DEST_ID`             | `0x02`  | Destination ID byte sent in keepalive packets.                                                                                 |
-| `LANGUAGE`                 | `en`    | 2-letter locale sent to the printer; no observed user-visible effect.                                                          |
-| `KEEPALIVE_INTERVAL`       | `500`   | ms between keepalive responses.                                                                                                |
-| `PRINTER_CERT_FINGERPRINT` | —       | Optional SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`). When set, scans abort if the peer cert doesn't match. |
-| `SHUTDOWN_TIMEOUT_MS`      | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                      |
+| Variable                   | Default | What it does                                                                                                                                                                                               |
+| -------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SCAN_DEST_ID`             | `0x02`  | Destination ID byte sent in keepalive packets.                                                                                                                                                             |
+| `LANGUAGE`                 | `en`    | 2-letter locale sent to the printer; no observed user-visible effect.                                                                                                                                      |
+| `LEGACY_FORCE_SOURCE`      | —       | Diagnostic override for the legacy path when FS F autodetection misfires. Set to `flatbed`, `adf-simplex`, or `adf-duplex` to bypass the wire-byte detection.                                              |
+| `PRINTER_CERT_FINGERPRINT` | —       | Optional SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`). When set, scans abort if the peer cert doesn't match. **Requires `PRINTER_PROTOCOL=esci2`** (auto-detection cannot pin reliably). |
+| `SHUTDOWN_TIMEOUT_MS`      | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                                                                                                  |
 
 </details>
 
@@ -112,7 +115,7 @@ npm run printer-fingerprint -- 192.0.2.58
 # AB:CD:EF:01:23:45:67:89:0A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78
 ```
 
-Set `PRINTER_CERT_FINGERPRINT` to that value (env var or `compose.yaml`). The scanner will refuse any TLS peer whose cert doesn't match. If you ever swap the printer for another unit (warranty, upgrade), re-run the helper and update the env var.
+Set `PRINTER_CERT_FINGERPRINT` to that value (env var or `compose.yaml`), and **also set `PRINTER_PROTOCOL=esci2`** so the auto-protocol probe can't downgrade silently to plain-TCP legacy and bypass the pin. The scanner will refuse any TLS peer whose cert doesn't match. If you ever swap the printer for another unit (warranty, upgrade), re-run the helper and update the env var.
 
 ## Pair with Paperless-ngx
 
