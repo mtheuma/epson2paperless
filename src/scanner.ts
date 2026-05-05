@@ -824,8 +824,9 @@ export function startScanSession(
       // Surface any error markers from the printer.
       for (const key of tokens.keys()) {
         if (key.startsWith("ERR") || key.startsWith("err")) {
-          log.error(`IMG_META: printer error token #${key}${tokens.get(key)}`);
-          transitionToError();
+          const msg = `IMG_META: printer error token #${key}${tokens.get(key)}`;
+          log.error(msg);
+          failOnce(new Error(msg));
           return;
         }
       }
