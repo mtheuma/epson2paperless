@@ -160,3 +160,31 @@ describe("esci-legacy IS-0x2200 stream-config payload", () => {
     );
   });
 });
+
+import { legacyDetectSource } from "./esci-legacy.js";
+
+describe("legacyDetectSource", () => {
+  it("0x81 + simplex → flatbed", () => {
+    expect(legacyDetectSource(0x81, false)).toEqual({ ok: true, source: "flatbed" });
+  });
+
+  it("0x81 + duplex → flatbed (panel-says-duplex on glass is impossible; flatbed wins)", () => {
+    expect(legacyDetectSource(0x81, true)).toEqual({ ok: true, source: "flatbed" });
+  });
+
+  it("0x01 + simplex → adf-simplex", () => {
+    expect(legacyDetectSource(0x01, false)).toEqual({ ok: true, source: "adf-simplex" });
+  });
+
+  it("0x01 + duplex → adf-duplex", () => {
+    expect(legacyDetectSource(0x01, true)).toEqual({ ok: true, source: "adf-duplex" });
+  });
+
+  it("0x00 + simplex → { ok: false, byte: 0x00 }", () => {
+    expect(legacyDetectSource(0x00, false)).toEqual({ ok: false, byte: 0x00 });
+  });
+
+  it("0xFF + duplex → { ok: false, byte: 0xFF }", () => {
+    expect(legacyDetectSource(0xff, true)).toEqual({ ok: false, byte: 0xff });
+  });
+});

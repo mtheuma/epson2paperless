@@ -25,6 +25,7 @@ import {
   buildStreamConfigPayload,
   parseFsGReply,
   geometry,
+  legacyDetectSource,
   SOURCE_BYTE,
   type Source,
   type Format,
@@ -55,10 +56,20 @@ export interface LegacyScanSession {
   port: number;
   outputDir: string;
   tempDir: string;
-  source: Source;
+  /** Panel-side Sides selection (true → 2-Sided). Source is detected from FS F. */
+  duplex: boolean;
+  /** Override for FS F autodetection — set via LEGACY_FORCE_SOURCE env var. */
+  forcedSource: Source | null;
   format: Format;
   jpegQuality: number;
   paperless?: PaperlessUploadOptions;
+  /**
+   * Test-only hook fired once when STATUS_2 has decided the source (either
+   * from the FS F byte via legacyDetectSource or from forcedSource). Lets
+   * the replay-test matrix assert per-fixture detection without needing a
+   * mutable return value. Production code does not pass this.
+   */
+  onSourceDetected?: (source: Source) => void;
 }
 
 export type TcpSocketFactory = (host: string, port: number, onConnect?: () => void) => net.Socket;
@@ -132,6 +143,10 @@ export function startScanSessionLegacy(
   socketFactory: TcpSocketFactory = (host, port, cb) => net.connect(port, host, cb),
 ): Promise<void> {
   return new Promise((resolve, reject) => {
+    // Set in STATUS_2 from the FS F byte (or short-circuited by session.forcedSource).
+    // Replaces session.source for all downstream reads.
+    let detectedSource: Source = session.forcedSource ?? "adf-simplex"; // safe default; overwritten in STATUS_2
+
     const sessionTs = resolveSessionTimestamp(new Date(), session.outputDir);
     const sessionTempDir = fs.mkdtempSync(
       path.join(session.tempDir || os.tmpdir(), "epson2paperless-leg-"),
@@ -335,22 +350,43 @@ export function startScanSessionLegacy(
 
         case "STATUS_2": {
           // Status after source-set probe.
-          // - 0x81: scanner busy/probing ADF (flatbed fixture) → standard reset cycle.
-          // - Other (e.g. 0x01 for ADF simplex): ADF extended setup — re-probe source,
-          //   check status again, then do the ESC ( reset cycle, then read identity twice.
+          // FS F byte 0 carries the source signal:
+          //   0x81 → flatbed (no ADF paper / no ADF present)
+          //   0x01 → ADF has paper; duplex flag disambiguates simplex/duplex
+          //   other → unknown (jam, mid-feed, panel-conflict). Reject loudly.
+          // session.forcedSource (LEGACY_FORCE_SOURCE) short-circuits the detection.
           if (pkt.payload.length !== 16) {
             return fail(`expected 16-byte status in STATUS_2, got ${pkt.payload.length}`);
           }
           const statusByte = pkt.payload[0];
+          if (session.forcedSource) {
+            log.info(
+              `STATUS_2: LEGACY_FORCE_SOURCE override: ${session.forcedSource} ` +
+                `(FS F byte 0x${statusByte.toString(16)} ignored)`,
+            );
+            detectedSource = session.forcedSource;
+          } else {
+            const result = legacyDetectSource(statusByte, session.duplex);
+            if (!result.ok) {
+              return fail(
+                `Unrecognised FS F status 0x${result.byte.toString(16).padStart(2, "0")} ` +
+                  `— please file a compatibility issue with LOG_LEVEL=debug output ` +
+                  `(see CONTRIBUTING.md). Workaround: set LEGACY_FORCE_SOURCE.`,
+              );
+            }
+            detectedSource = result.source;
+            log.info(
+              `STATUS_2: source detected from FS F byte 0x${statusByte.toString(16)} → ${detectedSource}`,
+            );
+          }
+          // Fire the test hook (no-op in production — the field is undefined).
+          session.onSourceDetected?.(detectedSource);
+          // Original branching, now in terms of detectedSource:
           if (statusByte === 0x81) {
-            // Scanner signalled busy — initiate reset cycle
             log.debug("STATUS_2: scanner busy (0x81), starting reset cycle");
             state = "RESET_PAREN";
             sendCmd(buildEscParen(), 1);
-          } else if (session.source !== "flatbed") {
-            // ADF source: re-probe with ESC e before entering the reset cycle.
-            // The ADF fixture shows an extra ESC e + source-param + FS F sequence
-            // before ESC ( / ESC @ (lines 32-43 of adf-single-page-jpeg.jsonl).
+          } else if (detectedSource !== "flatbed") {
             log.debug(
               `STATUS_2: ADF status 0x${statusByte.toString(16)}, starting ADF pre-reset probe`,
             );
@@ -358,7 +394,6 @@ export function startScanSessionLegacy(
             sendCmd(buildEscE(), 1);
             sendCmd(Buffer.from([PROBE_SOURCE_BYTE]), 1);
           } else {
-            // Flatbed scanner ready — proceed to gamma phase
             log.debug(
               `STATUS_2: scanner ready (0x${statusByte.toString(16)}), entering gamma phase`,
             );
@@ -404,7 +439,7 @@ export function startScanSessionLegacy(
           if (!isAck(pkt)) return fail(`expected ESC @ ack in reset cycle`);
           state = "RESET_SRC_CMD";
           sendCmd(buildEscE(), 1);
-          sendCmd(Buffer.from([SOURCE_BYTE[session.source]]), 1);
+          sendCmd(Buffer.from([SOURCE_BYTE[detectedSource]]), 1);
           return;
 
         case "RESET_SRC_CMD":
@@ -425,7 +460,7 @@ export function startScanSessionLegacy(
             return fail(`expected 16-byte status in STATUS_READY, got ${pkt.payload.length}`);
           }
           log.debug(`STATUS_READY: status byte 0x${pkt.payload[0].toString(16)}`);
-          if (session.source !== "flatbed") {
+          if (detectedSource !== "flatbed") {
             state = "ADF_IDENTITY_A";
             sendCmd(buildFsI(), 80);
           } else {
@@ -453,7 +488,7 @@ export function startScanSessionLegacy(
           if (session.format === "pdf" && !inInterPageLoop) {
             state = "ADF_PDF_SRC_CMD";
             sendCmd(buildEscE(), 1);
-            sendCmd(Buffer.from([SOURCE_BYTE[session.source]]), 1);
+            sendCmd(Buffer.from([SOURCE_BYTE[detectedSource]]), 1);
           } else {
             // Inter-page loop: flag has been consumed by STATUS_1B and now here;
             // reset it so it's not stuck true for any future multi-sheet iterations.
@@ -498,7 +533,7 @@ export function startScanSessionLegacy(
         case "WINDOW_CMD":
           if (!isAck(pkt)) return fail(`expected FS W ack`);
           state = "WINDOW_DATA";
-          sendCmd(buildFsWBlock({ source: session.source, format: session.format }), 1);
+          sendCmd(buildFsWBlock({ source: detectedSource, format: session.format }), 1);
           return;
 
         case "WINDOW_DATA":
@@ -530,7 +565,7 @@ export function startScanSessionLegacy(
             sendCmd(buildFsF(), 16);
             return;
           }
-          expectedBytes = computeExpectedBytes(session.source, session.format);
+          expectedBytes = computeExpectedBytes(detectedSource, session.format);
           imageBuffer = Buffer.alloc(expectedBytes);
           imageBufferOffset = 0;
           log.debug(`START: expectedBytes=${expectedBytes}, chunkSize=${fsGReply.chunkSize}`);
@@ -601,7 +636,7 @@ export function startScanSessionLegacy(
           // is the back side of the same sheet.
           // Pages are 1-indexed: 1 (front), 2 (back), 3 (front), 4 (back) ... so back-pages
           // are even indices. We push them as we discover them.
-          if (session.source === "adf-duplex" && pageCount % 2 === 1) {
+          if (detectedSource === "adf-duplex" && pageCount % 2 === 1) {
             backPageIndices.push(pageCount + 1);
             // We push speculatively (next page may not arrive on hardware fault).
             // composePdfFromJpegs uses Set.has() so a dangling index is benign.
@@ -628,10 +663,10 @@ export function startScanSessionLegacy(
             return fail(`expected 1-byte CLEANUP_1 reply, got ${pkt.payload.length}`);
           }
           log.debug(`CLEANUP_1: ESC ) returned 0x${pkt.payload[0].toString(16)}`);
-          if (session.source !== "flatbed") {
+          if (detectedSource !== "flatbed") {
             state = "ADF_CLEANUP_SRC_CMD";
             sendCmd(buildEscE(), 1);
-            sendCmd(Buffer.from([SOURCE_BYTE[session.source]]), 1);
+            sendCmd(Buffer.from([SOURCE_BYTE[detectedSource]]), 1);
           } else {
             state = "CLEANUP_2";
             sendCmd(buildEscCleanup(), 1);
@@ -690,7 +725,7 @@ export function startScanSessionLegacy(
 
     async function onPageComplete(): Promise<void> {
       if (!fsGReply) return fail("page complete with no FS G reply");
-      const geom = geometry({ source: session.source, format: session.format });
+      const geom = geometry({ source: detectedSource, format: session.format });
       try {
         let jpg = await encodeRawGbrToJpeg(
           imageBuffer,
@@ -702,7 +737,7 @@ export function startScanSessionLegacy(
         const pageNum = pageCount + 1;
         // Duplex: even-numbered pages (2, 4, …) are back pages and come out rotated 180° due to
         // the ADF U-turn path. Insert EXIF Orientation=3 so viewers render them right-side up.
-        if (session.source === "adf-duplex" && pageNum % 2 === 0) {
+        if (detectedSource === "adf-duplex" && pageNum % 2 === 0) {
           jpg = setJpegOrientation(jpg, 3);
         }
         const jpgPath = path.join(sessionTempDir, `page_${String(pageNum).padStart(2, "0")}.jpg`);
@@ -718,7 +753,7 @@ export function startScanSessionLegacy(
 
       // Flatbed: skip eject; go straight to POST_STATUS.
       // ADF: send 0x0c 0x00 page-eject, wait for ACK, then FS F in PAGE_EJECT_WAIT handler.
-      if (session.source !== "flatbed") {
+      if (detectedSource !== "flatbed") {
         state = "PAGE_EJECT_WAIT";
         sendCmd(buildPageEject(), 1);
       } else {
