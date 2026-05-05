@@ -41,6 +41,7 @@ Noteworthy for dev:
 - `PRINTER_CERT_FINGERPRINT` — optional sha256 pin (32 colon-separated hex bytes) for the printer's TLS cert. When set, the scan session rejects any cert whose fingerprint doesn't match. Capture with `npm run printer-fingerprint`. ESC/I-2 path only — no effect on legacy (no TLS).
 - `PRINTER_PROTOCOL` (`auto` / `esci2` / `legacy`, default `auto`) — protocol generation selector. `auto` opens a TLS handshake and falls back to plain-TCP legacy on first-byte failure; `esci2` / `legacy` skip the probe.
 - `LEGACY_FORCE_SOURCE` (`adf-simplex` / `adf-duplex` / `flatbed`) — legacy path only. Overrides the FS W source byte when probe-based detection isn't enough. Zod-rejected when paired with `PRINTER_PROTOCOL=esci2`.
+- `DIAGNOSE_PROTOCOL=true` — compatibility-report aid. When the legacy `ESC @` init returns a non-ACK, sends one extra `FS Y` probe (the ET-4950 ESC/I-2 path's first command) and aborts with `[diagnose]` log lines tagged with the IS packet type and payload. Off by default; only useful when triaging an unknown printer that gets past welcome+lock.
 - `SHUTDOWN_TIMEOUT_MS` — how long graceful shutdown waits for in-flight scans before forcing exit (default 30000).
 
 ## Architecture (brief — full detail in `docs/HOW-IT-WORKS.md`)

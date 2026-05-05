@@ -41,6 +41,11 @@ export function logStartupBanner(config: Config, modeMessage: string): void {
   log.info(
     `Protocol: ${config.printerProtocol}${config.printerProtocol === "auto" ? " (TLS-probe at first scan)" : ""}`,
   );
+  if (config.diagnoseProtocol) {
+    log.info(
+      "Protocol diagnostic mode: ENABLED (DIAGNOSE_PROTOCOL=true) — legacy ESC @ failures will trigger an FS Y probe and abort. Disable for normal scanning.",
+    );
+  }
   log.info(`JPEG quality: ${config.jpegQuality}`);
 }
 
@@ -126,5 +131,6 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     format: args.action,
     jpegQuality: args.config.jpegQuality,
     paperless: args.paperless,
+    diagnoseProtocol: args.config.diagnoseProtocol,
   });
 }

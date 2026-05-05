@@ -100,6 +100,7 @@ Configuration is via environment variables. Only `PRINTER_IP` is required.
 | `LANGUAGE`                 | `en`    | 2-letter locale sent to the printer; no observed user-visible effect.                                                                                                                                      |
 | `LEGACY_FORCE_SOURCE`      | —       | Diagnostic override for the legacy path when FS F autodetection misfires. Set to `flatbed`, `adf-simplex`, or `adf-duplex` to bypass the wire-byte detection.                                              |
 | `PRINTER_CERT_FINGERPRINT` | —       | Optional SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`). When set, scans abort if the peer cert doesn't match. **Requires `PRINTER_PROTOCOL=esci2`** (auto-detection cannot pin reliably). |
+| `DIAGNOSE_PROTOCOL`        | `false` | Compatibility-report aid. On a legacy `ESC @` non-ACK, sends one extra `FS Y` probe and aborts with annotated `[diagnose]` log lines. Leave off in normal use.                                             |
 | `SHUTDOWN_TIMEOUT_MS`      | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                                                                                                  |
 
 </details>

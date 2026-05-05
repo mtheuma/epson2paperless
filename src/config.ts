@@ -20,6 +20,12 @@ const configSchema = z
     previewAction: z.enum(["reject", "jpg", "pdf"]).default("reject"),
     legacyForceSource: z.enum(["flatbed", "adf-simplex", "adf-duplex"]).optional(),
     printerProtocol: z.enum(["auto", "esci2", "legacy"]).default("auto"),
+    // Diagnostic-only. When true and the legacy `ESC @` init returns a non-ACK,
+    // the legacy scanner sends one extra `FS Y` probe (the ET-4950 ESC/I-2 path's
+    // first command) before failing, and logs both replies in detail. Used to
+    // help classify unsupported printers that get past welcome+lock but reject
+    // `ESC @`. Should remain false in normal operation.
+    diagnoseProtocol: z.boolean().default(false),
     tempDir: z.string().default(""),
     shutdownTimeoutMs: z.coerce.number().int().min(100).default(30000),
     paperlessUrl: z.string().url("PAPERLESS_URL must be a valid URL").optional(),
@@ -101,6 +107,10 @@ export function loadConfig(): Config {
     legacyForceSource: process.env.LEGACY_FORCE_SOURCE || undefined,
     printerCertFingerprint: process.env.PRINTER_CERT_FINGERPRINT || undefined,
     printerProtocol: process.env.PRINTER_PROTOCOL || undefined,
+    diagnoseProtocol:
+      process.env.DIAGNOSE_PROTOCOL === undefined
+        ? undefined
+        : process.env.DIAGNOSE_PROTOCOL === "true",
   };
 
   return configSchema.parse(raw);
