@@ -595,7 +595,7 @@ export function startScanSession(
       // of the INIT_POLL loop: length 0 → ADF, length 12 → flatbed (payload is
       // filler `#---#---#---`). Later STATs (POSTSCAN cycles) can carry non-
       // zero lengths for unrelated reasons, so we only sample the first.
-      // See docs/notes/2026-04-21-flatbed-protocol-analysis.md.
+      // See `docs/HOW-IT-WORKS.md` (ESC/I-2 INIT_POLL section).
       const header = parseEsci2ReplyHeader(payload);
       if (initPollIteration === 0) {
         if (header) {
@@ -815,7 +815,7 @@ export function startScanSession(
       // On flatbed, any #pen is terminal because the glass is inherently single-
       // page and the printer never emits #lftd000 on that path. On ADF, #lft
       // disambiguates "terminal" vs "page boundary, more coming".
-      // See docs/notes/2026-04-21-flatbed-protocol-analysis.md.
+      // See `docs/HOW-IT-WORKS.md` (ESC/I-2 IMG loop / page boundary section).
       pageEndKind = tokens.has("pen")
         ? source === "flatbed" || tokens.has("lft")
           ? "last"

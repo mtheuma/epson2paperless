@@ -26,30 +26,26 @@ export interface FinalizeSessionArgs {
 export async function finalizeSession(args: FinalizeSessionArgs): Promise<void> {
   const { sessionTempDir, outputDir, sessionTs, action, backPageIndices, paperless } = args;
   try {
+    let savedPaths: string[];
     if (action === "jpg") {
-      const saved = promoteTempPagesToOutput(sessionTempDir, outputDir, sessionTs, "jpg");
-      log.info(`Scan complete — wrote ${saved.length} JPG file(s); first: ${saved[0]}`);
-      if (paperless) {
-        await uploadAllToPaperless(saved, paperless);
+      savedPaths = promoteTempPagesToOutput(sessionTempDir, outputDir, sessionTs, "jpg");
+      log.info(`Scan complete — wrote ${savedPaths.length} JPG file(s); first: ${savedPaths[0]}`);
+    } else {
+      try {
+        const pdfBuf = await composePdfFromJpegs(sessionTempDir, { backPages: backPageIndices });
+        const pdfName = generateFilename(sessionTs, "pdf");
+        const pdfPath = writeOutputFile(outputDir, pdfName, pdfBuf);
+        log.info(`Scan complete — saved PDF to ${pdfPath}`);
+        savedPaths = [pdfPath];
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error(`PDF composition failed: ${msg}. Falling back to JPG output.`);
+        savedPaths = promoteTempPagesToOutput(sessionTempDir, outputDir, sessionTs, "jpg");
+        log.info(`Saved ${savedPaths.length} JPG file(s) as fallback`);
       }
-      return;
     }
-    try {
-      const pdfBuf = await composePdfFromJpegs(sessionTempDir, { backPages: backPageIndices });
-      const pdfName = generateFilename(sessionTs, "pdf");
-      const savedPath = writeOutputFile(outputDir, pdfName, pdfBuf);
-      log.info(`Scan complete — saved PDF to ${savedPath}`);
-      if (paperless) {
-        await uploadAllToPaperless([savedPath], paperless);
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error(`PDF composition failed: ${msg}. Falling back to JPG output.`);
-      const saved = promoteTempPagesToOutput(sessionTempDir, outputDir, sessionTs, "jpg");
-      log.info(`Saved ${saved.length} JPG file(s) as fallback`);
-      if (paperless) {
-        await uploadAllToPaperless(saved, paperless);
-      }
+    if (paperless) {
+      await uploadAllToPaperless(savedPaths, paperless);
     }
   } finally {
     fs.rmSync(sessionTempDir, { recursive: true, force: true });

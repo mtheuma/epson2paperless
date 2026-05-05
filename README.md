@@ -99,7 +99,6 @@ Configuration is via environment variables. Only `PRINTER_IP` is required.
 | -------------------------- | ------- | ------------------------------------------------------------------------------------------------------------------------------ |
 | `SCAN_DEST_ID`             | `0x02`  | Destination ID byte sent in keepalive packets.                                                                                 |
 | `LANGUAGE`                 | `en`    | 2-letter locale sent to the printer; no observed user-visible effect.                                                          |
-| `KEEPALIVE_INTERVAL`       | `500`   | ms between keepalive responses.                                                                                                |
 | `PRINTER_CERT_FINGERPRINT` | —       | Optional SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`). When set, scans abort if the peer cert doesn't match. |
 | `SHUTDOWN_TIMEOUT_MS`      | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                      |
 

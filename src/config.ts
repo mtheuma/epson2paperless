@@ -12,7 +12,6 @@ const configSchema = z
     // scanDestId is a hex byte (e.g. "02"); parsed in loadConfig.
     scanDestId: z.number().int().min(1).max(255).default(0x02),
     outputDir: z.string().default("/output"),
-    keepaliveInterval: z.coerce.number().int().min(100).default(500),
     healthPort: z.coerce.number().int().min(1).max(65535).default(3000),
     logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
     logFormat: z.enum(["text", "json"]).default("text"),
@@ -76,7 +75,6 @@ export function loadConfig(): Config {
     scanDestName: process.env.SCAN_DEST_NAME || undefined,
     scanDestId: process.env.SCAN_DEST_ID ? parseInt(process.env.SCAN_DEST_ID, 16) : undefined,
     outputDir: process.env.OUTPUT_DIR || undefined,
-    keepaliveInterval: process.env.KEEPALIVE_INTERVAL || undefined,
     healthPort: process.env.HEALTH_PORT || undefined,
     logLevel: process.env.LOG_LEVEL || undefined,
     logFormat: process.env.LOG_FORMAT || undefined,
