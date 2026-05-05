@@ -30,6 +30,10 @@ import {
   type Source,
   type Format,
 } from "./esci-legacy.js";
+// FS Y (0x1C 0x59) — first command in the ET-4950 ESC/I-2 init sequence
+// (see scanner.ts INIT1_FS_Y). Used here only by the DIAGNOSE_PROTOCOL probe
+// to classify printers that NAK `ESC @`.
+import { buildFsY } from "./esci.js";
 import { GAMMA_LUT_R, GAMMA_LUT_G, GAMMA_LUT_B } from "./esci-legacy-luts.js";
 import { encodeRawGbrToJpeg } from "./raw-to-jpeg.js";
 import { setJpegOrientation } from "./exif.js";
@@ -64,6 +68,13 @@ export interface LegacyScanSession {
   jpegQuality: number;
   paperless?: PaperlessUploadOptions;
   /**
+   * When true, a non-ACK reply to `ESC @` triggers one additional `FS Y` probe
+   * (the ET-4950 ESC/I-2 path's first command) before the session fails. Both
+   * replies are logged with full IS type + payload to aid protocol classification
+   * for unsupported printers. Set via the DIAGNOSE_PROTOCOL env var.
+   */
+  diagnoseProtocol?: boolean;
+  /**
    * Test-only hook fired once when STATUS_2 has decided the source (either
    * from the FS F byte via legacyDetectSource or from forcedSource). Lets
    * the replay-test matrix assert per-fixture detection without needing a
@@ -80,6 +91,10 @@ type State =
   | "WELCOME"
   | "LOCKING"
   | "INIT"
+  // Diagnostic-only: entered after `ESC @` is NAK'd when DIAGNOSE_PROTOCOL=true.
+  // We send `FS Y` (the ET-4950 ESC/I-2 init's first command) and log whatever
+  // comes back, then fail with a "diagnostic complete" message.
+  | "DIAGNOSE_INIT_PROBE"
   | "IDENTITY"
   | "STATUS_1A"
   | "STATUS_1B"
@@ -282,11 +297,40 @@ export function startScanSessionLegacy(
 
         case "INIT":
           // IS-0xa000 with payload = 0x06 (ACK for ESC @)
-          if (!isAck(pkt))
-            return fail(`expected ESC @ ack, got payload ${pkt.payload.toString("hex")}`);
+          if (!isAck(pkt)) {
+            const detail = `type=0x${pkt.type.toString(16)} payload=${pkt.payload.toString("hex")}`;
+            if (session.diagnoseProtocol) {
+              log.info(
+                `[diagnose] ESC @ returned non-ACK (${detail}) — sending FS Y probe to classify protocol`,
+              );
+              state = "DIAGNOSE_INIT_PROBE";
+              sendCmd(buildFsY(), 1);
+              return;
+            }
+            return fail(`expected ESC @ ack, got ${detail}`);
+          }
           state = "IDENTITY";
           sendCmd(buildFsI(), 80);
           return;
+
+        case "DIAGNOSE_INIT_PROBE": {
+          // Diagnostic-only terminal state. Whatever comes back, log it in
+          // detail and fail with a message instructing the user to share the
+          // [diagnose] log lines on the issue tracker.
+          const detail = `type=0x${pkt.type.toString(16)} payload=${pkt.payload.toString("hex")}`;
+          if (isAck(pkt)) {
+            log.info(
+              `[diagnose] FS Y returned ACK (${detail}) — printer likely speaks ESC/I-2 over plain TCP (ET-4950-style init, no TLS).`,
+            );
+          } else {
+            log.info(
+              `[diagnose] FS Y returned non-ACK (${detail}) — printer rejects both legacy ESC @ and ESC/I-2 FS Y; protocol family unknown.`,
+            );
+          }
+          return fail(
+            "diagnostic probe complete — please share the [diagnose] log lines on the GitHub issue",
+          );
+        }
 
         case "IDENTITY":
           // IS-0xa000 with 80-byte identity payload; we don't decode it

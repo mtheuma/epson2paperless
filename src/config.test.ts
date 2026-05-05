@@ -302,6 +302,26 @@ describe("loadConfig", () => {
     process.env.LEGACY_FORCE_SOURCE = "flatbed";
     expect(() => loadConfig()).toThrow(/no effect/i);
   });
+
+  it("DIAGNOSE_PROTOCOL defaults to false", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    delete process.env.DIAGNOSE_PROTOCOL;
+    expect(loadConfig().diagnoseProtocol).toBe(false);
+  });
+
+  it("DIAGNOSE_PROTOCOL accepts 'true'", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.DIAGNOSE_PROTOCOL = "true";
+    expect(loadConfig().diagnoseProtocol).toBe(true);
+    delete process.env.DIAGNOSE_PROTOCOL;
+  });
+
+  it("DIAGNOSE_PROTOCOL anything other than 'true' is false", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.DIAGNOSE_PROTOCOL = "yes";
+    expect(loadConfig().diagnoseProtocol).toBe(false);
+    delete process.env.DIAGNOSE_PROTOCOL;
+  });
 });
 
 describe("buildPaperlessOptions", () => {
