@@ -368,3 +368,81 @@ describe("startScanSessionLegacy failure-mode matrix", () => {
     await expect(scanPromise).rejects.toThrow(/expected welcome \(0x8000\)/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// FS F unknown-byte handling (E.5)
+// ---------------------------------------------------------------------------
+
+describe("FS F unknown-byte handling", () => {
+  let outputDir: string;
+  let tempDir: string;
+
+  beforeEach(() => {
+    outputDir = mkdtempSync(path.join(os.tmpdir(), "leg-out-"));
+    tempDir = mkdtempSync(path.join(os.tmpdir(), "leg-tmp-"));
+  });
+
+  afterEach(() => {
+    rmSync(outputDir, { recursive: true, force: true });
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("rejects when the STATUS_2 FS F byte is not 0x01 or 0x81", async () => {
+    const fixture = loadFixture(path.join(FIXTURES, "adf-single-page-jpeg.jsonl"));
+    // In the fixture, IS packets are split across two consecutive events:
+    //   - a 12-byte IS header event (type 0xa000, payloadSize 16)
+    //   - a 16-byte payload event immediately following
+    // STATUS_n replies are IS-0xa000 with a 16-byte payload.
+    // The sequence is: STATUS_1A (1st a000/16 header), STATUS_1B (2nd a000/16 header),
+    // then STATUS_2 (3rd a000/16 header).  We mutate the payload of the 3rd.
+    // Strategy: scan for a000/16 IS header events; on the 3rd, mark the NEXT event
+    // as the target and replace byte 0 with 0x00.
+    let fsFHeaderCount = 0;
+    let mutateNextPayload = false;
+    const mutated = fixture.map((event) => {
+      if (event.dir !== "p>h" || !("hex" in event)) return event;
+      const buf = Buffer.from(event.hex, "hex");
+      // IS header is exactly 12 bytes with type at bytes 2-3 and payloadSize at 6-9.
+      if (buf.length === 12) {
+        const type = buf.readUInt16BE(2);
+        const length = buf.readUInt32BE(6);
+        if (type === 0xa000 && length === 16) {
+          fsFHeaderCount++;
+          if (fsFHeaderCount === 3) {
+            // The 3rd a000/16 header is STATUS_2; mark next payload for mutation.
+            mutateNextPayload = true;
+          }
+        }
+        return event;
+      }
+      // 16-byte payload following the marked header — mutate byte 0 to 0x00.
+      if (mutateNextPayload && buf.length === 16) {
+        mutateNextPayload = false;
+        buf[0] = 0x00;
+        return { ...event, hex: buf.toString("hex") };
+      }
+      return event;
+    });
+
+    const fake = new FakeTcpSocket();
+    const sessionPromise = startScanSessionLegacy(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        outputDir,
+        tempDir,
+        duplex: false,
+        forcedSource: null,
+        format: "jpg",
+        jpegQuality: 90,
+      },
+      fake.asFactory(),
+    );
+    // Attach a no-op catch to prevent Node from flagging sessionPromise as
+    // unhandled before driveFixture awaits it internally.
+    sessionPromise.catch(() => {});
+    await expect(driveFixture(mutated, fake, sessionPromise)).rejects.toThrow(
+      /Unrecognised FS F status 0x00/,
+    );
+  });
+});
