@@ -6,7 +6,6 @@ import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import { detectVariant, type Variant } from "./protocol-probe.js";
 import { startScanSession } from "./scanner.js";
 import { startScanSessionLegacy } from "./scanner-legacy.js";
-import type { Source } from "./esci-legacy.js";
 
 const log = createLogger("startup");
 
@@ -114,21 +113,16 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
       printerCertFingerprint: args.config.printerCertFingerprint,
     });
   }
-  // Legacy. PushScan carries duplex+action but no explicit flatbed-vs-ADF byte.
-  // v1 mapping: duplex → adf-duplex, otherwise adf-simplex; LEGACY_FORCE_SOURCE
-  // overrides for users who need flatbed scanning from the panel.
-  let source: Source;
-  if (args.config.legacyForceSource) {
-    source = args.config.legacyForceSource;
-  } else {
-    source = args.duplex ? "adf-duplex" : "adf-simplex";
-  }
+  // Legacy. Source is autodetected from the FS F status byte (see scanner-legacy.ts
+  // STATUS_2). LEGACY_FORCE_SOURCE overrides the autodetection for users hitting
+  // edge cases the autodetect doesn't cover (yet).
   return startScanSessionLegacy({
     printerIp: args.config.printerIp,
     port: 1865,
     outputDir: args.config.outputDir,
     tempDir: args.config.tempDir,
-    source,
+    duplex: args.duplex,
+    forcedSource: args.config.legacyForceSource ?? null,
     format: args.action,
     jpegQuality: args.config.jpegQuality,
     paperless: args.paperless,
