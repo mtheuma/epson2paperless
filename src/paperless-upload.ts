@@ -65,10 +65,8 @@ export async function uploadAllToPaperless(
   opts: PaperlessUploadOptions,
 ): Promise<void> {
   log.info(`Uploading ${filePaths.length} file(s) to Paperless-ngx`);
-  // Per-upload catch logs and swallows; Promise.all is safe because no
-  // mapped promise rejects. Decision: log-and-continue on any single
-  // upload failure — see paperless-upload.ts:56-60 for the broader
-  // "scan complete = local file written" policy.
+  // Per-upload .catch swallows so Promise.all never rejects — log-and-continue
+  // on any single failure (scan-complete = local file written).
   await Promise.all(
     filePaths.map((p) =>
       uploadOne(p, opts).catch((err: unknown) => {
