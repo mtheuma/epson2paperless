@@ -78,19 +78,19 @@ Within about 60 seconds, your destination (default `Paperless`) appears in the p
 
 Configuration is via environment variables. Only `PRINTER_IP` is required.
 
-| Variable              | Required | Default          | What it does                                                                                                                                            |
-| --------------------- | -------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PRINTER_IP`          | ✅       | —                | The printer's IPv4 address.                                                                                                                             |
-| `SCAN_DEST_NAME`      |          | `Paperless`      | The label the printer shows on its panel.                                                                                                               |
-| `OUTPUT_DIR`          |          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                        |
-| `LOG_LEVEL`           |          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                    |
-| `LOG_FORMAT`          |          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line — for `docker logs` + Loki / `jq`).                                                      |
-| `PREVIEW_ACTION`      |          | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen. |
-| `PRINTER_PROTOCOL`    |          | `auto`           | `auto` (TLS-probe each session), `esci2` (force ET-4950 mode), `legacy` (force WF-3620 mode).                                                           |
-| `JPEG_QUALITY`        |          | `90`             | JPEG encoder quality 1–100 for the legacy (WF-3620) path.                                                                                               |
-| `LEGACY_FORCE_SOURCE` |          | —                | Override the legacy path's source mapping: `flatbed`, `adf-simplex`, or `adf-duplex`. Unset = derive from panel Sides selection.                        |
-| `TEMP_DIR`            |          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                               |
-| `HEALTH_PORT`         |          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                   |
+| Variable              | Required | Default          | What it does                                                                                                                                                                                 |
+| --------------------- | -------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PRINTER_IP`          | ✅       | —                | The printer's IPv4 address.                                                                                                                                                                  |
+| `SCAN_DEST_NAME`      |          | `Paperless`      | The label the printer shows on its panel.                                                                                                                                                    |
+| `OUTPUT_DIR`          |          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                                                             |
+| `LOG_LEVEL`           |          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                                                         |
+| `LOG_FORMAT`          |          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line — for `docker logs` + Loki / `jq`).                                                                                           |
+| `PREVIEW_ACTION`      |          | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen.                                      |
+| `PRINTER_PROTOCOL`    |          | `auto`           | `auto` (TLS-probe each session), `esci2` (force ET-4950 mode), `legacy` (force WF-3620 mode).                                                                                                |
+| `JPEG_QUALITY`        |          | `90`             | JPEG encoder quality 1–100 for the legacy (WF-3620) path.                                                                                                                                    |
+| `LEGACY_FORCE_SOURCE` |          | —                | Diagnostic override for the legacy path when FS F autodetection misfires. Set to `flatbed`, `adf-simplex`, or `adf-duplex` to bypass the wire-byte detection. Normal users do not need this. |
+| `TEMP_DIR`            |          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                                                                    |
+| `HEALTH_PORT`         |          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                                                        |
 
 <details>
 <summary>Advanced (leave as default unless you know why)</summary>
