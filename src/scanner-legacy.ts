@@ -141,6 +141,7 @@ export function startScanSessionLegacy(
     let buffer = Buffer.alloc(0);
     let timeoutTimer: NodeJS.Timeout | null = null;
     let resolved = false;
+    let errorReason: Error | null = null;
 
     let fsGReply: ReturnType<typeof parseFsGReply> | null = null;
     let imageBuffer = Buffer.alloc(0);
@@ -180,10 +181,12 @@ export function startScanSessionLegacy(
       resolve();
     }
 
-    function fail(reason: string): void {
+    function failOnce(err: Error): void {
+      if (errorReason) return;
+      errorReason = err;
       if (state === "ERROR") return;
       state = "ERROR";
-      log.error(`State machine error: ${reason}`);
+      log.error(`State machine error: ${err.message}`);
       if (timeoutTimer) clearTimeout(timeoutTimer);
       try {
         socket.destroy();
@@ -197,7 +200,10 @@ export function startScanSessionLegacy(
       }
       if (resolved) return;
       resolved = true;
-      reject(new Error(reason));
+      reject(err);
+    }
+    function fail(reason: string): void {
+      failOnce(new Error(reason));
     }
 
     function armTimeout(): void {
@@ -784,7 +790,16 @@ export function startScanSessionLegacy(
           backPageIndices,
           paperless: session.paperless,
         })
-          .catch((err: unknown) => log.error(`finalizeSession failed: ${String(err)}`))
+          .catch((err: unknown) => {
+            const msg = err instanceof Error ? err.message : String(err);
+            log.error(`finalizeSession failed: ${msg}`);
+            // Symmetric with scanner.ts D.3: a finalize failure means no
+            // completed scan was saved, so reject — don't let the .finally
+            // resolveOnce silently mask it. failOnce sets errorReason and
+            // rejects via the resolved-guard; the .finally resolveOnce is
+            // then a no-op.
+            failOnce(new Error(`finalizeSession failure: ${msg}`));
+          })
           .finally(() => resolveOnce());
       });
     }

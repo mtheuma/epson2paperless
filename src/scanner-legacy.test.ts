@@ -5,7 +5,7 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { PDFDocument } from "pdf-lib";
 import { startScanSessionLegacy, appendImageChunk } from "./scanner-legacy.js";
-import { parseIsPacket } from "./protocol.js";
+import { parseIsPacket, buildIsPacket } from "./protocol.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
 import { loadFixture, driveFixture } from "./test-support/legacy-replay.js";
 
@@ -387,5 +387,61 @@ describe("appendImageChunk", () => {
     const offset = appendImageChunk(Buffer.from([0x01]), dest, 1);
     expect(offset).toBe(1);
     expect(Array.from(dest)).toEqual([0xee, 0xee, 0xee, 0xee]);
+  });
+});
+
+describe("startScanSessionLegacy failure-mode matrix", () => {
+  let outputDir: string;
+  let tempDir: string;
+
+  beforeEach(() => {
+    outputDir = mkdtempSync(path.join(os.tmpdir(), "leg-out-"));
+    tempDir = mkdtempSync(path.join(os.tmpdir(), "leg-tmp-"));
+  });
+
+  afterEach(() => {
+    rmSync(outputDir, { recursive: true, force: true });
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("rejects on socket error mid-session", async () => {
+    const fake = new FakeTcpSocket();
+    const scanPromise = startScanSessionLegacy(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        outputDir,
+        tempDir,
+        source: "adf-simplex",
+        format: "jpg",
+        jpegQuality: 90,
+      },
+      fake.asFactory(),
+    );
+    fake.simulateConnect();
+    fake.emit("error", new Error("ECONNREFUSED"));
+    await expect(scanPromise).rejects.toThrow(/socket error|ECONNREFUSED/i);
+  });
+
+  it("rejects on protocol violation (welcome with wrong packet type)", async () => {
+    const fake = new FakeTcpSocket();
+    const scanPromise = startScanSessionLegacy(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        outputDir,
+        tempDir,
+        source: "adf-simplex",
+        format: "jpg",
+        jpegQuality: 90,
+      },
+      fake.asFactory(),
+    );
+    fake.simulateConnect();
+    // WELCOME state expects type 0x8000 (scanner-legacy.ts:247).
+    // Feed type 0xa000 — fail() rejects with "expected welcome (0x8000), got 0xa000".
+    // (Raw garbage that doesn't form a valid IS header would just buffer until timeout.)
+    fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
+    await expect(scanPromise).rejects.toThrow(/expected welcome \(0x8000\)/);
   });
 });
