@@ -660,4 +660,121 @@ describe("runScanSession (engine pump)", () => {
     const singleByteWrites = transport.written.filter((b) => b.length === 1).map((b) => b[0]);
     expect(singleByteWrites).toEqual([0xaa, 0xbb, 0xcc]);
   });
+
+  // Fix 1: DONE no longer waits for transport close to settle the promise.
+  it("settles after DONE without waiting for transport close", async () => {
+    // FakeTransport.end() normally emits "close" synchronously. Override it
+    // to be a no-op to simulate a peer that never ACKs our FIN.
+    const transport = new FakeTransport();
+    transport.end = () => {
+      /* swallow — peer never closes */
+    };
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "DONE",
+          flushPage: {
+            side: "front",
+            encode: () => Promise.resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+          },
+        },
+      },
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    const result = await promise;
+    expect(result.ok).toBe(true);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
+  // Fix 2: Pump stops dispatching after an error settle.
+  it("stops the pump after an error settle even if more packets are buffered", async () => {
+    const transport = new FakeTransport();
+    let secondPacketDispatched = false;
+    const g = createGraph<Record<string, never>>("WAITING", 1_000).globalAbortHandlers({
+      0x9000: () => new Error("first packet aborts"),
+    });
+    g.state("WAITING", {
+      on: {
+        0xa000: {
+          next: "WAITING",
+          validate: (_payload) => {
+            // If the second packet is dispatched, this validator runs.
+            secondPacketDispatched = true;
+            return true;
+          },
+        },
+      },
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    // Two packets in one tick: first triggers globalAbort error settle,
+    // second is buffered. The pump must NOT dispatch the second.
+    setImmediate(() => {
+      transport.emit("data", buildIsPacket(0x9000, Buffer.from([0x02])));
+      transport.emit("data", buildIsPacket(0xa000, Buffer.from([0x06])));
+    });
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason.message).toMatch(/first packet aborts/);
+    expect(secondPacketDispatched).toBe(false);
+  });
+
+  // Fix 3: Hook exceptions route through settle as { ok: false }.
+  it("settles { ok: false } when a hook throws synchronously", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("WAITING", 1_000);
+    g.state(
+      "WAITING",
+      decision(() => {
+        throw new Error("bad payload parse");
+      }),
+    );
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason.message).toMatch(/Engine error in state WAITING/);
+      expect(result.reason.message).toMatch(/bad payload parse/);
+    }
+  });
 });

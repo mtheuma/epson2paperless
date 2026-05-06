@@ -273,11 +273,22 @@ export async function runScanSession<Ctx>(
      * initial command for that state), and handles the DONE terminal.
      * Called synchronously on initial entry and after every transition.
      * Re-arms the rolling timeout on each state entry.
+     *
+     * On entering DONE: calls transport.end() (polite FIN) and schedules
+     * finalize/zero-page-rejection via setImmediate — does NOT wait for
+     * the 'close' event, mirroring the ESC/I-2 scanner's "logical completion"
+     * pattern. The close handler then only handles unexpected closes.
      */
     function enterState(name: string): void {
       currentState = name;
       if (currentState === "DONE") {
-        transport.end(); // triggers close → resolve ok in close handler
+        transport.end(); // polite close request; peer may ACK late or never
+        // Schedule logical finalize independently — do NOT block on socket
+        // close. setImmediate gives any in-flight microtasks (e.g. flushPage's
+        // last file-write) a tick to settle before we run finalize.
+        setImmediate(() => {
+          void doFinalize();
+        });
         return;
       }
       const state = graph.states[currentState];
@@ -288,20 +299,12 @@ export async function runScanSession<Ctx>(
       armTimeout(); // (T15)
     }
 
-    transport.on("error", (err) => {
-      settle({ ok: false, reason: err, finalCtx: ctx });
-    });
-
-    transport.on("close", () => {
-      if (settled) return;
-      if (currentState !== "DONE") {
-        settle({
-          ok: false,
-          reason: new Error(`Transport closed in state ${currentState}`),
-          finalCtx: ctx,
-        });
-        return;
-      }
+    /**
+     * Logical completion handler — runs after DONE is entered (via setImmediate).
+     * Handles zero-page rejection and finalizeSession. Idempotent via `settled`.
+     */
+    async function doFinalize(): Promise<void> {
+      if (settled) return; // already settled (race with unexpected close)
 
       // Zero-page rejection (spec §3.6). A graph reaching DONE without any
       // flushPage having fired is a real failure mode in production — typically
@@ -316,28 +319,45 @@ export async function runScanSession<Ctx>(
         return;
       }
 
-      // Run finalize (async). Wrap in an IIFE so the synchronous listener body
-      // doesn't return a Promise (avoids floating-promise lint issues).
-      void (async () => {
-        if (sessionTempDir) {
-          try {
-            const { finalizeSession } = await import("./output-tail.js");
-            await finalizeSession({
-              sessionTempDir,
-              outputDir: opts.outputDir,
-              sessionTs: opts.sessionTs,
-              action: opts.action,
-              backPageIndices,
-              paperless: opts.paperless,
-            });
-          } catch (err) {
-            const reason = err instanceof Error ? err : new Error(String(err));
-            settle({ ok: false, reason, finalCtx: ctx });
-            return;
-          }
+      if (sessionTempDir) {
+        try {
+          const { finalizeSession } = await import("./output-tail.js");
+          await finalizeSession({
+            sessionTempDir,
+            outputDir: opts.outputDir,
+            sessionTs: opts.sessionTs,
+            action: opts.action,
+            backPageIndices,
+            paperless: opts.paperless,
+          });
+        } catch (err) {
+          const reason = err instanceof Error ? err : new Error(String(err));
+          settle({ ok: false, reason, finalCtx: ctx });
+          return;
         }
-        settle({ ok: true, finalCtx: ctx });
-      })();
+      }
+      settle({ ok: true, finalCtx: ctx });
+    }
+
+    transport.on("error", (err) => {
+      settle({ ok: false, reason: err, finalCtx: ctx });
+    });
+
+    // Close handler — only handles unexpected closes. The DONE path settles
+    // via doFinalize (scheduled by enterState via setImmediate) independently
+    // of socket close. Two reasons this handler is a no-op on the DONE path:
+    // 1. If close fires after doFinalize has run, settled === true → return.
+    // 2. If close fires synchronously during transport.end() (e.g. FakeTransport
+    //    emits close in end()), currentState === "DONE" → return; doFinalize
+    //    will still run on the next tick and settle the promise.
+    transport.on("close", () => {
+      if (settled) return;
+      if (currentState === "DONE") return; // doFinalize handles this path
+      settle({
+        ok: false,
+        reason: new Error(`Transport closed unexpectedly in state ${currentState}`),
+        finalCtx: ctx,
+      });
     });
 
     transport.on("data", (chunk: Buffer) => {
@@ -369,20 +389,39 @@ export async function runScanSession<Ctx>(
      * awaiting an applyTransition) short-circuit; the active loop drains
      * any chunks they buffered on its next iteration.
      *
-     * The loop checks `paused` at every step — set during a flushPage
-     * barrier (Task 16) — and breaks out so multiple buffered packets in
-     * a single TCP chunk don't dispatch concurrently with a flush.
+     * The loop checks `paused`, `settled`, and `currentState === "DONE"` at
+     * every step — set during a flushPage barrier or after the session is
+     * finalized — so a buffered second packet in the same TCP chunk doesn't
+     * keep dispatching after the session has already completed or errored.
+     *
+     * Hook exceptions (from validate, decision, onEnter, send thunks, etc.)
+     * are caught here and routed through settle so they surface as
+     * { ok: false, reason } rather than unhandled Promise rejections.
      */
     async function tryDispatch(): Promise<void> {
       if (dispatching) return;
       dispatching = true;
       try {
         while (true) {
-          if (paused) return;
+          if (paused || settled || currentState === "DONE") return;
           const packet = tryParseHead();
           if (!packet) return;
-          await dispatchPacket(packet);
-          if (paused) return;
+          try {
+            await dispatchPacket(packet);
+          } catch (err) {
+            // Hook threw — route through settle rather than letting the
+            // rejection escape through the `void tryDispatch()` call site.
+            const reason = err instanceof Error ? err : new Error(String(err));
+            if (!settled) {
+              settle({
+                ok: false,
+                reason: new Error(`Engine error in state ${currentState}: ${reason.message}`),
+                finalCtx: ctx,
+              });
+            }
+            return;
+          }
+          if (paused || settled || currentState === "DONE") return;
         }
       } finally {
         dispatching = false;
@@ -566,6 +605,22 @@ export async function runScanSession<Ctx>(
     // (which may write the first command) synchronously inside the Promise
     // body, after all listeners are wired, so the first setImmediate
     // microtask queued by tests sees the writes.
-    enterState(graph.initial);
+    //
+    // Wrap in try/catch: if the initial onEnter hook throws, we route through
+    // settle rather than letting the Promise reject (which would violate the
+    // RunScanSessionResult contract and become an unhandled rejection at the
+    // call site, since callers await the result, not a thrown error).
+    try {
+      enterState(graph.initial);
+    } catch (err) {
+      const reason = err instanceof Error ? err : new Error(String(err));
+      settle({
+        ok: false,
+        reason: new Error(
+          `Engine error entering initial state ${graph.initial}: ${reason.message}`,
+        ),
+        finalCtx: ctx,
+      });
+    }
   });
 }
