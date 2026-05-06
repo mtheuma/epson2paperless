@@ -243,9 +243,9 @@ describe("loadConfig", () => {
     expect(loadConfig().printerProtocol).toBe("auto");
   });
 
-  it("rejects PRINTER_CERT_FINGERPRINT with PRINTER_PROTOCOL=legacy", () => {
+  it("rejects PRINTER_CERT_FINGERPRINT with PRINTER_PROTOCOL=esci", () => {
     process.env.PRINTER_IP = "10.0.0.1";
-    process.env.PRINTER_PROTOCOL = "legacy";
+    process.env.PRINTER_PROTOCOL = "esci";
     process.env.PRINTER_CERT_FINGERPRINT =
       "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89";
     expect(() => loadConfig()).toThrow(/incompatible/i);
@@ -321,6 +321,21 @@ describe("loadConfig", () => {
     process.env.DIAGNOSE_PROTOCOL = "yes";
     expect(loadConfig().diagnoseProtocol).toBe(false);
     delete process.env.DIAGNOSE_PROTOCOL;
+  });
+
+  it("accepts PRINTER_PROTOCOL=esci", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.PRINTER_PROTOCOL = "esci";
+    const config = loadConfig();
+    expect(config.printerProtocol).toBe("esci");
+  });
+
+  it("rejects PRINTER_PROTOCOL=legacy with a helpful migration error", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.PRINTER_PROTOCOL = "legacy";
+    // The Zod enum rejects "legacy" since v0.4.0; the error message should
+    // mention the new name "esci" so users get a clear migration signal.
+    expect(() => loadConfig()).toThrow(/esci/i);
   });
 });
 

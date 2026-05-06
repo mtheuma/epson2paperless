@@ -19,7 +19,7 @@ const configSchema = z
     jpegQuality: z.coerce.number().int().min(1).max(100).default(90),
     previewAction: z.enum(["reject", "jpg", "pdf"]).default("reject"),
     legacyForceSource: z.enum(["flatbed", "adf-simplex", "adf-duplex"]).optional(),
-    printerProtocol: z.enum(["auto", "esci2", "legacy"]).default("auto"),
+    printerProtocol: z.enum(["auto", "esci2", "esci"]).default("auto"),
     // Diagnostic-only. When true and the legacy `ESC @` init returns a non-ACK,
     // the legacy scanner sends one extra `FS Y` probe (the ET-4950 ESC/I-2 path's
     // first command) before failing, and logs both replies in detail. Used to
@@ -41,11 +41,11 @@ const configSchema = z
       .optional(),
   })
   .superRefine((cfg, ctx) => {
-    if (cfg.printerProtocol === "legacy" && cfg.printerCertFingerprint) {
+    if (cfg.printerProtocol === "esci" && cfg.printerCertFingerprint) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "PRINTER_CERT_FINGERPRINT is incompatible with PRINTER_PROTOCOL=legacy (the legacy variant uses plain TCP, not TLS).",
+          "PRINTER_CERT_FINGERPRINT is incompatible with PRINTER_PROTOCOL=esci (ESC/I uses plain TCP, not TLS).",
         path: ["printerCertFingerprint"],
       });
     }
