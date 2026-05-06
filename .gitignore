@@ -5,6 +5,7 @@ dist/
 test-output/
 .claude/
 .reference/
+.superpowers/
 coverage/
 scan.log*
 command.bat
