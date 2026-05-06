@@ -124,7 +124,7 @@ const MAX_ZERO_IMG_RETRIES = 2000;
 const ASYNC_FATAL = new Set([0x02 /* Disconnect */, 0x80 /* Timeout */, 0xa0 /* ServerError */]);
 const ASYNC_CANCEL = new Set([0x03 /* ScanCancel */]);
 
-export function startScanSession(
+export function runEsci2Scan(
   session: ScanSession,
   socketFactory: TlsSocketFactory = tls.connect,
 ): Promise<void> {

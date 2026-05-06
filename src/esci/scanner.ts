@@ -153,7 +153,7 @@ type State =
 const TIMEOUT_MS = 60_000;
 const ACK_BYTE = 0x06;
 
-export function startScanSessionLegacy(
+export function runEsciScan(
   session: LegacyScanSession,
   socketFactory: TcpSocketFactory = (host, port, cb) => net.connect(port, host, cb),
 ): Promise<void> {

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { startScanSessionLegacy } from "./scanner.js";
+import { runEsciScan } from "./scanner.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
 import { buildIsPacket, parseIsPacket } from "../protocol.js";
 
@@ -25,7 +25,7 @@ function passthruCommand(buf: Buffer): Buffer {
 describe("scanner-legacy DIAGNOSE_PROTOCOL probe", () => {
   it("sends FS Y after ESC @ NAK and rejects with a diagnostic message", async () => {
     const fake = new FakeTcpSocket();
-    const promise = startScanSessionLegacy(
+    const promise = runEsciScan(
       {
         printerIp: "10.0.0.1",
         port: 1865,
@@ -58,7 +58,7 @@ describe("scanner-legacy DIAGNOSE_PROTOCOL probe", () => {
 
   it("rejects with a diagnostic message even when FS Y is also NAK'd", async () => {
     const fake = new FakeTcpSocket();
-    const promise = startScanSessionLegacy(
+    const promise = runEsciScan(
       {
         printerIp: "10.0.0.1",
         port: 1865,
@@ -87,7 +87,7 @@ describe("scanner-legacy DIAGNOSE_PROTOCOL probe", () => {
 
   it("preserves existing behaviour when DIAGNOSE_PROTOCOL is off", async () => {
     const fake = new FakeTcpSocket();
-    const promise = startScanSessionLegacy(
+    const promise = runEsciScan(
       {
         printerIp: "10.0.0.1",
         port: 1865,
