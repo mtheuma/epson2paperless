@@ -1,7 +1,7 @@
 # pcap-extract
 
 Converts a Wireshark `.pcap` of a WF-3620 (or any plain-TCP legacy) scan
-session into a small JSONL fixture used by `scanner-legacy.test.ts`.
+session into a small JSONL fixture used by `src/esci/scanner.test.ts`.
 
 ## Requirements
 

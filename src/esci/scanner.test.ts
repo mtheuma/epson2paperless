@@ -117,7 +117,7 @@ const FIXTURE_SPECS: FixtureSpec[] = [
 // Replay matrix
 // ---------------------------------------------------------------------------
 
-describe("scanner-legacy", () => {
+describe("scanner-esci", () => {
   let outputDir: string;
   let tempDir: string;
 

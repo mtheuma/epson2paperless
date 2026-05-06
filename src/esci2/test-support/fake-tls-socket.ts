@@ -54,7 +54,7 @@ export class FakeTlsSocket extends EventEmitter {
 
   /**
    * Create a `tls.connect`-compatible factory that hands out this fake.
-   * Use in tests: `startScanSession(session, fake.asFactory())`.
+   * Use in tests: `runEsci2Scan(session, fake.asFactory())`.
    */
   asFactory(): (options: tls.ConnectionOptions, cb?: () => void) => tls.TLSSocket {
     return (_options, cb) => {

@@ -41,7 +41,7 @@ import { resolveSessionTimestamp } from "../output.js";
 import { finalizeSession } from "../output-tail.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
 
-const log = createLogger("scanner-legacy");
+const log = createLogger("scanner-esci");
 
 const GAMMA_CHANNELS = [
   { tag: 0x52, lut: GAMMA_LUT_R },

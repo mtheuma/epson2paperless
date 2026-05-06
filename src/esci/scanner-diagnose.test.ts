@@ -22,7 +22,7 @@ function passthruCommand(buf: Buffer): Buffer {
   return pkt.payload.subarray(8);
 }
 
-describe("scanner-legacy DIAGNOSE_PROTOCOL probe", () => {
+describe("scanner-esci DIAGNOSE_PROTOCOL probe", () => {
   it("sends FS Y after ESC @ NAK and rejects with a diagnostic message", async () => {
     const fake = new FakeTcpSocket();
     const promise = runEsciScan(
