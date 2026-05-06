@@ -1,5 +1,8 @@
 // src/scan-session.ts
 
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { IS_HEADER_SIZE } from "./protocol.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 
@@ -223,16 +226,18 @@ export async function runScanSession<Ctx>(
   }
 
   let currentState = "";
-  // Set during a flushPage barrier (Task 16) — for now always false; the pump
-  // checks it preemptively so the wiring is in place when T16 lands.
-  const paused = false;
-  // errorReason is set in two places (transport.on("error") and the
-  // global-abort-handler path) and read in T16's flushPage error path.
+  // Set during a flushPage barrier — pauses the pump while encode/persist runs.
+  let paused = false;
+  // _errorReason is set in two places (transport.on("error") and the
+  // global-abort-handler path) and read in the flushPage error path.
   let _errorReason: Error | null = null;
   let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
   const recvChunks: Buffer[] = [];
   let recvBytes = 0;
+  let pageIndex = 0;
+  const backPageIndices: number[] = [];
+  let sessionTempDir: string | null = null;
 
   return new Promise<RunScanSessionResult<Ctx>>((resolve) => {
     let settled = false;
@@ -457,23 +462,77 @@ export async function runScanSession<Ctx>(
       }
     }
 
+    async function createSessionTempDir(baseDir: string): Promise<string> {
+      const base = baseDir || os.tmpdir();
+      return fs.promises.mkdtemp(path.join(base, "epson2paperless-"));
+    }
+
     /**
-     * Applies a resolved transition: writes any bytes, advances currentState,
-     * and triggers transport.end() on DONE. Accepts both StaticTransition
-     * (function-form send) and TransitionResult (decision return; concrete
-     * bytes only) — resolveSend handles both shapes uniformly.
-     * Async to support flushPage barriers in T16 (no await yet — stub is
-     * intentionally sync-body-only until T16 adds the flushPage barrier).
+     * Applies a resolved transition: handles the flushPage barrier (encode +
+     * persist while pump is paused), then writes any staged send bytes and
+     * advances currentState. On the non-flush path writes and enters state
+     * immediately. Accepts both StaticTransition and TransitionResult shapes —
+     * resolveSend handles both uniformly.
      */
-    // eslint-disable-next-line @typescript-eslint/require-await
     async function applyTransition(t: {
       next: string;
       send?: SendSpec<Ctx> | SendSpec<Ctx>[] | Buffer | Buffer[];
       flushPage?: PageFlush;
     }): Promise<void> {
+      if (t.flushPage) {
+        // Spec §3.5 barrier order:
+        // pause → encode/persist → unpause → write staged send → enter staged next.
+        const stagedNext = t.next;
+        const stagedSend = t.send;
+
+        paused = true;
+        clearTimeoutTimer(); // suspend timeout during barrier (spec §3.6)
+
+        pageIndex += 1;
+        const myPageIndex = pageIndex;
+
+        try {
+          const jpegBytes = await t.flushPage.encode();
+
+          // Track back-page index regardless of action (PDF mode needs it for
+          // pdf-lib /Rotate=180 in finalizeSession).
+          if (t.flushPage.side === "back") {
+            backPageIndices.push(myPageIndex);
+          }
+
+          // EXIF action-gating (spec §3.5 step 5).
+          let outputBytes = jpegBytes;
+          if (t.flushPage.side === "back" && opts.action === "jpg") {
+            const { setJpegOrientation } = await import("./exif.js");
+            outputBytes = setJpegOrientation(jpegBytes, 3);
+          }
+
+          // Write to temp file.
+          if (!sessionTempDir) {
+            sessionTempDir = await createSessionTempDir(opts.tempDir);
+          }
+          const filename = `page_${String(myPageIndex).padStart(2, "0")}.jpg`;
+          await fs.promises.writeFile(path.join(sessionTempDir, filename), outputBytes);
+        } catch (err) {
+          const reason = err instanceof Error ? err : new Error(String(err));
+          _errorReason = reason;
+          settle({ ok: false, reason, finalCtx: ctx });
+          return;
+        }
+
+        paused = false;
+        // Apply staged send after barrier resolves (spec §3.5 step 8).
+        writeAll(resolveSend(stagedSend));
+        enterState(stagedNext);
+        // Do NOT call tryDispatch() recursively. The outer pump loop is awaiting
+        // this very applyTransition call — once we return, its next iteration
+        // picks up any buffered packets and dispatches them with the new state.
+        return;
+      }
+
+      // Non-flush path — write and enter state immediately.
       writeAll(resolveSend(t.send));
       enterState(t.next);
-      // flushPage handled in T16
     }
 
     // Enter the initial state. This fires onEnter for the initial state

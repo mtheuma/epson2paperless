@@ -2,6 +2,9 @@
 
 import { describe, it, expect } from "vitest";
 import { EventEmitter } from "node:events";
+import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import { createGraph, decision, runScanSession } from "./scan-session.js";
 import type { SessionTransport } from "./scan-session.js";
 import { buildIsPacket } from "./protocol.js";
@@ -220,5 +223,110 @@ describe("runScanSession (engine pump)", () => {
 
     const result = await promise;
     expect(result.ok).toBe(true);
+  });
+
+  it("awaits flushPage.encode before sending the next command", async () => {
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+
+    let encodeStartedAt = 0;
+    let sendObservedAt = 0;
+    const encodePromise = new Promise<Buffer>((resolve) => {
+      setTimeout(() => {
+        // Minimal valid JPEG: SOI + EOI
+        resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+      }, 30);
+    });
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "DONE",
+          send: Buffer.from([0xca, 0xfe]),
+          flushPage: {
+            side: "front",
+            encode: () => {
+              encodeStartedAt = Date.now();
+              return encodePromise;
+            },
+          },
+        },
+      },
+    });
+
+    // Wrap transport.write to record when our send was observed
+    const origWrite = transport.write.bind(transport);
+    transport.write = (buf: Buffer) => {
+      if (buf.equals(Buffer.from([0xca, 0xfe]))) sendObservedAt = Date.now();
+      return origWrite(buf);
+    };
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: tempDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    // The send must happen AFTER encode resolved
+    expect(sendObservedAt).toBeGreaterThanOrEqual(encodeStartedAt + 30);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("buffers inbound data during a flushPage barrier and dispatches after resume", async () => {
+    // Verifies: while flushPage is pending, the next packet from the printer is
+    // buffered. Once flush resolves, that packet gets dispatched.
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+
+    const g = createGraph<{ pages: number }>("AWAIT_PAGE", 1_000);
+    g.state("AWAIT_PAGE", {
+      on: {
+        0xa000: {
+          next: "AFTER_FLUSH",
+          flushPage: {
+            side: "front",
+            encode: async () => {
+              await new Promise((r) => setTimeout(r, 30));
+              return Buffer.from([0xff, 0xd8, 0xff, 0xd9]);
+            },
+          },
+        },
+      },
+    });
+    g.state("AFTER_FLUSH", { on: { 0xa000: { next: "DONE" } } });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: { pages: 0 },
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: tempDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    // First 0xa000 triggers flush; immediately after, send a SECOND 0xa000.
+    // The second one should be buffered and dispatched only after flush resolves.
+    setImmediate(() => {
+      transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0)));
+      transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0)));
+    });
+
+    const result = await promise;
+    expect(result.ok).toBe(true);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 });
