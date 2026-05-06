@@ -9,7 +9,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { startScanSession } from "../src/esci2/scanner.js";
+import { runEsci2Scan } from "../src/esci2/scanner.js";
 import { FakeTlsSocket } from "../src/esci2/test-support/fake-tls-socket.js";
 
 const CAPTURE = "tools/frida-capture/captures/2026-04-24T08-56-07-adf-1p-simplex.jsonl";
@@ -54,7 +54,7 @@ async function main() {
   const filtered = trimmed.filter((r) => r.hook === "send" || r.hook === "recv");
 
   const fake = new FakeTlsSocket();
-  void startScanSession(
+  void runEsci2Scan(
     {
       printerIp: "192.0.2.58",
       port: 1865,
