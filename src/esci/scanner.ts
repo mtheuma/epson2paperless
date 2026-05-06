@@ -2,14 +2,14 @@ import net from "node:net";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
-import { createLogger } from "./logger.js";
+import { createLogger } from "../logger.js";
 import {
   parseIsPacket,
   buildLockPacket,
   buildUnlockPacket,
   buildPassthruPacket,
   buildIsPacket,
-} from "./protocol.js";
+} from "../protocol.js";
 import {
   buildEscInit,
   buildFsI,
@@ -29,17 +29,17 @@ import {
   SOURCE_BYTE,
   type Source,
   type Format,
-} from "./esci-legacy.js";
+} from "./commands.js";
 // FS Y (0x1C 0x59) — first command in the ET-4950 ESC/I-2 init sequence
 // (see esci2/scanner.ts INIT1_FS_Y). Used here only by the DIAGNOSE_PROTOCOL probe
 // to classify printers that NAK `ESC @`.
-import { buildFsY } from "./esci2/commands.js";
-import { GAMMA_LUT_R, GAMMA_LUT_G, GAMMA_LUT_B } from "./esci-legacy-luts.js";
+import { buildFsY } from "../esci2/commands.js";
+import { GAMMA_LUT_R, GAMMA_LUT_G, GAMMA_LUT_B } from "./luts.js";
 import { encodeRawGbrToJpeg } from "./raw-to-jpeg.js";
-import { setJpegOrientation } from "./exif.js";
-import { resolveSessionTimestamp } from "./output.js";
-import { finalizeSession } from "./output-tail.js";
-import type { PaperlessUploadOptions } from "./paperless-upload.js";
+import { setJpegOrientation } from "../exif.js";
+import { resolveSessionTimestamp } from "../output.js";
+import { finalizeSession } from "../output-tail.js";
+import type { PaperlessUploadOptions } from "../paperless-upload.js";
 
 const log = createLogger("scanner-legacy");
 

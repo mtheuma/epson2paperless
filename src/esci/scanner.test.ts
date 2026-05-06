@@ -4,13 +4,13 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { PDFDocument } from "pdf-lib";
-import { startScanSessionLegacy, appendImageChunk } from "./scanner-legacy.js";
-import { parseIsPacket, buildIsPacket, IS_HEADER_SIZE } from "./protocol.js";
+import { startScanSessionLegacy, appendImageChunk } from "./scanner.js";
+import { parseIsPacket, buildIsPacket, IS_HEADER_SIZE } from "../protocol.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
-import { loadFixture, driveFixture } from "./test-support/legacy-replay.js";
+import { loadFixture, driveFixture } from "./test-support/replay.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURES = path.join(__dirname, "..", "tools", "pcap-extract", "captures", "wf-3620");
+const FIXTURES = path.join(__dirname, "..", "..", "tools", "pcap-extract", "captures", "wf-3620");
 
 // ---------------------------------------------------------------------------
 // Per-fixture metadata driving the it.each replay matrix

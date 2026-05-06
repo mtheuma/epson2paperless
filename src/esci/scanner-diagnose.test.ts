@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { startScanSessionLegacy } from "./scanner-legacy.js";
+import { startScanSessionLegacy } from "./scanner.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
-import { buildIsPacket, parseIsPacket } from "./protocol.js";
+import { buildIsPacket, parseIsPacket } from "../protocol.js";
 
 // Welcome and lock-ack helpers — same shape as the WF-3620 fixtures.
 const welcome = buildIsPacket(0x8000, Buffer.alloc(0));

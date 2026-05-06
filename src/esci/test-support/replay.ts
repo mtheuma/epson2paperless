@@ -1,8 +1,8 @@
 import { readFileSync } from "node:fs";
-import { buildIsPacket } from "../protocol.js";
+import { buildIsPacket } from "../../protocol.js";
 import type { FakeTcpSocket } from "./fake-tcp-socket.js";
 
-export type { FixtureEvent } from "../../tools/pcap-extract/extract.js";
+export type { FixtureEvent } from "../../../tools/pcap-extract/extract.js";
 
 export function loadFixture(path: string): FixtureEvent[] {
   const text = readFileSync(path, "utf8");

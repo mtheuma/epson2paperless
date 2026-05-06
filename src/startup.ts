@@ -5,7 +5,7 @@ import { createKeepaliveResponder, type KeepaliveResponder } from "./keepalive.j
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import { detectVariant, type Variant } from "./protocol-probe.js";
 import { startScanSession } from "./esci2/scanner.js";
-import { startScanSessionLegacy } from "./scanner-legacy.js";
+import { startScanSessionLegacy } from "./esci/scanner.js";
 
 const log = createLogger("startup");
 
@@ -118,7 +118,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
       printerCertFingerprint: args.config.printerCertFingerprint,
     });
   }
-  // Legacy. Source is autodetected from the FS F status byte (see scanner-legacy.ts
+  // Legacy. Source is autodetected from the FS F status byte (see esci/scanner.ts
   // STATUS_2). LEGACY_FORCE_SOURCE overrides the autodetection for users hitting
   // edge cases the autodetect doesn't cover (yet).
   return startScanSessionLegacy({
