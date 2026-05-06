@@ -39,6 +39,7 @@ export class FakeTlsSocket extends EventEmitter {
   }
 
   private pendingChunks: Buffer[] = [];
+  private pendingError: Error | null = null;
 
   /**
    * Feed bytes as if the remote side sent them. If no `"data"` listener is
@@ -79,7 +80,42 @@ export class FakeTlsSocket extends EventEmitter {
         for (const chunk of chunks) this.emit("data", chunk);
       });
     }
+    if (event === "error" && this.pendingError !== null) {
+      const err = this.pendingError;
+      this.pendingError = null;
+      queueMicrotask(() => this.emit("error", err));
+    }
     return this;
+  }
+
+  /**
+   * Override emit() so that an "error" emitted before any non-once listener
+   * is registered (e.g., the test calls `fake.emit("error", ...)` between
+   * simulateConnect and the engine attaching its error listener via
+   * `transport.on("error", ...)` after `await transportFactory()` resolves)
+   * gets buffered and replayed when the listener attaches. Mirrors the data
+   * buffering above, for the same reason: real sockets buffer errors during
+   * the connecting state too.
+   */
+  override emit(event: string | symbol, ...args: unknown[]): boolean {
+    if (event === "error" && args.length > 0) {
+      // Count listeners EXCLUDING the factory's `once("error", reject)` which
+      // is attached pre-handshake. Heuristic: if the only listener is one
+      // attached via `once()` (we can't distinguish reliably), the error may
+      // still be lost on the engine. Simplest robust check: if listener
+      // count drops to 0 after emit (because once removes itself), buffer
+      // for replay when a future on() registers.
+      const before = this.listenerCount("error");
+      const result = super.emit(event, ...args);
+      const after = this.listenerCount("error");
+      if (before > 0 && after === 0) {
+        // Only `once` listeners were present; the engine hasn't attached
+        // its persistent listener yet. Buffer the error for replay.
+        this.pendingError = args[0] as Error;
+      }
+      return result;
+    }
+    return super.emit(event, ...args);
   }
 
   write(data: Buffer): boolean {

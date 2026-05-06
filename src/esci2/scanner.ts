@@ -1,10 +1,14 @@
 import tls from "node:tls";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import {
   runScanSession,
   type SessionTransport,
   type SessionTransportFactory,
 } from "../scan-session.js";
 import { resolveSessionTimestamp } from "../output.js";
+import { buildUnlockPacket } from "../protocol.js";
 import { esci2Graph, type Esci2Ctx } from "./graph.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
 
@@ -31,6 +35,53 @@ export type TlsSocketFactory = (
   onSecureConnect?: () => void,
 ) => tls.TLSSocket;
 
+/**
+ * Wraps a tls.TLSSocket so that `destroy()` first attempts a polite UNLOCK
+ * write (engine doesn't know about ESC/I-2 protocol cleanup; this keeps the
+ * printer's panel from staying in a locked state after a mid-session abort).
+ * Best-effort: write errors are swallowed since the socket is being destroyed.
+ */
+function withUnlockOnDestroy(socket: tls.TLSSocket): SessionTransport {
+  let unlockSent = false;
+  let lockSent = false;
+  const wrapped: SessionTransport = {
+    write(buf: Buffer) {
+      // Track LOCK / UNLOCK sends by IS type byte (header byte 2-3).
+      if (buf.length >= 4 && buf[2] === 0x21) {
+        if (buf[3] === 0x00) lockSent = true;
+        if (buf[3] === 0x01) unlockSent = true;
+      }
+      return socket.write(buf);
+    },
+    end: () => socket.end(),
+    destroy(err?: Error) {
+      if (lockSent && !unlockSent) {
+        try {
+          socket.write(buildUnlockPacket());
+        } catch {
+          /* socket already closed; nothing to do */
+        }
+      }
+      socket.destroy(err);
+    },
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    on(event: string, cb: (...args: any[]) => void) {
+      if (event === "error") {
+        // Wrap raw socket errors with a "TLS connection error" prefix so
+        // operators (and tests) get a recognisable category instead of a
+        // bare ECONNRESET / EPIPE / etc. Mirrors the pre-engine scanner.
+        socket.on(event, (err: Error) => {
+          cb(new Error(`TLS connection error: ${err.message}`));
+        });
+      } else {
+        socket.on(event, cb);
+      }
+      return wrapped;
+    },
+  };
+  return wrapped;
+}
+
 function makeTlsTransportFactory(
   session: ScanSession,
   socketFactory: TlsSocketFactory,
@@ -43,11 +94,11 @@ function makeTlsTransportFactory(
         rejectUnauthorized: false,
       };
       const socket = socketFactory(opts, () => {
-        // Manual fingerprint pin (not via TLS's `checkServerIdentity` since
-        // tests use a fake socket that doesn't run a real handshake). Mirrors
-        // the pre-engine scanner's pattern: if pin is set, read the peer cert
-        // and compare; on mismatch, destroy the socket and reject the
-        // factory Promise so runScanSession returns { ok: false, reason }.
+        // Manual fingerprint pin (TLS's `checkServerIdentity` isn't fired by
+        // the fake socket used in tests). Mirrors the pre-engine scanner's
+        // pattern: read the peer cert, compare to the configured pin, reject
+        // the factory Promise on mismatch — engine then settles { ok: false,
+        // reason } per spec §3.6.
         if (session.printerCertFingerprint) {
           const peer = socket.getPeerCertificate?.();
           const actual = peer?.fingerprint256;
@@ -61,7 +112,7 @@ function makeTlsTransportFactory(
             return;
           }
         }
-        resolve(socket);
+        resolve(withUnlockOnDestroy(socket));
       });
       socket.once("error", reject);
     });
@@ -71,6 +122,19 @@ export async function runEsci2Scan(
   session: ScanSession,
   socketFactory: TlsSocketFactory = tls.connect,
 ): Promise<void> {
+  // Eagerly validate the temp dir base before opening the TLS connection.
+  // Mirrors the pre-engine scanner's mkdtempSync at session start so a bad
+  // tempDir fails fast (rather than waiting until first flushPage's lazy
+  // creation, which a no-data scan would never reach).
+  const tempBase = session.tempDir || os.tmpdir();
+  try {
+    const probe = fs.mkdtempSync(path.join(tempBase, "epson2paperless-probe-"));
+    fs.rmSync(probe, { recursive: true, force: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to create session temp dir under ${tempBase}: ${msg}`);
+  }
+
   const result = await runScanSession<Esci2Ctx>({
     graph: esci2Graph,
     initialCtx: {

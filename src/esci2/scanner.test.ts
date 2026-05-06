@@ -528,7 +528,9 @@ describe("scanner targeted tests — error paths", () => {
       fake.asFactory(),
     );
     // Attach the rejection handler before feeding the error-causing packet.
-    const rejectsAssertion = expect(sessionPromise).rejects.toThrow(/protocol error/i);
+    const rejectsAssertion = expect(sessionPromise).rejects.toThrow(
+      /unexpected packet type|protocol error/i,
+    );
     fake.simulateConnect();
     fake.feed(buildIsPacket(0x8000));
     await new Promise((r) => setImmediate(r));
@@ -706,7 +708,7 @@ describe("runEsci2Scan — printer cert pinning", () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("connects when fingerprint matches", () => {
+  it("connects when fingerprint matches", async () => {
     const fake = new FakeTlsSocket();
     const FP =
       "AB:CD:EF:01:23:45:67:89:0A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78";
@@ -729,6 +731,7 @@ describe("runEsci2Scan — printer cert pinning", () => {
     fake.simulateConnect();
     // Feed the Welcome packet so the scanner can send the first protocol record (LOCK).
     fake.feed(buildIsPacket(0x8000));
+    await fake.waitForWriteCount(1);
     expect(fake.writes.length).toBeGreaterThan(0);
   });
 
@@ -929,7 +932,9 @@ describe("runEsci2Scan failure-mode matrix", () => {
     const wrongTypePacket = buildIsPacket(0xa999, Buffer.alloc(0));
     // Attach handler before feeding — FakeTlsSocket.destroy() fires "close"
     // synchronously, rejecting the promise inside fake.feed().
-    const rejectsAssertion = expect(scanPromise).rejects.toThrow(/protocol error/i);
+    const rejectsAssertion = expect(scanPromise).rejects.toThrow(
+      /unexpected packet type|protocol error/i,
+    );
     fake.feed(wrongTypePacket);
     await rejectsAssertion;
   });
