@@ -229,15 +229,36 @@ export async function runScanSession<Ctx>(
   // errorReason is set in two places (transport.on("error") and the
   // global-abort-handler path) and read in T16's flushPage error path.
   let _errorReason: Error | null = null;
+  let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
   const recvChunks: Buffer[] = [];
   let recvBytes = 0;
 
   return new Promise<RunScanSessionResult<Ctx>>((resolve) => {
     let settled = false;
+
+    function armTimeout(): void {
+      if (timeoutTimer) clearTimeout(timeoutTimer);
+      timeoutTimer = setTimeout(() => {
+        const reason = new Error(
+          `Timeout in state ${currentState} — no response in ${graph.timeoutMs}ms`,
+        );
+        _errorReason = reason;
+        settle({ ok: false, reason, finalCtx: ctx });
+      }, graph.timeoutMs);
+    }
+
+    function clearTimeoutTimer(): void {
+      if (timeoutTimer) {
+        clearTimeout(timeoutTimer);
+        timeoutTimer = null;
+      }
+    }
+
     const settle = (result: RunScanSessionResult<Ctx>) => {
       if (settled) return; // idempotent — close handler may also call this
       settled = true;
+      clearTimeoutTimer(); // (T15)
       try {
         transport.destroy();
       } catch {
@@ -263,7 +284,7 @@ export async function runScanSession<Ctx>(
         const bytes = state.onEnter(ctx);
         if (bytes) transport.write(bytes);
       }
-      // Re-arm timeout (T15 will add the timeout call here)
+      armTimeout(); // (T15)
     }
 
     transport.on("error", (err) => {

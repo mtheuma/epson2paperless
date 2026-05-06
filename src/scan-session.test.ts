@@ -176,4 +176,49 @@ describe("runScanSession (engine pump)", () => {
     const result = await promise;
     expect(result.ok).toBe(true);
   });
+
+  it("fires the rolling timeout if no packet arrives within timeoutMs", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("WAITING", 50); // 50ms timeout
+    g.state("WAITING", { on: { 0xa000: { next: "DONE" } } });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    // Don't send any data
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason.message).toMatch(/Timeout in state WAITING/);
+  });
+
+  it("clears the rolling timeout when the expected packet arrives", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("WAITING", 50);
+    g.state("WAITING", { on: { 0xa000: { next: "DONE" } } });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    // Send before timeout
+    setTimeout(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))), 20);
+
+    const result = await promise;
+    expect(result.ok).toBe(true);
+  });
 });
