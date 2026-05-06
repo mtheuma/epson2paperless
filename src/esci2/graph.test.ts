@@ -915,3 +915,31 @@ describe("esci2Graph T26 — FIN_AFTER_IMG decision + POSTSCAN drain cycles", ()
     }
   });
 });
+
+describe("esci2Graph T27 UNLOCKING", () => {
+  it("UNLOCKING is a static state with onEnter sending the unlock packet", () => {
+    const state = esci2Graph.states.UNLOCKING;
+    expect(state.kind).toBe("static");
+    if (state.kind !== "static") return;
+    expect(state.onEnter).toBeDefined();
+    const ctx = makeCtx({});
+    const bytes = state.onEnter!(ctx);
+    expect(bytes).toBeDefined();
+    expect(bytes!.length).toBeGreaterThan(0);
+    // Unlock packet IS type 0x2101 (verify by inspecting bytes 2-3 of the IS frame).
+    expect(bytes![2]).toBe(0x21);
+    expect(bytes![3]).toBe(0x01);
+  });
+
+  it("UNLOCKING transitions to DONE on 0xa101", () => {
+    const state = esci2Graph.states.UNLOCKING;
+    if (state.kind !== "static") return;
+    expect(state.on[0xa101]?.next).toBe("DONE");
+  });
+
+  it("UNLOCKING's transition has no send (sent via onEnter, not on transition)", () => {
+    const state = esci2Graph.states.UNLOCKING;
+    if (state.kind !== "static") return;
+    expect(state.on[0xa101]?.send).toBeUndefined();
+  });
+});

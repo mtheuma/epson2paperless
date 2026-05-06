@@ -24,9 +24,6 @@ import {
   parseTokens,
 } from "./commands.js";
 
-// Suppress unused-import warnings for identifiers used in T26 state helpers.
-void buildUnlockPacket;
-
 /**
  * Per-session mutable state threaded through every transition. The engine
  * owns the page-index + back-page-indices + sessionTempDir bookkeeping;
@@ -359,6 +356,20 @@ g.state("POSTSCAN_FS_Y_2", {
 // POSTSCAN_2_FIN has no further send — UNLOCKING's onEnter sends the unlock packet.
 // Mirrors scanner.ts:937-975 (onPostscanStat / onPostscanDrain / onPostscanFin, cycle=2).
 statThenDrain(g, "POSTSCAN_2", "UNLOCKING");
+
+// =============================================================================
+// T27: UNLOCKING state with onEnter sending unlock packet
+// =============================================================================
+
+// UNLOCKING: static state that sends the unlock packet on entry and awaits 0xa101 ack.
+// The onEnter hook sends the packet to preserve wire order: unlock → 0xa101 ack → DONE.
+// If the send were on the transition leading INTO UNLOCKING (e.g., on FIN_AFTER_IMG or
+// POSTSCAN_2_FIN), the packet would be sent BEFORE the state entered, which would appear
+// on the wire AFTER the incoming state's 0xa000 ack — reversing the order vs. the fixture.
+g.state("UNLOCKING", {
+  onEnter: () => buildUnlockPacket(),
+  on: { 0xa101: { next: "DONE" } },
+});
 
 // ---------------------------------------------------------------------------
 // INIT_POLL cycle — 3 iterations of FS Y → STAT → (optional drain) → FIN
