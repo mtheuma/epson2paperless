@@ -86,8 +86,8 @@ Configuration is via environment variables. Only `PRINTER_IP` is required.
 | `LOG_LEVEL`        |          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                    |
 | `LOG_FORMAT`       |          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line — for `docker logs` + Loki / `jq`).                                                      |
 | `PREVIEW_ACTION`   |          | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen. |
-| `PRINTER_PROTOCOL` |          | `auto`           | `auto` (TLS-probe each session), `esci2` (force ESC/I-2 over TLS), `legacy` (force plain-TCP ESC/I).                                                    |
-| `JPEG_QUALITY`     |          | `90`             | JPEG encoder quality 1–100 for the legacy (WF-3620) path.                                                                                               |
+| `PRINTER_PROTOCOL` |          | `auto`           | `auto` (TLS-probe each session), `esci2` (force ESC/I-2 over TLS), `esci` (force plain-TCP ESC/I).                                                      |
+| `JPEG_QUALITY`     |          | `90`             | JPEG encoder quality 1–100 for the ESC/I (WF-3620) path.                                                                                                |
 | `TEMP_DIR`         |          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                               |
 | `HEALTH_PORT`      |          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                   |
 
@@ -98,7 +98,7 @@ Configuration is via environment variables. Only `PRINTER_IP` is required.
 | -------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `SCAN_DEST_ID`             | `0x02`  | Destination ID byte sent in keepalive packets.                                                                                                                                                             |
 | `LANGUAGE`                 | `en`    | 2-letter locale sent to the printer; no observed user-visible effect.                                                                                                                                      |
-| `LEGACY_FORCE_SOURCE`      | —       | Diagnostic override for the legacy path when FS F autodetection misfires. Set to `flatbed`, `adf-simplex`, or `adf-duplex` to bypass the wire-byte detection.                                              |
+| `ESCI_FORCE_SOURCE`        | —       | Diagnostic override for the ESC/I path when FS F autodetection misfires. Set to `flatbed`, `adf-simplex`, or `adf-duplex` to bypass the wire-byte detection.                                               |
 | `PRINTER_CERT_FINGERPRINT` | —       | Optional SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`). When set, scans abort if the peer cert doesn't match. **Requires `PRINTER_PROTOCOL=esci2`** (auto-detection cannot pin reliably). |
 | `DIAGNOSE_PROTOCOL`        | `false` | Compatibility-report aid. On a legacy `ESC @` non-ACK, sends one extra `FS Y` probe and aborts with annotated `[diagnose]` log lines. Leave off in normal use.                                             |
 | `SHUTDOWN_TIMEOUT_MS`      | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                                                                                                  |
@@ -116,7 +116,16 @@ npm run printer-fingerprint -- 192.0.2.58
 # AB:CD:EF:01:23:45:67:89:0A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78
 ```
 
-Set `PRINTER_CERT_FINGERPRINT` to that value (env var or `compose.yaml`), and **also set `PRINTER_PROTOCOL=esci2`** so the auto-protocol probe can't downgrade silently to plain-TCP legacy and bypass the pin. The scanner will refuse any TLS peer whose cert doesn't match. If you ever swap the printer for another unit (warranty, upgrade), re-run the helper and update the env var.
+Set `PRINTER_CERT_FINGERPRINT` to that value (env var or `compose.yaml`), and **also set `PRINTER_PROTOCOL=esci2`** so the auto-protocol probe can't downgrade silently to plain-TCP ESC/I and bypass the pin. The scanner will refuse any TLS peer whose cert doesn't match. If you ever swap the printer for another unit (warranty, upgrade), re-run the helper and update the env var.
+
+### Upgrade notes
+
+**v0.3.x → v0.4.0 migration:** rename your env vars / compose values:
+
+- `PRINTER_PROTOCOL=legacy` → `PRINTER_PROTOCOL=esci`
+- `LEGACY_FORCE_SOURCE=...` → `ESCI_FORCE_SOURCE=...` (values unchanged)
+
+The old names are rejected at startup with a clear error pointing at the new ones.
 
 ## Pair with Paperless-ngx
 
