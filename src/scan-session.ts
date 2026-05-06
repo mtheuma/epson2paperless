@@ -256,7 +256,7 @@ export async function runScanSession<Ctx>(
     transport.on("data", (chunk: Buffer) => {
       recvChunks.push(chunk);
       recvBytes += chunk.length;
-      tryDispatch();
+      void tryDispatch();
     });
 
     /**
@@ -286,7 +286,7 @@ export async function runScanSession<Ctx>(
      * barrier (Task 16) — and breaks out so multiple buffered packets in
      * a single TCP chunk don't dispatch concurrently with a flush.
      */
-    function tryDispatch(): void {
+    async function tryDispatch(): Promise<void> {
       if (dispatching) return;
       dispatching = true;
       try {
@@ -294,7 +294,7 @@ export async function runScanSession<Ctx>(
           if (paused) return;
           const packet = tryParseHead();
           if (!packet) return;
-          dispatchPacket(packet);
+          await dispatchPacket(packet);
           if (paused) return;
         }
       } finally {
@@ -347,7 +347,7 @@ export async function runScanSession<Ctx>(
       return { type, payload, totalSize };
     }
 
-    function dispatchPacket(packet: { type: number; payload: Buffer }): void {
+    async function dispatchPacket(packet: { type: number; payload: Buffer }): Promise<void> {
       // Step 1: globalIgnoreFilter — silently discard packets the protocol
       // wants to filter pre-dispatch (e.g. ESC/I-2 empty 0xa000 envelopes).
       if (graph.globalIgnoreFilter && graph.globalIgnoreFilter(packet)) {
@@ -392,14 +392,39 @@ export async function runScanSession<Ctx>(
           });
           return;
         }
-        // Apply send (multi-write capable) + next. flushPage handling lands in T16.
-        writeAll(resolveSend(transition.send));
-        currentState = transition.next;
-        if (currentState === "DONE") {
-          transport.end(); // triggers close → resolve ok in close handler
+        await applyTransition(transition);
+      } else {
+        // decision
+        const result = state.decide(ctx, packet);
+        if ("error" in result) {
+          _errorReason = result.error;
+          settle({ ok: false, reason: result.error, finalCtx: ctx });
+          return;
         }
+        await applyTransition(result);
       }
-      // decision branch added in T13
+    }
+
+    /**
+     * Applies a resolved transition: writes any bytes, advances currentState,
+     * and triggers transport.end() on DONE. Accepts both StaticTransition
+     * (function-form send) and TransitionResult (decision return; concrete
+     * bytes only) — resolveSend handles both shapes uniformly.
+     * Async to support flushPage barriers in T16 (no await yet — stub is
+     * intentionally sync-body-only until T16 adds the flushPage barrier).
+     */
+    // eslint-disable-next-line @typescript-eslint/require-await
+    async function applyTransition(t: {
+      next: string;
+      send?: SendSpec<Ctx> | SendSpec<Ctx>[] | Buffer | Buffer[];
+      flushPage?: PageFlush;
+    }): Promise<void> {
+      writeAll(resolveSend(t.send));
+      currentState = t.next;
+      if (currentState === "DONE") {
+        transport.end(); // triggers close → resolve ok in close handler
+      }
+      // flushPage handled in T16
     }
   });
 }

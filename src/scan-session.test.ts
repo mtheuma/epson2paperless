@@ -87,4 +87,64 @@ describe("runScanSession (engine pump)", () => {
     const result = await promise;
     expect(result.ok).toBe(true);
   });
+
+  it("calls a decision function and follows its returned next state", async () => {
+    const transport = new FakeTransport();
+    type Ctx = { sourceByte: number | null };
+    const g = createGraph<Ctx>("WAITING", 1_000);
+    g.state(
+      "WAITING",
+      decision((ctx, packet) => {
+        ctx.sourceByte = packet.payload[0];
+        return { next: packet.payload[0] === 0x81 ? "FLATBED" : "ADF" };
+      }),
+    );
+    g.state("FLATBED", { on: {} });
+    g.state("ADF", { on: { 0xa000: { next: "DONE" } } });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: { sourceByte: null },
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    setImmediate(() => {
+      transport.emit("data", buildIsPacket(0xa200, Buffer.from([0x01]))); // ADF
+      setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    });
+
+    const result = await promise;
+    expect(result.ok).toBe(true);
+  });
+
+  it("settles { ok: false, reason } when a decision returns { error }", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("WAITING", 1_000);
+    g.state(
+      "WAITING",
+      decision(() => ({ error: new Error("boom") })),
+    );
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa200, Buffer.from([0x01]))));
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason.message).toBe("boom");
+  });
 });
