@@ -34,6 +34,7 @@ void buildUnlockPacket;
  */
 export interface Esci2Ctx {
   duplex: boolean;
+  source: "adf" | "flatbed"; // detected at INIT_POLL iteration 0
   initPollIteration: number;
   imgChunkSize: number;
   pageEndKind: "none" | "more" | "last";
@@ -314,14 +315,27 @@ g.state("INIT_POLL_FS_Y", {
 });
 
 // INIT_POLL_STAT: decision on STAT reply — drain if length>0, else FIN.
-// scanner.ts also samples source (ADF vs flatbed) from iteration 0's reply;
-// that context mutation is deferred to T28 (scanner.ts → graph wiring).
+// On the first iteration (ctx.initPollIteration === 0) also detects source:
+//   length 0 → ADF (no status queued); length 12 → flatbed (filler #---#---#---).
+//   Other lengths default to ADF (mirrors scanner.ts:619-633).
 g.state(
   "INIT_POLL_STAT",
-  decision<Esci2Ctx>((_ctx, packet) => {
+  decision<Esci2Ctx>((ctx, packet) => {
     const header = parseEsci2ReplyHeader(packet.payload);
     if (header === null) {
       return { error: new Error("INIT_POLL_STAT: unparseable reply header") };
+    }
+    // Source detection — only on the FIRST iteration. Per scanner.ts:619-633:
+    // length 0 → ADF (printer queued no status); length 12 → flatbed (queued
+    // `#---#---#---` filler). Other lengths default to ADF with a comment.
+    if (ctx.initPollIteration === 0) {
+      if (header.length === 0) {
+        ctx.source = "adf";
+      } else if (header.length === 12) {
+        ctx.source = "flatbed";
+      } else {
+        ctx.source = "adf"; // fallback per scanner.ts:626-627
+      }
     }
     if (header.length > 0) {
       return {
@@ -372,12 +386,12 @@ g.state(
 // T24 (continued): MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_META states
 // =============================================================================
 
-// Helper: build the PARA header + body send pair, resolving duplex from ctx.
+// Helper: build the PARA header + body send pair, resolving source + duplex from ctx.
 // Called both in POST_MODE_STAT's decision (skip-drain branch) and in the
 // POST_MODE_STAT_DRAIN static transition (drain branch). Each call computes
 // paraPayload once per thunk invocation; the cost is negligible.
 function buildParaSend(ctx: Esci2Ctx): [Buffer, Buffer] {
-  const paraPayload = buildParaPayload({ source: "adf", duplex: ctx.duplex });
+  const paraPayload = buildParaPayload({ source: ctx.source, duplex: ctx.duplex });
   return [
     buildPassthruPacket(buildParaHeader(paraPayload.length), 0),
     buildPassthruPacket(paraPayload, ESCI2_REPLY_SIZE),
@@ -462,22 +476,13 @@ g.state("TRDT", {
 // - Updates ctx.imgChunkSize, ctx.pageSide, ctx.pageEndKind.
 // - Sends pure-read for the declared image chunk; advances to IMG_DATA.
 //
-// pageEndKind logic (mirrors scanner.ts onImgMeta:839-843):
-//   Source detection (ADF vs flatbed) is deferred to T28 and stored in ctx.
-//   For now we default to ADF semantics: #pen with #lft=d000 → "last";
-//   #pen without #lft → "more"; no #pen → "none".
-//   Flatbed always has #pen as terminal (#lft is absent on flatbed) — that
-//   path also resolves "last" here because tokens.has("lft") is false
-//   (same branch as ADF-with-#lftd000). Verified against scanner.ts:839-843:
+// pageEndKind logic (mirrors scanner.ts:835-843):
+//   On flatbed, any #pen is terminal (glass is inherently single-page; #lft
+//   is never emitted on the flatbed path). On ADF, #lftd000 disambiguates
+//   "terminal" (last page) vs "page boundary, more coming".
 //     pageEndKind = tokens.has("pen")
-//       ? source === "flatbed" || tokens.has("lft") ? "last" : "more"
+//       ? source === "flatbed" || tokens.get("lft") === "d000" ? "last" : "more"
 //       : "none";
-//   For flatbed, tokens.has("lft") is false AND source==="flatbed" → "last". ✓
-//   For ADF last-page, tokens.has("lft") is true → "last". ✓
-//   For ADF mid-page, tokens.has("lft") is false → "more". ✓
-//   Default-ADF semantics (no source in ctx yet) handles all three cases
-//   correctly once source detection (T28) sets ctx.source; IMG_META will
-//   re-read it each time it's re-entered.
 g.state(
   "IMG_META",
   decision<Esci2Ctx>((ctx, packet) => {
@@ -495,11 +500,17 @@ g.state(
     }
     ctx.imgChunkSize = header.length;
     ctx.pageSide = tokens.get("typ") === "IMGB" ? "back" : "front";
-    // ADF-default semantics: #pen + #lft=d000 → "last", #pen without #lft → "more".
-    // Flatbed (no #lft ever) resolves the same as #lft present because flatbed
-    // is inherently single-page; T28 will supply ctx.source for the full check.
+    // Per scanner.ts:835-842:
+    // On flatbed, any #pen is terminal because the glass is single-page.
+    // On ADF, #lftd000 disambiguates "terminal" vs "page boundary, more coming".
     if (tokens.has("pen")) {
-      ctx.pageEndKind = tokens.get("lft") === "d000" ? "last" : "more";
+      if (ctx.source === "flatbed") {
+        ctx.pageEndKind = "last";
+      } else if (tokens.get("lft") === "d000") {
+        ctx.pageEndKind = "last";
+      } else {
+        ctx.pageEndKind = "more";
+      }
     } else {
       ctx.pageEndKind = "none";
     }
