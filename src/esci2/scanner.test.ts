@@ -4,8 +4,8 @@ import path from "node:path";
 import os from "node:os";
 import { PDFDocument } from "pdf-lib";
 import { startScanSession } from "./scanner.js";
-import { buildIsPacket } from "./protocol.js";
-import { parseEsci2ReplyHeader } from "./esci.js";
+import { buildIsPacket } from "../protocol.js";
+import { parseEsci2ReplyHeader } from "./commands.js";
 import { FakeTlsSocket } from "./test-support/fake-tls-socket.js";
 
 // Fixed capability-body packets used by driveScannerToPara for both init cycles.

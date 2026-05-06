@@ -31,9 +31,9 @@ import {
   type Format,
 } from "./esci-legacy.js";
 // FS Y (0x1C 0x59) — first command in the ET-4950 ESC/I-2 init sequence
-// (see scanner.ts INIT1_FS_Y). Used here only by the DIAGNOSE_PROTOCOL probe
+// (see esci2/scanner.ts INIT1_FS_Y). Used here only by the DIAGNOSE_PROTOCOL probe
 // to classify printers that NAK `ESC @`.
-import { buildFsY } from "./esci.js";
+import { buildFsY } from "./esci2/commands.js";
 import { GAMMA_LUT_R, GAMMA_LUT_G, GAMMA_LUT_B } from "./esci-legacy-luts.js";
 import { encodeRawGbrToJpeg } from "./raw-to-jpeg.js";
 import { setJpegOrientation } from "./exif.js";

@@ -4,7 +4,7 @@ import { getLocalIpForTarget } from "./network.js";
 import { createKeepaliveResponder, type KeepaliveResponder } from "./keepalive.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import { detectVariant, type Variant } from "./protocol-probe.js";
-import { startScanSession } from "./scanner.js";
+import { startScanSession } from "./esci2/scanner.js";
 import { startScanSessionLegacy } from "./scanner-legacy.js";
 
 const log = createLogger("startup");

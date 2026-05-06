@@ -2,7 +2,7 @@ import tls from "node:tls";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
-import { createLogger } from "./logger.js";
+import { createLogger } from "../logger.js";
 import {
   IS_HEADER_SIZE,
   parseIsPacket,
@@ -10,7 +10,7 @@ import {
   buildUnlockPacket,
   buildPassthruPacket,
   buildPurereadPacket,
-} from "./protocol.js";
+} from "../protocol.js";
 import {
   buildFsY,
   buildFsX,
@@ -20,11 +20,11 @@ import {
   buildParaPayload,
   parseEsci2ReplyHeader,
   parseTokens,
-} from "./esci.js";
-import { resolveSessionTimestamp } from "./output.js";
-import { setJpegOrientation } from "./exif.js";
-import { type PaperlessUploadOptions } from "./paperless-upload.js";
-import { finalizeSession } from "./output-tail.js";
+} from "./commands.js";
+import { resolveSessionTimestamp } from "../output.js";
+import { setJpegOrientation } from "../exif.js";
+import { type PaperlessUploadOptions } from "../paperless-upload.js";
+import { finalizeSession } from "../output-tail.js";
 
 const log = createLogger("scanner");
 
@@ -61,7 +61,7 @@ export interface ScanSession {
 
 /**
  * Factory for the TLS socket. Defaults to `tls.connect`. Tests inject a
- * fake here; see src/test-support/fake-tls-socket.ts.
+ * fake here; see src/esci2/test-support/fake-tls-socket.ts.
  */
 export type TlsSocketFactory = (
   options: tls.ConnectionOptions,
