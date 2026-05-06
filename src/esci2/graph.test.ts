@@ -58,11 +58,11 @@ describe("esci2Graph T22 states", () => {
     }
   });
 
-  it("INIT1_FS_Y transitions to INIT1_FIN on 0xa000", () => {
+  it("INIT1_FS_Y transitions to INIT1_INFO_META on 0xa000 (TPR sequence)", () => {
     const state = esci2Graph.states.INIT1_FS_Y;
     expect(state.kind).toBe("static");
     if (state.kind === "static") {
-      expect(state.on[0xa000]?.next).toBe("INIT1_FIN");
+      expect(state.on[0xa000]?.next).toBe("INIT1_INFO_META");
     }
   });
 
@@ -82,11 +82,11 @@ describe("esci2Graph T22 states", () => {
     }
   });
 
-  it("INIT2_FS_Z transitions to INIT2_FIN on 0xa000", () => {
+  it("INIT2_FS_Z transitions to INIT2_INFO_META on 0xa000 (TPR sequence)", () => {
     const state = esci2Graph.states.INIT2_FS_Z;
     expect(state.kind).toBe("static");
     if (state.kind === "static") {
-      expect(state.on[0xa000]?.next).toBe("INIT2_FIN");
+      expect(state.on[0xa000]?.next).toBe("INIT2_INFO_META");
     }
   });
 
@@ -182,11 +182,335 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
     }
   });
 
-  it("statThenDrain helper states exist for future use (POST_MODE_STAT etc.)", () => {
-    // The helper is defined at file scope for T24/T26 use.
-    // Verify the graph currently only contains the INIT_POLL inline states.
+  it("INIT_POLL inline states are all defined", () => {
     expect(esci2Graph.states.INIT_POLL_STAT).toBeDefined();
     expect(esci2Graph.states.INIT_POLL_STAT_DRAIN).toBeDefined();
     expect(esci2Graph.states.INIT_POLL_FIN).toBeDefined();
+  });
+});
+
+describe("esci2Graph T24 — twoPhaseRead (INIT1 TPR)", () => {
+  it("INIT1_INFO_META is a decision state", () => {
+    expect(esci2Graph.states.INIT1_INFO_META.kind).toBe("decision");
+  });
+
+  it("INIT1_INFO_META rejects bad command name", () => {
+    const state = esci2Graph.states.INIT1_INFO_META;
+    expect(state.kind).toBe("decision");
+    if (state.kind === "decision") {
+      const ctx = {
+        duplex: false,
+        initPollIteration: 0,
+        imgChunkSize: 0,
+        pageEndKind: "none" as const,
+        pageSide: "front" as const,
+        zeroImgRetries: 0,
+        postScanCycle: 1 as const,
+      };
+      // Build a header with cmd=CAPA (wrong for INFO state)
+      const badPayload = Buffer.from("CAPAx0000010" + " ".repeat(52), "ascii");
+      const result = state.decide(ctx, { type: 0xa000, payload: badPayload });
+      expect("error" in result).toBe(true);
+    }
+  });
+
+  it("INIT1_INFO_META advances to INIT1_INFO_DATA on valid INFO header", () => {
+    const state = esci2Graph.states.INIT1_INFO_META;
+    expect(state.kind).toBe("decision");
+    if (state.kind === "decision") {
+      const ctx = {
+        duplex: false,
+        initPollIteration: 0,
+        imgChunkSize: 0,
+        pageEndKind: "none" as const,
+        pageSide: "front" as const,
+        zeroImgRetries: 0,
+        postScanCycle: 1 as const,
+      };
+      const payload = Buffer.from("INFOx0000020" + " ".repeat(52), "ascii");
+      const result = state.decide(ctx, { type: 0xa000, payload });
+      expect("next" in result && result.next).toBe("INIT1_INFO_DATA");
+      expect("send" in result && result.send).toBeDefined();
+    }
+  });
+
+  it("INIT1_INFO_DATA advances to INIT1_CAPA_META with CAPA send", () => {
+    const state = esci2Graph.states.INIT1_INFO_DATA;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.next).toBe("INIT1_CAPA_META");
+      expect(state.on[0xa000]?.send).toBeDefined();
+    }
+  });
+
+  it("INIT1_CAPA_META is a decision state", () => {
+    expect(esci2Graph.states.INIT1_CAPA_META.kind).toBe("decision");
+  });
+
+  it("INIT1_CAPA_DATA advances to INIT1_FIN with FIN send", () => {
+    const state = esci2Graph.states.INIT1_CAPA_DATA;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.next).toBe("INIT1_FIN");
+      expect(state.on[0xa000]?.send).toBeDefined();
+    }
+  });
+});
+
+describe("esci2Graph T24 — twoPhaseRead (INIT2 TPR)", () => {
+  it("INIT2_INFO_META is a decision state", () => {
+    expect(esci2Graph.states.INIT2_INFO_META.kind).toBe("decision");
+  });
+
+  it("INIT2_INFO_DATA advances to INIT2_CAPA_META", () => {
+    const state = esci2Graph.states.INIT2_INFO_DATA;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.next).toBe("INIT2_CAPA_META");
+      expect(state.on[0xa000]?.send).toBeDefined();
+    }
+  });
+
+  it("INIT2_CAPA_META is a decision state", () => {
+    expect(esci2Graph.states.INIT2_CAPA_META.kind).toBe("decision");
+  });
+
+  it("INIT2_CAPA_DATA advances to INIT2_RESA_META with RESA send", () => {
+    const state = esci2Graph.states.INIT2_CAPA_DATA;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.next).toBe("INIT2_RESA_META");
+      expect(state.on[0xa000]?.send).toBeDefined();
+    }
+  });
+
+  it("INIT2_RESA_META is a decision state", () => {
+    expect(esci2Graph.states.INIT2_RESA_META.kind).toBe("decision");
+  });
+
+  it("INIT2_RESA_DATA advances to INIT2_FIN with FIN send", () => {
+    const state = esci2Graph.states.INIT2_RESA_DATA;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.next).toBe("INIT2_FIN");
+      expect(state.on[0xa000]?.send).toBeDefined();
+    }
+  });
+});
+
+describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_META", () => {
+  it("MODE_SWITCH is a static state that validates ACK byte", () => {
+    const state = esci2Graph.states.MODE_SWITCH;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.next).toBe("POST_MODE_STAT");
+      expect(state.on[0xa000]?.validate).toBeDefined();
+      const validateFn = state.on[0xa000]?.validate;
+      // ACK byte (0x06) passes
+      expect(validateFn?.(Buffer.from([0x06]))).toBe(true);
+      // Non-ACK fails
+      expect(validateFn?.(Buffer.from([0x15]))).toBe(false);
+    }
+  });
+
+  it("POST_MODE_STAT is a decision state", () => {
+    expect(esci2Graph.states.POST_MODE_STAT.kind).toBe("decision");
+  });
+
+  it("POST_MODE_STAT drains when length > 0", () => {
+    const state = esci2Graph.states.POST_MODE_STAT;
+    expect(state.kind).toBe("decision");
+    if (state.kind === "decision") {
+      const ctx = {
+        duplex: false,
+        initPollIteration: 0,
+        imgChunkSize: 0,
+        pageEndKind: "none" as const,
+        pageSide: "front" as const,
+        zeroImgRetries: 0,
+        postScanCycle: 1 as const,
+      };
+      // Header declaring 12 bytes of data
+      const payload = Buffer.from("STATx000000C" + " ".repeat(52), "ascii");
+      const result = state.decide(ctx, { type: 0xa000, payload });
+      expect("next" in result && result.next).toBe("POST_MODE_STAT_DRAIN");
+    }
+  });
+
+  it("POST_MODE_STAT skips drain when length === 0 and goes to PARA", () => {
+    const state = esci2Graph.states.POST_MODE_STAT;
+    expect(state.kind).toBe("decision");
+    if (state.kind === "decision") {
+      const ctx = {
+        duplex: false,
+        initPollIteration: 0,
+        imgChunkSize: 0,
+        pageEndKind: "none" as const,
+        pageSide: "front" as const,
+        zeroImgRetries: 0,
+        postScanCycle: 1 as const,
+      };
+      const payload = Buffer.from("STATx0000000" + " ".repeat(52), "ascii");
+      const result = state.decide(ctx, { type: 0xa000, payload });
+      expect("next" in result && result.next).toBe("PARA");
+      // send should be an array (para header + body)
+      expect("send" in result && Array.isArray(result.send)).toBe(true);
+    }
+  });
+
+  it("POST_MODE_STAT_DRAIN advances to PARA with para send array", () => {
+    const state = esci2Graph.states.POST_MODE_STAT_DRAIN;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.next).toBe("PARA");
+      expect(Array.isArray(state.on[0xa000]?.send)).toBe(true);
+    }
+  });
+
+  it("PARA validates #parOK token and advances to TRDT", () => {
+    const state = esci2Graph.states.PARA;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.next).toBe("TRDT");
+      expect(state.on[0xa000]?.validate).toBeDefined();
+      const validateFn = state.on[0xa000]?.validate;
+      // Payload with #parOK at offset 12
+      const okPayload = Buffer.from("PARAx0000000#parOK  ", "ascii");
+      expect(validateFn?.(okPayload)).toBe(true);
+      // Payload with #parNG
+      const ngPayload = Buffer.from("PARAx0000000#parNG  ", "ascii");
+      expect(validateFn?.(ngPayload)).toBe(false);
+    }
+  });
+
+  it("TRDT advances to IMG_META with IMG send", () => {
+    const state = esci2Graph.states.TRDT;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.next).toBe("IMG_META");
+      expect(state.on[0xa000]?.send).toBeDefined();
+    }
+  });
+
+  it("IMG_META is a decision state", () => {
+    expect(esci2Graph.states.IMG_META.kind).toBe("decision");
+  });
+
+  it("IMG_META errors on unparseable header", () => {
+    const state = esci2Graph.states.IMG_META;
+    expect(state.kind).toBe("decision");
+    if (state.kind === "decision") {
+      const ctx = {
+        duplex: false,
+        initPollIteration: 0,
+        imgChunkSize: 0,
+        pageEndKind: "none" as const,
+        pageSide: "front" as const,
+        zeroImgRetries: 0,
+        postScanCycle: 1 as const,
+      };
+      const result = state.decide(ctx, { type: 0xa000, payload: Buffer.from("bad") });
+      expect("error" in result).toBe(true);
+    }
+  });
+
+  it("IMG_META errors on #ERR token", () => {
+    const state = esci2Graph.states.IMG_META;
+    expect(state.kind).toBe("decision");
+    if (state.kind === "decision") {
+      const ctx = {
+        duplex: false,
+        initPollIteration: 0,
+        imgChunkSize: 0,
+        pageEndKind: "none" as const,
+        pageSide: "front" as const,
+        zeroImgRetries: 0,
+        postScanCycle: 1 as const,
+      };
+      // 12-byte header + #ERR token
+      const payload = Buffer.from("IMG x0000020#ERRADF ", "ascii");
+      const result = state.decide(ctx, { type: 0xa000, payload });
+      expect("error" in result).toBe(true);
+    }
+  });
+
+  it("IMG_META sets ctx fields and advances to IMG_DATA", () => {
+    const state = esci2Graph.states.IMG_META;
+    expect(state.kind).toBe("decision");
+    if (state.kind === "decision") {
+      const ctx = {
+        duplex: false,
+        initPollIteration: 0,
+        imgChunkSize: 0,
+        pageEndKind: "none" as const,
+        pageSide: "front" as const,
+        zeroImgRetries: 0,
+        postScanCycle: 1 as const,
+      };
+      // Header: length=0x20=32, tokens: #pst, typ=IMGF (front), no #pen
+      const payload = Buffer.from("IMG x0000020#pst#typIMGF", "ascii");
+      const result = state.decide(ctx, { type: 0xa000, payload });
+      expect("next" in result && result.next).toBe("IMG_DATA");
+      expect(ctx.imgChunkSize).toBe(0x20);
+      expect(ctx.pageSide).toBe("front");
+      expect(ctx.pageEndKind).toBe("none");
+    }
+  });
+
+  it("IMG_META sets pageSide=back for IMGB typ token", () => {
+    const state = esci2Graph.states.IMG_META;
+    expect(state.kind).toBe("decision");
+    if (state.kind === "decision") {
+      const ctx = {
+        duplex: true,
+        initPollIteration: 0,
+        imgChunkSize: 0,
+        pageEndKind: "none" as const,
+        pageSide: "front" as const,
+        zeroImgRetries: 0,
+        postScanCycle: 1 as const,
+      };
+      const payload = Buffer.from("IMG x0000010#typIMGB", "ascii");
+      state.decide(ctx, { type: 0xa000, payload });
+      expect(ctx.pageSide).toBe("back");
+    }
+  });
+
+  it("IMG_META sets pageEndKind=more for #pen without #lft", () => {
+    const state = esci2Graph.states.IMG_META;
+    expect(state.kind).toBe("decision");
+    if (state.kind === "decision") {
+      const ctx = {
+        duplex: false,
+        initPollIteration: 0,
+        imgChunkSize: 0,
+        pageEndKind: "none" as const,
+        pageSide: "front" as const,
+        zeroImgRetries: 0,
+        postScanCycle: 1 as const,
+      };
+      const payload = Buffer.from("IMG x0000010#pen#typIMGF", "ascii");
+      state.decide(ctx, { type: 0xa000, payload });
+      expect(ctx.pageEndKind).toBe("more");
+    }
+  });
+
+  it("IMG_META sets pageEndKind=last for #pen + #lftd000", () => {
+    const state = esci2Graph.states.IMG_META;
+    expect(state.kind).toBe("decision");
+    if (state.kind === "decision") {
+      const ctx = {
+        duplex: false,
+        initPollIteration: 0,
+        imgChunkSize: 0,
+        pageEndKind: "none" as const,
+        pageSide: "front" as const,
+        zeroImgRetries: 0,
+        postScanCycle: 1 as const,
+      };
+      const payload = Buffer.from("IMG x0000010#pen#lftd000", "ascii");
+      state.decide(ctx, { type: 0xa000, payload });
+      expect(ctx.pageEndKind).toBe("last");
+    }
   });
 });

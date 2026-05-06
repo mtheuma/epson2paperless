@@ -21,13 +21,11 @@ import {
   buildParaHeader,
   buildParaPayload,
   parseEsci2ReplyHeader,
-  // TODO(T24): parseTokens used when parsing PARA / TRDT replies
+  parseTokens,
 } from "./commands.js";
 
-// Suppress unused-import warnings for identifiers used in T24-T26 state helpers.
+// Suppress unused-import warnings for identifiers used in T26 state helpers.
 void buildUnlockPacket;
-void buildParaHeader;
-void buildParaPayload;
 
 /**
  * Per-session mutable state threaded through every transition. The engine
@@ -117,30 +115,30 @@ awaitAck(g, "WELCOME", 0x8000, "LOCKING", buildLockPacket());
 // scanner.ts onLockAck: receives 0xa100, sends buildPassthruPacket(buildFsY(), LEGACY_REPLY_SIZE)
 awaitAck(g, "LOCKING", 0xa100, "INIT1_FS_Y", buildPassthruPacket(buildFsY(), LEGACY_REPLY_SIZE));
 
-// INIT1_FS_Y: 0xa000 FS-Y-ack → send FIN → INIT1_FIN
+// INIT1_FS_Y: 0xa000 FS-Y-ack → send INFO META command → INIT1_INFO_META
 // scanner.ts onInit1FsY: receives 0xa000, runs INFO+CAPA two-phase sequence,
-// then sends FIN → INIT1_FIN. INFO/CAPA states added in T23.
+// then sends FIN → INIT1_FIN. INFO/CAPA states added in T24.
 awaitAck(
   g,
   "INIT1_FS_Y",
   0xa000,
-  "INIT1_FIN",
-  buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
+  "INIT1_INFO_META",
+  buildPassthruPacket(buildEsci2Command("INFO"), ESCI2_REPLY_SIZE),
 );
 
 // INIT1_FIN: 0xa000 FIN-ack → send FS Z → INIT2_FS_Z
 // scanner.ts onInit1Fin: receives 0xa000, sends buildPassthruPacket(buildFsZ(), LEGACY_REPLY_SIZE)
 awaitAck(g, "INIT1_FIN", 0xa000, "INIT2_FS_Z", buildPassthruPacket(buildFsZ(), LEGACY_REPLY_SIZE));
 
-// INIT2_FS_Z: 0xa000 FS-Z-ack → send FIN → INIT2_FIN
+// INIT2_FS_Z: 0xa000 FS-Z-ack → send INFO META command → INIT2_INFO_META
 // scanner.ts onInit2FsZ: receives 0xa000, runs INFO+CAPA+RESA two-phase sequence,
-// then sends FIN → INIT2_FIN. INFO/CAPA/RESA states added in T23.
+// then sends FIN → INIT2_FIN. INFO/CAPA/RESA states added in T24.
 awaitAck(
   g,
   "INIT2_FS_Z",
   0xa000,
-  "INIT2_FIN",
-  buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
+  "INIT2_INFO_META",
+  buildPassthruPacket(buildEsci2Command("INFO"), ESCI2_REPLY_SIZE),
 );
 
 // INIT2_FIN: 0xa000 FIN-ack → reset initPollIteration, send FS Y → INIT_POLL_FS_Y.
@@ -151,6 +149,88 @@ awaitAck(
   0xa000,
   "INIT_POLL_FS_Y",
   buildPassthruPacket(buildFsY(), LEGACY_REPLY_SIZE),
+);
+
+// =============================================================================
+// T24: twoPhaseRead helper + INIT1/INIT2 TPR cycles + MODE_SWITCH / POST_MODE /
+//      PARA / TRDT / IMG_META states
+// =============================================================================
+
+/**
+ * twoPhaseRead — generates 2 states for a capability-read command:
+ *   `${prefix}_META` — decision: parses reply header; validates cmd name;
+ *                       sends a pure-read for the declared length; advances to _DATA.
+ *   `${prefix}_DATA` — static: 0xa000 body receipt; sends `nextSend`; advances to `next`.
+ *
+ * Used for INFO / CAPA / RESA commands in INIT1 and INIT2.
+ */
+function twoPhaseRead(
+  g: GraphBuilder<Esci2Ctx>,
+  prefix: string,
+  expectedCmd: string,
+  nextSend: SendSpec<Esci2Ctx> | SendSpec<Esci2Ctx>[],
+  next: string,
+): void {
+  g.state(
+    `${prefix}_META`,
+    decision<Esci2Ctx>((_ctx, packet) => {
+      const header = parseEsci2ReplyHeader(packet.payload);
+      if (header === null || header.cmd !== expectedCmd) {
+        return {
+          error: new Error(
+            `${prefix}_META: bad reply header (expected cmd=${expectedCmd}, got ${header?.cmd ?? "(unparseable)"})`,
+          ),
+        };
+      }
+      return {
+        next: `${prefix}_DATA`,
+        send: buildPurereadPacket(header.length),
+      };
+    }),
+  );
+
+  g.state(`${prefix}_DATA`, {
+    on: { 0xa000: { next, send: nextSend } },
+  });
+}
+
+// INIT1 two-phase reads: INFO → CAPA → FIN
+twoPhaseRead(
+  g,
+  "INIT1_INFO",
+  "INFO",
+  buildPassthruPacket(buildEsci2Command("CAPA"), ESCI2_REPLY_SIZE),
+  "INIT1_CAPA_META",
+);
+twoPhaseRead(
+  g,
+  "INIT1_CAPA",
+  "CAPA",
+  buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
+  "INIT1_FIN",
+);
+
+// INIT2 two-phase reads: INFO → CAPA → RESA → FIN
+twoPhaseRead(
+  g,
+  "INIT2_INFO",
+  "INFO",
+  buildPassthruPacket(buildEsci2Command("CAPA"), ESCI2_REPLY_SIZE),
+  "INIT2_CAPA_META",
+);
+twoPhaseRead(
+  g,
+  "INIT2_CAPA",
+  "CAPA",
+  buildPassthruPacket(buildEsci2Command("RESA"), ESCI2_REPLY_SIZE),
+  "INIT2_RESA_META",
+);
+twoPhaseRead(
+  g,
+  "INIT2_RESA",
+  "RESA",
+  buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
+  "INIT2_FIN",
 );
 
 // =============================================================================
@@ -284,6 +364,148 @@ g.state(
     return {
       next: "MODE_SWITCH",
       send: buildPassthruPacket(buildFsX(), LEGACY_REPLY_SIZE),
+    };
+  }),
+);
+
+// =============================================================================
+// T24 (continued): MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_META states
+// =============================================================================
+
+// Helper: build the PARA header + body send pair, resolving duplex from ctx.
+// Called both in POST_MODE_STAT's decision (skip-drain branch) and in the
+// POST_MODE_STAT_DRAIN static transition (drain branch). Each call computes
+// paraPayload once per thunk invocation; the cost is negligible.
+function buildParaSend(ctx: Esci2Ctx): [Buffer, Buffer] {
+  const paraPayload = buildParaPayload({ source: "adf", duplex: ctx.duplex });
+  return [
+    buildPassthruPacket(buildParaHeader(paraPayload.length), 0),
+    buildPassthruPacket(paraPayload, ESCI2_REPLY_SIZE),
+  ];
+}
+
+// MODE_SWITCH: receives the FS X ack (payload[0]=0x06); sends STAT → POST_MODE_STAT.
+// scanner.ts onModeSwitch: validates ACK byte, sends STAT.
+g.state("MODE_SWITCH", {
+  on: {
+    0xa000: {
+      validate: (payload) => payload[0] === 0x06,
+      next: "POST_MODE_STAT",
+      send: buildPassthruPacket(buildEsci2Command("STAT"), ESCI2_REPLY_SIZE),
+    },
+  },
+});
+
+// POST_MODE_STAT: decision on STAT reply.
+// If length>0 → pure-read drain → POST_MODE_STAT_DRAIN.
+// If length===0 → send PARA header + body → PARA.
+// scanner.ts onPostModeStat: same drain-or-skip logic; sendParaHeaderAndBody on both paths.
+g.state(
+  "POST_MODE_STAT",
+  decision<Esci2Ctx>((_ctx, packet) => {
+    const header = parseEsci2ReplyHeader(packet.payload);
+    if (header === null) {
+      return { error: new Error("POST_MODE_STAT: unparseable reply header") };
+    }
+    if (header.length > 0) {
+      return {
+        next: "POST_MODE_STAT_DRAIN",
+        send: buildPurereadPacket(header.length),
+      };
+    }
+    return {
+      next: "PARA",
+      send: [(ctx) => buildParaSend(ctx)[0], (ctx) => buildParaSend(ctx)[1]],
+    };
+  }),
+);
+
+// POST_MODE_STAT_DRAIN: drains queued status bytes, then sends PARA header + body → PARA.
+// scanner.ts onPostModeStatDrain: calls sendParaHeaderAndBody().
+g.state("POST_MODE_STAT_DRAIN", {
+  on: {
+    0xa000: {
+      next: "PARA",
+      send: [(ctx) => buildParaSend(ctx)[0], (ctx) => buildParaSend(ctx)[1]],
+    },
+  },
+});
+
+// PARA: validates printer's acceptance of parameters (#parOK), sends TRDT.
+// scanner.ts onPara: parses tokens, checks #parOK, sends TRDT.
+g.state("PARA", {
+  on: {
+    0xa000: {
+      validate: (payload) => {
+        const tokens = parseTokens(payload.subarray(12));
+        return tokens.get("par")?.trim() === "OK";
+      },
+      next: "TRDT",
+      send: buildPassthruPacket(buildEsci2Command("TRDT"), ESCI2_REPLY_SIZE),
+    },
+  },
+});
+
+// TRDT: transfer-data handshake; sends IMG to start the image-receive loop.
+// scanner.ts onTrdt: receives 0xa000, sends IMG → IMG_META.
+g.state("TRDT", {
+  on: {
+    0xa000: {
+      next: "IMG_META",
+      send: buildPassthruPacket(buildEsci2Command("IMG"), ESCI2_REPLY_SIZE),
+    },
+  },
+});
+
+// IMG_META: decision on IMG reply header.
+// - Parses header; errors on unparseable or #ERR* token.
+// - Updates ctx.imgChunkSize, ctx.pageSide, ctx.pageEndKind.
+// - Sends pure-read for the declared image chunk; advances to IMG_DATA.
+//
+// pageEndKind logic (mirrors scanner.ts onImgMeta:839-843):
+//   Source detection (ADF vs flatbed) is deferred to T28 and stored in ctx.
+//   For now we default to ADF semantics: #pen with #lft=d000 → "last";
+//   #pen without #lft → "more"; no #pen → "none".
+//   Flatbed always has #pen as terminal (#lft is absent on flatbed) — that
+//   path also resolves "last" here because tokens.has("lft") is false
+//   (same branch as ADF-with-#lftd000). Verified against scanner.ts:839-843:
+//     pageEndKind = tokens.has("pen")
+//       ? source === "flatbed" || tokens.has("lft") ? "last" : "more"
+//       : "none";
+//   For flatbed, tokens.has("lft") is false AND source==="flatbed" → "last". ✓
+//   For ADF last-page, tokens.has("lft") is true → "last". ✓
+//   For ADF mid-page, tokens.has("lft") is false → "more". ✓
+//   Default-ADF semantics (no source in ctx yet) handles all three cases
+//   correctly once source detection (T28) sets ctx.source; IMG_META will
+//   re-read it each time it's re-entered.
+g.state(
+  "IMG_META",
+  decision<Esci2Ctx>((ctx, packet) => {
+    const header = parseEsci2ReplyHeader(packet.payload);
+    if (!header) {
+      return { error: new Error("IMG_META: unparseable reply header") };
+    }
+    const tokens = parseTokens(packet.payload.subarray(12));
+    for (const key of tokens.keys()) {
+      if (key.startsWith("ERR") || key.startsWith("err")) {
+        return {
+          error: new Error(`IMG_META: printer error token #${key}${tokens.get(key) ?? ""}`),
+        };
+      }
+    }
+    ctx.imgChunkSize = header.length;
+    ctx.pageSide = tokens.get("typ") === "IMGB" ? "back" : "front";
+    // ADF-default semantics: #pen + #lft=d000 → "last", #pen without #lft → "more".
+    // Flatbed (no #lft ever) resolves the same as #lft present because flatbed
+    // is inherently single-page; T28 will supply ctx.source for the full check.
+    if (tokens.has("pen")) {
+      ctx.pageEndKind = tokens.get("lft") === "d000" ? "last" : "more";
+    } else {
+      ctx.pageEndKind = "none";
+    }
+    return {
+      next: "IMG_DATA",
+      send: buildPurereadPacket(ctx.imgChunkSize),
     };
   }),
 );
