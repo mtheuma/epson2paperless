@@ -333,6 +333,7 @@ describe("runScanSession (engine pump)", () => {
   it("injects EXIF Orientation=3 on back-side flushPage when action='jpg'", async () => {
     const transport = new FakeTransport();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
 
     const g = createGraph<Record<string, never>>("PAGE", 1_000);
     g.state("PAGE", {
@@ -351,28 +352,98 @@ describe("runScanSession (engine pump)", () => {
       graph: g.build(),
       initialCtx: {},
       transportFactory: () => Promise.resolve(transport),
-      outputDir: tempDir,
+      outputDir,
       tempDir,
       sessionTs: new Date(),
       action: "jpg",
-      allowZeroPages: true,
+      // No allowZeroPages — there IS a flushPage in this run.
     });
 
     setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
     const result = await promise;
     expect(result.ok).toBe(true);
 
-    // Find the temp file and verify it has the EXIF APP1 segment.
-    const files = fs.readdirSync(tempDir);
-    const sessionDir = files.find((f) => f.startsWith("epson2paperless-"));
-    expect(sessionDir).toBeDefined();
-    const pages = fs.readdirSync(path.join(tempDir, sessionDir!));
-    expect(pages.length).toBe(1);
-    const bytes = fs.readFileSync(path.join(tempDir, sessionDir!, pages[0]));
+    // finalizeSession promotes the temp page to outputDir as scan_*.jpg.
+    // Verify the promoted file has the EXIF APP1 segment (bytes 2-3 = FF E1).
+    const outputs = fs.readdirSync(outputDir);
+    expect(outputs.length).toBe(1);
+    const bytes = fs.readFileSync(path.join(outputDir, outputs[0]));
     // Bytes 2-3 of the EXIF-injected output are FF E1 (APP1 marker).
     expect(bytes[2]).toBe(0xff);
     expect(bytes[3]).toBe(0xe1);
 
     fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
+  it("rejects with 'zero image chunks' when DONE is reached without any flushPage (production path)", async () => {
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+
+    // Graph reaches DONE without flushing a page. Production callers must NOT
+    // set allowZeroPages — note its absence below.
+    const g = createGraph<Record<string, never>>("WAIT", 1_000);
+    g.state("WAIT", { on: { 0xa000: { next: "DONE" } } });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+      // allowZeroPages: NOT set — engine should reject.
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason.message).toMatch(/zero image chunks/);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
+  it("calls finalizeSession on reaching DONE — produces a JPG in outputDir", async () => {
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "DONE",
+          flushPage: {
+            side: "front",
+            encode: () => Promise.resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+          },
+        },
+      },
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+      // No allowZeroPages — and that's fine because there IS a flushPage in this run.
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    const result = await promise;
+    expect(result.ok).toBe(true);
+
+    // Output dir should contain a scan_*.jpg promoted by finalizeSession.
+    const outputs = fs.readdirSync(outputDir);
+    expect(outputs.some((f) => /^scan_.*\.jpg$/.test(f))).toBe(true);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
   });
 });

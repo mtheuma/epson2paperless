@@ -299,15 +299,50 @@ export async function runScanSession<Ctx>(
 
     transport.on("close", () => {
       if (settled) return;
-      if (currentState === "DONE") {
-        settle({ ok: true, finalCtx: ctx });
-      } else {
+      if (currentState !== "DONE") {
         settle({
           ok: false,
           reason: new Error(`Transport closed in state ${currentState}`),
           finalCtx: ctx,
         });
+        return;
       }
+
+      // Zero-page rejection (spec §3.6). A graph reaching DONE without any
+      // flushPage having fired is a real failure mode in production — typically
+      // a printer-side error that aborted before pixel transfer started, or a
+      // protocol mis-script. Test-only escape via opts.allowZeroPages.
+      if (pageIndex === 0 && !opts.allowZeroPages) {
+        settle({
+          ok: false,
+          reason: new Error("Scan completed with zero image chunks"),
+          finalCtx: ctx,
+        });
+        return;
+      }
+
+      // Run finalize (async). Wrap in an IIFE so the synchronous listener body
+      // doesn't return a Promise (avoids floating-promise lint issues).
+      void (async () => {
+        if (sessionTempDir) {
+          try {
+            const { finalizeSession } = await import("./output-tail.js");
+            await finalizeSession({
+              sessionTempDir,
+              outputDir: opts.outputDir,
+              sessionTs: opts.sessionTs,
+              action: opts.action,
+              backPageIndices,
+              paperless: opts.paperless,
+            });
+          } catch (err) {
+            const reason = err instanceof Error ? err : new Error(String(err));
+            settle({ ok: false, reason, finalCtx: ctx });
+            return;
+          }
+        }
+        settle({ ok: true, finalCtx: ctx });
+      })();
     });
 
     transport.on("data", (chunk: Buffer) => {
