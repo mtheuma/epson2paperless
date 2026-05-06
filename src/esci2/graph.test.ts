@@ -29,3 +29,80 @@ describe("esci2Graph (smoke)", () => {
     expect(esci2Graph.globalAbortHandlers![0x9000]).toBeDefined();
   });
 });
+
+describe("esci2Graph T22 states", () => {
+  it("WELCOME transitions to LOCKING on 0x8000 with a lock-packet send", () => {
+    const state = esci2Graph.states.WELCOME;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      const t = state.on[0x8000];
+      expect(t).toBeDefined();
+      expect(t.next).toBe("LOCKING");
+      expect(t.send).toBeDefined();
+    }
+  });
+
+  it("LOCKING transitions to INIT1_FS_Y on 0xa100", () => {
+    const state = esci2Graph.states.LOCKING;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa100]?.next).toBe("INIT1_FS_Y");
+    }
+  });
+
+  it("LOCKING sends a passthru packet on 0xa100 transition", () => {
+    const state = esci2Graph.states.LOCKING;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa100]?.send).toBeDefined();
+    }
+  });
+
+  it("INIT1_FS_Y transitions to INIT1_FIN on 0xa000", () => {
+    const state = esci2Graph.states.INIT1_FS_Y;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.next).toBe("INIT1_FIN");
+    }
+  });
+
+  it("INIT1_FS_Y sends a passthru packet on 0xa000 transition", () => {
+    const state = esci2Graph.states.INIT1_FS_Y;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.send).toBeDefined();
+    }
+  });
+
+  it("INIT1_FIN transitions to INIT2_FS_Z", () => {
+    const state = esci2Graph.states.INIT1_FIN;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.next).toBe("INIT2_FS_Z");
+    }
+  });
+
+  it("INIT2_FS_Z transitions to INIT2_FIN on 0xa000", () => {
+    const state = esci2Graph.states.INIT2_FS_Z;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.next).toBe("INIT2_FIN");
+    }
+  });
+
+  it("INIT2_FS_Z sends a passthru packet on 0xa000 transition", () => {
+    const state = esci2Graph.states.INIT2_FS_Z;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.send).toBeDefined();
+    }
+  });
+
+  it("INIT2_FIN transitions to INIT_POLL_FS_Y (T23 territory)", () => {
+    const state = esci2Graph.states.INIT2_FIN;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.next).toBe("INIT_POLL_FS_Y");
+    }
+  });
+});
