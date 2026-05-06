@@ -3,9 +3,9 @@ import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { PDFDocument } from "pdf-lib";
-import { startScanSession } from "./scanner.js";
-import { buildIsPacket } from "./protocol.js";
-import { parseEsci2ReplyHeader } from "./esci.js";
+import { runEsci2Scan } from "./scanner.js";
+import { buildIsPacket } from "../protocol.js";
+import { parseEsci2ReplyHeader } from "./commands.js";
 import { FakeTlsSocket } from "./test-support/fake-tls-socket.js";
 
 // Fixed capability-body packets used by driveScannerToPara for both init cycles.
@@ -41,7 +41,7 @@ async function driveScannerToPara(args: {
 }> {
   const { outputDir, firstStatReplyHex, duplex = false, action = "jpg" } = args;
   const fake = new FakeTlsSocket();
-  const sessionPromise = startScanSession(
+  const sessionPromise = runEsci2Scan(
     { printerIp: "1.2.3.4", port: 1865, destId: 0x02, outputDir, tempDir: "", duplex, action },
     fake.asFactory(),
   );
@@ -267,7 +267,7 @@ async function replayCapture(
   const filtered = records.filter((r) => r.hook === "send" || r.hook === "recv");
   const fake = new FakeTlsSocket();
 
-  const sessionPromise = startScanSession(
+  const sessionPromise = runEsci2Scan(
     { printerIp: "192.0.2.58", port: 1865, destId: 0x02, outputDir, tempDir: "", duplex, action },
     fake.asFactory(),
   );
@@ -484,7 +484,7 @@ describe("scanner targeted tests — error paths", () => {
 
   it("aborts and attempts unlock when a 0x9000 ServerError arrives", async () => {
     const fake = new FakeTlsSocket();
-    const sessionPromise = startScanSession(
+    const sessionPromise = runEsci2Scan(
       {
         printerIp: "192.0.2.58",
         port: 1865,
@@ -513,7 +513,7 @@ describe("scanner targeted tests — error paths", () => {
 
   it("aborts on unexpected IS type received mid-session", async () => {
     const fake = new FakeTlsSocket();
-    const sessionPromise = startScanSession(
+    const sessionPromise = runEsci2Scan(
       {
         printerIp: "192.0.2.58",
         port: 1865,
@@ -543,7 +543,7 @@ describe("scanner targeted tests — error paths", () => {
 
   it("socket 'error' event triggers transitionToError and rejects the promise", async () => {
     const fake = new FakeTlsSocket();
-    const sessionPromise = startScanSession(
+    const sessionPromise = runEsci2Scan(
       {
         printerIp: "192.0.2.58",
         port: 1865,
@@ -693,7 +693,7 @@ describe("scanner post-scan sequencing", () => {
   });
 });
 
-describe("startScanSession — printer cert pinning", () => {
+describe("runEsci2Scan — printer cert pinning", () => {
   let tempDir: string;
 
   beforeEach(() => {
@@ -710,7 +710,7 @@ describe("startScanSession — printer cert pinning", () => {
       "AB:CD:EF:01:23:45:67:89:0A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78";
     fake.setPeerCertificate(FP);
 
-    void startScanSession(
+    void runEsci2Scan(
       {
         printerIp: "192.0.2.58",
         port: 1865,
@@ -736,7 +736,7 @@ describe("startScanSession — printer cert pinning", () => {
       "11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11",
     );
 
-    const done = startScanSession(
+    const done = runEsci2Scan(
       {
         printerIp: "192.0.2.58",
         port: 1865,
@@ -757,11 +757,11 @@ describe("startScanSession — printer cert pinning", () => {
   });
 });
 
-describe("startScanSession failure-mode matrix", () => {
+describe("runEsci2Scan failure-mode matrix", () => {
   it("rejects when the printer cert fingerprint does not match the pin", async () => {
     const fake = new FakeTlsSocket();
     fake.setPeerCertificate("AA:BB:CC"); // FakeTlsSocket.setPeerCertificate takes a string
-    const scanPromise = startScanSession(
+    const scanPromise = runEsci2Scan(
       {
         printerIp: "1.2.3.4",
         port: 1865,
@@ -782,7 +782,7 @@ describe("startScanSession failure-mode matrix", () => {
   it("rejects when the session temp dir cannot be created", async () => {
     const fake = new FakeTlsSocket();
     // tempDir points at a path that mkdtempSync cannot resolve.
-    const scanPromise = startScanSession(
+    const scanPromise = runEsci2Scan(
       {
         printerIp: "1.2.3.4",
         port: 1865,
@@ -799,14 +799,14 @@ describe("startScanSession failure-mode matrix", () => {
   });
 
   it("rejects on timeout (no response in TIMEOUT_MS)", async () => {
-    // CRITICAL: install fake timers BEFORE startScanSession runs. The scanner
+    // CRITICAL: install fake timers BEFORE runEsci2Scan runs. The scanner
     // schedules a setTimeout(TIMEOUT_MS) inside the connect callback fired by
     // simulateConnect(); if useFakeTimers is called after, the real timer is
     // already armed and advancing fake timers won't fire it.
     vi.useFakeTimers();
     try {
       const fake = new FakeTlsSocket();
-      const scanPromise = startScanSession(
+      const scanPromise = runEsci2Scan(
         {
           printerIp: "1.2.3.4",
           port: 1865,
@@ -834,7 +834,7 @@ describe("startScanSession failure-mode matrix", () => {
 
   it("rejects on socket error mid-session", async () => {
     const fake = new FakeTlsSocket();
-    const scanPromise = startScanSession(
+    const scanPromise = runEsci2Scan(
       {
         printerIp: "1.2.3.4",
         port: 1865,
@@ -857,7 +857,7 @@ describe("startScanSession failure-mode matrix", () => {
 
   it("rejects on async ScanCancel event mid-session", async () => {
     const fake = new FakeTlsSocket();
-    const scanPromise = startScanSession(
+    const scanPromise = runEsci2Scan(
       {
         printerIp: "1.2.3.4",
         port: 1865,
@@ -881,7 +881,7 @@ describe("startScanSession failure-mode matrix", () => {
 
   it("rejects on async fatal event mid-session", async () => {
     const fake = new FakeTlsSocket();
-    const scanPromise = startScanSession(
+    const scanPromise = runEsci2Scan(
       {
         printerIp: "1.2.3.4",
         port: 1865,
@@ -908,7 +908,7 @@ describe("startScanSession failure-mode matrix", () => {
 
   it("rejects on per-state assertion failure (unexpected packet type)", async () => {
     const fake = new FakeTlsSocket();
-    const scanPromise = startScanSession(
+    const scanPromise = runEsci2Scan(
       {
         printerIp: "1.2.3.4",
         port: 1865,

@@ -106,7 +106,7 @@ The command bytes are either:
 
 **PARA is sent in two passthru packets**, not one. The first packet carries the 12-byte `PARAx<hex-len>` header with `reply_size=0`. The second carries the raw parameter bytes with `reply_size=64`. The printer responds only to the second packet, with a 64-byte `PARAx0000000#parOK…` reply if the parameters were accepted or `#parFAIL` if not. This two-phase structure was discovered from the Frida capture: the Windows driver never batches the two sends into a single passthru.
 
-ESC/I-2 command builders are in `src/esci.ts`. `buildFsY`, `buildFsX`, `buildFsZ` produce the legacy 2-byte commands. `buildEsci2Command` builds the generic 12-byte ESC/I-2 header. `buildParaHeader` and `buildParaPayload` build the two PARA phases. Reply parsing is done by `parseEsci2ReplyHeader` (extracts the 12-byte reply header's `cmd` and `length` fields) and `parseTokens` (splits the `#KEY value` token stream from reply bodies).
+ESC/I-2 command builders are in `src/esci2/commands.ts`. `buildFsY`, `buildFsX`, `buildFsZ` produce the legacy 2-byte initialization commands. `buildEsci2Command` builds the generic 12-byte ESC/I-2 header. `buildParaHeader` and `buildParaPayload` build the two PARA phases. Reply parsing is done by `parseEsci2ReplyHeader` (extracts the 12-byte reply header's `cmd` and `length` fields) and `parseTokens` (splits the `#KEY value` token stream from reply bodies).
 
 The SANE `epsonds` backend provides a useful cross-reference: its passthru framing — IS header layout, `0x000C` data offset, 8-byte data header with `cmd_size` / `reply_size` — is byte-identical to what the ET-4950 expects. However, `epsonds` targets older scanners that do not require the legacy ESC/I initialization loop before ESC/I-2 commands. The ET-4950's firmware requires `FS Y → STAT → FIN` polling repeated until the printer reports ready, followed by a `FS X` mode switch, before any ESC/I-2 command will be accepted.
 
@@ -120,7 +120,7 @@ The INFO and CAPA replies declare the scanner's capabilities — supported resol
 
 ## The scanner state machine
 
-`startScanSession` in `src/scanner.ts` implements a deterministic state machine. Each incoming IS packet advances the state by exactly one transition; all state is kept in local variables within a single TLS socket callback.
+`runEsci2Scan` in `src/esci2/scanner.ts` implements a deterministic state machine. Each incoming IS packet advances the state by exactly one transition; all state is kept in local variables within a single TLS socket callback.
 
 ```
 CONNECTING
@@ -235,15 +235,15 @@ The temp directory is removed in a `finally` block regardless of outcome.
 
 ---
 
-## Legacy variant (WF-3620)
+## ESC/I variant (WF-3620)
 
 The WF-3620 (and other 2014-era Epson printers using the same firmware
-generation) speaks **plain TCP on port 1865** with **legacy ESC/I commands**
+generation) speaks **plain TCP on port 1865** with **ESC/I commands**
 inside the same IS framing the ET-4950 uses. The protocol is decided per
 session by `protocol-probe.ts`: a quick TLS handshake against port 1865
-distinguishes the two — TLS success means esci2, `ERR_SSL_WRONG_VERSION_NUMBER`
-or `ECONNRESET` means legacy. Successful esci2 probes are cached for the
-daemon's lifetime; legacy is never cached so a flaky network blip during a
+distinguishes the two — TLS success means ESC/I-2, `ERR_SSL_WRONG_VERSION_NUMBER`
+or `ECONNRESET` means ESC/I. Successful ESC/I-2 probes are cached for the
+daemon's lifetime; ESC/I is never cached so a flaky network blip during a
 TLS handshake doesn't pin the wrong scanner.
 
 Key wire differences (full table in
@@ -261,23 +261,23 @@ Key wire differences (full table in
   produces two cycles per sheet; the back side comes out 180°-rotated and
   the host applies EXIF Orientation=3 / `/Rotate 180` accordingly.
 
-The legacy state machine lives in `src/scanner-legacy.ts`. Per-page raw
+The ESC/I state machine lives in `src/esci/scanner.ts`. Per-page raw
 pixel buffers are accumulated in memory (~104 MB at 600 DPI A4), encoded
 to JPEG via sharp, and handed off to `output-tail.ts`'s shared post-scan
 pipeline.
 
-### Source selection (legacy)
+### Source selection (ESC/I)
 
 The PushScan SOAP carries `duplex` and `action` (Sides + Format) but no
 explicit ADF-vs-flatbed selector. v1 ships a simpler mapping than the
 Windows driver's probe-and-fallback:
 
-| Panel selection | scanner-legacy source |
-| --------------- | --------------------- |
-| 2-paged: On     | `adf-duplex`          |
-| 2-paged: Off    | `adf-simplex`         |
+| Panel selection | ESC/I source  |
+| --------------- | ------------- |
+| 2-paged: On     | `adf-duplex`  |
+| 2-paged: Off    | `adf-simplex` |
 
-Setting `LEGACY_FORCE_SOURCE=flatbed` (or `adf-simplex` / `adf-duplex`)
+Setting `ESCI_FORCE_SOURCE=flatbed` (or `adf-simplex` / `adf-duplex`)
 overrides the mapping. **Future work**: mirror the driver's probe-and-
 fallback (ESC e 0x01 → FS F → bit-7 of byte 0 selects ADF vs flatbed)
 so the panel button auto-detects without env-var configuration.
@@ -359,34 +359,40 @@ Investigation via paired Wireshark captures (one from the Epson driver, one from
 
 ### The byte-for-byte replay test
 
-`src/scanner.test.ts` is the regression shield that ties everything together. It loads a Frida capture JSONL file, connects the real `startScanSession` state machine to a fake TLS socket that feeds the captured RECV records one-by-one, and asserts that every byte the state machine sends matches the corresponding SEND record from the capture. Any state-machine edit that changes the outgoing byte sequence will fail this test.
+`src/esci2/scanner.test.ts` is the regression shield for the ESC/I-2 path. It loads a Frida capture JSONL file, connects the real `runEsci2Scan` state machine to a fake TLS socket that feeds the captured RECV records one-by-one, and asserts that every byte the state machine sends matches the corresponding SEND record from the capture. Any state-machine edit that changes the outgoing byte sequence will fail this test.
 
 The suite runs six parametrized replay entries: the 1p-simplex, 3p-simplex, and 1p-duplex ADF captures in both JPG mode and PDF mode (reusing the same capture data with `action='pdf'`). JPG replay entries assert JPEG files on disk with correct EXIF orientation on back-side pages. PDF replay entries assert a single composed PDF with correct page count and `/Rotate = 180` on back pages.
 
-Because the protocol was built from these captures, the replay test is both a regression test and a specification: the state machine is, by construction, correct if and only if it produces the exact byte sequence that the Windows driver produced on the same printer.
+`src/esci/scanner.test.ts` applies the same replay approach to the WF-3620 ESC/I path using pcap-derived JSONL fixtures (see `tools/pcap-extract/`).
+
+Because the protocol was built from these captures, the replay tests are both regression tests and specifications: each state machine is, by construction, correct if and only if it produces the exact byte sequence that the Windows driver produced on the same printer.
 
 ---
 
 ## Code layout
 
-| File               | Responsibility                                                             |
-| ------------------ | -------------------------------------------------------------------------- |
-| `src/index.ts`     | Service entry point — wires together all modules and starts the event loop |
-| `src/config.ts`    | Zod-validated configuration from environment variables                     |
-| `src/keepalive.ts` | UDP multicast listener and keepalive responder                             |
-| `src/pushscan.ts`  | TCP server for push-scan trigger, SOAP parsing, x-uid echo                 |
-| `src/scanner.ts`   | TLS scan session state machine                                             |
-| `src/protocol.ts`  | IS-frame encode/decode, lock/unlock/passthru/pureread packet builders      |
-| `src/esci.ts`      | ESC/I and ESC/I-2 command builders, PARA payload blobs, reply parsers      |
-| `src/exif.ts`      | JPEG EXIF APP1 injection for back-side orientation                         |
-| `src/pdf.ts`       | PDF composition from per-page JPEGs using pdf-lib                          |
-| `src/output.ts`    | Output filename generation and temp-file promotion                         |
-| `src/health.ts`    | HTTP health-check endpoint on port 3000                                    |
-| `src/logger.ts`    | Hand-rolled structured logger; text or JSON output via `LOG_FORMAT`        |
-| `src/lifecycle.ts` | Graceful shutdown coordination                                             |
-| `src/network.ts`   | Resolves the local IP that can reach the printer (UDP `connect()` trick)   |
+| File                      | Responsibility                                                             |
+| ------------------------- | -------------------------------------------------------------------------- |
+| `src/index.ts`            | Service entry point — wires together all modules and starts the event loop |
+| `src/config.ts`           | Zod-validated configuration from environment variables                     |
+| `src/keepalive.ts`        | UDP multicast listener and keepalive responder                             |
+| `src/pushscan.ts`         | TCP server for push-scan trigger, SOAP parsing, x-uid echo                 |
+| `src/esci2/scanner.ts`    | ESC/I-2 TLS scan session state machine                                     |
+| `src/esci2/commands.ts`   | ESC/I-2 command builders, PARA payload blobs, reply parsers                |
+| `src/esci/scanner.ts`     | ESC/I plain-TCP scan session state machine                                 |
+| `src/esci/commands.ts`    | ESC/I command builders and reply parsers                                   |
+| `src/esci/luts.ts`        | Gamma LUT tables for the ESC/I scan path                                   |
+| `src/esci/raw-to-jpeg.ts` | Raw 24-bit RGB → JPEG encoding via sharp                                   |
+| `src/protocol.ts`         | IS-frame encode/decode, lock/unlock/passthru/pureread packet builders      |
+| `src/exif.ts`             | JPEG EXIF APP1 injection for back-side orientation                         |
+| `src/pdf.ts`              | PDF composition from per-page JPEGs using pdf-lib                          |
+| `src/output.ts`           | Output filename generation and temp-file promotion                         |
+| `src/health.ts`           | HTTP health-check endpoint on port 3000                                    |
+| `src/logger.ts`           | Hand-rolled structured logger; text or JSON output via `LOG_FORMAT`        |
+| `src/lifecycle.ts`        | Graceful shutdown coordination                                             |
+| `src/network.ts`          | Resolves the local IP that can reach the printer (UDP `connect()` trick)   |
 
-Test files mirror the module they cover (`src/scanner.test.ts`, `src/keepalive.test.ts`, etc.). The replay test harness support code lives in `src/test-support/`.
+Test files mirror the module they cover (`src/esci2/scanner.test.ts`, `src/esci/scanner.test.ts`, `src/keepalive.test.ts`, etc.). The replay test harness support code lives in `src/esci2/test-support/` and `src/esci/test-support/`.
 
 Reverse-engineering artifacts:
 
@@ -401,16 +407,17 @@ Reverse-engineering artifacts:
 
 ## Testing
 
-The test suite uses Vitest and runs with `npm test` (216 tests across 14 files, completing in roughly a second).
+The test suite uses Vitest and runs with `npm test` (298 tests across 19 files, completing in roughly 5 seconds).
 
-**The replay harness** (`src/scanner.test.ts`) is the most important test file. It instantiates the real `startScanSession` function with a fake TLS socket factory. The fake socket replays the RECV side of a Frida capture (the bytes the printer sent), advancing one IS packet at a time, and records every byte the state machine sends. After the session completes, the test asserts byte-for-byte equality against the SEND side of the capture. On-disk output files are also asserted — JPEG files for JPG-mode runs (including EXIF orientation verification), and a composed PDF for PDF-mode runs (including page count and `/Rotate` metadata on back pages).
+**The replay harnesses** are the most important test files. `src/esci2/scanner.test.ts` instantiates the real `runEsci2Scan` function with a fake TLS socket factory. The fake socket replays the RECV side of a Frida capture (the bytes the printer sent), advancing one IS packet at a time, and records every byte the state machine sends. After the session completes, the test asserts byte-for-byte equality against the SEND side of the capture. On-disk output files are also asserted — JPEG files for JPG-mode runs (including EXIF orientation verification), and a composed PDF for PDF-mode runs (including page count and `/Rotate` metadata on back pages). `src/esci/scanner.test.ts` applies the same approach to the WF-3620 ESC/I path using pcap-derived JSONL fixtures.
 
 **Unit tests** cover each module independently:
 
 - `src/keepalive.test.ts` — announcement parsing, keepalive packet construction, burst timing.
 - `src/pushscan.test.ts` — SOAP request parsing, `PushScanIDIn` decoding, `x-uid` echo, action resolution.
 - `src/protocol.test.ts` — IS-frame encode/decode round-trips, all packet builder variants.
-- `src/esci.test.ts` — ESC/I-2 command builders, PARA payload size assertions, token parser.
+- `src/esci2/commands.test.ts` — ESC/I-2 command builders, PARA payload size assertions, token parser.
+- `src/esci/commands.test.ts` — ESC/I command builders and reply parsers.
 - `src/pdf.test.ts` — PDF composition from sample JPEGs, page-count and rotation assertions.
 - `src/exif.test.ts` — EXIF APP1 injection, orientation byte placement, SOI/SOF preservation.
 - `src/output.test.ts` — filename generation, sorted page file enumeration.
@@ -425,7 +432,7 @@ CI runs `npm install` followed by the same lint + format:check + test trio that 
 To run a single test file with verbose output:
 
 ```sh
-npx vitest run src/scanner.test.ts --reporter=verbose
+npx vitest run src/esci2/scanner.test.ts --reporter=verbose
 ```
 
 To run only tests matching a name pattern:

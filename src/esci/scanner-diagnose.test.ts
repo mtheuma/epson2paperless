@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { startScanSessionLegacy } from "./scanner-legacy.js";
+import { runEsciScan } from "./scanner.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
-import { buildIsPacket, parseIsPacket } from "./protocol.js";
+import { buildIsPacket, parseIsPacket } from "../protocol.js";
 
 // Welcome and lock-ack helpers — same shape as the WF-3620 fixtures.
 const welcome = buildIsPacket(0x8000, Buffer.alloc(0));
@@ -22,10 +22,10 @@ function passthruCommand(buf: Buffer): Buffer {
   return pkt.payload.subarray(8);
 }
 
-describe("scanner-legacy DIAGNOSE_PROTOCOL probe", () => {
+describe("scanner-esci DIAGNOSE_PROTOCOL probe", () => {
   it("sends FS Y after ESC @ NAK and rejects with a diagnostic message", async () => {
     const fake = new FakeTcpSocket();
-    const promise = startScanSessionLegacy(
+    const promise = runEsciScan(
       {
         printerIp: "10.0.0.1",
         port: 1865,
@@ -58,7 +58,7 @@ describe("scanner-legacy DIAGNOSE_PROTOCOL probe", () => {
 
   it("rejects with a diagnostic message even when FS Y is also NAK'd", async () => {
     const fake = new FakeTcpSocket();
-    const promise = startScanSessionLegacy(
+    const promise = runEsciScan(
       {
         printerIp: "10.0.0.1",
         port: 1865,
@@ -87,7 +87,7 @@ describe("scanner-legacy DIAGNOSE_PROTOCOL probe", () => {
 
   it("preserves existing behaviour when DIAGNOSE_PROTOCOL is off", async () => {
     const fake = new FakeTcpSocket();
-    const promise = startScanSessionLegacy(
+    const promise = runEsciScan(
       {
         printerIp: "10.0.0.1",
         port: 1865,

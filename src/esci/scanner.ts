@@ -2,14 +2,14 @@ import net from "node:net";
 import os from "node:os";
 import fs from "node:fs";
 import path from "node:path";
-import { createLogger } from "./logger.js";
+import { createLogger } from "../logger.js";
 import {
   parseIsPacket,
   buildLockPacket,
   buildUnlockPacket,
   buildPassthruPacket,
   buildIsPacket,
-} from "./protocol.js";
+} from "../protocol.js";
 import {
   buildEscInit,
   buildFsI,
@@ -29,19 +29,19 @@ import {
   SOURCE_BYTE,
   type Source,
   type Format,
-} from "./esci-legacy.js";
+} from "./commands.js";
 // FS Y (0x1C 0x59) — first command in the ET-4950 ESC/I-2 init sequence
-// (see scanner.ts INIT1_FS_Y). Used here only by the DIAGNOSE_PROTOCOL probe
+// (see esci2/scanner.ts INIT1_FS_Y). Used here only by the DIAGNOSE_PROTOCOL probe
 // to classify printers that NAK `ESC @`.
-import { buildFsY } from "./esci.js";
-import { GAMMA_LUT_R, GAMMA_LUT_G, GAMMA_LUT_B } from "./esci-legacy-luts.js";
+import { buildFsY } from "../esci2/commands.js";
+import { GAMMA_LUT_R, GAMMA_LUT_G, GAMMA_LUT_B } from "./luts.js";
 import { encodeRawGbrToJpeg } from "./raw-to-jpeg.js";
-import { setJpegOrientation } from "./exif.js";
-import { resolveSessionTimestamp } from "./output.js";
-import { finalizeSession } from "./output-tail.js";
-import type { PaperlessUploadOptions } from "./paperless-upload.js";
+import { setJpegOrientation } from "../exif.js";
+import { resolveSessionTimestamp } from "../output.js";
+import { finalizeSession } from "../output-tail.js";
+import type { PaperlessUploadOptions } from "../paperless-upload.js";
 
-const log = createLogger("scanner-legacy");
+const log = createLogger("scanner-esci");
 
 const GAMMA_CHANNELS = [
   { tag: 0x52, lut: GAMMA_LUT_R },
@@ -62,7 +62,7 @@ export interface LegacyScanSession {
   tempDir: string;
   /** Panel-side Sides selection (true → 2-Sided). Source is detected from FS F. */
   duplex: boolean;
-  /** Override for FS F autodetection — set via LEGACY_FORCE_SOURCE env var. */
+  /** Override for FS F autodetection — set via ESCI_FORCE_SOURCE env var. */
   forcedSource: Source | null;
   format: Format;
   jpegQuality: number;
@@ -153,7 +153,7 @@ type State =
 const TIMEOUT_MS = 60_000;
 const ACK_BYTE = 0x06;
 
-export function startScanSessionLegacy(
+export function runEsciScan(
   session: LegacyScanSession,
   socketFactory: TcpSocketFactory = (host, port, cb) => net.connect(port, host, cb),
 ): Promise<void> {
@@ -398,14 +398,14 @@ export function startScanSessionLegacy(
           //   0x81 → flatbed (no ADF paper / no ADF present)
           //   0x01 → ADF has paper; duplex flag disambiguates simplex/duplex
           //   other → unknown (jam, mid-feed, panel-conflict). Reject loudly.
-          // session.forcedSource (LEGACY_FORCE_SOURCE) short-circuits the detection.
+          // session.forcedSource (ESCI_FORCE_SOURCE) short-circuits the detection.
           if (pkt.payload.length !== 16) {
             return fail(`expected 16-byte status in STATUS_2, got ${pkt.payload.length}`);
           }
           const statusByte = pkt.payload[0];
           if (session.forcedSource) {
             log.info(
-              `STATUS_2: LEGACY_FORCE_SOURCE override: ${session.forcedSource} ` +
+              `STATUS_2: ESCI_FORCE_SOURCE override: ${session.forcedSource} ` +
                 `(FS F byte 0x${statusByte.toString(16)} ignored)`,
             );
             detectedSource = session.forcedSource;
@@ -415,7 +415,7 @@ export function startScanSessionLegacy(
               return fail(
                 `Unrecognised FS F status 0x${result.byte.toString(16).padStart(2, "0")} ` +
                   `— please file a compatibility issue with LOG_LEVEL=debug output ` +
-                  `(see CONTRIBUTING.md). Workaround: set LEGACY_FORCE_SOURCE.`,
+                  `(see CONTRIBUTING.md). Workaround: set ESCI_FORCE_SOURCE.`,
               );
             }
             detectedSource = result.source;

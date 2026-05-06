@@ -1,6 +1,6 @@
 # WF-3620 replay fixtures
 
-JSONL fixtures used by `src/scanner-legacy.test.ts` replay tests. Generated
+JSONL fixtures used by `src/esci/scanner.test.ts` replay tests. Generated
 from gitignored Wireshark captures in `.reference/wireshark-captures/wf-3620/`
 via `npm run pcap:extract`. Image-stream runs are folded into summary records
 so each fixture stays under ~80 KB.

@@ -13,10 +13,10 @@ describe("protocol-probe", () => {
     const variant = await detectVariant({
       printerIp: "10.0.0.1",
       port: 1865,
-      override: "legacy",
+      override: "esci",
       timeoutMs: 100,
     });
-    expect(variant).toBe("legacy");
+    expect(variant).toBe("esci");
     expect(spy).not.toHaveBeenCalled();
   });
 
@@ -41,7 +41,7 @@ describe("protocol-probe", () => {
     expect(variant).toBe("esci2");
   });
 
-  it("returns legacy on TLS wrong-version", async () => {
+  it("returns esci on TLS wrong-version", async () => {
     const fakeSocket = {
       destroy: vi.fn(),
       once: (ev: string, cb: (e: Error) => void) => {
@@ -65,7 +65,7 @@ describe("protocol-probe", () => {
       override: "auto",
       timeoutMs: 100,
     });
-    expect(variant).toBe("legacy");
+    expect(variant).toBe("esci");
   });
 
   it("caches per-IP across multiple calls", async () => {
@@ -84,7 +84,7 @@ describe("protocol-probe", () => {
     expect(spy).toHaveBeenCalledTimes(1);
   });
 
-  it("does NOT cache legacy results (avoids pinning a misclassified ECONNRESET)", async () => {
+  it("does NOT cache esci results (avoids pinning a misclassified ECONNRESET)", async () => {
     const fakeSocket = {
       destroy: vi.fn(),
       once: (ev: string, cb: (e: Error) => void) => {
@@ -114,8 +114,8 @@ describe("protocol-probe", () => {
       override: "auto",
       timeoutMs: 100,
     });
-    expect(a).toBe("legacy");
-    expect(b).toBe("legacy");
+    expect(a).toBe("esci");
+    expect(b).toBe("esci");
     expect(spy).toHaveBeenCalledTimes(2);
   });
 

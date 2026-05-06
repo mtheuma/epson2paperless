@@ -6,7 +6,7 @@ pipeline (`encodeRawGbrToJpeg` → `output-tail.finalizeSession`), producing
 viewable JPEGs / PDFs on disk.
 
 Used to eyeball real maltris captures end-to-end before merging WF-3620
-support — the replay tests in `scanner-legacy.test.ts` use synthesised
+support — the replay tests in `src/esci/scanner.test.ts` use synthesised
 fill-byte data, which exercises wire-protocol correctness but doesn't
 verify that real pixel content round-trips correctly.
 

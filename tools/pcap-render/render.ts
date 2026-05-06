@@ -4,9 +4,9 @@ import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { runTshark, IS_IMAGE_CHUNK_HEX } from "../pcap-extract/extract.js";
 import { IS_HEADER_SIZE } from "../../src/protocol.js";
-import { encodeRawGbrToJpeg } from "../../src/raw-to-jpeg.js";
+import { encodeRawGbrToJpeg } from "../../src/esci/raw-to-jpeg.js";
 import { setJpegOrientation } from "../../src/exif.js";
-import { geometry, type Source, type Format } from "../../src/esci-legacy.js";
+import { geometry, type Source, type Format } from "../../src/esci/commands.js";
 import { resolveSessionTimestamp } from "../../src/output.js";
 import { finalizeSession } from "../../src/output-tail.js";
 

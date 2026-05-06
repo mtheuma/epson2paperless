@@ -4,8 +4,8 @@ import { getLocalIpForTarget } from "./network.js";
 import { createKeepaliveResponder, type KeepaliveResponder } from "./keepalive.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import { detectVariant, type Variant } from "./protocol-probe.js";
-import { startScanSession } from "./scanner.js";
-import { startScanSessionLegacy } from "./scanner-legacy.js";
+import { runEsci2Scan } from "./esci2/scanner.js";
+import { runEsciScan } from "./esci/scanner.js";
 
 const log = createLogger("startup");
 
@@ -106,7 +106,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     timeoutMs: 3000,
   });
   if (variant === "esci2") {
-    return startScanSession({
+    return runEsci2Scan({
       printerIp: args.config.printerIp,
       port: 1865,
       destId: args.config.scanDestId,
@@ -118,16 +118,16 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
       printerCertFingerprint: args.config.printerCertFingerprint,
     });
   }
-  // Legacy. Source is autodetected from the FS F status byte (see scanner-legacy.ts
-  // STATUS_2). LEGACY_FORCE_SOURCE overrides the autodetection for users hitting
+  // Legacy. Source is autodetected from the FS F status byte (see esci/scanner.ts
+  // STATUS_2). ESCI_FORCE_SOURCE overrides the autodetection for users hitting
   // edge cases the autodetect doesn't cover (yet).
-  return startScanSessionLegacy({
+  return runEsciScan({
     printerIp: args.config.printerIp,
     port: 1865,
     outputDir: args.config.outputDir,
     tempDir: args.config.tempDir,
     duplex: args.duplex,
-    forcedSource: args.config.legacyForceSource ?? null,
+    forcedSource: args.config.esciForceSource ?? null,
     format: args.action,
     jpegQuality: args.config.jpegQuality,
     paperless: args.paperless,
