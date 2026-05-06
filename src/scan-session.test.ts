@@ -329,4 +329,50 @@ describe("runScanSession (engine pump)", () => {
 
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
+
+  it("injects EXIF Orientation=3 on back-side flushPage when action='jpg'", async () => {
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "DONE",
+          flushPage: {
+            side: "back",
+            encode: () => Promise.resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+          },
+        },
+      },
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: tempDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    const result = await promise;
+    expect(result.ok).toBe(true);
+
+    // Find the temp file and verify it has the EXIF APP1 segment.
+    const files = fs.readdirSync(tempDir);
+    const sessionDir = files.find((f) => f.startsWith("epson2paperless-"));
+    expect(sessionDir).toBeDefined();
+    const pages = fs.readdirSync(path.join(tempDir, sessionDir!));
+    expect(pages.length).toBe(1);
+    const bytes = fs.readFileSync(path.join(tempDir, sessionDir!, pages[0]));
+    // Bytes 2-3 of the EXIF-injected output are FF E1 (APP1 marker).
+    expect(bytes[2]).toBe(0xff);
+    expect(bytes[3]).toBe(0xe1);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
 });
