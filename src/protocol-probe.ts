@@ -3,7 +3,7 @@ import { createLogger } from "./logger.js";
 
 const log = createLogger("protocol-probe");
 
-export type Variant = "esci2" | "legacy";
+export type Variant = "esci2" | "esci";
 export type Override = "auto" | Variant;
 
 export interface DetectOptions {
@@ -25,11 +25,11 @@ export async function detectVariant(opts: DetectOptions): Promise<Variant> {
   if (cached) return cached;
 
   const variant = await probeTls(opts.printerIp, opts.port, opts.timeoutMs);
-  // Cache positive evidence only. ECONNRESET — which classifies as "legacy" —
+  // Cache positive evidence only. ECONNRESET — which classifies as "esci" —
   // can also be triggered by a transient network blip mid-handshake against
   // a real ET-4950. Caching that misclassification would pin every subsequent
   // scan to the wrong scanner. Re-probing on each scan when the result is
-  // "legacy" is cheap (real WF-3620 RSTs back fast), and self-heals once the
+  // "esci" is cheap (real WF-3620 RSTs back fast), and self-heals once the
   // network blip clears.
   if (variant === "esci2") {
     cache.set(opts.printerIp, variant);
@@ -74,7 +74,7 @@ function probeTls(host: string, port: number, timeoutMs: number): Promise<Varian
         clearTimeout(timer);
         socket.destroy();
         if (err.code === "ERR_SSL_WRONG_VERSION_NUMBER" || err.code === "ECONNRESET") {
-          resolve("legacy");
+          resolve("esci");
           return;
         }
         log.error(`Probe failed against ${host}:${port}: ${err.code ?? err.message}`);

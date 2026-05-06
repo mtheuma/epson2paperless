@@ -18,7 +18,7 @@ const configSchema = z
     language: z.string().length(2).default("en"),
     jpegQuality: z.coerce.number().int().min(1).max(100).default(90),
     previewAction: z.enum(["reject", "jpg", "pdf"]).default("reject"),
-    legacyForceSource: z.enum(["flatbed", "adf-simplex", "adf-duplex"]).optional(),
+    esciForceSource: z.enum(["flatbed", "adf-simplex", "adf-duplex"]).optional(),
     printerProtocol: z.enum(["auto", "esci2", "esci"]).default("auto"),
     // Diagnostic-only. When true and the legacy `ESC @` init returns a non-ACK,
     // the legacy scanner sends one extra `FS Y` probe (the ET-4950 ESC/I-2 path's
@@ -49,12 +49,12 @@ const configSchema = z
         path: ["printerCertFingerprint"],
       });
     }
-    if (cfg.printerProtocol === "esci2" && cfg.legacyForceSource) {
+    if (cfg.printerProtocol === "esci2" && cfg.esciForceSource) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "LEGACY_FORCE_SOURCE has no effect with PRINTER_PROTOCOL=esci2; remove one or the other.",
-        path: ["legacyForceSource"],
+          "ESCI_FORCE_SOURCE has no effect with PRINTER_PROTOCOL=esci2; remove one or the other.",
+        path: ["esciForceSource"],
       });
     }
     if (cfg.printerProtocol === "auto" && cfg.printerCertFingerprint) {
@@ -70,6 +70,14 @@ const configSchema = z
 export type Config = z.infer<typeof configSchema>;
 
 export function loadConfig(): Config {
+  if (process.env.LEGACY_FORCE_SOURCE !== undefined) {
+    throw new Error(
+      "LEGACY_FORCE_SOURCE has been renamed to ESCI_FORCE_SOURCE in v0.4.0. " +
+        "Please update your env / compose file. The values are unchanged " +
+        "(adf-simplex / adf-duplex / flatbed).",
+    );
+  }
+
   // Resolve PAPERLESS_TOKEN — PAPERLESS_TOKEN_FILE takes precedence when both
   // are set. A missing / unreadable _TOKEN_FILE is a startup error.
   let paperlessToken: string | undefined;
@@ -104,7 +112,7 @@ export function loadConfig(): Config {
       process.env.PAPERLESS_DELETE_AFTER_UPLOAD === undefined
         ? undefined
         : process.env.PAPERLESS_DELETE_AFTER_UPLOAD === "true",
-    legacyForceSource: process.env.LEGACY_FORCE_SOURCE || undefined,
+    esciForceSource: process.env.ESCI_FORCE_SOURCE || undefined,
     printerCertFingerprint: process.env.PRINTER_CERT_FINGERPRINT || undefined,
     printerProtocol: process.env.PRINTER_PROTOCOL || undefined,
     diagnoseProtocol:

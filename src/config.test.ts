@@ -26,6 +26,7 @@ describe("loadConfig", () => {
     delete process.env.JPEG_QUALITY;
     delete process.env.PRINTER_PROTOCOL;
     delete process.env.LEGACY_FORCE_SOURCE;
+    delete process.env.ESCI_FORCE_SOURCE;
   });
 
   it("throws if PRINTER_IP is missing", () => {
@@ -278,29 +279,43 @@ describe("loadConfig", () => {
     );
   });
 
-  it("LEGACY_FORCE_SOURCE defaults to undefined", () => {
+  it("ESCI_FORCE_SOURCE defaults to undefined", () => {
     process.env.PRINTER_IP = "10.0.0.1";
-    delete process.env.LEGACY_FORCE_SOURCE;
-    expect(loadConfig().legacyForceSource).toBeUndefined();
+    delete process.env.ESCI_FORCE_SOURCE;
+    expect(loadConfig().esciForceSource).toBeUndefined();
   });
 
-  it("LEGACY_FORCE_SOURCE accepts flatbed", () => {
+  it("ESCI_FORCE_SOURCE accepts flatbed", () => {
     process.env.PRINTER_IP = "10.0.0.1";
-    process.env.LEGACY_FORCE_SOURCE = "flatbed";
-    expect(loadConfig().legacyForceSource).toBe("flatbed");
+    process.env.ESCI_FORCE_SOURCE = "flatbed";
+    expect(loadConfig().esciForceSource).toBe("flatbed");
   });
 
-  it("LEGACY_FORCE_SOURCE rejects invalid values", () => {
+  it("ESCI_FORCE_SOURCE rejects invalid values", () => {
     process.env.PRINTER_IP = "10.0.0.1";
-    process.env.LEGACY_FORCE_SOURCE = "garbage";
+    process.env.ESCI_FORCE_SOURCE = "garbage";
     expect(() => loadConfig()).toThrow();
   });
 
-  it("rejects LEGACY_FORCE_SOURCE with PRINTER_PROTOCOL=esci2", () => {
+  it("rejects ESCI_FORCE_SOURCE with PRINTER_PROTOCOL=esci2", () => {
     process.env.PRINTER_IP = "10.0.0.1";
     process.env.PRINTER_PROTOCOL = "esci2";
-    process.env.LEGACY_FORCE_SOURCE = "flatbed";
+    process.env.ESCI_FORCE_SOURCE = "flatbed";
     expect(() => loadConfig()).toThrow(/no effect/i);
+  });
+
+  it("accepts ESCI_FORCE_SOURCE=adf-simplex", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.ESCI_FORCE_SOURCE = "adf-simplex";
+    const config = loadConfig();
+    expect(config.esciForceSource).toBe("adf-simplex");
+  });
+
+  it("rejects LEGACY_FORCE_SOURCE at startup with a helpful migration error", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.LEGACY_FORCE_SOURCE = "adf-simplex";
+    // Old name produces an explicit migration error pointing at the new name.
+    expect(() => loadConfig()).toThrow(/LEGACY_FORCE_SOURCE has been renamed to ESCI_FORCE_SOURCE/);
   });
 
   it("DIAGNOSE_PROTOCOL defaults to false", () => {
@@ -347,7 +362,7 @@ describe("buildPaperlessOptions", () => {
     delete process.env.PAPERLESS_TOKEN_FILE;
     delete process.env.PAPERLESS_DELETE_AFTER_UPLOAD;
     delete process.env.PRINTER_PROTOCOL;
-    delete process.env.LEGACY_FORCE_SOURCE;
+    delete process.env.ESCI_FORCE_SOURCE;
   });
 
   it("returns undefined when either URL or token is missing", () => {
@@ -391,7 +406,7 @@ describe("PRINTER_CERT_FINGERPRINT", () => {
     delete process.env.PRINTER_IP;
     delete process.env.PRINTER_CERT_FINGERPRINT;
     delete process.env.PRINTER_PROTOCOL;
-    delete process.env.LEGACY_FORCE_SOURCE;
+    delete process.env.ESCI_FORCE_SOURCE;
   });
 
   it("accepts a 32-byte uppercase fingerprint", () => {

@@ -119,7 +119,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     });
   }
   // Legacy. Source is autodetected from the FS F status byte (see esci/scanner.ts
-  // STATUS_2). LEGACY_FORCE_SOURCE overrides the autodetection for users hitting
+  // STATUS_2). ESCI_FORCE_SOURCE overrides the autodetection for users hitting
   // edge cases the autodetect doesn't cover (yet).
   return runEsciScan({
     printerIp: args.config.printerIp,
@@ -127,7 +127,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     outputDir: args.config.outputDir,
     tempDir: args.config.tempDir,
     duplex: args.duplex,
-    forcedSource: args.config.legacyForceSource ?? null,
+    forcedSource: args.config.esciForceSource ?? null,
     format: args.action,
     jpegQuality: args.config.jpegQuality,
     paperless: args.paperless,

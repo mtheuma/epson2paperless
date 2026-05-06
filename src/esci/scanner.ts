@@ -62,7 +62,7 @@ export interface LegacyScanSession {
   tempDir: string;
   /** Panel-side Sides selection (true → 2-Sided). Source is detected from FS F. */
   duplex: boolean;
-  /** Override for FS F autodetection — set via LEGACY_FORCE_SOURCE env var. */
+  /** Override for FS F autodetection — set via ESCI_FORCE_SOURCE env var. */
   forcedSource: Source | null;
   format: Format;
   jpegQuality: number;
@@ -398,14 +398,14 @@ export function runEsciScan(
           //   0x81 → flatbed (no ADF paper / no ADF present)
           //   0x01 → ADF has paper; duplex flag disambiguates simplex/duplex
           //   other → unknown (jam, mid-feed, panel-conflict). Reject loudly.
-          // session.forcedSource (LEGACY_FORCE_SOURCE) short-circuits the detection.
+          // session.forcedSource (ESCI_FORCE_SOURCE) short-circuits the detection.
           if (pkt.payload.length !== 16) {
             return fail(`expected 16-byte status in STATUS_2, got ${pkt.payload.length}`);
           }
           const statusByte = pkt.payload[0];
           if (session.forcedSource) {
             log.info(
-              `STATUS_2: LEGACY_FORCE_SOURCE override: ${session.forcedSource} ` +
+              `STATUS_2: ESCI_FORCE_SOURCE override: ${session.forcedSource} ` +
                 `(FS F byte 0x${statusByte.toString(16)} ignored)`,
             );
             detectedSource = session.forcedSource;
@@ -415,7 +415,7 @@ export function runEsciScan(
               return fail(
                 `Unrecognised FS F status 0x${result.byte.toString(16).padStart(2, "0")} ` +
                   `— please file a compatibility issue with LOG_LEVEL=debug output ` +
-                  `(see CONTRIBUTING.md). Workaround: set LEGACY_FORCE_SOURCE.`,
+                  `(see CONTRIBUTING.md). Workaround: set ESCI_FORCE_SOURCE.`,
               );
             }
             detectedSource = result.source;
