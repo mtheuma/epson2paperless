@@ -156,6 +156,7 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
         pageSide: "front" as const,
         zeroImgRetries: 0,
         postScanCycle: 1 as const,
+        imageChunks: [] as Buffer[],
       };
       const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
       expect("next" in result && result.next).toBe("INIT_POLL_FS_Y");
@@ -177,6 +178,7 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
         pageSide: "front" as const,
         zeroImgRetries: 0,
         postScanCycle: 1 as const,
+        imageChunks: [] as Buffer[],
       };
       const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
       expect("next" in result && result.next).toBe("MODE_SWITCH");
@@ -209,6 +211,7 @@ describe("esci2Graph T24 — twoPhaseRead (INIT1 TPR)", () => {
         pageSide: "front" as const,
         zeroImgRetries: 0,
         postScanCycle: 1 as const,
+        imageChunks: [] as Buffer[],
       };
       // Build a header with cmd=CAPA (wrong for INFO state)
       const badPayload = Buffer.from("CAPAx0000010" + " ".repeat(52), "ascii");
@@ -230,6 +233,7 @@ describe("esci2Graph T24 — twoPhaseRead (INIT1 TPR)", () => {
         pageSide: "front" as const,
         zeroImgRetries: 0,
         postScanCycle: 1 as const,
+        imageChunks: [] as Buffer[],
       };
       const payload = Buffer.from("INFOx0000020" + " ".repeat(52), "ascii");
       const result = state.decide(ctx, { type: 0xa000, payload });
@@ -334,6 +338,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
         pageSide: "front" as const,
         zeroImgRetries: 0,
         postScanCycle: 1 as const,
+        imageChunks: [] as Buffer[],
       };
       // Header declaring 12 bytes of data
       const payload = Buffer.from("STATx000000C" + " ".repeat(52), "ascii");
@@ -355,6 +360,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
         pageSide: "front" as const,
         zeroImgRetries: 0,
         postScanCycle: 1 as const,
+        imageChunks: [] as Buffer[],
       };
       const payload = Buffer.from("STATx0000000" + " ".repeat(52), "ascii");
       const result = state.decide(ctx, { type: 0xa000, payload });
@@ -415,6 +421,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
         pageSide: "front" as const,
         zeroImgRetries: 0,
         postScanCycle: 1 as const,
+        imageChunks: [] as Buffer[],
       };
       const result = state.decide(ctx, { type: 0xa000, payload: Buffer.from("bad") });
       expect("error" in result).toBe(true);
@@ -434,6 +441,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
         pageSide: "front" as const,
         zeroImgRetries: 0,
         postScanCycle: 1 as const,
+        imageChunks: [] as Buffer[],
       };
       // 12-byte header + #ERR token
       const payload = Buffer.from("IMG x0000020#ERRADF ", "ascii");
@@ -455,6 +463,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
         pageSide: "front" as const,
         zeroImgRetries: 0,
         postScanCycle: 1 as const,
+        imageChunks: [] as Buffer[],
       };
       // Header: length=0x20=32, tokens: #pst, typ=IMGF (front), no #pen
       const payload = Buffer.from("IMG x0000020#pst#typIMGF", "ascii");
@@ -479,6 +488,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
         pageSide: "front" as const,
         zeroImgRetries: 0,
         postScanCycle: 1 as const,
+        imageChunks: [] as Buffer[],
       };
       const payload = Buffer.from("IMG x0000010#typIMGB", "ascii");
       state.decide(ctx, { type: 0xa000, payload });
@@ -499,6 +509,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
         pageSide: "front" as const,
         zeroImgRetries: 0,
         postScanCycle: 1 as const,
+        imageChunks: [] as Buffer[],
       };
       const payload = Buffer.from("IMG x0000010#pen#typIMGF", "ascii");
       state.decide(ctx, { type: 0xa000, payload });
@@ -519,6 +530,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
         pageSide: "front" as const,
         zeroImgRetries: 0,
         postScanCycle: 1 as const,
+        imageChunks: [] as Buffer[],
       };
       const payload = Buffer.from("IMG x0000010#pen#lftd000", "ascii");
       state.decide(ctx, { type: 0xa000, payload });
@@ -539,6 +551,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
         pageSide: "front" as const,
         zeroImgRetries: 0,
         postScanCycle: 1 as const,
+        imageChunks: [] as Buffer[],
       };
       // Flatbed emits #pen but never #lft; source=flatbed must resolve "last".
       const payload = Buffer.from("IMG x0000010#pen#typIMGF", "ascii");
@@ -548,23 +561,24 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
   });
 });
 
-describe("esci2Graph INIT_POLL_STAT source detection", () => {
-  function makeCtx(
-    overrides: Partial<import("./graph.js").Esci2Ctx> = {},
-  ): import("./graph.js").Esci2Ctx {
-    return {
-      duplex: false,
-      source: "adf",
-      initPollIteration: 0,
-      imgChunkSize: 0,
-      pageEndKind: "none",
-      pageSide: "front",
-      zeroImgRetries: 0,
-      postScanCycle: 1,
-      ...overrides,
-    };
-  }
+function makeCtx(
+  overrides: Partial<import("./graph.js").Esci2Ctx> = {},
+): import("./graph.js").Esci2Ctx {
+  return {
+    duplex: false,
+    source: "adf",
+    initPollIteration: 0,
+    imgChunkSize: 0,
+    pageEndKind: "none",
+    pageSide: "front",
+    zeroImgRetries: 0,
+    postScanCycle: 1,
+    imageChunks: [],
+    ...overrides,
+  };
+}
 
+describe("esci2Graph INIT_POLL_STAT source detection", () => {
   it("detects source=adf when STAT header length is 0 on iteration 0", () => {
     const state = esci2Graph.states.INIT_POLL_STAT;
     expect(state.kind).toBe("decision");
@@ -628,5 +642,190 @@ describe("esci2Graph INIT_POLL_STAT source detection", () => {
     const payload = Buffer.from("STATx000000c#---#---#---", "ascii");
     const result = state.decide(ctx, { type: 0xa000, payload });
     expect("next" in result && result.next).toBe("INIT_POLL_STAT_DRAIN");
+  });
+});
+
+describe("esci2Graph T25 — IMG_DATA decision", () => {
+  it("IMG_DATA is a decision state", () => {
+    expect(esci2Graph.states.IMG_DATA.kind).toBe("decision");
+  });
+
+  it("IMG_DATA accumulates chunk and advances to IMG_META on pageEndKind=none", () => {
+    const state = esci2Graph.states.IMG_DATA;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ imgChunkSize: 3, pageEndKind: "none", imageChunks: [] });
+    const result = state.decide(ctx, { type: 0xa000, payload: Buffer.from([0xaa, 0xbb, 0xcc]) });
+    if ("error" in result) throw result.error;
+    expect(result.next).toBe("IMG_META");
+    expect(result.flushPage).toBeUndefined();
+    expect(ctx.imageChunks.length).toBe(1);
+    expect(ctx.imageChunks[0]).toEqual(Buffer.from([0xaa, 0xbb, 0xcc]));
+  });
+
+  it("IMG_DATA emits flushPage with side=front when pageEndKind=last", () => {
+    const state = esci2Graph.states.IMG_DATA;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({
+      imgChunkSize: 3,
+      pageEndKind: "last",
+      pageSide: "front",
+      imageChunks: [],
+    });
+    const result = state.decide(ctx, { type: 0xa000, payload: Buffer.from([0xaa, 0xbb, 0xcc]) });
+    if ("error" in result) throw result.error;
+    expect(result.next).toBe("FIN_AFTER_IMG");
+    expect(result.flushPage?.side).toBe("front");
+    expect(ctx.imageChunks).toEqual([]); // reset for next page
+  });
+
+  it("IMG_DATA emits flushPage with side=back when pageEndKind=last and pageSide=back", () => {
+    const state = esci2Graph.states.IMG_DATA;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({
+      imgChunkSize: 3,
+      pageEndKind: "last",
+      pageSide: "back",
+      imageChunks: [],
+    });
+    const result = state.decide(ctx, { type: 0xa000, payload: Buffer.from([0xaa, 0xbb, 0xcc]) });
+    if ("error" in result) throw result.error;
+    expect(result.next).toBe("FIN_AFTER_IMG");
+    expect(result.flushPage?.side).toBe("back");
+    expect(ctx.imageChunks).toEqual([]);
+  });
+
+  it("IMG_DATA flushPage encode concatenates all accumulated chunks", async () => {
+    const state = esci2Graph.states.IMG_DATA;
+    if (state.kind !== "decision") return;
+    const prior = Buffer.from([0x01, 0x02]);
+    const ctx = makeCtx({
+      imgChunkSize: 2,
+      pageEndKind: "last",
+      pageSide: "front",
+      imageChunks: [prior],
+    });
+    const result = state.decide(ctx, { type: 0xa000, payload: Buffer.from([0x03, 0x04]) });
+    if ("error" in result) throw result.error;
+    expect(result.flushPage).toBeDefined();
+    const encoded = await result.flushPage!.encode();
+    expect(encoded).toEqual(Buffer.from([0x01, 0x02, 0x03, 0x04]));
+  });
+
+  it("IMG_DATA emits flushPage on pageEndKind=more and loops to IMG_META", () => {
+    const state = esci2Graph.states.IMG_DATA;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({
+      imgChunkSize: 2,
+      pageEndKind: "more",
+      pageSide: "front",
+      imageChunks: [],
+    });
+    const result = state.decide(ctx, { type: 0xa000, payload: Buffer.from([0x11, 0x22]) });
+    if ("error" in result) throw result.error;
+    expect(result.next).toBe("IMG_META");
+    expect(result.flushPage).toBeDefined();
+    expect(result.flushPage?.side).toBe("front");
+    expect(ctx.imageChunks).toEqual([]);
+  });
+
+  it("IMG_DATA validates payload length matches imgChunkSize", () => {
+    const state = esci2Graph.states.IMG_DATA;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ imgChunkSize: 5, pageEndKind: "none", imageChunks: [] });
+    const result = state.decide(ctx, { type: 0xa000, payload: Buffer.from([0xaa, 0xbb]) });
+    expect("error" in result).toBe(true);
+  });
+});
+
+describe("esci2Graph T25 — IMG_META zero-length chunk handling", () => {
+  it("IMG_META zero-chunk + pageEndKind=last + accumulated → emits flushPage and goes to FIN_AFTER_IMG", async () => {
+    const state = esci2Graph.states.IMG_META;
+    if (state.kind !== "decision") return;
+    const prior = Buffer.from([0xde, 0xad]);
+    const ctx = makeCtx({ source: "flatbed", imageChunks: [prior] });
+    // length=0, #pen token, flatbed → pageEndKind=last
+    const payload = Buffer.from("IMG x0000000#pen#typIMGF", "ascii");
+    const result = state.decide(ctx, { type: 0xa000, payload });
+    if ("error" in result) throw result.error;
+    expect(result.next).toBe("FIN_AFTER_IMG");
+    expect(result.flushPage).toBeDefined();
+    expect(result.flushPage?.side).toBe("front");
+    const encoded = await result.flushPage!.encode();
+    expect(encoded).toEqual(prior);
+    expect(ctx.imageChunks).toEqual([]);
+  });
+
+  it("IMG_META zero-chunk + pageEndKind=last + empty accumulated → no flushPage, goes to FIN_AFTER_IMG", () => {
+    const state = esci2Graph.states.IMG_META;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ source: "flatbed", imageChunks: [] });
+    const payload = Buffer.from("IMG x0000000#pen#typIMGF", "ascii");
+    const result = state.decide(ctx, { type: 0xa000, payload });
+    if ("error" in result) throw result.error;
+    expect(result.next).toBe("FIN_AFTER_IMG");
+    expect(result.flushPage).toBeUndefined();
+  });
+
+  it("IMG_META zero-chunk + pageEndKind=more + accumulated → emits flushPage and loops to IMG_META", async () => {
+    const state = esci2Graph.states.IMG_META;
+    if (state.kind !== "decision") return;
+    const prior = Buffer.from([0xbe, 0xef]);
+    const ctx = makeCtx({ source: "adf", imageChunks: [prior] });
+    // ADF + #pen but no #lft → pageEndKind=more
+    const payload = Buffer.from("IMG x0000000#pen#typIMGF", "ascii");
+    const result = state.decide(ctx, { type: 0xa000, payload });
+    if ("error" in result) throw result.error;
+    expect(result.next).toBe("IMG_META");
+    expect(result.flushPage).toBeDefined();
+    expect(result.flushPage?.side).toBe("front");
+    const encoded = await result.flushPage!.encode();
+    expect(encoded).toEqual(prior);
+    expect(ctx.imageChunks).toEqual([]);
+  });
+
+  it("IMG_META zero-chunk + pageEndKind=more + empty accumulated → no flushPage, loops to IMG_META", () => {
+    const state = esci2Graph.states.IMG_META;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ source: "adf", imageChunks: [] });
+    const payload = Buffer.from("IMG x0000000#pen#typIMGF", "ascii");
+    const result = state.decide(ctx, { type: 0xa000, payload });
+    if ("error" in result) throw result.error;
+    expect(result.next).toBe("IMG_META");
+    expect(result.flushPage).toBeUndefined();
+  });
+
+  it("IMG_META zero-chunk + no pen (pageEndKind=none) increments zeroImgRetries and loops", () => {
+    const state = esci2Graph.states.IMG_META;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ source: "adf", zeroImgRetries: 0, imageChunks: [] });
+    // length=0, no #pen
+    const payload = Buffer.from("IMG x0000000#typIMGF    ", "ascii");
+    const result = state.decide(ctx, { type: 0xa000, payload });
+    if ("error" in result) throw result.error;
+    expect(result.next).toBe("IMG_META");
+    expect(result.flushPage).toBeUndefined();
+    expect(ctx.zeroImgRetries).toBe(1);
+  });
+
+  it("IMG_META zero-chunk + no pen + retries exceeded → errors", () => {
+    const state = esci2Graph.states.IMG_META;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ source: "adf", zeroImgRetries: 2000, imageChunks: [] });
+    const payload = Buffer.from("IMG x0000000#typIMGF    ", "ascii");
+    const result = state.decide(ctx, { type: 0xa000, payload });
+    expect("error" in result).toBe(true);
+  });
+
+  it("IMG_META non-zero chunk resets zeroImgRetries and advances to IMG_DATA", () => {
+    const state = esci2Graph.states.IMG_META;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ source: "adf", zeroImgRetries: 5, imageChunks: [] });
+    // length=0x10=16, no #pen → advance to IMG_DATA
+    const payload = Buffer.from("IMG x0000010#typIMGF    ", "ascii");
+    const result = state.decide(ctx, { type: 0xa000, payload });
+    if ("error" in result) throw result.error;
+    expect(result.next).toBe("IMG_DATA");
+    expect(ctx.zeroImgRetries).toBe(0);
+    expect(ctx.imgChunkSize).toBe(16);
   });
 });

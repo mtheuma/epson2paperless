@@ -41,12 +41,16 @@ export interface Esci2Ctx {
   pageSide: "front" | "back";
   zeroImgRetries: number;
   postScanCycle: 1 | 2;
+  /** Accumulated image-chunk bytes for the current page. Reset on each page flush. */
+  imageChunks: Buffer[];
 }
 
 export const ESCI2_TIMEOUT_MS = 30_000;
 export const ESCI2_REPLY_SIZE = 64;
 const LEGACY_REPLY_SIZE = 1;
 const INIT_POLL_ITERATIONS = 3;
+// scanner.ts:120: 2000 zero-length retries gives ~40s of headroom for slow scan starts.
+const MAX_ZERO_IMG_RETRIES = 2000;
 
 /**
  * Async-event dispatch bytes (type 0x9000 body[0]).
@@ -474,7 +478,9 @@ g.state("TRDT", {
 // IMG_META: decision on IMG reply header.
 // - Parses header; errors on unparseable or #ERR* token.
 // - Updates ctx.imgChunkSize, ctx.pageSide, ctx.pageEndKind.
-// - Sends pure-read for the declared image chunk; advances to IMG_DATA.
+// - Zero-length chunk with page-end: dispatches page-end without going through IMG_DATA.
+// - Zero-length chunk with no page-end: zero-retry path (up to MAX_ZERO_IMG_RETRIES).
+// - Non-zero chunk size: resets zeroImgRetries, sends pure-read, advances to IMG_DATA.
 //
 // pageEndKind logic (mirrors scanner.ts:835-843):
 //   On flatbed, any #pen is terminal (glass is inherently single-page; #lft
@@ -514,9 +520,126 @@ g.state(
     } else {
       ctx.pageEndKind = "none";
     }
+
+    // Zero-length chunk with page-end token: dispatch page-end without entering IMG_DATA.
+    // Mirrors scanner.ts:849-853 (dispatchPageEnd("zero-length + pen")).
+    if (ctx.imgChunkSize === 0 && ctx.pageEndKind !== "none") {
+      const accumulated = ctx.imageChunks;
+      ctx.imageChunks = [];
+      if (ctx.pageEndKind === "last") {
+        if (accumulated.length > 0) {
+          return {
+            next: "FIN_AFTER_IMG",
+            send: buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
+            flushPage: {
+              side: ctx.pageSide,
+              encode: () => Promise.resolve(Buffer.concat(accumulated)),
+            },
+          };
+        }
+        return {
+          next: "FIN_AFTER_IMG",
+          send: buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
+        };
+      }
+      // pageEndKind === "more"
+      if (accumulated.length > 0) {
+        return {
+          next: "IMG_META",
+          send: buildPassthruPacket(buildEsci2Command("IMG"), ESCI2_REPLY_SIZE),
+          flushPage: {
+            side: ctx.pageSide,
+            encode: () => Promise.resolve(Buffer.concat(accumulated)),
+          },
+        };
+      }
+      return {
+        next: "IMG_META",
+        send: buildPassthruPacket(buildEsci2Command("IMG"), ESCI2_REPLY_SIZE),
+      };
+    }
+
+    // Zero-length chunk with no page-end: printer has nothing yet, retry.
+    // Mirrors scanner.ts:854-867.
+    if (ctx.imgChunkSize === 0) {
+      if (ctx.zeroImgRetries >= MAX_ZERO_IMG_RETRIES) {
+        return {
+          error: new Error(`IMG_META: max ${MAX_ZERO_IMG_RETRIES} zero-length retries exceeded`),
+        };
+      }
+      ctx.zeroImgRetries += 1;
+      return {
+        next: "IMG_META",
+        send: buildPassthruPacket(buildEsci2Command("IMG"), ESCI2_REPLY_SIZE),
+      };
+    }
+
+    // Non-zero chunk size — advance to IMG_DATA.
+    ctx.zeroImgRetries = 0;
     return {
       next: "IMG_DATA",
       send: buildPurereadPacket(ctx.imgChunkSize),
+    };
+  }),
+);
+
+// IMG_DATA: decision on received image chunk.
+// - Validates chunk length against ctx.imgChunkSize.
+// - Accumulates chunk into ctx.imageChunks.
+// - pageEndKind=none: request next chunk metadata (loop).
+// - pageEndKind=more: flush page (flushPage barrier), request next page's metadata.
+// - pageEndKind=last: flush page (flushPage barrier), send FIN, advance to FIN_AFTER_IMG.
+//
+// Barrier ordering (spec §3.5): engine stages next+send, pauses, awaits encode(),
+// writes to temp dir, unpauses, then delivers the staged send to the wire.
+// Wire order: lastImgChunk-received → FIN-sent. The encode+write happen between
+// but produce no wire bytes, preserving replay test byte-equivalence.
+// Mirrors scanner.ts:875-895 (onImgData + dispatchPageEnd).
+g.state(
+  "IMG_DATA",
+  decision<Esci2Ctx>((ctx, packet) => {
+    if (packet.payload.length !== ctx.imgChunkSize) {
+      return {
+        error: new Error(
+          `IMG_DATA: expected ${ctx.imgChunkSize} bytes, got ${packet.payload.length}`,
+        ),
+      };
+    }
+
+    ctx.imageChunks.push(Buffer.from(packet.payload));
+
+    if (ctx.pageEndKind === "none") {
+      // Mid-stream — request the next chunk's metadata.
+      return {
+        next: "IMG_META",
+        send: buildPassthruPacket(buildEsci2Command("IMG"), ESCI2_REPLY_SIZE),
+      };
+    }
+
+    // Page boundary — assemble the page bytes and use the engine's flushPage barrier.
+    const accumulated = ctx.imageChunks;
+    ctx.imageChunks = []; // reset for next page
+
+    if (ctx.pageEndKind === "last") {
+      // Terminal — send FIN, advance to FIN_AFTER_IMG.
+      return {
+        next: "FIN_AFTER_IMG",
+        send: buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
+        flushPage: {
+          side: ctx.pageSide,
+          encode: () => Promise.resolve(Buffer.concat(accumulated)),
+        },
+      };
+    }
+
+    // pageEndKind === "more" — flush this page, request the next page's metadata.
+    return {
+      next: "IMG_META",
+      send: buildPassthruPacket(buildEsci2Command("IMG"), ESCI2_REPLY_SIZE),
+      flushPage: {
+        side: ctx.pageSide,
+        encode: () => Promise.resolve(Buffer.concat(accumulated)),
+      },
     };
   }),
 );
