@@ -38,9 +38,48 @@ export class FakeTlsSocket extends EventEmitter {
     this.onSecureConnect?.();
   }
 
-  /** Feed bytes as if the remote side sent them. */
+  private pendingChunks: Buffer[] = [];
+
+  /**
+   * Feed bytes as if the remote side sent them. If no `"data"` listener is
+   * attached yet, buffer the chunk and replay synchronously when one
+   * attaches via `on("data", ...)`. This matches real TCP/TLS socket
+   * behaviour where bytes received in the connecting state are buffered
+   * until the application starts reading. Without this, tests that call
+   * `simulateConnect(); feed(...)` synchronously would drop the first
+   * packet because the engine's `transport.on("data", ...)` registration
+   * happens on the next microtask after `await transportFactory()`.
+   */
   feed(chunk: Buffer): void {
-    this.emit("data", chunk);
+    if (this.listenerCount("data") > 0) {
+      this.emit("data", chunk);
+    } else {
+      this.pendingChunks.push(chunk);
+    }
+  }
+
+  override on(event: string | symbol, listener: (...args: unknown[]) => void): this {
+    super.on(event, listener);
+    if (event === "data" && this.pendingChunks.length > 0) {
+      const chunks = this.pendingChunks;
+      this.pendingChunks = [];
+      // Defer the replay to the microtask queue. Two reasons:
+      //   1. The engine declares `let dispatching = false` AFTER
+      //      `transport.on("data", ...)` registers, so a synchronous
+      //      replay would call `tryDispatch()` while `dispatching` is
+      //      still in the temporal dead zone.
+      //   2. We need the replay to run BEFORE the test's next
+      //      `await new Promise(r => setImmediate(r))` resolves —
+      //      otherwise live feeds on the next iteration arrive in
+      //      `recvChunks` ahead of the buffered chunks, scrambling
+      //      packet order. queueMicrotask runs in the microtask phase
+      //      (immediately after the engine's setup body completes,
+      //      before any setImmediate fires), which preserves order.
+      queueMicrotask(() => {
+        for (const chunk of chunks) this.emit("data", chunk);
+      });
+    }
+    return this;
   }
 
   write(data: Buffer): boolean {
