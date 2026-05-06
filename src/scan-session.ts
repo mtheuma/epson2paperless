@@ -1,5 +1,6 @@
 // src/scan-session.ts
 
+import { IS_HEADER_SIZE } from "./protocol.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 
 // =============================================================================
@@ -157,7 +158,7 @@ export function createGraph<Ctx>(initial: string, timeoutMs: number): GraphBuild
         timeoutMs,
         globalAbortHandlers: abortHandlers,
         globalIgnoreFilter: ignoreFilter,
-      }) as Graph<Ctx>;
+      });
     },
   };
 }
@@ -194,8 +195,211 @@ export type RunScanSessionResult<Ctx> =
   | { ok: false; reason: Error; finalCtx?: Ctx };
 
 export async function runScanSession<Ctx>(
-  _opts: RunScanSessionOpts<Ctx>,
+  opts: RunScanSessionOpts<Ctx>,
 ): Promise<RunScanSessionResult<Ctx>> {
-  // Implemented in subsequent tasks.
-  throw new Error("runScanSession not yet implemented");
+  const { graph, initialCtx, transportFactory } = opts;
+  const ctx = { ...initialCtx }; // engine owns mutability
+
+  // Factory failures (TLS handshake, cert-fingerprint mismatch, plain TCP
+  // connect refusal) must surface as { ok: false, reason } to keep the
+  // engine's Result contract honest.
+  let transport: SessionTransport;
+  try {
+    transport = await transportFactory();
+  } catch (err) {
+    const reason = err instanceof Error ? err : new Error(String(err));
+    return { ok: false, reason, finalCtx: ctx };
+  }
+
+  let currentState = graph.initial;
+  // Set during a flushPage barrier (Task 16) — for now always false; the pump
+  // checks it preemptively so the wiring is in place when T16 lands.
+  const paused = false;
+  // errorReason is set in two places (transport.on("error") and the
+  // global-abort-handler path) and read in T16's flushPage error path.
+  let _errorReason: Error | null = null;
+
+  const recvChunks: Buffer[] = [];
+  let recvBytes = 0;
+
+  return new Promise<RunScanSessionResult<Ctx>>((resolve) => {
+    let settled = false;
+    const settle = (result: RunScanSessionResult<Ctx>) => {
+      if (settled) return; // idempotent — close handler may also call this
+      settled = true;
+      try {
+        transport.destroy();
+      } catch {
+        /* swallow — destroy may throw on already-closed sockets */
+      }
+      resolve(result);
+    };
+
+    transport.on("error", (err) => {
+      _errorReason = err;
+      settle({ ok: false, reason: err, finalCtx: ctx });
+    });
+
+    transport.on("close", () => {
+      if (settled) return;
+      if (currentState === "DONE") {
+        settle({ ok: true, finalCtx: ctx });
+      } else {
+        settle({
+          ok: false,
+          reason: new Error(`Transport closed in state ${currentState}`),
+          finalCtx: ctx,
+        });
+      }
+    });
+
+    transport.on("data", (chunk: Buffer) => {
+      recvChunks.push(chunk);
+      recvBytes += chunk.length;
+      tryDispatch();
+    });
+
+    /**
+     * Resolves a transition `send` field — Buffer | function | array of
+     * either — against the current ctx into a flat array of byte buffers
+     * to write in order. Empty array means "no writes."
+     */
+    function resolveSend(send: SendSpec<Ctx> | SendSpec<Ctx>[] | Buffer | undefined): Buffer[] {
+      if (!send) return [];
+      const items = Array.isArray(send) ? send : [send];
+      return items.map((s) => (typeof s === "function" ? s(ctx) : s));
+    }
+
+    function writeAll(buffers: Buffer[]): void {
+      for (const buf of buffers) transport.write(buf);
+    }
+
+    let dispatching = false;
+
+    /**
+     * Async pump loop. Reentrancy is prevented by the `dispatching` guard:
+     * concurrent calls (from `'data'` events that fire while the loop is
+     * awaiting an applyTransition) short-circuit; the active loop drains
+     * any chunks they buffered on its next iteration.
+     *
+     * The loop checks `paused` at every step — set during a flushPage
+     * barrier (Task 16) — and breaks out so multiple buffered packets in
+     * a single TCP chunk don't dispatch concurrently with a flush.
+     */
+    function tryDispatch(): void {
+      if (dispatching) return;
+      dispatching = true;
+      try {
+        while (true) {
+          if (paused) return;
+          const packet = tryParseHead();
+          if (!packet) return;
+          dispatchPacket(packet);
+          if (paused) return;
+        }
+      } finally {
+        dispatching = false;
+      }
+    }
+
+    /**
+     * Parse one IS packet at the head of recvChunks if a complete one is
+     * present. Reads payloadSize directly from header bytes 6-9 (rather
+     * than calling parseIsPacket on a partial buffer, which would return
+     * null for any packet whose payload exceeds the peek window).
+     */
+    function tryParseHead(): { type: number; payload: Buffer; totalSize: number } | null {
+      if (recvBytes < IS_HEADER_SIZE) return null;
+
+      // Ensure first chunk has at least IS_HEADER_SIZE bytes so we can read
+      // the header fields without re-concatenating each time.
+      if (recvChunks[0].length < IS_HEADER_SIZE) {
+        const merged = Buffer.concat(recvChunks, recvBytes);
+        recvChunks.length = 0;
+        recvChunks.push(merged);
+      }
+
+      const head = recvChunks[0];
+      // Validate magic
+      if (head[0] !== 0x49 /* 'I' */ || head[1] !== 0x53 /* 'S' */) {
+        settle({
+          ok: false,
+          reason: new Error(
+            `Invalid IS magic at packet head: 0x${head[0]?.toString(16)} 0x${head[1]?.toString(16)}`,
+          ),
+          finalCtx: ctx,
+        });
+        return null;
+      }
+      const type = head.readUInt16BE(2);
+      const payloadSize = head.readUInt32BE(6);
+      const totalSize = IS_HEADER_SIZE + payloadSize;
+
+      if (recvBytes < totalSize) return null; // need more bytes
+
+      // We have the full packet — materialize and peel
+      const merged = recvChunks.length === 1 ? recvChunks[0] : Buffer.concat(recvChunks, recvBytes);
+      recvChunks.length = 0;
+      const payload = merged.subarray(IS_HEADER_SIZE, totalSize);
+      const remainder = merged.subarray(totalSize);
+      recvBytes = remainder.length;
+      if (remainder.length > 0) recvChunks.push(remainder);
+      return { type, payload, totalSize };
+    }
+
+    function dispatchPacket(packet: { type: number; payload: Buffer }): void {
+      // Step 1: globalIgnoreFilter — silently discard packets the protocol
+      // wants to filter pre-dispatch (e.g. ESC/I-2 empty 0xa000 envelopes).
+      if (graph.globalIgnoreFilter && graph.globalIgnoreFilter(packet)) {
+        return;
+      }
+
+      // Step 2: globalAbortHandlers — protocol meta-events that preempt
+      // state-specific dispatch (e.g. ESC/I-2 0x9000 fatal/cancel/info).
+      // Returns Error → fail; null → continue (info-only event).
+      const handler = graph.globalAbortHandlers?.[packet.type];
+      if (handler) {
+        const err = handler(ctx, packet);
+        if (err) {
+          _errorReason = err;
+          settle({ ok: false, reason: err, finalCtx: ctx });
+          return;
+        }
+        return; // null → handler consumed the packet, no state change
+      }
+
+      // Step 3: state-specific dispatch
+      const state = graph.states[currentState];
+      if (state.kind === "static") {
+        const transition = state.on[packet.type];
+        if (!transition) {
+          settle({
+            ok: false,
+            reason: new Error(
+              `Unexpected packet type 0x${packet.type.toString(16).padStart(4, "0")} in state ${currentState}`,
+            ),
+            finalCtx: ctx,
+          });
+          return;
+        }
+        if (transition.validate && !transition.validate(packet.payload)) {
+          settle({
+            ok: false,
+            reason: new Error(
+              `Validation failed in state ${currentState} for packet type 0x${packet.type.toString(16).padStart(4, "0")}`,
+            ),
+            finalCtx: ctx,
+          });
+          return;
+        }
+        // Apply send (multi-write capable) + next. flushPage handling lands in T16.
+        writeAll(resolveSend(transition.send));
+        currentState = transition.next;
+        if (currentState === "DONE") {
+          transport.end(); // triggers close → resolve ok in close handler
+        }
+      }
+      // decision branch added in T13
+    }
+  });
 }
