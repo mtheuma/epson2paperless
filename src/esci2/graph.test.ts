@@ -155,7 +155,6 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
         pageEndKind: "none" as const,
         pageSide: "front" as const,
         zeroImgRetries: 0,
-        postScanCycle: 1 as const,
         imageChunks: [] as Buffer[],
       };
       const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
@@ -177,7 +176,6 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
         pageEndKind: "none" as const,
         pageSide: "front" as const,
         zeroImgRetries: 0,
-        postScanCycle: 1 as const,
         imageChunks: [] as Buffer[],
       };
       const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
@@ -210,7 +208,6 @@ describe("esci2Graph T24 — twoPhaseRead (INIT1 TPR)", () => {
         pageEndKind: "none" as const,
         pageSide: "front" as const,
         zeroImgRetries: 0,
-        postScanCycle: 1 as const,
         imageChunks: [] as Buffer[],
       };
       // Build a header with cmd=CAPA (wrong for INFO state)
@@ -232,7 +229,6 @@ describe("esci2Graph T24 — twoPhaseRead (INIT1 TPR)", () => {
         pageEndKind: "none" as const,
         pageSide: "front" as const,
         zeroImgRetries: 0,
-        postScanCycle: 1 as const,
         imageChunks: [] as Buffer[],
       };
       const payload = Buffer.from("INFOx0000020" + " ".repeat(52), "ascii");
@@ -337,7 +333,6 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
         pageEndKind: "none" as const,
         pageSide: "front" as const,
         zeroImgRetries: 0,
-        postScanCycle: 1 as const,
         imageChunks: [] as Buffer[],
       };
       // Header declaring 12 bytes of data
@@ -359,7 +354,6 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
         pageEndKind: "none" as const,
         pageSide: "front" as const,
         zeroImgRetries: 0,
-        postScanCycle: 1 as const,
         imageChunks: [] as Buffer[],
       };
       const payload = Buffer.from("STATx0000000" + " ".repeat(52), "ascii");
@@ -372,10 +366,16 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
 
   it("POST_MODE_STAT_DRAIN advances to PARA with para send array", () => {
     const state = esci2Graph.states.POST_MODE_STAT_DRAIN;
-    expect(state.kind).toBe("static");
-    if (state.kind === "static") {
-      expect(state.on[0xa000]?.next).toBe("PARA");
-      expect(Array.isArray(state.on[0xa000]?.send)).toBe(true);
+    expect(state.kind).toBe("decision");
+    if (state.kind === "decision") {
+      const result = state.decide(makeCtx({ source: "adf" }), {
+        type: 0xa000,
+        payload: Buffer.alloc(0),
+      });
+      expect("next" in result && result.next === "PARA").toBe(true);
+      if ("next" in result) {
+        expect(Array.isArray(result.send)).toBe(true);
+      }
     }
   });
 
@@ -420,7 +420,6 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
         pageEndKind: "none" as const,
         pageSide: "front" as const,
         zeroImgRetries: 0,
-        postScanCycle: 1 as const,
         imageChunks: [] as Buffer[],
       };
       const result = state.decide(ctx, { type: 0xa000, payload: Buffer.from("bad") });
@@ -440,7 +439,6 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
         pageEndKind: "none" as const,
         pageSide: "front" as const,
         zeroImgRetries: 0,
-        postScanCycle: 1 as const,
         imageChunks: [] as Buffer[],
       };
       // 12-byte header + #ERR token
@@ -462,7 +460,6 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
         pageEndKind: "none" as const,
         pageSide: "front" as const,
         zeroImgRetries: 0,
-        postScanCycle: 1 as const,
         imageChunks: [] as Buffer[],
       };
       // Header: length=0x20=32, tokens: #pst, typ=IMGF (front), no #pen
@@ -487,7 +484,6 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
         pageEndKind: "none" as const,
         pageSide: "front" as const,
         zeroImgRetries: 0,
-        postScanCycle: 1 as const,
         imageChunks: [] as Buffer[],
       };
       const payload = Buffer.from("IMG x0000010#typIMGB", "ascii");
@@ -508,7 +504,6 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
         pageEndKind: "none" as const,
         pageSide: "front" as const,
         zeroImgRetries: 0,
-        postScanCycle: 1 as const,
         imageChunks: [] as Buffer[],
       };
       const payload = Buffer.from("IMG x0000010#pen#typIMGF", "ascii");
@@ -529,7 +524,6 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
         pageEndKind: "none" as const,
         pageSide: "front" as const,
         zeroImgRetries: 0,
-        postScanCycle: 1 as const,
         imageChunks: [] as Buffer[],
       };
       const payload = Buffer.from("IMG x0000010#pen#lftd000", "ascii");
@@ -550,7 +544,6 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
         pageEndKind: "none" as const,
         pageSide: "front" as const,
         zeroImgRetries: 0,
-        postScanCycle: 1 as const,
         imageChunks: [] as Buffer[],
       };
       // Flatbed emits #pen but never #lft; source=flatbed must resolve "last".
@@ -572,7 +565,6 @@ function makeCtx(
     pageEndKind: "none",
     pageSide: "front",
     zeroImgRetries: 0,
-    postScanCycle: 1,
     imageChunks: [],
     ...overrides,
   };

@@ -1,7 +1,6 @@
 import tls from "node:tls";
 import fs from "node:fs";
 import os from "node:os";
-import path from "node:path";
 import {
   runScanSession,
   type SessionTransport,
@@ -122,14 +121,13 @@ export async function runEsci2Scan(
   session: ScanSession,
   socketFactory: TlsSocketFactory = tls.connect,
 ): Promise<void> {
-  // Eagerly validate the temp dir base before opening the TLS connection.
-  // Mirrors the pre-engine scanner's mkdtempSync at session start so a bad
-  // tempDir fails fast (rather than waiting until first flushPage's lazy
-  // creation, which a no-data scan would never reach).
+  // Validate the temp dir base before opening the TLS connection so a bad
+  // path fails fast (rather than waiting until first flushPage, which a
+  // no-data scan would never reach). One stat-level syscall — no probe
+  // directory is created.
   const tempBase = session.tempDir || os.tmpdir();
   try {
-    const probe = fs.mkdtempSync(path.join(tempBase, "epson2paperless-probe-"));
-    fs.rmSync(probe, { recursive: true, force: true });
+    fs.accessSync(tempBase, fs.constants.W_OK);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to create session temp dir under ${tempBase}: ${msg}`);
@@ -145,7 +143,6 @@ export async function runEsci2Scan(
       pageEndKind: "none",
       pageSide: "front",
       zeroImgRetries: 0,
-      postScanCycle: 1,
       imageChunks: [],
     },
     transportFactory: makeTlsTransportFactory(session, socketFactory),

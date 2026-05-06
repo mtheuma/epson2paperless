@@ -37,7 +37,6 @@ export interface Esci2Ctx {
   pageEndKind: "none" | "more" | "last";
   pageSide: "front" | "back";
   zeroImgRetries: number;
-  postScanCycle: 1 | 2;
   /** Accumulated image-chunk bytes for the current page. Reset on each page flush. */
   imageChunks: Buffer[];
 }
@@ -106,7 +105,7 @@ const g = createGraph<Esci2Ctx>("WELCOME", ESCI2_TIMEOUT_MS)
   });
 
 // =============================================================================
-// T22: WELCOME / LOCKING / INIT1 / INIT2 cycles
+// Welcome / Lock / Init capability cycles
 // =============================================================================
 
 // WELCOME: 0x8000 from printer → host sends LOCK → LOCKING
@@ -154,7 +153,7 @@ awaitAck(
 );
 
 // =============================================================================
-// T24: twoPhaseRead helper + INIT1/INIT2 TPR cycles + MODE_SWITCH / POST_MODE /
+// twoPhaseRead helper + INIT1/INIT2 capability reads (INFO / CAPA / RESA) +
 //      PARA / TRDT / IMG_META states
 // =============================================================================
 
@@ -236,7 +235,7 @@ twoPhaseRead(
 );
 
 // =============================================================================
-// T23: statThenDrain helper + INIT_POLL cycle
+// statThenDrain helper + INIT_POLL cycle (3 iterations of FS Y → STAT → drain → FIN)
 // =============================================================================
 
 /**
@@ -294,7 +293,7 @@ function statThenDrain(
 }
 
 // =============================================================================
-// T26: FIN_AFTER_IMG decision + POSTSCAN drain cycles ×2
+// FIN_AFTER_IMG decision (flatbed skips POSTSCAN) + POSTSCAN drain cycles ×2
 // =============================================================================
 
 // FIN_AFTER_IMG: decision on receipt of FIN reply after last image chunk.
@@ -302,7 +301,6 @@ function statThenDrain(
 //   onEnter sends the unlock packet). Verified by the 2026-04-24 flatbed Frida
 //   fixture (last 5 sends: @IMG | @IMG | @FIN | UNLOCK — no POSTSCAN in between).
 // - ADF: start POSTSCAN drain cycle 1 by sending FS Y.
-// Mirrors scanner.ts:897-915 (onFinAfterImg).
 g.state(
   "FIN_AFTER_IMG",
   decision<Esci2Ctx>((ctx, _packet) => {
@@ -319,7 +317,6 @@ g.state(
 );
 
 // POSTSCAN_FS_Y_1: receives FS Y ACK (0xa000, payload[0]=0x06); sends STAT.
-// Mirrors scanner.ts:921-934 (onPostscanFsY, cycle=1).
 g.state("POSTSCAN_FS_Y_1", {
   on: {
     0xa000: {
@@ -332,7 +329,6 @@ g.state("POSTSCAN_FS_Y_1", {
 
 // POSTSCAN cycle 1: POSTSCAN_1_STAT → POSTSCAN_1_STAT_DRAIN? → POSTSCAN_1_FIN → POSTSCAN_FS_Y_2
 // POSTSCAN_1_FIN sends FS Y to start cycle 2.
-// Mirrors scanner.ts:937-975 (onPostscanStat / onPostscanDrain / onPostscanFin, cycle=1).
 statThenDrain(
   g,
   "POSTSCAN_1",
@@ -341,7 +337,6 @@ statThenDrain(
 );
 
 // POSTSCAN_FS_Y_2: receives FS Y ACK (0xa000, payload[0]=0x06); sends STAT.
-// Mirrors scanner.ts:921-934 (onPostscanFsY, cycle=2).
 g.state("POSTSCAN_FS_Y_2", {
   on: {
     0xa000: {
@@ -354,11 +349,10 @@ g.state("POSTSCAN_FS_Y_2", {
 
 // POSTSCAN cycle 2: POSTSCAN_2_STAT → POSTSCAN_2_STAT_DRAIN? → POSTSCAN_2_FIN → UNLOCKING
 // POSTSCAN_2_FIN has no further send — UNLOCKING's onEnter sends the unlock packet.
-// Mirrors scanner.ts:937-975 (onPostscanStat / onPostscanDrain / onPostscanFin, cycle=2).
 statThenDrain(g, "POSTSCAN_2", "UNLOCKING");
 
 // =============================================================================
-// T27: UNLOCKING state with onEnter sending unlock packet
+// UNLOCKING state — onEnter sends unlock packet, awaits 0xa101 ack → DONE
 // =============================================================================
 
 // UNLOCKING: static state that sends the unlock packet on entry and awaits 0xa101 ack.
@@ -378,7 +372,6 @@ g.state("UNLOCKING", {
 // Inlined rather than using statThenDrain because INIT_POLL_FIN is a decision
 // state that does the loop-back check on the same 0xa000 packet that completes
 // the FIN exchange, rather than a plain static transition.
-// Mirrors scanner.ts onInitFsY / onInitStat / onInitStatDrain / onInitFin.
 
 // INIT_POLL_FS_Y: receives 0xa000 (FS Y ACK, payload[0]=0x06); sends STAT.
 g.state("INIT_POLL_FS_Y", {
@@ -459,14 +452,14 @@ g.state(
 );
 
 // =============================================================================
-// T24 (continued): MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_META states
+// MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_META states
 // =============================================================================
 
-// Helper: build the PARA header + body send pair, resolving source + duplex from ctx.
-// Called both in POST_MODE_STAT's decision (skip-drain branch) and in the
-// POST_MODE_STAT_DRAIN static transition (drain branch). Each call computes
-// paraPayload once per thunk invocation; the cost is negligible.
-function buildParaSend(ctx: Esci2Ctx): [Buffer, Buffer] {
+// Builds the PARA header + body send pair, resolving source + duplex from ctx.
+// Called once per dispatch in POST_MODE_STAT and POST_MODE_STAT_DRAIN — each
+// site is now a decision so the result is computed once and embedded as a
+// concrete Buffer[] in the returned TransitionResult.send.
+function buildParaSend(ctx: Esci2Ctx): Buffer[] {
   const paraPayload = buildParaPayload({ source: ctx.source, duplex: ctx.duplex });
   return [
     buildPassthruPacket(buildParaHeader(paraPayload.length), 0),
@@ -492,7 +485,7 @@ g.state("MODE_SWITCH", {
 // scanner.ts onPostModeStat: same drain-or-skip logic; sendParaHeaderAndBody on both paths.
 g.state(
   "POST_MODE_STAT",
-  decision<Esci2Ctx>((_ctx, packet) => {
+  decision<Esci2Ctx>((ctx, packet) => {
     const header = parseEsci2ReplyHeader(packet.payload);
     if (header === null) {
       return { error: new Error("POST_MODE_STAT: unparseable reply header") };
@@ -503,23 +496,19 @@ g.state(
         send: buildPurereadPacket(header.length),
       };
     }
-    return {
-      next: "PARA",
-      send: [(ctx) => buildParaSend(ctx)[0], (ctx) => buildParaSend(ctx)[1]],
-    };
+    return { next: "PARA", send: buildParaSend(ctx) };
   }),
 );
 
 // POST_MODE_STAT_DRAIN: drains queued status bytes, then sends PARA header + body → PARA.
-// scanner.ts onPostModeStatDrain: calls sendParaHeaderAndBody().
-g.state("POST_MODE_STAT_DRAIN", {
-  on: {
-    0xa000: {
-      next: "PARA",
-      send: [(ctx) => buildParaSend(ctx)[0], (ctx) => buildParaSend(ctx)[1]],
-    },
-  },
-});
+// Decision (rather than static) so buildParaSend resolves once per dispatch.
+g.state(
+  "POST_MODE_STAT_DRAIN",
+  decision<Esci2Ctx>((ctx, _packet) => ({
+    next: "PARA",
+    send: buildParaSend(ctx),
+  })),
+);
 
 // PARA: validates printer's acceptance of parameters (#parOK), sends TRDT.
 // scanner.ts onPara: parses tokens, checks #parOK, sends TRDT.
@@ -594,7 +583,6 @@ g.state(
     }
 
     // Zero-length chunk with page-end token: dispatch page-end without entering IMG_DATA.
-    // Mirrors scanner.ts:849-853 (dispatchPageEnd("zero-length + pen")).
     if (ctx.imgChunkSize === 0 && ctx.pageEndKind !== "none") {
       const accumulated = ctx.imageChunks;
       ctx.imageChunks = [];
@@ -632,7 +620,6 @@ g.state(
     }
 
     // Zero-length chunk with no page-end: printer has nothing yet, retry.
-    // Mirrors scanner.ts:854-867.
     if (ctx.imgChunkSize === 0) {
       if (ctx.zeroImgRetries >= MAX_ZERO_IMG_RETRIES) {
         return {
@@ -666,7 +653,6 @@ g.state(
 // writes to temp dir, unpauses, then delivers the staged send to the wire.
 // Wire order: lastImgChunk-received → FIN-sent. The encode+write happen between
 // but produce no wire bytes, preserving replay test byte-equivalence.
-// Mirrors scanner.ts:875-895 (onImgData + dispatchPageEnd).
 g.state(
   "IMG_DATA",
   decision<Esci2Ctx>((ctx, packet) => {
@@ -678,7 +664,10 @@ g.state(
       };
     }
 
-    ctx.imageChunks.push(Buffer.from(packet.payload));
+    // Push the payload reference directly. The engine's recv pump materialises
+    // each IS packet into a fresh subarray (scan-session.ts:tryParseHead), so
+    // the underlying ArrayBuffer is not reused across packets — no copy needed.
+    ctx.imageChunks.push(packet.payload);
 
     if (ctx.pageEndKind === "none") {
       // Mid-stream — request the next chunk's metadata.
