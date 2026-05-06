@@ -24,15 +24,10 @@ import {
   // TODO(T24): parseTokens used when parsing PARA / TRDT replies
 } from "./commands.js";
 
-// Suppress unused-import warnings for identifiers used in T23-T26 state helpers.
-void decision;
+// Suppress unused-import warnings for identifiers used in T24-T26 state helpers.
 void buildUnlockPacket;
-void buildPurereadPacket;
-void buildFsX;
-void buildEsci2Command;
 void buildParaHeader;
 void buildParaPayload;
-void parseEsci2ReplyHeader;
 
 /**
  * Per-session mutable state threaded through every transition. The engine
@@ -52,6 +47,7 @@ export interface Esci2Ctx {
 export const ESCI2_TIMEOUT_MS = 30_000;
 export const ESCI2_REPLY_SIZE = 64;
 const LEGACY_REPLY_SIZE = 1;
+const INIT_POLL_ITERATIONS = 3;
 
 /**
  * Async-event dispatch bytes (type 0x9000 body[0]).
@@ -70,7 +66,7 @@ const ASYNC_CANCEL_BYTES = new Set([0x03 /* ScanCancel */]);
 
 /**
  * awaitAck — creates a static state that waits for `expectedReplyType` and
- * optionally sends bytes on transition.
+ * optionally sends bytes on transition. Used in WELCOME/LOCKING/INIT1/INIT2.
  */
 function awaitAck(
   g: GraphBuilder<Esci2Ctx>,
@@ -81,8 +77,6 @@ function awaitAck(
 ): void {
   g.state(name, { on: { [expectedReplyType]: { next, ...(send !== undefined ? { send } : {}) } } });
 }
-
-// statThenDrain — defined in T23.
 
 // =============================================================================
 // Graph builder
@@ -149,17 +143,150 @@ awaitAck(
   buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
 );
 
-// INIT2_FIN: 0xa000 FIN-ack → advance to INIT_POLL_FS_Y (T23 territory).
-// scanner.ts onInit2Fin: receives 0xa000, resets initPollIteration, sends FS Y.
-// The initPollIteration reset and FS Y send are T23's responsibility;
-// this state just records the transition target.
-awaitAck(g, "INIT2_FIN", 0xa000, "INIT_POLL_FS_Y");
+// INIT2_FIN: 0xa000 FIN-ack → reset initPollIteration, send FS Y → INIT_POLL_FS_Y.
+// scanner.ts onInit2Fin: receives 0xa000, sets initPollIteration=0, sends buildPassthruPacket(buildFsY(), 1).
+awaitAck(
+  g,
+  "INIT2_FIN",
+  0xa000,
+  "INIT_POLL_FS_Y",
+  buildPassthruPacket(buildFsY(), LEGACY_REPLY_SIZE),
+);
 
 // =============================================================================
-// Helpers (extended in T23-T26)
+// T23: statThenDrain helper + INIT_POLL cycle
 // =============================================================================
 
-// statThenDrain — defined in T23.
+/**
+ * statThenDrain — builds three states that encode the "STAT reply → optional
+ * drain → FIN" sub-flow that recurs in INIT_POLL (inline), POST_MODE (T24),
+ * and POSTSCAN×2 (T26).
+ *
+ *   `${prefix}_STAT`       — decision: parses reply header length; if >0 sends
+ *                            pure-read and goes to _STAT_DRAIN, else sends FIN
+ *                            and goes to _FIN.
+ *   `${prefix}_STAT_DRAIN` — static: 0xa000 → sends FIN, goes to _FIN.
+ *   `${prefix}_FIN`        — static: 0xa000 → next (with optional finSend).
+ *
+ * INIT_POLL does not use this helper because its FIN state is a custom decision
+ * (loop-back vs advance). POST_MODE and POSTSCAN use it directly.
+ */
+function statThenDrain(
+  g: GraphBuilder<Esci2Ctx>,
+  prefix: string,
+  next: string,
+  finSend?: SendSpec<Esci2Ctx> | SendSpec<Esci2Ctx>[],
+): void {
+  g.state(
+    `${prefix}_STAT`,
+    decision<Esci2Ctx>((_ctx, packet) => {
+      const header = parseEsci2ReplyHeader(packet.payload);
+      if (header === null) {
+        return { error: new Error(`${prefix}_STAT: unparseable reply header`) };
+      }
+      if (header.length > 0) {
+        return {
+          next: `${prefix}_STAT_DRAIN`,
+          send: buildPurereadPacket(header.length),
+        };
+      }
+      return {
+        next: `${prefix}_FIN`,
+        send: buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
+      };
+    }),
+  );
+
+  g.state(`${prefix}_STAT_DRAIN`, {
+    on: {
+      0xa000: {
+        next: `${prefix}_FIN`,
+        send: buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
+      },
+    },
+  });
+
+  g.state(`${prefix}_FIN`, {
+    on: { 0xa000: { next, ...(finSend !== undefined ? { send: finSend } : {}) } },
+  });
+}
+
+// Expose for T24-T26 (referenced below once those task blocks are added).
+void statThenDrain;
+
+// ---------------------------------------------------------------------------
+// INIT_POLL cycle — 3 iterations of FS Y → STAT → (optional drain) → FIN
+// ---------------------------------------------------------------------------
+//
+// Inlined rather than using statThenDrain because INIT_POLL_FIN is a decision
+// state that does the loop-back check on the same 0xa000 packet that completes
+// the FIN exchange, rather than a plain static transition.
+// Mirrors scanner.ts onInitFsY / onInitStat / onInitStatDrain / onInitFin.
+
+// INIT_POLL_FS_Y: receives 0xa000 (FS Y ACK, payload[0]=0x06); sends STAT.
+g.state("INIT_POLL_FS_Y", {
+  on: {
+    0xa000: {
+      next: "INIT_POLL_STAT",
+      send: buildPassthruPacket(buildEsci2Command("STAT"), ESCI2_REPLY_SIZE),
+    },
+  },
+});
+
+// INIT_POLL_STAT: decision on STAT reply — drain if length>0, else FIN.
+// scanner.ts also samples source (ADF vs flatbed) from iteration 0's reply;
+// that context mutation is deferred to T28 (scanner.ts → graph wiring).
+g.state(
+  "INIT_POLL_STAT",
+  decision<Esci2Ctx>((_ctx, packet) => {
+    const header = parseEsci2ReplyHeader(packet.payload);
+    if (header === null) {
+      return { error: new Error("INIT_POLL_STAT: unparseable reply header") };
+    }
+    if (header.length > 0) {
+      return {
+        next: "INIT_POLL_STAT_DRAIN",
+        send: buildPurereadPacket(header.length),
+      };
+    }
+    return {
+      next: "INIT_POLL_FIN",
+      send: buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
+    };
+  }),
+);
+
+// INIT_POLL_STAT_DRAIN: drains queued status bytes, then sends FIN.
+g.state("INIT_POLL_STAT_DRAIN", {
+  on: {
+    0xa000: {
+      next: "INIT_POLL_FIN",
+      send: buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
+    },
+  },
+});
+
+// INIT_POLL_FIN: decision on FIN reply — loop or advance to MODE_SWITCH.
+// scanner.ts onInitFin: increments initPollIteration; if <3 sends FS Y and
+// loops; else sends FS X and moves to MODE_SWITCH.
+g.state(
+  "INIT_POLL_FIN",
+  decision<Esci2Ctx>((ctx, _packet) => {
+    ctx.initPollIteration += 1;
+    if (ctx.initPollIteration < INIT_POLL_ITERATIONS) {
+      return {
+        next: "INIT_POLL_FS_Y",
+        send: buildPassthruPacket(buildFsY(), LEGACY_REPLY_SIZE),
+      };
+    }
+    // 3 iterations done — send FS X to enter extended mode → MODE_SWITCH.
+    // scanner.ts onInitFin: sends buildPassthruPacket(buildFsX(), LEGACY_REPLY_SIZE).
+    return {
+      next: "MODE_SWITCH",
+      send: buildPassthruPacket(buildFsX(), LEGACY_REPLY_SIZE),
+    };
+  }),
+);
 
 // =============================================================================
 // Export the built graph

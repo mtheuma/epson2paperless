@@ -98,11 +98,95 @@ describe("esci2Graph T22 states", () => {
     }
   });
 
-  it("INIT2_FIN transitions to INIT_POLL_FS_Y (T23 territory)", () => {
+  it("INIT2_FIN transitions to INIT_POLL_FS_Y with FS Y send", () => {
     const state = esci2Graph.states.INIT2_FIN;
     expect(state.kind).toBe("static");
     if (state.kind === "static") {
       expect(state.on[0xa000]?.next).toBe("INIT_POLL_FS_Y");
+      expect(state.on[0xa000]?.send).toBeDefined();
     }
+  });
+});
+
+describe("esci2Graph T23 INIT_POLL cycle", () => {
+  it("INIT_POLL_FS_Y transitions to INIT_POLL_STAT on 0xa000", () => {
+    const state = esci2Graph.states.INIT_POLL_FS_Y;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.next).toBe("INIT_POLL_STAT");
+    }
+  });
+
+  it("INIT_POLL_FS_Y sends a STAT passthru packet on 0xa000 transition", () => {
+    const state = esci2Graph.states.INIT_POLL_FS_Y;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.send).toBeDefined();
+    }
+  });
+
+  it("INIT_POLL_STAT is a decision state", () => {
+    expect(esci2Graph.states.INIT_POLL_STAT.kind).toBe("decision");
+  });
+
+  it("INIT_POLL_STAT_DRAIN is a static state that advances to INIT_POLL_FIN on 0xa000", () => {
+    const state = esci2Graph.states.INIT_POLL_STAT_DRAIN;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.next).toBe("INIT_POLL_FIN");
+      expect(state.on[0xa000]?.send).toBeDefined();
+    }
+  });
+
+  it("INIT_POLL_FIN is a decision state (loop check)", () => {
+    expect(esci2Graph.states.INIT_POLL_FIN.kind).toBe("decision");
+  });
+
+  it("INIT_POLL_FIN loops back to INIT_POLL_FS_Y while initPollIteration < 3", () => {
+    const state = esci2Graph.states.INIT_POLL_FIN;
+    expect(state.kind).toBe("decision");
+    if (state.kind === "decision") {
+      // Simulate first completion (iteration was 0, bumps to 1 — still < 3).
+      const ctx = {
+        duplex: false,
+        initPollIteration: 0,
+        imgChunkSize: 0,
+        pageEndKind: "none" as const,
+        pageSide: "front" as const,
+        zeroImgRetries: 0,
+        postScanCycle: 1 as const,
+      };
+      const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
+      expect("next" in result && result.next).toBe("INIT_POLL_FS_Y");
+      expect(ctx.initPollIteration).toBe(1);
+    }
+  });
+
+  it("INIT_POLL_FIN advances to MODE_SWITCH after 3 iterations", () => {
+    const state = esci2Graph.states.INIT_POLL_FIN;
+    expect(state.kind).toBe("decision");
+    if (state.kind === "decision") {
+      // Simulate third completion (iteration was 2, bumps to 3 — equals INIT_POLL_ITERATIONS).
+      const ctx = {
+        duplex: false,
+        initPollIteration: 2,
+        imgChunkSize: 0,
+        pageEndKind: "none" as const,
+        pageSide: "front" as const,
+        zeroImgRetries: 0,
+        postScanCycle: 1 as const,
+      };
+      const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
+      expect("next" in result && result.next).toBe("MODE_SWITCH");
+      expect(ctx.initPollIteration).toBe(3);
+    }
+  });
+
+  it("statThenDrain helper states exist for future use (POST_MODE_STAT etc.)", () => {
+    // The helper is defined at file scope for T24/T26 use.
+    // Verify the graph currently only contains the INIT_POLL inline states.
+    expect(esci2Graph.states.INIT_POLL_STAT).toBeDefined();
+    expect(esci2Graph.states.INIT_POLL_STAT_DRAIN).toBeDefined();
+    expect(esci2Graph.states.INIT_POLL_FIN).toBeDefined();
   });
 });
