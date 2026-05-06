@@ -446,4 +446,63 @@ describe("runScanSession (engine pump)", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
     fs.rmSync(outputDir, { recursive: true, force: true });
   });
+
+  it("resolves a (ctx) => Buffer send at dispatch time using current ctx", async () => {
+    const transport = new FakeTransport();
+    type Ctx = { token: number };
+    const g = createGraph<Ctx>("WAITING", 1_000);
+    g.state("WAITING", {
+      on: {
+        0xa000: {
+          next: "DONE",
+          send: (ctx) => Buffer.from([ctx.token]),
+        },
+      },
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: { token: 0x42 },
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    const result = await promise;
+    expect(result.ok).toBe(true);
+
+    // Among transport.written, find a buffer with byte 0x42
+    expect(transport.written.some((b) => b.length === 1 && b[0] === 0x42)).toBe(true);
+  });
+
+  it("supports a decision state with onEnter (sends bytes before deciding)", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("WAITING", 1_000);
+    g.state("WAITING", {
+      ...decision(() => ({ next: "DONE" })),
+      onEnter: () => Buffer.from([0xff]),
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    await new Promise((r) => setImmediate(r));
+    expect(transport.written.some((b) => b.length === 1 && b[0] === 0xff)).toBe(true);
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa200, Buffer.alloc(0))));
+    const result = await promise;
+    expect(result.ok).toBe(true);
+  });
 });
