@@ -50,8 +50,16 @@ export interface Graph<Ctx> {
 export type SendSpec<Ctx> = Buffer | ((ctx: Ctx) => Buffer);
 
 export type GraphState<Ctx> =
-  | { kind: "static"; on: Record<number, StaticTransition<Ctx>> }
-  | { kind: "decision"; decide: DecisionFn<Ctx> };
+  | {
+      kind: "static";
+      on: Record<number, StaticTransition<Ctx>>;
+      onEnter?: (ctx: Ctx) => Buffer | null;
+    }
+  | {
+      kind: "decision";
+      decide: DecisionFn<Ctx>;
+      onEnter?: (ctx: Ctx) => Buffer | null;
+    };
 
 export interface StaticTransition<Ctx> {
   next: string;
@@ -116,11 +124,14 @@ export interface GraphBuilder<Ctx> {
   build(): Graph<Ctx>;
 }
 
-export type StateDef<Ctx> = { on: Record<number, StaticTransition<Ctx>> } | DecisionDef<Ctx>;
+export type StateDef<Ctx> =
+  | { on: Record<number, StaticTransition<Ctx>>; onEnter?: (ctx: Ctx) => Buffer | null }
+  | DecisionDef<Ctx>;
 
 export interface DecisionDef<Ctx> {
   __decision: true;
   decide: DecisionFn<Ctx>;
+  onEnter?: (ctx: Ctx) => Buffer | null;
 }
 
 export function createGraph<Ctx>(initial: string, timeoutMs: number): GraphBuilder<Ctx> {
@@ -136,9 +147,9 @@ export function createGraph<Ctx>(initial: string, timeoutMs: number): GraphBuild
       }
       if (states[name]) throw new Error(`Duplicate state name: ${name}`);
       if ("__decision" in def) {
-        states[name] = { kind: "decision", decide: def.decide };
+        states[name] = { kind: "decision", decide: def.decide, onEnter: def.onEnter };
       } else {
-        states[name] = { kind: "static", on: def.on };
+        states[name] = { kind: "static", on: def.on, onEnter: def.onEnter };
       }
       return this;
     },
@@ -211,7 +222,7 @@ export async function runScanSession<Ctx>(
     return { ok: false, reason, finalCtx: ctx };
   }
 
-  let currentState = graph.initial;
+  let currentState = "";
   // Set during a flushPage barrier (Task 16) — for now always false; the pump
   // checks it preemptively so the wiring is in place when T16 lands.
   const paused = false;
@@ -234,6 +245,26 @@ export async function runScanSession<Ctx>(
       }
       resolve(result);
     };
+
+    /**
+     * Advances to a new state, fires its onEnter hook (which may write the
+     * initial command for that state), and handles the DONE terminal.
+     * Called synchronously on initial entry and after every transition.
+     * T15 will add timeout re-arming here.
+     */
+    function enterState(name: string): void {
+      currentState = name;
+      if (currentState === "DONE") {
+        transport.end(); // triggers close → resolve ok in close handler
+        return;
+      }
+      const state = graph.states[currentState];
+      if (state.onEnter) {
+        const bytes = state.onEnter(ctx);
+        if (bytes) transport.write(bytes);
+      }
+      // Re-arm timeout (T15 will add the timeout call here)
+    }
 
     transport.on("error", (err) => {
       _errorReason = err;
@@ -420,11 +451,14 @@ export async function runScanSession<Ctx>(
       flushPage?: PageFlush;
     }): Promise<void> {
       writeAll(resolveSend(t.send));
-      currentState = t.next;
-      if (currentState === "DONE") {
-        transport.end(); // triggers close → resolve ok in close handler
-      }
+      enterState(t.next);
       // flushPage handled in T16
     }
+
+    // Enter the initial state. This fires onEnter for the initial state
+    // (which may write the first command) synchronously inside the Promise
+    // body, after all listeners are wired, so the first setImmediate
+    // microtask queued by tests sees the writes.
+    enterState(graph.initial);
   });
 }

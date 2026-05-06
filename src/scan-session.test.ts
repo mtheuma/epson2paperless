@@ -147,4 +147,33 @@ describe("runScanSession (engine pump)", () => {
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason.message).toBe("boom");
   });
+
+  it("fires onEnter when entering the initial state and sends its bytes", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("WELCOME", 1_000);
+    g.state("WELCOME", {
+      on: { 0xa000: { next: "DONE" } },
+      onEnter: () => Buffer.from([0xde, 0xad, 0xbe, 0xef]),
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    // Wait one microtask for transportFactory to resolve and onEnter to fire
+    await new Promise((r) => setImmediate(r));
+    expect(transport.written.length).toBe(1);
+    expect(transport.written[0].equals(Buffer.from([0xde, 0xad, 0xbe, 0xef]))).toBe(true);
+
+    transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0)));
+    const result = await promise;
+    expect(result.ok).toBe(true);
+  });
 });
