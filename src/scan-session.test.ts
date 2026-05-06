@@ -657,9 +657,7 @@ describe("runScanSession (engine pump)", () => {
 
     // The transport.written array should contain three buffers in order: 0xaa, 0xbb, 0xcc.
     // (There may also be other writes from session setup; filter to single-byte writes.)
-    const singleByteWrites = transport.written
-      .filter((b) => b.length === 1)
-      .map((b) => b[0]);
+    const singleByteWrites = transport.written.filter((b) => b.length === 1).map((b) => b[0]);
     expect(singleByteWrites).toEqual([0xaa, 0xbb, 0xcc]);
   });
 });
