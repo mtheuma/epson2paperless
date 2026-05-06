@@ -228,9 +228,6 @@ export async function runScanSession<Ctx>(
   let currentState = "";
   // Set during a flushPage barrier — pauses the pump while encode/persist runs.
   let paused = false;
-  // _errorReason is set in two places (transport.on("error") and the
-  // global-abort-handler path) and read in the flushPage error path.
-  let _errorReason: Error | null = null;
   let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
 
   const recvChunks: Buffer[] = [];
@@ -248,7 +245,6 @@ export async function runScanSession<Ctx>(
         const reason = new Error(
           `Timeout in state ${currentState} — no response in ${graph.timeoutMs}ms`,
         );
-        _errorReason = reason;
         settle({ ok: false, reason, finalCtx: ctx });
       }, graph.timeoutMs);
     }
@@ -276,7 +272,7 @@ export async function runScanSession<Ctx>(
      * Advances to a new state, fires its onEnter hook (which may write the
      * initial command for that state), and handles the DONE terminal.
      * Called synchronously on initial entry and after every transition.
-     * T15 will add timeout re-arming here.
+     * Re-arms the rolling timeout on each state entry.
      */
     function enterState(name: string): void {
       currentState = name;
@@ -293,7 +289,6 @@ export async function runScanSession<Ctx>(
     }
 
     transport.on("error", (err) => {
-      _errorReason = err;
       settle({ ok: false, reason: err, finalCtx: ctx });
     });
 
@@ -453,7 +448,6 @@ export async function runScanSession<Ctx>(
       if (handler) {
         const err = handler(ctx, packet);
         if (err) {
-          _errorReason = err;
           settle({ ok: false, reason: err, finalCtx: ctx });
           return;
         }
@@ -489,7 +483,6 @@ export async function runScanSession<Ctx>(
         // decision
         const result = state.decide(ctx, packet);
         if ("error" in result) {
-          _errorReason = result.error;
           settle({ ok: false, reason: result.error, finalCtx: ctx });
           return;
         }
@@ -550,7 +543,6 @@ export async function runScanSession<Ctx>(
           await fs.promises.writeFile(path.join(sessionTempDir, filename), outputBytes);
         } catch (err) {
           const reason = err instanceof Error ? err : new Error(String(err));
-          _errorReason = reason;
           settle({ ok: false, reason, finalCtx: ctx });
           return;
         }
@@ -560,8 +552,8 @@ export async function runScanSession<Ctx>(
         writeAll(resolveSend(stagedSend));
         enterState(stagedNext);
         // Do NOT call tryDispatch() recursively. The outer pump loop is awaiting
-        // this very applyTransition call — once we return, its next iteration
-        // picks up any buffered packets and dispatches them with the new state.
+        // this very applyTransition call — the next loop pass picks up any
+        // buffered packets and dispatches them with the new state.
         return;
       }
 

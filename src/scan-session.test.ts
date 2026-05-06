@@ -505,4 +505,161 @@ describe("runScanSession (engine pump)", () => {
     const result = await promise;
     expect(result.ok).toBe(true);
   });
+
+  it("calls a global abort handler that returns Error and fails the session", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("WAITING", 1_000).globalAbortHandlers({
+      0x9000: () => new Error("simulated async fatal"),
+    });
+    g.state("WAITING", { on: { 0xa000: { next: "DONE" } } });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0x9000, Buffer.from([0x02]))));
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason.message).toMatch(/simulated async fatal/);
+  });
+
+  it("calls a global abort handler that returns null and continues dispatch", async () => {
+    const transport = new FakeTransport();
+    let infoSeen = false;
+    const g = createGraph<Record<string, never>>("WAITING", 1_000).globalAbortHandlers({
+      0x9000: () => {
+        infoSeen = true;
+        return null; // info-only — no abort
+      },
+    });
+    g.state("WAITING", { on: { 0xa000: { next: "DONE" } } });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    // First send a 0x9000 info event (should be consumed by the handler, not advance state).
+    // Then send 0xa000 to advance to DONE.
+    setImmediate(() => {
+      transport.emit("data", buildIsPacket(0x9000, Buffer.from([0x01])));
+      setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    });
+
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    expect(infoSeen).toBe(true);
+  });
+
+  it("silently discards packets matched by globalIgnoreFilter", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("WAITING", 1_000).globalIgnoreFilter(
+      // Filter out empty 0xa000 envelopes (simulates the ESC/I-2 wait-for-body pattern).
+      (packet) => packet.type === 0xa000 && packet.payload.length === 0,
+    );
+    g.state("WAITING", { on: { 0xa000: { next: "DONE" } } });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    setImmediate(() => {
+      // Empty 0xa000 — filter discards; state does NOT advance.
+      transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0)));
+      // Non-empty 0xa000 — passes the filter; state advances to DONE.
+      setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.from([0xab]))));
+    });
+
+    const result = await promise;
+    expect(result.ok).toBe(true);
+  });
+
+  it("fails the session when a transition's validate returns false", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("WAITING", 1_000);
+    g.state("WAITING", {
+      on: {
+        0x2000: {
+          // Simulates the ESC/I "ACK is 0x06 byte 0 of 0x2000 envelope" pattern.
+          validate: (payload) => payload[0] === 0x06,
+          next: "DONE",
+        },
+      },
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    // Send a 0x2000 packet whose payload[0] is NOT 0x06 — validate fails.
+    setImmediate(() => transport.emit("data", buildIsPacket(0x2000, Buffer.from([0x15]))));
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason.message).toMatch(/Validation failed in state WAITING/);
+      expect(result.reason.message).toMatch(/0x2000/);
+    }
+  });
+
+  it("writes multi-buffer send arrays in order", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("WAITING", 1_000);
+    g.state("WAITING", {
+      on: {
+        0xa000: {
+          next: "DONE",
+          send: [Buffer.from([0xaa]), Buffer.from([0xbb]), Buffer.from([0xcc])],
+        },
+      },
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    const result = await promise;
+    expect(result.ok).toBe(true);
+
+    // The transport.written array should contain three buffers in order: 0xaa, 0xbb, 0xcc.
+    // (There may also be other writes from session setup; filter to single-byte writes.)
+    const singleByteWrites = transport.written
+      .filter((b) => b.length === 1)
+      .map((b) => b[0]);
+    expect(singleByteWrites).toEqual([0xaa, 0xbb, 0xcc]);
+  });
 });
