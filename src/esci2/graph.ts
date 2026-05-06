@@ -296,8 +296,69 @@ function statThenDrain(
   });
 }
 
-// Expose for T24-T26 (referenced below once those task blocks are added).
-void statThenDrain;
+// =============================================================================
+// T26: FIN_AFTER_IMG decision + POSTSCAN drain cycles ×2
+// =============================================================================
+
+// FIN_AFTER_IMG: decision on receipt of FIN reply after last image chunk.
+// - Flatbed: skip POSTSCAN drain entirely — go straight to UNLOCKING (whose
+//   onEnter sends the unlock packet). Verified by the 2026-04-24 flatbed Frida
+//   fixture (last 5 sends: @IMG | @IMG | @FIN | UNLOCK — no POSTSCAN in between).
+// - ADF: start POSTSCAN drain cycle 1 by sending FS Y.
+// Mirrors scanner.ts:897-915 (onFinAfterImg).
+g.state(
+  "FIN_AFTER_IMG",
+  decision<Esci2Ctx>((ctx, _packet) => {
+    if (ctx.source === "flatbed") {
+      // No POSTSCAN drain — UNLOCKING's onEnter sends the unlock packet.
+      return { next: "UNLOCKING" };
+    }
+    // ADF: start POSTSCAN drain cycle 1.
+    return {
+      next: "POSTSCAN_FS_Y_1",
+      send: buildPassthruPacket(buildFsY(), LEGACY_REPLY_SIZE),
+    };
+  }),
+);
+
+// POSTSCAN_FS_Y_1: receives FS Y ACK (0xa000, payload[0]=0x06); sends STAT.
+// Mirrors scanner.ts:921-934 (onPostscanFsY, cycle=1).
+g.state("POSTSCAN_FS_Y_1", {
+  on: {
+    0xa000: {
+      validate: (payload) => payload[0] === 0x06,
+      next: "POSTSCAN_1_STAT",
+      send: buildPassthruPacket(buildEsci2Command("STAT"), ESCI2_REPLY_SIZE),
+    },
+  },
+});
+
+// POSTSCAN cycle 1: POSTSCAN_1_STAT → POSTSCAN_1_STAT_DRAIN? → POSTSCAN_1_FIN → POSTSCAN_FS_Y_2
+// POSTSCAN_1_FIN sends FS Y to start cycle 2.
+// Mirrors scanner.ts:937-975 (onPostscanStat / onPostscanDrain / onPostscanFin, cycle=1).
+statThenDrain(
+  g,
+  "POSTSCAN_1",
+  "POSTSCAN_FS_Y_2",
+  buildPassthruPacket(buildFsY(), LEGACY_REPLY_SIZE),
+);
+
+// POSTSCAN_FS_Y_2: receives FS Y ACK (0xa000, payload[0]=0x06); sends STAT.
+// Mirrors scanner.ts:921-934 (onPostscanFsY, cycle=2).
+g.state("POSTSCAN_FS_Y_2", {
+  on: {
+    0xa000: {
+      validate: (payload) => payload[0] === 0x06,
+      next: "POSTSCAN_2_STAT",
+      send: buildPassthruPacket(buildEsci2Command("STAT"), ESCI2_REPLY_SIZE),
+    },
+  },
+});
+
+// POSTSCAN cycle 2: POSTSCAN_2_STAT → POSTSCAN_2_STAT_DRAIN? → POSTSCAN_2_FIN → UNLOCKING
+// POSTSCAN_2_FIN has no further send — UNLOCKING's onEnter sends the unlock packet.
+// Mirrors scanner.ts:937-975 (onPostscanStat / onPostscanDrain / onPostscanFin, cycle=2).
+statThenDrain(g, "POSTSCAN_2", "UNLOCKING");
 
 // ---------------------------------------------------------------------------
 // INIT_POLL cycle — 3 iterations of FS Y → STAT → (optional drain) → FIN

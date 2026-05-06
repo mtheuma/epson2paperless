@@ -829,3 +829,89 @@ describe("esci2Graph T25 — IMG_META zero-length chunk handling", () => {
     expect(ctx.imgChunkSize).toBe(16);
   });
 });
+
+describe("esci2Graph T26 — FIN_AFTER_IMG decision + POSTSCAN drain cycles", () => {
+  it("FIN_AFTER_IMG is a decision state", () => {
+    expect(esci2Graph.states.FIN_AFTER_IMG.kind).toBe("decision");
+  });
+
+  it("FIN_AFTER_IMG with source=flatbed returns next=UNLOCKING with no send", () => {
+    const state = esci2Graph.states.FIN_AFTER_IMG;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ source: "flatbed" });
+    const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
+    if ("error" in result) throw result.error;
+    expect(result.next).toBe("UNLOCKING");
+    expect("send" in result ? result.send : undefined).toBeUndefined();
+  });
+
+  it("FIN_AFTER_IMG with source=adf returns next=POSTSCAN_FS_Y_1 with FS Y send", () => {
+    const state = esci2Graph.states.FIN_AFTER_IMG;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ source: "adf" });
+    const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
+    if ("error" in result) throw result.error;
+    expect(result.next).toBe("POSTSCAN_FS_Y_1");
+    expect("send" in result && result.send).toBeDefined();
+  });
+
+  it("POSTSCAN_FS_Y_1 transitions to POSTSCAN_1_STAT on 0xa000 with payload[0]=0x06", () => {
+    const state = esci2Graph.states.POSTSCAN_FS_Y_1;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      const t = state.on[0xa000];
+      expect(t).toBeDefined();
+      expect(t.next).toBe("POSTSCAN_1_STAT");
+      expect(t.send).toBeDefined();
+    }
+  });
+
+  it("POSTSCAN_FS_Y_1 validate returns true for ACK byte 0x06 and false for others", () => {
+    const state = esci2Graph.states.POSTSCAN_FS_Y_1;
+    if (state.kind !== "static") return;
+    const validateFn = state.on[0xa000]?.validate;
+    expect(validateFn).toBeDefined();
+    expect(validateFn?.(Buffer.from([0x06]))).toBe(true);
+    expect(validateFn?.(Buffer.from([0x15]))).toBe(false);
+  });
+
+  it("POSTSCAN_1_STAT is a decision state", () => {
+    expect(esci2Graph.states.POSTSCAN_1_STAT.kind).toBe("decision");
+  });
+
+  it("statThenDrain POSTSCAN_1_FIN advances to POSTSCAN_FS_Y_2 with FS Y send", () => {
+    const state = esci2Graph.states.POSTSCAN_1_FIN;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.next).toBe("POSTSCAN_FS_Y_2");
+      expect(state.on[0xa000]?.send).toBeDefined();
+    }
+  });
+
+  it("POSTSCAN_FS_Y_2 transitions to POSTSCAN_2_STAT on 0xa000 with valid ACK", () => {
+    const state = esci2Graph.states.POSTSCAN_FS_Y_2;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.next).toBe("POSTSCAN_2_STAT");
+      expect(state.on[0xa000]?.send).toBeDefined();
+    }
+  });
+
+  it("POSTSCAN_FS_Y_2 validate returns true for ACK byte 0x06 and false for others", () => {
+    const state = esci2Graph.states.POSTSCAN_FS_Y_2;
+    if (state.kind !== "static") return;
+    const validateFn = state.on[0xa000]?.validate;
+    expect(validateFn).toBeDefined();
+    expect(validateFn?.(Buffer.from([0x06]))).toBe(true);
+    expect(validateFn?.(Buffer.from([0x15]))).toBe(false);
+  });
+
+  it("statThenDrain POSTSCAN_2_FIN advances to UNLOCKING with no send", () => {
+    const state = esci2Graph.states.POSTSCAN_2_FIN;
+    expect(state.kind).toBe("static");
+    if (state.kind === "static") {
+      expect(state.on[0xa000]?.next).toBe("UNLOCKING");
+      expect(state.on[0xa000]?.send).toBeUndefined();
+    }
+  });
+});
