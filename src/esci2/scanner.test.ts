@@ -141,7 +141,11 @@ async function drivePastImgTerminator(
   await feedEsci2Reply("IMG x0000004#pst");
   fake.feed(buildIsPacket(0xa000, Buffer.from("ffd8ffd9", "hex")));
   await new Promise((r) => setImmediate(r));
+  // Snapshot writes before the page-end feed; wait for the engine's response
+  // (FIN for flatbed-terminal, IMG for ADF-more) before returning.
+  const writesBeforePageEnd = fake.writes.length;
   await feedEsci2Reply("IMG x0000000#peni0002481i0003506#typIMGA#---#---#---#---#---");
+  await fake.waitForWriteCount(writesBeforePageEnd + 1);
   return { fake, sessionPromise, feedEsci2Reply };
 }
 
@@ -279,12 +283,10 @@ async function replayCapture(
       fake.feed(Buffer.from(rec.payload_hex ?? "", "hex"));
       await new Promise((r) => setImmediate(r));
     } else {
-      if (expectedSendIdx >= fake.writes.length) {
-        throw new Error(
-          `At driver-send #${expectedSendIdx}: scanner hasn't written anything yet. ` +
-            `Last driver send type=${rec.type_hex} payload=${rec.payload_hex?.slice(0, 40)}…`,
-        );
-      }
+      // Wait for the scanner to produce this write — handles the engine's
+      // async flushPage barrier (multi-microtask: await encode → file I/O →
+      // unpause → write staged send) without hard-coding tick counts.
+      await fake.waitForWriteCount(expectedSendIdx + 1);
       const actual = fake.writes[expectedSendIdx].toString("hex");
       const expected = rec.payload_hex ?? "";
       expect(actual, `send #${expectedSendIdx} (driver type=${rec.type_hex})`).toBe(expected);

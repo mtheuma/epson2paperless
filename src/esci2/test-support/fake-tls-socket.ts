@@ -87,6 +87,31 @@ export class FakeTlsSocket extends EventEmitter {
     return true;
   }
 
+  /**
+   * Resolves once `this.writes.length >= target`. Polls per setImmediate
+   * until the target is reached or `timeoutMs` elapses (default 1000 ms).
+   *
+   * Why a predicate-based wait instead of a fixed `await setImmediate(r)`?
+   * The engine's flushPage barrier is genuinely multi-microtask (await
+   * encode → optionally async file I/O → unpause → write staged send →
+   * enter next state). Tests that assert "FIN follows the page-end feed"
+   * shouldn't hard-code a tick count — they should wait for the wire-level
+   * promise. This also turns "scanner is stuck" into a useful timeout
+   * error instead of an opaque assertion failure.
+   */
+  async waitForWriteCount(target: number, opts: { timeoutMs?: number } = {}): Promise<void> {
+    const timeoutMs = opts.timeoutMs ?? 1000;
+    const start = Date.now();
+    while (this.writes.length < target) {
+      if (Date.now() - start > timeoutMs) {
+        throw new Error(
+          `waitForWriteCount: expected ${target} writes within ${timeoutMs}ms, got ${this.writes.length}`,
+        );
+      }
+      await new Promise((r) => setImmediate(r));
+    }
+  }
+
   end(): void {
     this.emit("close");
   }

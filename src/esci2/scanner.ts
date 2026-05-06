@@ -41,21 +41,28 @@ function makeTlsTransportFactory(
         host: session.printerIp,
         port: session.port,
         rejectUnauthorized: false,
-        ...(session.printerCertFingerprint
-          ? {
-              checkServerIdentity: (_host, cert) => {
-                const got = cert.fingerprint256;
-                if (got !== session.printerCertFingerprint) {
-                  return new Error(
-                    `Printer cert fingerprint mismatch — expected ${session.printerCertFingerprint}, got ${got}`,
-                  );
-                }
-                return undefined;
-              },
-            }
-          : {}),
       };
-      const socket = socketFactory(opts, () => resolve(socket as unknown as SessionTransport));
+      const socket = socketFactory(opts, () => {
+        // Manual fingerprint pin (not via TLS's `checkServerIdentity` since
+        // tests use a fake socket that doesn't run a real handshake). Mirrors
+        // the pre-engine scanner's pattern: if pin is set, read the peer cert
+        // and compare; on mismatch, destroy the socket and reject the
+        // factory Promise so runScanSession returns { ok: false, reason }.
+        if (session.printerCertFingerprint) {
+          const peer = socket.getPeerCertificate?.();
+          const actual = peer?.fingerprint256;
+          if (actual !== session.printerCertFingerprint) {
+            socket.destroy();
+            reject(
+              new Error(
+                `Printer cert fingerprint mismatch — expected ${session.printerCertFingerprint}, got ${actual ?? "(none)"}`,
+              ),
+            );
+            return;
+          }
+        }
+        resolve(socket);
+      });
       socket.once("error", reject);
     });
 }
