@@ -8,7 +8,7 @@ import {
   buildParaPayload,
   parseEsci2ReplyHeader,
   parseTokens,
-} from "./esci2/commands.js";
+} from "./commands.js";
 
 describe("buildFsY", () => {
   it("returns exactly the 2 bytes 0x1c 0x59", () => {
