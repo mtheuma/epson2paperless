@@ -361,11 +361,11 @@ describe("runEsciScan failure-mode matrix", () => {
       fake.asFactory(),
     );
     fake.simulateConnect();
-    // WELCOME state expects type 0x8000 (scanner-legacy.ts:247).
-    // Feed type 0xa000 — fail() rejects with "expected welcome (0x8000), got 0xa000".
+    // WELCOME state expects IS type 0x8000. Feed type 0xa000 — engine routes
+    // through its "Unexpected packet type ... in state WELCOME" failure path.
     // (Raw garbage that doesn't form a valid IS header would just buffer until timeout.)
     fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
-    await expect(scanPromise).rejects.toThrow(/expected welcome \(0x8000\)/);
+    await expect(scanPromise).rejects.toThrow(/Unexpected packet type 0xa000 in state WELCOME/);
   });
 });
 

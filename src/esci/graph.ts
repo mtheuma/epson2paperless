@@ -277,7 +277,9 @@ g.state(
     const typeGuard = expectIsType(packet, ESCI_REPLY, "STATUS_1A");
     if (typeGuard) return typeGuard;
     if (packet.payload.length !== 16) {
-      return { error: new Error(`STATUS_1A: expected 16-byte status, got ${packet.payload.length}`) };
+      return {
+        error: new Error(`STATUS_1A: expected 16-byte status, got ${packet.payload.length}`),
+      };
     }
     if (ctx.inInterPageLoop && packet.payload[0] === 0x81) {
       ctx.inInterPageLoop = false;
@@ -295,7 +297,9 @@ g.state(
     const typeGuard = expectIsType(packet, ESCI_REPLY, "STATUS_1B");
     if (typeGuard) return typeGuard;
     if (packet.payload.length !== 16) {
-      return { error: new Error(`STATUS_1B: expected 16-byte status, got ${packet.payload.length}`) };
+      return {
+        error: new Error(`STATUS_1B: expected 16-byte status, got ${packet.payload.length}`),
+      };
     }
     if (ctx.inInterPageLoop) {
       return { next: "ADF_IDENTITY_A", send: sendFsI() };
@@ -409,7 +413,9 @@ g.state(
     const typeGuard = expectIsType(packet, ESCI_REPLY, "ADF_IDENTITY_B");
     if (typeGuard) return typeGuard;
     if (packet.payload.length !== 80) {
-      return { error: new Error(`ADF_IDENTITY_B: expected 80-byte identity, got ${packet.payload.length}`) };
+      return {
+        error: new Error(`ADF_IDENTITY_B: expected 80-byte identity, got ${packet.payload.length}`),
+      };
     }
     if (ctx.format === "pdf" && !ctx.inInterPageLoop) {
       return { next: "ADF_PDF_SRC_ACK1", send: sendEscEPlusCtxSource };
@@ -448,7 +454,9 @@ g.state(
     const typeGuard = expectIsType(packet, ESCI_REPLY, "GAMMA_DATA");
     if (typeGuard) return typeGuard;
     if (!isAck(packet.payload)) {
-      return { error: new Error(`GAMMA_DATA: expected gamma LUT ack (channel ${ctx.gammaChannelIdx})`) };
+      return {
+        error: new Error(`GAMMA_DATA: expected gamma LUT ack (channel ${ctx.gammaChannelIdx})`),
+      };
     }
     if (ctx.gammaChannelIdx + 1 < GAMMA_CHANNELS.length) {
       ctx.gammaChannelIdx += 1;
@@ -490,7 +498,9 @@ g.state(
     const typeGuard = expectIsType(packet, ESCI_REPLY, "START");
     if (typeGuard) return typeGuard;
     if (!length14(packet.payload)) {
-      return { error: new Error(`START: expected 14-byte FS G reply, got ${packet.payload.length}`) };
+      return {
+        error: new Error(`START: expected 14-byte FS G reply, got ${packet.payload.length}`),
+      };
     }
     const reply = parseFsGReply(packet.payload);
     ctx.fsGReply = reply;
@@ -515,7 +525,9 @@ g.state(
     const typeGuard = expectIsType(packet, ESCI_REPLY, "START_POLL");
     if (typeGuard) return typeGuard;
     if (!length16(packet.payload)) {
-      return { error: new Error(`START_POLL: expected 16-byte status, got ${packet.payload.length}`) };
+      return {
+        error: new Error(`START_POLL: expected 16-byte status, got ${packet.payload.length}`),
+      };
     }
     if (packet.payload[0] === 0x01) {
       return { next: "START_POLL_READY", send: sendFsF() };
@@ -544,7 +556,11 @@ g.state(
         ),
       };
     }
-    ctx.imageBufferOffset = appendImageChunk(packet.payload, ctx.imageBuffer, ctx.imageBufferOffset);
+    ctx.imageBufferOffset = appendImageChunk(
+      packet.payload,
+      ctx.imageBuffer,
+      ctx.imageBufferOffset,
+    );
     if (ctx.imageBufferOffset < ctx.expectedBytes) {
       return { next: "IMG_RECEIVING" };
     }
@@ -593,7 +609,11 @@ g.state(
     const typeGuard = expectIsType(packet, ESCI_REPLY, "PAGE_EJECT_WAIT");
     if (typeGuard) return typeGuard;
     if (!length1(packet.payload)) {
-      return { error: new Error(`PAGE_EJECT_WAIT: expected 1-byte page-eject ACK, got ${packet.payload.length}`) };
+      return {
+        error: new Error(
+          `PAGE_EJECT_WAIT: expected 1-byte page-eject ACK, got ${packet.payload.length}`,
+        ),
+      };
     }
     ctx.inInterPageLoop = true;
     return { next: "STATUS_1A", send: sendFsF() };
@@ -617,7 +637,9 @@ g.state(
     const typeGuard = expectIsType(packet, ESCI_REPLY, "CLEANUP_1");
     if (typeGuard) return typeGuard;
     if (!length1(packet.payload)) {
-      return { error: new Error(`CLEANUP_1: expected 1-byte ESC ) reply, got ${packet.payload.length}`) };
+      return {
+        error: new Error(`CLEANUP_1: expected 1-byte ESC ) reply, got ${packet.payload.length}`),
+      };
     }
     if (ctx.source !== "flatbed") {
       return { next: "ADF_CLEANUP_ACK1", send: sendEscEPlusCtxSource };

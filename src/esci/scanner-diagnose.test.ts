@@ -22,6 +22,16 @@ function passthruCommand(buf: Buffer): Buffer {
   return pkt.payload.subarray(8);
 }
 
+/**
+ * Yield a microtask-and-macrotask round so the engine's async pump can
+ * process buffered feeds and emit writes. Mirrors the pattern used in
+ * src/esci/test-support/replay.ts:driveFixture for the same reason: with
+ * the engine model `transport.on("data", ...)` only registers after the
+ * factory's await yields, so synchronous feed→write→assert chains need
+ * an explicit yield between feed and assertion.
+ */
+const yieldEngine = () => new Promise((r) => setImmediate(r));
+
 describe("scanner-esci DIAGNOSE_PROTOCOL probe", () => {
   it("sends FS Y after ESC @ NAK and rejects with a diagnostic message", async () => {
     const fake = new FakeTcpSocket();
@@ -42,12 +52,15 @@ describe("scanner-esci DIAGNOSE_PROTOCOL probe", () => {
 
     fake.simulateConnect();
     fake.feed(welcome);
+    await yieldEngine();
     expect(parseIsPacket(fake.writes[0])?.type).toBe(0x2100); // lock packet
     fake.feed(lockAck);
+    await yieldEngine();
     expect(passthruCommand(fake.writes[1]).equals(ESC_AT)).toBe(true);
 
     // Printer NAKs ESC @ — diagnostic mode should send FS Y instead of failing.
     fake.feed(nakReply);
+    await yieldEngine();
     expect(passthruCommand(fake.writes[2]).equals(FS_Y)).toBe(true);
 
     // Printer ACKs FS Y — session still aborts, but with a diagnostic message.
@@ -77,6 +90,7 @@ describe("scanner-esci DIAGNOSE_PROTOCOL probe", () => {
     fake.feed(welcome);
     fake.feed(lockAck);
     fake.feed(nakReply);
+    await yieldEngine();
     expect(passthruCommand(fake.writes[2]).equals(FS_Y)).toBe(true);
 
     // Both legacy ESC @ and ESC/I-2 FS Y rejected — printer is in some other family.
@@ -107,8 +121,9 @@ describe("scanner-esci DIAGNOSE_PROTOCOL probe", () => {
     fake.feed(lockAck);
     fake.feed(nakReply);
 
+    // Engine rejects via INIT decision's custom error.
+    await expect(promise).rejects.toThrow(/expected ESC @ ack, got type=0xa000 payload=15/);
     // No FS Y probe — only the lock packet and ESC @ should have been sent.
     expect(fake.writes.length).toBe(2);
-    await expect(promise).rejects.toThrow(/expected ESC @ ack, got type=0xa000 payload=15/);
   });
 });
