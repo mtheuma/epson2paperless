@@ -47,6 +47,17 @@ export interface Graph<Ctx> {
    * "wait for body" empty-envelope pattern (ESC/I-2 empty 0xa000).
    */
   globalIgnoreFilter?: (packet: { type: number; payload: Buffer }) => boolean;
+  /**
+   * States in which a failure is treated as post-image cleanup and
+   * recovered to success via the post-scan-save fallback (v0.3.0 §3.3) —
+   * provided at least one page has already flushed. The graph declares
+   * which states sit *after* the last image transfer (e.g.
+   * FIN_AFTER_IMG, POSTSCAN_*, UNLOCKING). Failures in image-acquisition
+   * states (IMG_META, IMG_DATA, etc.) still reject the session even on
+   * page 2 of N — partial multi-page output should not be silently
+   * promoted as success.
+   */
+  cleanupStates?: ReadonlySet<string>;
 }
 
 /** Single write spec — concrete bytes or a ctx-thunk resolved at dispatch time. */
@@ -124,6 +135,12 @@ export interface GraphBuilder<Ctx> {
   ): this;
   /** Set the graph's pre-dispatch packet filter. */
   globalIgnoreFilter(filter: (packet: { type: number; payload: Buffer }) => boolean): this;
+  /**
+   * Declare the post-image cleanup states. Failures in any of these
+   * states are recovered to success via the post-scan-save fallback when
+   * pages have already flushed. See `Graph.cleanupStates` for semantics.
+   */
+  cleanupStates(names: readonly string[]): this;
   build(): Graph<Ctx>;
 }
 
@@ -141,6 +158,7 @@ export function createGraph<Ctx>(initial: string, timeoutMs: number): GraphBuild
   const states: Record<string, GraphState<Ctx>> = {};
   let abortHandlers: Graph<Ctx>["globalAbortHandlers"];
   let ignoreFilter: Graph<Ctx>["globalIgnoreFilter"];
+  let cleanup: ReadonlySet<string> | undefined;
   return {
     state(name, def) {
       if (name === "DONE") {
@@ -164,14 +182,24 @@ export function createGraph<Ctx>(initial: string, timeoutMs: number): GraphBuild
       ignoreFilter = filter;
       return this;
     },
+    cleanupStates(names) {
+      cleanup = new Set(names);
+      return this;
+    },
     build() {
       if (!states[initial]) throw new Error(`Initial state '${initial}' not defined`);
+      if (cleanup) {
+        for (const name of cleanup) {
+          if (!states[name]) throw new Error(`cleanupStates references undefined state '${name}'`);
+        }
+      }
       return Object.freeze({
         initial,
         states: Object.freeze(states),
         timeoutMs,
         globalAbortHandlers: abortHandlers,
         globalIgnoreFilter: ignoreFilter,
+        cleanupStates: cleanup,
       });
     },
   };
@@ -238,6 +266,23 @@ export async function runScanSession<Ctx>(
 
   return new Promise<RunScanSessionResult<Ctx>>((resolve) => {
     let settled = false;
+    // Gates settle's post-scan-save branch against doFinalize's own finalize
+    // attempt — without this, a finalize failure in doFinalize would route
+    // back through settle and retry the same call.
+    let finalizeAttempted = false;
+
+    /** Promotes pages from sessionTempDir to outputDir via the output pipeline. */
+    async function runFinalize(tempDir: string): Promise<void> {
+      const { finalizeSession } = await import("./output-tail.js");
+      await finalizeSession({
+        sessionTempDir: tempDir,
+        outputDir: opts.outputDir,
+        sessionTs: opts.sessionTs,
+        action: opts.action,
+        backPageIndices,
+        paperless: opts.paperless,
+      });
+    }
 
     function armTimeout(): void {
       if (timeoutTimer) clearTimeout(timeoutTimer);
@@ -265,6 +310,43 @@ export async function runScanSession<Ctx>(
       } catch {
         /* swallow — destroy may throw on already-closed sockets */
       }
+
+      // Post-scan-save fallback (v0.3.0 §3.3) — see Graph.cleanupStates
+      // JSDoc for the contract. If finalize itself fails, surface the
+      // original error rather than masking it with a finalize-side error.
+      if (
+        !result.ok &&
+        sessionTempDir !== null &&
+        pageIndex > 0 &&
+        graph.cleanupStates?.has(currentState) &&
+        !finalizeAttempted
+      ) {
+        finalizeAttempted = true;
+        void (async () => {
+          try {
+            await runFinalize(sessionTempDir);
+            resolve({ ok: true, finalCtx: ctx });
+          } catch {
+            // finalizeSession's own `finally` already removes
+            // sessionTempDir before throwing — no extra cleanup here.
+            resolve(result);
+          }
+        })();
+        return;
+      }
+
+      // Non-recovery failure path — make sure flushed temp pages don't
+      // outlive the session. Successful DONE goes through doFinalize →
+      // finalizeSession (which rms in its own `finally`); only the
+      // unrecoverable-error branches leave the dir behind. Best-effort.
+      if (!result.ok && sessionTempDir !== null) {
+        try {
+          fs.rmSync(sessionTempDir, { recursive: true, force: true });
+        } catch {
+          /* swallow — best-effort cleanup */
+        }
+      }
+
       resolve(result);
     };
 
@@ -320,16 +402,9 @@ export async function runScanSession<Ctx>(
       }
 
       if (sessionTempDir) {
+        finalizeAttempted = true;
         try {
-          const { finalizeSession } = await import("./output-tail.js");
-          await finalizeSession({
-            sessionTempDir,
-            outputDir: opts.outputDir,
-            sessionTs: opts.sessionTs,
-            action: opts.action,
-            backPageIndices,
-            paperless: opts.paperless,
-          });
+          await runFinalize(sessionTempDir);
         } catch (err) {
           const reason = err instanceof Error ? err : new Error(String(err));
           settle({ ok: false, reason, finalCtx: ctx });
