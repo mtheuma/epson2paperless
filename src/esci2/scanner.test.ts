@@ -3,7 +3,8 @@ import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { PDFDocument } from "pdf-lib";
-import { runEsci2Scan } from "./scanner.js";
+import { runEsci2Scan, withUnlockOnDestroy } from "./scanner.js";
+import type * as tls from "node:tls";
 import { buildIsPacket } from "../protocol.js";
 import { parseEsci2ReplyHeader } from "./commands.js";
 import { FakeTlsSocket } from "./test-support/fake-tls-socket.js";
@@ -770,6 +771,75 @@ describe("runEsci2Scan — printer cert pinning", () => {
     fake.simulateConnect();
     await expect(done).rejects.toThrow(/fingerprint mismatch/i);
     expect(fake.writes.length).toBe(0);
+  });
+});
+
+describe("withUnlockOnDestroy wrapper", () => {
+  // Stub socket: records end()/destroy() invocations without actually
+  // doing TLS / network work. Just enough surface for the wrapper.
+  function makeStubSocket() {
+    const calls: { end: number; destroy: number; endData: Buffer | null } = {
+      end: 0,
+      destroy: 0,
+      endData: null,
+    };
+    const writes: Buffer[] = [];
+    const stub = {
+      write(buf: Buffer) {
+        writes.push(buf);
+        return true;
+      },
+      end(data?: Buffer) {
+        calls.end += 1;
+        if (data) calls.endData = data;
+      },
+      destroy(_err?: Error) {
+        calls.destroy += 1;
+      },
+      on(_event: string, _cb: (...args: unknown[]) => void) {
+        return stub;
+      },
+    } as unknown as tls.TLSSocket;
+    return { socket: stub, calls, writes };
+  }
+
+  it("destroy() is a no-op after end() — preserves graceful TLS close_notify", () => {
+    // Engine flow on healthy DONE: enterState(DONE) → transport.end()
+    // (FIN), then settle → transport.destroy(). The wrapper must NOT
+    // RST the socket on the second call, or TLS close_notify never
+    // lands and the printer sees an unclean disconnect.
+    const { socket, calls } = makeStubSocket();
+    const wrapped = withUnlockOnDestroy(socket);
+    wrapped.end();
+    expect(calls.end).toBe(1);
+    wrapped.destroy();
+    expect(calls.destroy).toBe(0); // <-- the invariant
+  });
+
+  it("destroy() force-closes when end() was never called (true error path)", () => {
+    const { socket, calls } = makeStubSocket();
+    const wrapped = withUnlockOnDestroy(socket);
+    wrapped.destroy();
+    expect(calls.destroy).toBe(1);
+  });
+
+  it("destroy() sends UNLOCK via end(unlock) when LOCK was sent but UNLOCK wasn't", () => {
+    // Scenario: engine errored mid-session after LOCK landed; wrapper
+    // sends the UNLOCK record before half-closing.
+    const { socket, calls } = makeStubSocket();
+    const wrapped = withUnlockOnDestroy(socket);
+    // Forge a LOCK packet — IS header type 0x21 dispatch 0x00.
+    const lock = Buffer.alloc(12);
+    lock[2] = 0x21;
+    lock[3] = 0x00;
+    wrapped.write(lock);
+    wrapped.destroy();
+    expect(calls.destroy).toBe(0);
+    expect(calls.end).toBe(1);
+    expect(calls.endData).not.toBeNull();
+    // Unlock packet: IS header type 0x21 dispatch 0x01.
+    expect(calls.endData?.[2]).toBe(0x21);
+    expect(calls.endData?.[3]).toBe(0x01);
   });
 });
 

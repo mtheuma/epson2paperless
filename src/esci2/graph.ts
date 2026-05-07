@@ -303,13 +303,18 @@ twoPhaseRead(
 // =============================================================================
 
 /**
- * statThenDrain — builds three states that encode the "STAT reply → optional
- * drain → FIN" sub-flow that recurs in INIT_POLL (inline), POST_MODE (T24),
- * and POSTSCAN×2 (T26).
+ * statThenDrain — builds three states that encode the "STAT reply →
+ * (optional) drain → FIN" sub-flow that recurs in INIT_POLL (inline),
+ * POST_MODE (T24), and POSTSCAN×2 (T26).
  *
- *   `${prefix}_STAT`       — decision: parses reply header length; if >0 sends
- *                            pure-read and goes to _STAT_DRAIN, else sends FIN
- *                            and goes to _FIN.
+ *   `${prefix}_STAT`       — decision: parses reply header length and either
+ *                            advances to _STAT_DRAIN with a pure-read or jumps
+ *                            straight to _FIN. POST_MODE skips the drain when
+ *                            length === 0; POSTSCAN always drains (legacy
+ *                            scanner sent buildPurereadPacket(length || 12)
+ *                            before FIN unconditionally — firmware variants
+ *                            that emit zero-length status replies still need
+ *                            the drain to clear printer-side cleanup state).
  *   `${prefix}_STAT_DRAIN` — static: 0xa000 → sends FIN, goes to _FIN.
  *   `${prefix}_FIN`        — static: 0xa000 → next (with optional finSend).
  *
@@ -321,7 +326,9 @@ function statThenDrain(
   prefix: string,
   next: string,
   finSend?: SendSpec<Esci2Ctx> | SendSpec<Esci2Ctx>[],
+  opts: { alwaysDrain?: boolean } = {},
 ): void {
+  const alwaysDrain = opts.alwaysDrain ?? false;
   g.state(
     `${prefix}_STAT`,
     decision<Esci2Ctx>((_ctx, packet) => {
@@ -331,10 +338,10 @@ function statThenDrain(
       if (header === null) {
         return { error: new Error(`${prefix}_STAT: unparseable reply header`) };
       }
-      if (header.length > 0) {
+      if (header.length > 0 || alwaysDrain) {
         return {
           next: `${prefix}_STAT_DRAIN`,
-          send: buildPurereadPacket(header.length),
+          send: buildPurereadPacket(header.length > 0 ? header.length : 12),
         };
       }
       return {
@@ -395,13 +402,14 @@ g.state("POSTSCAN_FS_Y_1", {
   },
 });
 
-// POSTSCAN cycle 1: POSTSCAN_1_STAT → POSTSCAN_1_STAT_DRAIN? → POSTSCAN_1_FIN → POSTSCAN_FS_Y_2
+// POSTSCAN cycle 1: POSTSCAN_1_STAT → POSTSCAN_1_STAT_DRAIN → POSTSCAN_1_FIN → POSTSCAN_FS_Y_2
 // POSTSCAN_1_FIN sends FS Y to start cycle 2.
 statThenDrain(
   g,
   "POSTSCAN_1",
   "POSTSCAN_FS_Y_2",
   buildPassthruPacket(buildFsY(), LEGACY_REPLY_SIZE),
+  { alwaysDrain: true },
 );
 
 // POSTSCAN_FS_Y_2: receives FS Y ACK (0xa000, payload[0]=0x06); sends STAT.
@@ -415,9 +423,9 @@ g.state("POSTSCAN_FS_Y_2", {
   },
 });
 
-// POSTSCAN cycle 2: POSTSCAN_2_STAT → POSTSCAN_2_STAT_DRAIN? → POSTSCAN_2_FIN → UNLOCKING
+// POSTSCAN cycle 2: POSTSCAN_2_STAT → POSTSCAN_2_STAT_DRAIN → POSTSCAN_2_FIN → UNLOCKING
 // POSTSCAN_2_FIN has no further send — UNLOCKING's onEnter sends the unlock packet.
-statThenDrain(g, "POSTSCAN_2", "UNLOCKING");
+statThenDrain(g, "POSTSCAN_2", "UNLOCKING", undefined, { alwaysDrain: true });
 
 // =============================================================================
 // UNLOCKING state — onEnter sends unlock packet, awaits 0xa101 ack → DONE
@@ -793,15 +801,19 @@ g.state(
 // Cleanup-state declaration — engine post-scan-save fallback (v0.3.0 §3.3)
 // =============================================================================
 //
-// Once the last page has been flushed, the remaining states are panel
-// hygiene: ADF drain handshake (POSTSCAN_*), final ack handshake
-// (FIN_AFTER_IMG), and the LOCK release (UNLOCKING). Failures here —
-// printer dropping the connection, async fatal during drain, an
-// unexpected reply byte on the unlock ack — should not discard scans
-// already sitting in the temp dir. The engine consults this set at
-// settle time and only recovers when current state is one of these.
+// Once the last page has been flushed AND the post-image FIN ack has
+// been received, the remaining states are panel hygiene: ADF drain
+// handshake (POSTSCAN_*) and the LOCK release (UNLOCKING). Failures
+// there — printer dropping the connection, async fatal during drain,
+// an unexpected reply byte on the unlock ack — should not discard
+// scans already sitting in the temp dir.
+//
+// FIN_AFTER_IMG is intentionally NOT in this list. The legacy scanner
+// only forgave failures in POSTSCAN_*/UNLOCKING; the FIN ack is the
+// printer's confirmation that image transfer completed cleanly, so an
+// async fatal, malformed reply, or timeout there can signal a real
+// end-of-transfer protocol error and should still reject the scan.
 g.cleanupStates([
-  "FIN_AFTER_IMG",
   "POSTSCAN_FS_Y_1",
   "POSTSCAN_1_STAT",
   "POSTSCAN_1_STAT_DRAIN",

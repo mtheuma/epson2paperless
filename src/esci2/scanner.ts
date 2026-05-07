@@ -54,10 +54,20 @@ export type TlsSocketFactory = (
  *    that to the engine would turn a successful scan into a rejection.
  *    The wrapper swallows those benign codes after end() has been called.
  */
-function withUnlockOnDestroy(socket: tls.TLSSocket): SessionTransport {
+export function withUnlockOnDestroy(socket: tls.TLSSocket): SessionTransport {
   let unlockSent = false;
   let lockSent = false;
+  // Tracks any teardown so post-close ECONNRESET / EPIPE noise can be
+  // swallowed. Set by both end() and destroy().
   let endCalled = false;
+  // Tracks specifically whether we already initiated a graceful close
+  // via end(). The engine calls transport.destroy() from settle even on
+  // healthy DONE (after end()), and a socket.destroy() there would RST
+  // the connection mid-TLS-close_notify and cancel the FIN we politely
+  // queued — reintroducing timing-dependent panel errors. When this is
+  // true, destroy() is a no-op and the graceful close completes on its
+  // own clock.
+  let politelyClosed = false;
   const wrapped: SessionTransport = {
     write(buf: Buffer) {
       // Track LOCK / UNLOCK sends by IS type byte (header byte 2-3).
@@ -69,9 +79,11 @@ function withUnlockOnDestroy(socket: tls.TLSSocket): SessionTransport {
     },
     end: () => {
       endCalled = true;
+      politelyClosed = true;
       socket.end();
     },
     destroy(err?: Error) {
+      if (politelyClosed) return;
       endCalled = true;
       if (lockSent && !unlockSent) {
         // Use end(unlock) — half-closes the connection after writing the

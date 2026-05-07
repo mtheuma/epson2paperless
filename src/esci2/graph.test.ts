@@ -855,6 +855,21 @@ describe("esci2Graph T26 — FIN_AFTER_IMG decision + POSTSCAN drain cycles", ()
     expect(esci2Graph.states.POSTSCAN_1_STAT.kind).toBe("decision");
   });
 
+  it("POSTSCAN_1_STAT always pure-reads into _STAT_DRAIN, even on zero-length reply", () => {
+    // POSTSCAN cycles must mirror the legacy scanner's wire sequence:
+    // pure-read with the declared length (or 12 as fallback) before
+    // FIN, regardless of the reply's status length. Skipping the drain
+    // on zero-length leaves printer-side cleanup state pending on
+    // firmware variants that emit empty STAT replies.
+    const state = esci2Graph.states.POSTSCAN_1_STAT;
+    if (state.kind !== "decision") return;
+    const zeroLengthHeader = Buffer.from("STATx0000000" + " ".repeat(52), "ascii");
+    const result = state.decide(makeCtx({}), { type: 0xa000, payload: zeroLengthHeader });
+    if ("error" in result) throw result.error;
+    expect(result.next).toBe("POSTSCAN_1_STAT_DRAIN");
+    expect("send" in result && result.send).toBeDefined();
+  });
+
   it("statThenDrain POSTSCAN_1_FIN advances to POSTSCAN_FS_Y_2 with FS Y send", () => {
     const state = esci2Graph.states.POSTSCAN_1_FIN;
     expect(state.kind).toBe("static");
@@ -889,6 +904,28 @@ describe("esci2Graph T26 — FIN_AFTER_IMG decision + POSTSCAN drain cycles", ()
       expect(state.on[0xa000]?.next).toBe("UNLOCKING");
       expect(state.on[0xa000]?.send).toBeUndefined();
     }
+  });
+
+  it("POSTSCAN_2_STAT always pure-reads into _STAT_DRAIN on zero-length reply too", () => {
+    const state = esci2Graph.states.POSTSCAN_2_STAT;
+    if (state.kind !== "decision") return;
+    const zeroLengthHeader = Buffer.from("STATx0000000" + " ".repeat(52), "ascii");
+    const result = state.decide(makeCtx({}), { type: 0xa000, payload: zeroLengthHeader });
+    if ("error" in result) throw result.error;
+    expect(result.next).toBe("POSTSCAN_2_STAT_DRAIN");
+    expect("send" in result && result.send).toBeDefined();
+  });
+
+  it("cleanupStates does NOT include FIN_AFTER_IMG (matches v0.3.0 contract)", () => {
+    // Failures while waiting for the post-image FIN ack — async fatal,
+    // malformed reply, timeout — can signal real end-of-transfer
+    // protocol errors (printer abort mid-transfer rather than panel
+    // hygiene). They must not be silently recovered as success.
+    expect(esci2Graph.cleanupStates?.has("FIN_AFTER_IMG")).toBe(false);
+    // POSTSCAN_* and UNLOCKING ARE forgiven — those are panel hygiene.
+    expect(esci2Graph.cleanupStates?.has("UNLOCKING")).toBe(true);
+    expect(esci2Graph.cleanupStates?.has("POSTSCAN_FS_Y_1")).toBe(true);
+    expect(esci2Graph.cleanupStates?.has("POSTSCAN_2_FIN")).toBe(true);
   });
 });
 
