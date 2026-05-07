@@ -276,6 +276,12 @@ export async function runScanSession<Ctx>(
     // attempt — without this, a finalize failure in doFinalize would route
     // back through settle and retry the same call.
     let finalizeAttempted = false;
+    // Pump-loop reentrancy guard. Hoisted above listener registration so a
+    // transport that fires `data` synchronously during `transport.on("data", …)`
+    // doesn't TDZ on this `let` when the resulting tryDispatch invocation
+    // reads it. Pair this with the `currentState === ""` gate inside the
+    // pump and the post-initial-entry tryDispatch trigger below.
+    let dispatching = false;
 
     /** Promotes pages from sessionTempDir to outputDir via the output pipeline. */
     async function runFinalize(tempDir: string): Promise<void> {
@@ -307,14 +313,22 @@ export async function runScanSession<Ctx>(
       }
     }
 
-    const settle = (result: RunScanSessionResult<Ctx>) => {
+    const settle = (result: RunScanSessionResult<Ctx>, settleOpts?: { skipDestroy?: boolean }) => {
       if (settled) return; // idempotent — close handler may also call this
       settled = true;
       clearTimeoutTimer(); // (T15)
-      try {
-        transport.destroy();
-      } catch {
-        /* swallow — destroy may throw on already-closed sockets */
+      // Natural-DONE success has already issued a polite transport.end() in
+      // enterState; calling destroy on top of it is redundant and forces
+      // adapters to special-case "we already closed." All failure paths still
+      // destroy. Recovery via cleanupStates bypasses settle's ok-resolution
+      // (it resolves directly inside the IIFE), so a recovered scan still
+      // tears down via the prior abort settle that ran before recovery.
+      if (!settleOpts?.skipDestroy) {
+        try {
+          transport.destroy();
+        } catch {
+          /* swallow — destroy may throw on already-closed sockets */
+        }
       }
 
       // Post-scan-save fallback (v0.3.0 §3.3) — see Graph.cleanupStates
@@ -376,7 +390,17 @@ export async function runScanSession<Ctx>(
         // timer fires "Timeout in state DONE" mid-finalize, races settle, and
         // rms sessionTempDir while finalizeSession is still reading it.
         clearTimeoutTimer();
-        transport.end(); // polite close request; peer may ACK late or never
+        // Polite close request; peer may ACK late or never. Wrap in
+        // try/catch — a real socket can throw on already-destroyed (e.g.
+        // peer RST during DONE entry). Swallowing keeps doFinalize on the
+        // schedule; a valid scan that just had a flaky close still settles
+        // ok rather than getting reported as failure when the throw routes
+        // through tryDispatch's catch.
+        try {
+          transport.end();
+        } catch {
+          /* swallow — already-closed sockets can throw on .end() */
+        }
         // Schedule logical finalize independently — do NOT block on socket
         // close. setImmediate gives any in-flight microtasks (e.g. flushPage's
         // last file-write) a tick to settle before we run finalize.
@@ -423,7 +447,7 @@ export async function runScanSession<Ctx>(
           return;
         }
       }
-      settle({ ok: true, finalCtx: ctx });
+      settle({ ok: true, finalCtx: ctx }, { skipDestroy: true });
     }
 
     transport.on("error", (err) => {
@@ -468,18 +492,19 @@ export async function runScanSession<Ctx>(
       for (const buf of buffers) transport.write(buf);
     }
 
-    let dispatching = false;
-
     /**
      * Async pump loop. Reentrancy is prevented by the `dispatching` guard:
      * concurrent calls (from `'data'` events that fire while the loop is
      * awaiting an applyTransition) short-circuit; the active loop drains
      * any chunks they buffered on its next iteration.
      *
-     * The loop checks `paused`, `settled`, and `currentState === "DONE"` at
-     * every step — set during a flushPage barrier or after the session is
-     * finalized — so a buffered second packet in the same TCP chunk doesn't
-     * keep dispatching after the session has already completed or errored.
+     * The loop checks `paused`, `settled`, `currentState === ""` (initial-
+     * entry gate — handles transports that synchronously fire `data` during
+     * listener registration, before enterState(graph.initial) has run), and
+     * `currentState === "DONE"` at every step — set during a flushPage
+     * barrier or after the session is finalized — so a buffered second
+     * packet in the same TCP chunk doesn't keep dispatching after the
+     * session has already completed or errored.
      *
      * Hook exceptions (from validate, decision, onEnter, send thunks, etc.)
      * are caught here and routed through settle so they surface as
@@ -490,7 +515,7 @@ export async function runScanSession<Ctx>(
       dispatching = true;
       try {
         while (true) {
-          if (paused || settled || currentState === "DONE") return;
+          if (paused || settled || currentState === "" || currentState === "DONE") return;
           const packet = tryParseHead();
           if (!packet) return;
           try {
@@ -508,7 +533,7 @@ export async function runScanSession<Ctx>(
             }
             return;
           }
-          if (paused || settled || currentState === "DONE") return;
+          if (paused || settled || currentState === "" || currentState === "DONE") return;
         }
       } finally {
         dispatching = false;
@@ -650,6 +675,13 @@ export async function runScanSession<Ctx>(
 
         try {
           const jpegBytes = await t.flushPage.encode();
+          // If the transport errored or closed during the encode, settle has
+          // already run; bail before any further side-effect (file write,
+          // staged send, ctx mutation).
+          if (settled) {
+            paused = false;
+            return;
+          }
 
           // Track back-page index regardless of action (PDF mode needs it for
           // pdf-lib /Rotate=180 in finalizeSession).
@@ -661,16 +693,32 @@ export async function runScanSession<Ctx>(
           let outputBytes = jpegBytes;
           if (t.flushPage.side === "back" && opts.action === "jpg") {
             const { setJpegOrientation } = await import("./exif.js");
+            if (settled) {
+              paused = false;
+              return;
+            }
             outputBytes = setJpegOrientation(jpegBytes, 3);
           }
 
           // Write to temp file.
           if (!sessionTempDir) {
             sessionTempDir = await createSessionTempDir(opts.tempDir);
+            if (settled) {
+              paused = false;
+              return;
+            }
           }
           const filename = `page_${String(myPageIndex).padStart(2, "0")}.jpg`;
           await fs.promises.writeFile(path.join(sessionTempDir, filename), outputBytes);
+          if (settled) {
+            paused = false;
+            return;
+          }
         } catch (err) {
+          // Flag-consistency: barrier always exits with paused=false, even on
+          // the error path, so a subsequent settled-gated re-entry doesn't
+          // see a stale `paused = true`.
+          paused = false;
           const reason = err instanceof Error ? err : new Error(String(err));
           settle({ ok: false, reason, finalCtx: ctx });
           return;
@@ -702,6 +750,11 @@ export async function runScanSession<Ctx>(
     // call site, since callers await the result, not a thrown error).
     try {
       enterState(graph.initial);
+      // Drain anything that arrived synchronously during listener
+      // registration. The pump's `currentState === ""` gate held those
+      // chunks in recvChunks; nothing schedules tryDispatch on its own
+      // once we've left the empty state, so trigger it explicitly.
+      void tryDispatch();
     } catch (err) {
       const reason = err instanceof Error ? err : new Error(String(err));
       settle({

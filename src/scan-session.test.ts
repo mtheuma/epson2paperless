@@ -55,16 +55,27 @@ describe("decision", () => {
 
 class FakeTransport extends EventEmitter implements SessionTransport {
   written: Buffer[] = [];
-  destroyed = false;
+  destroyCallCount = 0;
+  /**
+   * Test hook: when set, end() throws this error. Used to verify the engine
+   * tolerates a throwing transport.end() (e.g. real sockets can throw on
+   * already-destroyed) without rerouting a valid scan into the failure path.
+   */
+  endThrowsOnce: Error | null = null;
   write(buf: Buffer): boolean {
     this.written.push(buf);
     return true;
   }
   end(): void {
+    if (this.endThrowsOnce) {
+      const err = this.endThrowsOnce;
+      this.endThrowsOnce = null;
+      throw err;
+    }
     this.emit("close");
   }
   destroy(err?: Error): void {
-    this.destroyed = true;
+    this.destroyCallCount += 1;
     if (err) this.emit("error", err);
     this.emit("close");
   }
@@ -1061,5 +1072,339 @@ describe("runScanSession (engine pump)", () => {
       expect(result.reason.message).toMatch(/Engine error in state WAITING/);
       expect(result.reason.message).toMatch(/bad payload parse/);
     }
+  });
+
+  // ---------------------------------------------------------------------------
+  // PR 1 lifecycle hardening regression suite
+  // ---------------------------------------------------------------------------
+
+  it("clean DONE success skips transport.destroy() (polite end already issued)", async () => {
+    // Regression: prior to PR 1, settle() unconditionally called destroy()
+    // even after enterState("DONE") had already issued a polite end(). That
+    // forced adapters to special-case "we already closed." Now: natural-DONE
+    // success skips destroy; only failure paths (and the cleanupStates
+    // recovery's prior abort settle) destroy.
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "DONE",
+          flushPage: {
+            side: "front",
+            encode: () => Promise.resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+          },
+        },
+      },
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    expect(transport.destroyCallCount).toBe(0);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
+  it("cleanupStates recovery still destroys the transport (abort settle ran first), then resolves ok", async () => {
+    // Companion to the previous test. The cleanupStates fallback path
+    // bypasses settle for its ok-resolution (it resolve()s the promise
+    // directly inside an IIFE), but it has *already* gone through a prior
+    // settle({ ok: false }) — which destroys. So a recovered scan still
+    // tears down the transport correctly, even though the final result
+    // is { ok: true }.
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "CLEANUP",
+          flushPage: {
+            side: "front",
+            encode: () => Promise.resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+          },
+        },
+      },
+    });
+    g.state("CLEANUP", {
+      ...decision(() => ({ error: new Error("cleanup glitch after flush") })),
+    });
+    g.cleanupStates(["CLEANUP"]);
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+    });
+
+    setImmediate(() =>
+      transport.emit(
+        "data",
+        Buffer.concat([
+          buildIsPacket(0xa000, Buffer.alloc(0)),
+          buildIsPacket(0xa000, Buffer.alloc(0)),
+        ]),
+      ),
+    );
+
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    expect(transport.destroyCallCount).toBeGreaterThanOrEqual(1);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
+  it("tolerates synchronous data replay during transport.on('data', ...) registration", async () => {
+    // Pre-fix behaviour: `let dispatching` was declared after the data
+    // listener was registered, so a synchronous-during-registration replay
+    // would TDZ when the resulting tryDispatch read `dispatching`. Then,
+    // even with `dispatching` hoisted, dispatch would crash on a
+    // graph.states[""] lookup because enterState(graph.initial) hadn't
+    // run yet. Then, even with the empty-state gate, the chunk would sit
+    // in recvChunks forever because nothing scheduled tryDispatch after
+    // initial entry. All three fixes are required for this test to pass.
+    class SyncReplayFakeTransport extends EventEmitter implements SessionTransport {
+      pending: Buffer[] = [];
+      written: Buffer[] = [];
+      destroyCallCount = 0;
+      write(buf: Buffer): boolean {
+        this.written.push(buf);
+        return true;
+      }
+      end(): void {
+        this.emit("close");
+      }
+      destroy(): void {
+        this.destroyCallCount += 1;
+        this.emit("close");
+      }
+      override on(event: string | symbol, listener: (...args: unknown[]) => void): this {
+        const wasFirst = this.listenerCount(event) === 0;
+        super.on(event, listener);
+        if (event === "data" && wasFirst && this.pending.length > 0) {
+          // Synchronously replay each queued chunk during the on() call —
+          // before it returns. Real Node sockets don't do this, but this is
+          // the contract the engine should be robust to.
+          const queue = this.pending.splice(0);
+          for (const chunk of queue) listener(chunk);
+        }
+        return this;
+      }
+    }
+
+    const transport = new SyncReplayFakeTransport();
+    // Queue the trigger packet *before* runScanSession registers its data
+    // listener, so the .on("data", cb) call in runScanSession synchronously
+    // replays the chunk before returning.
+    transport.pending.push(buildIsPacket(0xa000, Buffer.alloc(0)));
+
+    const g = createGraph<Record<string, never>>("WAITING", 1_000);
+    g.state("WAITING", { on: { 0xa000: { next: "DONE" } } });
+
+    const result = await runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("keeps a valid scan ok when transport.end() throws on DONE entry", async () => {
+    // Regression: prior to PR 1, a throw from transport.end() inside
+    // enterState("DONE") propagated up through applyTransition into
+    // tryDispatch's catch, which routed through settle({ ok: false }) —
+    // misclassifying a successful scan (all pages flushed, finalize would
+    // have succeeded) as a failure. Post-fix the throw is swallowed and
+    // doFinalize runs normally.
+    const transport = new FakeTransport();
+    transport.endThrowsOnce = new Error("simulated already-destroyed throw");
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "DONE",
+          flushPage: {
+            side: "front",
+            encode: () => Promise.resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+          },
+        },
+      },
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    // Clean-DONE-skip-destroy contract still applies — even though end()
+    // threw, the engine treats DONE as a clean exit and doesn't escalate
+    // to destroy.
+    expect(transport.destroyCallCount).toBe(0);
+    const outputs = fs.readdirSync(outputDir);
+    expect(outputs.some((f) => /^scan_.*\.jpg$/.test(f))).toBe(true);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
+  it("settles cleanly when 'close' arrives during a flushPage barrier (no double-settle, no post-settle writes)", async () => {
+    // While encode is pending, the transport closes unexpectedly. The
+    // engine's barrier code re-checks `settled` after each await before
+    // performing any side-effect (file write, staged send, ctx mutation,
+    // entering the staged next state).
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+
+    let resolveEncode: ((bytes: Buffer) => void) | null = null;
+    const encodePromise = new Promise<Buffer>((r) => {
+      resolveEncode = r;
+    });
+    const settleSpyWrites: Buffer[] = [];
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "AFTER",
+          send: Buffer.from([0xca, 0xfe]), // staged send — must NOT fire post-close
+          flushPage: { side: "front", encode: () => encodePromise },
+        },
+      },
+    });
+    g.state("AFTER", { on: {} });
+
+    // Wrap write to catch any post-close staged-send leak.
+    const origWrite = transport.write.bind(transport);
+    transport.write = (buf: Buffer) => {
+      settleSpyWrites.push(buf);
+      return origWrite(buf);
+    };
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: tempDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+
+    // Wait long enough for the barrier to start, then close the transport
+    // mid-encode and let encode resolve.
+    await new Promise((r) => setTimeout(r, 20));
+    transport.emit("close");
+    await new Promise((r) => setTimeout(r, 5));
+    resolveEncode!(Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason.message).toMatch(/closed unexpectedly/);
+    // Staged send (0xca 0xfe) must NOT have been written post-settle.
+    expect(settleSpyWrites.some((b) => b.equals(Buffer.from([0xca, 0xfe])))).toBe(false);
+    // Close path destroys the transport.
+    expect(transport.destroyCallCount).toBeGreaterThanOrEqual(1);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("settles cleanly when 'error' arrives during a flushPage barrier", async () => {
+    // Mirror of the close-mid-barrier test, but with an error event. Same
+    // settled-recheck contract applies.
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+
+    let resolveEncode: ((bytes: Buffer) => void) | null = null;
+    const encodePromise = new Promise<Buffer>((r) => {
+      resolveEncode = r;
+    });
+    const stagedSendObserved: Buffer[] = [];
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "AFTER",
+          send: Buffer.from([0xde, 0xad]),
+          flushPage: { side: "front", encode: () => encodePromise },
+        },
+      },
+    });
+    g.state("AFTER", { on: {} });
+
+    const origWrite = transport.write.bind(transport);
+    transport.write = (buf: Buffer) => {
+      stagedSendObserved.push(buf);
+      return origWrite(buf);
+    };
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: tempDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+
+    await new Promise((r) => setTimeout(r, 20));
+    transport.emit("error", new Error("network blip mid-encode"));
+    await new Promise((r) => setTimeout(r, 5));
+    resolveEncode!(Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason.message).toMatch(/network blip mid-encode/);
+    expect(stagedSendObserved.some((b) => b.equals(Buffer.from([0xde, 0xad])))).toBe(false);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 });
