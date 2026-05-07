@@ -790,6 +790,30 @@ g.state(
 );
 
 // =============================================================================
+// Cleanup-state declaration — engine post-scan-save fallback (v0.3.0 §3.3)
+// =============================================================================
+//
+// Once the last page has been flushed, the remaining states are panel
+// hygiene: ADF drain handshake (POSTSCAN_*), final ack handshake
+// (FIN_AFTER_IMG), and the LOCK release (UNLOCKING). Failures here —
+// printer dropping the connection, async fatal during drain, an
+// unexpected reply byte on the unlock ack — should not discard scans
+// already sitting in the temp dir. The engine consults this set at
+// settle time and only recovers when current state is one of these.
+g.cleanupStates([
+  "FIN_AFTER_IMG",
+  "POSTSCAN_FS_Y_1",
+  "POSTSCAN_1_STAT",
+  "POSTSCAN_1_STAT_DRAIN",
+  "POSTSCAN_1_FIN",
+  "POSTSCAN_FS_Y_2",
+  "POSTSCAN_2_STAT",
+  "POSTSCAN_2_STAT_DRAIN",
+  "POSTSCAN_2_FIN",
+  "UNLOCKING",
+]);
+
+// =============================================================================
 // Export the built graph
 // =============================================================================
 

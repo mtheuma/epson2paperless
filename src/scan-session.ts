@@ -47,6 +47,17 @@ export interface Graph<Ctx> {
    * "wait for body" empty-envelope pattern (ESC/I-2 empty 0xa000).
    */
   globalIgnoreFilter?: (packet: { type: number; payload: Buffer }) => boolean;
+  /**
+   * States in which a failure is treated as post-image cleanup and
+   * recovered to success via the post-scan-save fallback (v0.3.0 §3.3) —
+   * provided at least one page has already flushed. The graph declares
+   * which states sit *after* the last image transfer (e.g.
+   * FIN_AFTER_IMG, POSTSCAN_*, UNLOCKING). Failures in image-acquisition
+   * states (IMG_META, IMG_DATA, etc.) still reject the session even on
+   * page 2 of N — partial multi-page output should not be silently
+   * promoted as success.
+   */
+  cleanupStates?: ReadonlySet<string>;
 }
 
 /** Single write spec — concrete bytes or a ctx-thunk resolved at dispatch time. */
@@ -124,6 +135,12 @@ export interface GraphBuilder<Ctx> {
   ): this;
   /** Set the graph's pre-dispatch packet filter. */
   globalIgnoreFilter(filter: (packet: { type: number; payload: Buffer }) => boolean): this;
+  /**
+   * Declare the post-image cleanup states. Failures in any of these
+   * states are recovered to success via the post-scan-save fallback when
+   * pages have already flushed. See `Graph.cleanupStates` for semantics.
+   */
+  cleanupStates(names: readonly string[]): this;
   build(): Graph<Ctx>;
 }
 
@@ -141,6 +158,7 @@ export function createGraph<Ctx>(initial: string, timeoutMs: number): GraphBuild
   const states: Record<string, GraphState<Ctx>> = {};
   let abortHandlers: Graph<Ctx>["globalAbortHandlers"];
   let ignoreFilter: Graph<Ctx>["globalIgnoreFilter"];
+  let cleanup: ReadonlySet<string> | undefined;
   return {
     state(name, def) {
       if (name === "DONE") {
@@ -164,14 +182,24 @@ export function createGraph<Ctx>(initial: string, timeoutMs: number): GraphBuild
       ignoreFilter = filter;
       return this;
     },
+    cleanupStates(names) {
+      cleanup = new Set(names);
+      return this;
+    },
     build() {
       if (!states[initial]) throw new Error(`Initial state '${initial}' not defined`);
+      if (cleanup) {
+        for (const name of cleanup) {
+          if (!states[name]) throw new Error(`cleanupStates references undefined state '${name}'`);
+        }
+      }
       return Object.freeze({
         initial,
         states: Object.freeze(states),
         timeoutMs,
         globalAbortHandlers: abortHandlers,
         globalIgnoreFilter: ignoreFilter,
+        cleanupStates: cleanup,
       });
     },
   };
@@ -270,16 +298,23 @@ export async function runScanSession<Ctx>(
         /* swallow — destroy may throw on already-closed sockets */
       }
 
-      // Post-scan-save fallback (v0.3.0 §3.3). If pages were already
-      // flushed before this failure fired, the failure is happening in
-      // post-image cleanup territory (panel hygiene — UNLOCK ack, async
-      // event, peer close mid-handshake). Promote the captured pages to
-      // outputDir and resolve as success. Discarding scans the user
-      // already got out of the printer is the worse outcome here.
+      // Post-scan-save fallback (v0.3.0 §3.3). Restricted to states the
+      // graph explicitly declares as post-image cleanup: panel-hygiene
+      // failures (UNLOCK ack, async drain event, peer close after the
+      // last page) shouldn't discard scans the user already got out of
+      // the printer. Failures in image-acquisition states (IMG_META,
+      // IMG_DATA, etc.) still reject — partial multi-page output isn't
+      // silently promoted to success on page 2 of N.
       // finalizeAttempted gates the doFinalize → settle({ok:false}) loop:
       // if doFinalize already tried and failed, surface the original error
       // instead of retrying.
-      if (!result.ok && sessionTempDir !== null && pageIndex > 0 && !finalizeAttempted) {
+      if (
+        !result.ok &&
+        sessionTempDir !== null &&
+        pageIndex > 0 &&
+        graph.cleanupStates?.has(currentState) &&
+        !finalizeAttempted
+      ) {
         finalizeAttempted = true;
         const tempDirAtSettle = sessionTempDir;
         void (async () => {

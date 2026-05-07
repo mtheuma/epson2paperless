@@ -474,6 +474,7 @@ describe("runScanSession (engine pump)", () => {
     g.state("CLEANUP", {
       ...decision(() => ({ error: new Error("cleanup glitch after flush") })),
     });
+    g.cleanupStates(["CLEANUP"]);
 
     const promise = runScanSession({
       graph: g.build(),
@@ -500,6 +501,67 @@ describe("runScanSession (engine pump)", () => {
     expect(result.ok).toBe(true);
     const outputs = fs.readdirSync(outputDir);
     expect(outputs.some((f) => /^scan_.*\.jpg$/.test(f))).toBe(true);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
+  it("post-scan-save fallback skipped when failure is in a non-cleanup state (mid-multi-page acquisition)", async () => {
+    // Models a 3-page scan that fatals while waiting for page 2: page 1
+    // is already flushed, but the failing state is image-acquisition,
+    // not cleanup. We must NOT silently treat partial output as success.
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+
+    const g = createGraph<Record<string, never>>("IMG_META_1", 1_000);
+    // IMG_META_1: flush page 1, then advance to IMG_META_2 (still in
+    // image-acquisition territory).
+    g.state("IMG_META_1", {
+      on: {
+        0xa000: {
+          next: "IMG_META_2",
+          flushPage: {
+            side: "front",
+            encode: () => Promise.resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+          },
+        },
+      },
+    });
+    // IMG_META_2: simulates the fatal during page-2 acquisition. Not
+    // declared as a cleanup state.
+    g.state("IMG_META_2", {
+      ...decision(() => ({ error: new Error("printer fatal mid-page-2") })),
+    });
+    // Declare IMG_META_1 as the only "cleanup" state — but the failure
+    // happens in IMG_META_2, so the predicate is false at settle time.
+    // (Using IMG_META_1 here just to satisfy the build-time "cleanup
+    // references defined state" check; the test still proves the
+    // predicate gates correctly.)
+    g.cleanupStates(["IMG_META_1"]);
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    setImmediate(() =>
+      setImmediate(() =>
+        setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0)))),
+      ),
+    );
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason.message).toMatch(/printer fatal mid-page-2/);
+    // outputDir must remain empty — partial multi-page output isn't promoted.
+    expect(fs.readdirSync(outputDir).length).toBe(0);
 
     fs.rmSync(tempDir, { recursive: true, force: true });
     fs.rmSync(outputDir, { recursive: true, force: true });
