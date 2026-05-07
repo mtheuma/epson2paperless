@@ -1,6 +1,5 @@
 import { describe, it, expect } from "vitest";
 import { esciGraph, ESCI_TIMEOUT_MS, ESCI_REPLY, type EsciCtx } from "./graph.js";
-import { parseFsGReply } from "./commands.js";
 
 function makeCtx(overrides: Partial<EsciCtx> = {}): EsciCtx {
   return {
@@ -14,10 +13,9 @@ function makeCtx(overrides: Partial<EsciCtx> = {}): EsciCtx {
     inInterPageLoop: false,
     pageCount: 0,
     gammaChannelIdx: 0,
-    fsGReply: null,
+    geom: null,
     imageBuffer: Buffer.alloc(0),
     imageBufferOffset: 0,
-    expectedBytes: 0,
     ...overrides,
   };
 }
@@ -292,13 +290,9 @@ describe("esciGraph reset / gamma / window / start cycles", () => {
       payload.writeUInt32LE(7002, 10);
       const result = state.decide(ctx, { type: ESCI_REPLY, payload });
       expect("next" in result && result.next).toBe("IMG_RECEIVING");
-      expect(ctx.expectedBytes).toBeGreaterThan(0);
-      expect(ctx.imageBuffer.length).toBe(ctx.expectedBytes);
-      // Sanity-check the parsed reply was retained on ctx.
-      expect(ctx.fsGReply).not.toBeNull();
-      expect(ctx.fsGReply!.chunkSize).toBe(0x1000);
-      // parseFsGReply round-trip
-      expect(parseFsGReply(payload).chunkSize).toBe(0x1000);
+      expect(ctx.imageBuffer.length).toBeGreaterThan(0);
+      expect(ctx.geom).not.toBeNull();
+      expect(ctx.imageBuffer.length).toBe(ctx.geom!.widthPx * ctx.geom!.heightPx * 3);
     }
   });
 
@@ -326,11 +320,16 @@ describe("esciGraph reset / gamma / window / start cycles", () => {
 });
 
 describe("esciGraph IMG_RECEIVING / PAGE_EJECT_WAIT / cleanup", () => {
+  // Stub geometry sized so widthPx * heightPx * 3 = the test's pre-allocated
+  // imageBuffer length. flush.encode() is never invoked from these tests, so
+  // dpi / topYOffsetPx values don't matter — only the dimensions feed back
+  // into the IMG_RECEIVING flush spec.
+  const stubGeom = { dpi: 300, widthPx: 1, heightPx: 2, topYOffsetPx: 0 };
+
   it("IMG_RECEIVING accumulates mid-page chunks without advancing", () => {
     const state = esciGraph.states.IMG_RECEIVING;
     if (state.kind === "decision") {
       const ctx = makeCtx({
-        expectedBytes: 100,
         imageBuffer: Buffer.alloc(100),
         imageBufferOffset: 0,
       });
@@ -348,7 +347,7 @@ describe("esciGraph IMG_RECEIVING / PAGE_EJECT_WAIT / cleanup", () => {
     if (state.kind === "decision") {
       const ctx = makeCtx({
         source: "flatbed",
-        expectedBytes: 6,
+        geom: stubGeom,
         imageBuffer: Buffer.alloc(6),
         imageBufferOffset: 0,
       });
@@ -366,7 +365,7 @@ describe("esciGraph IMG_RECEIVING / PAGE_EJECT_WAIT / cleanup", () => {
     if (state.kind === "decision") {
       const ctx = makeCtx({
         source: "adf-duplex",
-        expectedBytes: 6,
+        geom: stubGeom,
         imageBuffer: Buffer.alloc(6),
         imageBufferOffset: 0,
       });
@@ -384,7 +383,7 @@ describe("esciGraph IMG_RECEIVING / PAGE_EJECT_WAIT / cleanup", () => {
       const ctx = makeCtx({
         source: "adf-duplex",
         pageCount: 1, // about to flush page 2 (back)
-        expectedBytes: 6,
+        geom: stubGeom,
         imageBuffer: Buffer.alloc(6),
         imageBufferOffset: 0,
       });

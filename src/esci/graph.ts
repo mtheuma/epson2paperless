@@ -3,15 +3,7 @@
 // ESC/I (legacy WF-3620) scan-session graph. Built atop the protocol-blind
 // engine in src/scan-session.ts. Mirrors the wire sequence captured from
 // real-hardware Wireshark pcaps; replay tests in src/esci/scanner.test.ts
-// pin every byte we emit.
-//
-// Patterned after src/esci2/graph.ts:
-//   - `expectIsType` guard at the top of every decision state
-//   - `awaitReply` helper for "static state: wait for type, validate, advance+send"
-//   - `escEThenAck` helper for the "ESC e + param then 2 ACKs" pattern that
-//     recurs five times in the ESC/I init / cleanup flows
-//   - all sends live on upstream transitions; only UNLOCKING uses onEnter
-//     (to preserve wire order: ack-of-prev → unlock).
+// pin every byte we emit. Structurally parallels src/esci2/graph.ts.
 
 import {
   createGraph,
@@ -45,10 +37,10 @@ import {
   SOURCE_BYTE,
   type Source,
   type Format,
-  type FsGReply,
+  type ScanGeometry,
 } from "./commands.js";
-// FS Y is the ET-4950 ESC/I-2 init's first command. We use it here only for
-// the DIAGNOSE_PROTOCOL probe — sent after ESC @ NAKs to classify printers
+// FS Y is the ET-4950 ESC/I-2 init's first command. Used here only for the
+// DIAGNOSE_PROTOCOL probe — sent after ESC @ NAKs to classify printers
 // stuck between ESC/I and ESC/I-2.
 import { buildFsY } from "../esci2/commands.js";
 import { GAMMA_LUT_R, GAMMA_LUT_G, GAMMA_LUT_B } from "./luts.js";
@@ -76,21 +68,22 @@ export interface EsciCtx {
   pageCount: number;
   /** Gamma channel iterator (R/G/B). */
   gammaChannelIdx: number;
-  /** Cached parsed FS G reply for the current page. */
-  fsGReply: FsGReply | null;
-  /** Per-page pixel buffer + write offset (allocated on first chunk after FS G). */
+  /**
+   * Per-page pixel buffer + write offset. Allocated in START once FS G has
+   * confirmed the scan geometry; reset to a length-0 buffer between pages so
+   * `imageBufferOffset < imageBuffer.length` is the page-complete check.
+   */
   imageBuffer: Buffer;
   imageBufferOffset: number;
-  expectedBytes: number;
+  /** Cached scan geometry (set in START alongside the imageBuffer allocation). */
+  geom: ScanGeometry | null;
 }
 
 export const ESCI_TIMEOUT_MS = 60_000;
 
 // IS-0xa000 carries every ESC/I passthru-reply (ACKs, identity, status).
 // IS-0x8000 = welcome; IS-0xa100 = lock-ack; IS-0xa101 = unlock-ack;
-// IS-0xa200 = unsolicited image chunks. The plan's `0x2000` placeholder for
-// ESCI_PASSTHRU_REPLY was the host-side outbound passthru envelope — the
-// matching reply is in 0xa000.
+// IS-0xa200 = unsolicited image chunks.
 export const ESCI_REPLY = 0xa000;
 const ACK_BYTE = 0x06;
 // Driver always probes with 0x01 (ADF-simplex) regardless of intended source —
@@ -197,6 +190,25 @@ function escEThenAck(
   awaitReply(g, `${prefix}_ACK2`, ESCI_REPLY, isAck, next, nextSend);
 }
 
+/**
+ * Decision-state guard for length-checked ESC/I replies. Companion to
+ * `expectIsType` — returns an error TransitionResult on length mismatch
+ * so the engine routes through the standard failure path; null to continue.
+ */
+function expectLength(
+  payload: Buffer,
+  expected: number,
+  stateName: string,
+  label: string,
+): { error: Error } | null {
+  if (payload.length !== expected) {
+    return {
+      error: new Error(`${stateName}: expected ${expected}-byte ${label}, got ${payload.length}`),
+    };
+  }
+  return null;
+}
+
 /** Strip the leading status byte from an IS-0xa200 chunk and copy pixel tail. */
 export function appendImageChunk(payload: Buffer, dest: Buffer, offset: number): number {
   if (payload.length === 0) return offset;
@@ -204,15 +216,9 @@ export function appendImageChunk(payload: Buffer, dest: Buffer, offset: number):
   return offset + payload.length - 1;
 }
 
-function computeExpectedBytes(source: Source, format: Format): number {
-  const geom = geometry({ source, format });
-  return geom.widthPx * geom.heightPx * 3;
-}
-
 const length1 = (p: Buffer): boolean => p.length === 1;
 const length16 = (p: Buffer): boolean => p.length === 16;
 const length80 = (p: Buffer): boolean => p.length === 80;
-const length14 = (p: Buffer): boolean => p.length === 14;
 
 // =============================================================================
 // Graph builder
@@ -276,11 +282,8 @@ g.state(
   decision<EsciCtx>((ctx, packet) => {
     const typeGuard = expectIsType(packet, ESCI_REPLY, "STATUS_1A");
     if (typeGuard) return typeGuard;
-    if (packet.payload.length !== 16) {
-      return {
-        error: new Error(`STATUS_1A: expected 16-byte status, got ${packet.payload.length}`),
-      };
-    }
+    const lengthGuard = expectLength(packet.payload, 16, "STATUS_1A", "status");
+    if (lengthGuard) return lengthGuard;
     if (ctx.inInterPageLoop && packet.payload[0] === 0x81) {
       ctx.inInterPageLoop = false;
       return { next: "CLEANUP_1", send: sendEscCleanup() };
@@ -296,11 +299,8 @@ g.state(
   decision<EsciCtx>((ctx, packet) => {
     const typeGuard = expectIsType(packet, ESCI_REPLY, "STATUS_1B");
     if (typeGuard) return typeGuard;
-    if (packet.payload.length !== 16) {
-      return {
-        error: new Error(`STATUS_1B: expected 16-byte status, got ${packet.payload.length}`),
-      };
-    }
+    const lengthGuard = expectLength(packet.payload, 16, "STATUS_1B", "status");
+    if (lengthGuard) return lengthGuard;
     if (ctx.inInterPageLoop) {
       return { next: "ADF_IDENTITY_A", send: sendFsI() };
     }
@@ -322,11 +322,8 @@ g.state(
   decision<EsciCtx>((ctx, packet) => {
     const typeGuard = expectIsType(packet, ESCI_REPLY, "STATUS_2");
     if (typeGuard) return typeGuard;
-    if (packet.payload.length !== 16) {
-      return {
-        error: new Error(`STATUS_2: expected 16-byte status, got ${packet.payload.length}`),
-      };
-    }
+    const lengthGuard = expectLength(packet.payload, 16, "STATUS_2", "status");
+    if (lengthGuard) return lengthGuard;
     const statusByte = packet.payload[0];
     if (ctx.forcedSource) {
       ctx.source = ctx.forcedSource;
@@ -386,11 +383,8 @@ g.state(
   decision<EsciCtx>((ctx, packet) => {
     const typeGuard = expectIsType(packet, ESCI_REPLY, "STATUS_READY");
     if (typeGuard) return typeGuard;
-    if (packet.payload.length !== 16) {
-      return {
-        error: new Error(`STATUS_READY: expected 16-byte status, got ${packet.payload.length}`),
-      };
-    }
+    const lengthGuard = expectLength(packet.payload, 16, "STATUS_READY", "status");
+    if (lengthGuard) return lengthGuard;
     if (ctx.source !== "flatbed") {
       return { next: "ADF_IDENTITY_A", send: sendFsI() };
     }
@@ -412,11 +406,8 @@ g.state(
   decision<EsciCtx>((ctx, packet) => {
     const typeGuard = expectIsType(packet, ESCI_REPLY, "ADF_IDENTITY_B");
     if (typeGuard) return typeGuard;
-    if (packet.payload.length !== 80) {
-      return {
-        error: new Error(`ADF_IDENTITY_B: expected 80-byte identity, got ${packet.payload.length}`),
-      };
-    }
+    const lengthGuard = expectLength(packet.payload, 80, "ADF_IDENTITY_B", "identity");
+    if (lengthGuard) return lengthGuard;
     if (ctx.format === "pdf" && !ctx.inInterPageLoop) {
       return { next: "ADF_PDF_SRC_ACK1", send: sendEscEPlusCtxSource };
     }
@@ -497,18 +488,15 @@ g.state(
   decision<EsciCtx>((ctx, packet) => {
     const typeGuard = expectIsType(packet, ESCI_REPLY, "START");
     if (typeGuard) return typeGuard;
-    if (!length14(packet.payload)) {
-      return {
-        error: new Error(`START: expected 14-byte FS G reply, got ${packet.payload.length}`),
-      };
-    }
+    const lengthGuard = expectLength(packet.payload, 14, "START", "FS G reply");
+    if (lengthGuard) return lengthGuard;
     const reply = parseFsGReply(packet.payload);
-    ctx.fsGReply = reply;
     if (reply.chunkSize === 0) {
       return { next: "START_POLL", send: sendFsF() };
     }
-    ctx.expectedBytes = computeExpectedBytes(ctx.source, ctx.format);
-    ctx.imageBuffer = Buffer.alloc(ctx.expectedBytes);
+    const geom = geometry({ source: ctx.source, format: ctx.format });
+    ctx.geom = geom;
+    ctx.imageBuffer = Buffer.alloc(geom.widthPx * geom.heightPx * 3);
     ctx.imageBufferOffset = 0;
     return {
       next: "IMG_RECEIVING",
@@ -524,11 +512,8 @@ g.state(
   decision<EsciCtx>((_ctx, packet) => {
     const typeGuard = expectIsType(packet, ESCI_REPLY, "START_POLL");
     if (typeGuard) return typeGuard;
-    if (!length16(packet.payload)) {
-      return {
-        error: new Error(`START_POLL: expected 16-byte status, got ${packet.payload.length}`),
-      };
-    }
+    const lengthGuard = expectLength(packet.payload, 16, "START_POLL", "status");
+    if (lengthGuard) return lengthGuard;
     if (packet.payload[0] === 0x01) {
       return { next: "START_POLL_READY", send: sendFsF() };
     }
@@ -540,10 +525,9 @@ g.state(
 awaitReply(g, "START_POLL_READY", ESCI_REPLY, length16, "START", passthru(buildFsG(), 14));
 
 // =============================================================================
-// IMG_RECEIVING — pixel stream + flushPage barrier (replaces ~80 LOC of
-// async-encode glue and the encodingDeferred[]/deferredImageChunks[] queues
-// the original scanner needed because the legacy state machine had no way to
-// pause for an async encode).
+// IMG_RECEIVING — accumulates pixel chunks into ctx.imageBuffer; on the
+// page-boundary chunk dispatches the flushPage barrier and routes to
+// PAGE_EJECT_WAIT (ADF) or POST_STATUS (flatbed).
 // =============================================================================
 
 g.state(
@@ -561,29 +545,27 @@ g.state(
       ctx.imageBuffer,
       ctx.imageBufferOffset,
     );
-    if (ctx.imageBufferOffset < ctx.expectedBytes) {
+    if (ctx.imageBufferOffset < ctx.imageBuffer.length) {
       return { next: "IMG_RECEIVING" };
     }
 
-    // Page complete — assemble + dispatch flushPage barrier. Increment
-    // BEFORE computing side so pageCount represents the 1-indexed page
-    // we're about to flush; even pageCount → ADF-duplex back side
-    // (matches scanner.ts pageNum = pageCount + 1 then `pageNum % 2 === 0`).
+    // Increment pageCount BEFORE computing side so pageCount represents the
+    // 1-indexed page we're about to flush; even pageCount → ADF-duplex back
+    // side (1=front, 2=back, 3=front, ...).
     ctx.pageCount += 1;
     const isBack = ctx.source === "adf-duplex" && ctx.pageCount % 2 === 0;
-    const geom = geometry({ source: ctx.source, format: ctx.format });
+    if (!ctx.geom) {
+      return { error: new Error("IMG_RECEIVING: page complete with no cached geometry") };
+    }
+    const { widthPx, heightPx } = ctx.geom;
     const rawRgb = ctx.imageBuffer;
     const quality = ctx.jpegQuality;
-    // Reset per-page buffer state so the next page (if any) starts fresh.
     ctx.imageBuffer = Buffer.alloc(0);
     ctx.imageBufferOffset = 0;
-    ctx.expectedBytes = 0;
 
-    // Flatbed: skip eject; go to POST_STATUS. ADF: send 0x0c 0x00 page-eject;
-    // PAGE_EJECT_WAIT then waits for the ACK and decides the next page.
     const flush = {
       side: isBack ? ("back" as const) : ("front" as const),
-      encode: () => encodeRawGbrToJpeg(rawRgb, geom.widthPx, geom.heightPx, quality),
+      encode: () => encodeRawGbrToJpeg(rawRgb, widthPx, heightPx, quality),
     };
     if (ctx.source === "flatbed") {
       return { next: "POST_STATUS", send: sendFsF(), flushPage: flush };
@@ -608,13 +590,8 @@ g.state(
   decision<EsciCtx>((ctx, packet) => {
     const typeGuard = expectIsType(packet, ESCI_REPLY, "PAGE_EJECT_WAIT");
     if (typeGuard) return typeGuard;
-    if (!length1(packet.payload)) {
-      return {
-        error: new Error(
-          `PAGE_EJECT_WAIT: expected 1-byte page-eject ACK, got ${packet.payload.length}`,
-        ),
-      };
-    }
+    const lengthGuard = expectLength(packet.payload, 1, "PAGE_EJECT_WAIT", "page-eject ACK");
+    if (lengthGuard) return lengthGuard;
     ctx.inInterPageLoop = true;
     return { next: "STATUS_1A", send: sendFsF() };
   }),
@@ -636,11 +613,8 @@ g.state(
   decision<EsciCtx>((ctx, packet) => {
     const typeGuard = expectIsType(packet, ESCI_REPLY, "CLEANUP_1");
     if (typeGuard) return typeGuard;
-    if (!length1(packet.payload)) {
-      return {
-        error: new Error(`CLEANUP_1: expected 1-byte ESC ) reply, got ${packet.payload.length}`),
-      };
-    }
+    const lengthGuard = expectLength(packet.payload, 1, "CLEANUP_1", "ESC ) reply");
+    if (lengthGuard) return lengthGuard;
     if (ctx.source !== "flatbed") {
       return { next: "ADF_CLEANUP_ACK1", send: sendEscEPlusCtxSource };
     }

@@ -49,14 +49,10 @@ function makeTcpTransportFactory(
 ): SessionTransportFactory {
   return () =>
     new Promise<SessionTransport>((resolve, reject) => {
-      // The legacy `net.Socket` already implements `write` / `end` / `destroy`
-      // and the `on('data' | 'error' | 'close')` event triplet that
-      // SessionTransport requires. Plain TCP, no TLS pin, no app-level unlock-
-      // on-destroy concern (the original scanner just `socket.destroy()`d on
-      // failure too) — so we hand the raw socket to the engine directly. If a
-      // future ESC/I quirk needs a wrapper (e.g. post-end RST suppression for
-      // a noisy printer), introduce a sibling `src/esci/transport.ts` then,
-      // not pre-emptively.
+      // net.Socket structurally satisfies SessionTransport; plain TCP needs
+      // no app-level wrapper (no TLS pin, no unlock-on-destroy semantics
+      // peculiar to ESC/I-2). If a future ESC/I quirk needs one, introduce
+      // a sibling src/esci/transport.ts.
       const socket = socketFactory(session.printerIp, session.port, () => {
         resolve(socket);
       });
@@ -69,8 +65,7 @@ export async function runEsciScan(
   socketFactory: TcpSocketFactory = (host, port, cb) => net.connect(port, host, cb),
 ): Promise<void> {
   // Validate the temp-dir base before opening the TCP connection so a bad
-  // path fails fast (rather than waiting until first flushPage). Mirrors the
-  // M2 scanner.ts pattern.
+  // path fails fast (rather than at first flushPage).
   const tempBase = session.tempDir || os.tmpdir();
   try {
     fs.accessSync(tempBase, fs.constants.W_OK);
@@ -84,9 +79,8 @@ export async function runEsciScan(
     initialCtx: {
       duplex: session.duplex,
       forcedSource: session.forcedSource,
-      // Safe default — overwritten in STATUS_2 from the FS F byte (or
-      // forcedSource if set). The plan's wire-up: STATUS_2 mutates ctx.source
-      // before any state that reads it (RESET_INIT, ADF_IDENTITY_B, IMG_RECEIVING).
+      // Safe default — STATUS_2 overwrites this from the FS F byte (or
+      // forcedSource) before any state downstream reads it.
       source: session.forcedSource ?? "adf-simplex",
       format: session.format,
       jpegQuality: session.jpegQuality,
@@ -95,10 +89,9 @@ export async function runEsciScan(
       inInterPageLoop: false,
       pageCount: 0,
       gammaChannelIdx: 0,
-      fsGReply: null,
+      geom: null,
       imageBuffer: Buffer.alloc(0),
       imageBufferOffset: 0,
-      expectedBytes: 0,
     },
     transportFactory: makeTcpTransportFactory(session, socketFactory),
     outputDir: session.outputDir,
