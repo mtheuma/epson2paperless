@@ -35,14 +35,29 @@ export type TlsSocketFactory = (
 ) => tls.TLSSocket;
 
 /**
- * Wraps a tls.TLSSocket so that `destroy()` first attempts a polite UNLOCK
- * write (engine doesn't know about ESC/I-2 protocol cleanup; this keeps the
- * printer's panel from staying in a locked state after a mid-session abort).
- * Best-effort: write errors are swallowed since the socket is being destroyed.
+ * Wraps a tls.TLSSocket with three protocol-aware concerns the generic
+ * engine doesn't know about:
+ *
+ * 1. **Unlock on abort.** If the engine destroys the transport mid-session
+ *    (after LOCK was sent but before the graph reached UNLOCKING),
+ *    politely send the UNLOCK packet via `socket.end(unlock)` so the bytes
+ *    actually leave the host before the socket closes — `socket.destroy()`
+ *    can otherwise discard queued writes or send a TCP reset.
+ *
+ * 2. **TLS-error wrapping.** Bare ECONNRESET / EPIPE / etc. surfaces as
+ *    "TLS connection error: <msg>" so operators (and tests) get a
+ *    recognisable category.
+ *
+ * 3. **Suppress benign post-end errors.** Once the engine has called
+ *    `transport.end()` (which only happens on entering DONE), the printer
+ *    may still RST or EPIPE before its FIN reaches the host. Forwarding
+ *    that to the engine would turn a successful scan into a rejection.
+ *    The wrapper swallows those benign codes after end() has been called.
  */
 function withUnlockOnDestroy(socket: tls.TLSSocket): SessionTransport {
   let unlockSent = false;
   let lockSent = false;
+  let endCalled = false;
   const wrapped: SessionTransport = {
     write(buf: Buffer) {
       // Track LOCK / UNLOCK sends by IS type byte (header byte 2-3).
@@ -52,24 +67,36 @@ function withUnlockOnDestroy(socket: tls.TLSSocket): SessionTransport {
       }
       return socket.write(buf);
     },
-    end: () => socket.end(),
+    end: () => {
+      endCalled = true;
+      socket.end();
+    },
     destroy(err?: Error) {
+      endCalled = true;
       if (lockSent && !unlockSent) {
+        // Use end(unlock) — half-closes the connection after writing the
+        // unlock bytes, so they actually leave the host. Plain `write` +
+        // immediate `destroy` can discard queued bytes or send TCP RST.
         try {
-          socket.write(buildUnlockPacket());
+          socket.end(buildUnlockPacket());
         } catch {
-          /* socket already closed; nothing to do */
+          socket.destroy(err);
         }
+      } else {
+        socket.destroy(err);
       }
-      socket.destroy(err);
     },
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     on(event: string, cb: (...args: any[]) => void) {
       if (event === "error") {
-        // Wrap raw socket errors with a "TLS connection error" prefix so
-        // operators (and tests) get a recognisable category instead of a
-        // bare ECONNRESET / EPIPE / etc. Mirrors the pre-engine scanner.
-        socket.on(event, (err: Error) => {
+        socket.on(event, (err: Error & { code?: string }) => {
+          // Suppress benign post-end resets so a printer that closes the
+          // connection between our FIN and its FIN doesn't fail an
+          // otherwise-successful scan. Mirrors the pre-engine scanner's
+          // post-DONE error tolerance.
+          if (endCalled && (err.code === "ECONNRESET" || err.code === "EPIPE")) {
+            return;
+          }
           cb(new Error(`TLS connection error: ${err.message}`));
         });
       } else {
@@ -91,6 +118,12 @@ function makeTlsTransportFactory(
         host: session.printerIp,
         port: session.port,
         rejectUnauthorized: false,
+        // Epson ScanSmart picks the SNI name from the destination ID byte.
+        // Real printers refuse the handshake without it; the fake ignores
+        // these options so replay tests pass either way.
+        servername: String.fromCharCode(session.destId),
+        minVersion: "TLSv1.2",
+        maxVersion: "TLSv1.2",
       };
       const socket = socketFactory(opts, () => {
         // Manual fingerprint pin (TLS's `checkServerIdentity` isn't fired by

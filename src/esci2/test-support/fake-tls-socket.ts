@@ -148,7 +148,11 @@ export class FakeTlsSocket extends EventEmitter {
     }
   }
 
-  end(): void {
+  end(data?: Buffer): void {
+    // tls.TLSSocket.end(data?) writes the buffer (if any) before half-closing.
+    // The fake mirrors this so callers can rely on `end(buf)` recording the
+    // write for assertions (e.g. unlock-on-abort tests).
+    if (data) this.writes.push(Buffer.from(data));
     this.emit("close");
   }
 

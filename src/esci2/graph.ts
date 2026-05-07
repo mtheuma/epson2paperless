@@ -65,7 +65,8 @@ const ASYNC_CANCEL_BYTES = new Set([0x03 /* ScanCancel */]);
 
 /**
  * awaitAck — creates a static state that waits for `expectedReplyType` and
- * optionally sends bytes on transition. Used in WELCOME/LOCKING/INIT1/INIT2.
+ * optionally validates the payload byte 0 (e.g. legacy ESC/I-2 ACKs are
+ * 0x06 inside an 0xa000 envelope) before advancing.
  */
 function awaitAck(
   g: GraphBuilder<Esci2Ctx>,
@@ -73,8 +74,43 @@ function awaitAck(
   expectedReplyType: number,
   next: string,
   send?: SendSpec<Esci2Ctx> | SendSpec<Esci2Ctx>[],
+  expectedAckByte?: number,
 ): void {
-  g.state(name, { on: { [expectedReplyType]: { next, ...(send !== undefined ? { send } : {}) } } });
+  g.state(name, {
+    on: {
+      [expectedReplyType]: {
+        next,
+        ...(send !== undefined ? { send } : {}),
+        ...(expectedAckByte !== undefined
+          ? { validate: (payload: Buffer) => payload[0] === expectedAckByte }
+          : {}),
+      },
+    },
+  });
+}
+
+/**
+ * Guard helper for decision states: ensure the incoming packet matches the
+ * expected IS type. Returns an Error TransitionResult on mismatch (the engine
+ * routes it through the normal failure path); returns null to continue.
+ *
+ * Static states fail fast on unmatched packet types automatically (engine
+ * behaviour), but decision states see every packet, so each one needs its
+ * own type guard to avoid acting on the wrong wire data.
+ */
+function expectIsType(
+  packet: { type: number },
+  expected: number,
+  stateName: string,
+): { error: Error } | null {
+  if (packet.type !== expected) {
+    return {
+      error: new Error(
+        `${stateName}: expected packet type 0x${expected.toString(16).padStart(4, "0")}, got 0x${packet.type.toString(16).padStart(4, "0")}`,
+      ),
+    };
+  }
+  return null;
 }
 
 // =============================================================================
@@ -112,34 +148,38 @@ const g = createGraph<Esci2Ctx>("WELCOME", ESCI2_TIMEOUT_MS)
 // Replaces the T21 placeholder.
 awaitAck(g, "WELCOME", 0x8000, "LOCKING", buildLockPacket());
 
-// LOCKING: 0xa100 lock-ack → send FS Y → INIT1_FS_Y
-// scanner.ts onLockAck: receives 0xa100, sends buildPassthruPacket(buildFsY(), LEGACY_REPLY_SIZE)
-awaitAck(g, "LOCKING", 0xa100, "INIT1_FS_Y", buildPassthruPacket(buildFsY(), LEGACY_REPLY_SIZE));
+// LOCKING: 0xa100 lock-ack (payload[0] === 0x06) → send FS Y → INIT1_FS_Y
+awaitAck(
+  g,
+  "LOCKING",
+  0xa100,
+  "INIT1_FS_Y",
+  buildPassthruPacket(buildFsY(), LEGACY_REPLY_SIZE),
+  0x06,
+);
 
-// INIT1_FS_Y: 0xa000 FS-Y-ack → send INFO META command → INIT1_INFO_META
-// scanner.ts onInit1FsY: receives 0xa000, runs INFO+CAPA two-phase sequence,
-// then sends FIN → INIT1_FIN. INFO/CAPA states added in T24.
+// INIT1_FS_Y: 0xa000 FS-Y-ack (1-byte 0x06) → send INFO META command → INIT1_INFO_META
 awaitAck(
   g,
   "INIT1_FS_Y",
   0xa000,
   "INIT1_INFO_META",
   buildPassthruPacket(buildEsci2Command("INFO"), ESCI2_REPLY_SIZE),
+  0x06,
 );
 
 // INIT1_FIN: 0xa000 FIN-ack → send FS Z → INIT2_FS_Z
-// scanner.ts onInit1Fin: receives 0xa000, sends buildPassthruPacket(buildFsZ(), LEGACY_REPLY_SIZE)
+// (No ack-byte check here — FIN reply is a 64-byte envelope, not a 1-byte ACK.)
 awaitAck(g, "INIT1_FIN", 0xa000, "INIT2_FS_Z", buildPassthruPacket(buildFsZ(), LEGACY_REPLY_SIZE));
 
-// INIT2_FS_Z: 0xa000 FS-Z-ack → send INFO META command → INIT2_INFO_META
-// scanner.ts onInit2FsZ: receives 0xa000, runs INFO+CAPA+RESA two-phase sequence,
-// then sends FIN → INIT2_FIN. INFO/CAPA/RESA states added in T24.
+// INIT2_FS_Z: 0xa000 FS-Z-ack (1-byte 0x06) → send INFO META command → INIT2_INFO_META
 awaitAck(
   g,
   "INIT2_FS_Z",
   0xa000,
   "INIT2_INFO_META",
   buildPassthruPacket(buildEsci2Command("INFO"), ESCI2_REPLY_SIZE),
+  0x06,
 );
 
 // INIT2_FIN: 0xa000 FIN-ack → reset initPollIteration, send FS Y → INIT_POLL_FS_Y.
@@ -172,9 +212,15 @@ function twoPhaseRead(
   nextSend: SendSpec<Esci2Ctx> | SendSpec<Esci2Ctx>[],
   next: string,
 ): void {
+  // Per-helper-instance closure storing the META-declared body length so
+  // the DATA state can validate the follow-up payload length matches.
+  let declaredLength = 0;
+
   g.state(
     `${prefix}_META`,
     decision<Esci2Ctx>((_ctx, packet) => {
+      const typeGuard = expectIsType(packet, 0xa000, `${prefix}_META`);
+      if (typeGuard) return typeGuard;
       const header = parseEsci2ReplyHeader(packet.payload);
       if (header === null || header.cmd !== expectedCmd) {
         return {
@@ -183,6 +229,7 @@ function twoPhaseRead(
           ),
         };
       }
+      declaredLength = header.length;
       return {
         next: `${prefix}_DATA`,
         send: buildPurereadPacket(header.length),
@@ -190,9 +237,21 @@ function twoPhaseRead(
     }),
   );
 
-  g.state(`${prefix}_DATA`, {
-    on: { 0xa000: { next, send: nextSend } },
-  });
+  g.state(
+    `${prefix}_DATA`,
+    decision<Esci2Ctx>((_ctx, packet) => {
+      const typeGuard = expectIsType(packet, 0xa000, `${prefix}_DATA`);
+      if (typeGuard) return typeGuard;
+      if (packet.payload.length !== declaredLength) {
+        return {
+          error: new Error(
+            `${prefix}_DATA: expected ${declaredLength} bytes, got ${packet.payload.length}`,
+          ),
+        };
+      }
+      return { next, send: nextSend };
+    }),
+  );
 }
 
 // INIT1 two-phase reads: INFO → CAPA → FIN
@@ -261,6 +320,8 @@ function statThenDrain(
   g.state(
     `${prefix}_STAT`,
     decision<Esci2Ctx>((_ctx, packet) => {
+      const typeGuard = expectIsType(packet, 0xa000, `${prefix}_STAT`);
+      if (typeGuard) return typeGuard;
       const header = parseEsci2ReplyHeader(packet.payload);
       if (header === null) {
         return { error: new Error(`${prefix}_STAT: unparseable reply header`) };
@@ -303,7 +364,9 @@ function statThenDrain(
 // - ADF: start POSTSCAN drain cycle 1 by sending FS Y.
 g.state(
   "FIN_AFTER_IMG",
-  decision<Esci2Ctx>((ctx, _packet) => {
+  decision<Esci2Ctx>((ctx, packet) => {
+    const typeGuard = expectIsType(packet, 0xa000, "FIN_AFTER_IMG");
+    if (typeGuard) return typeGuard;
     if (ctx.source === "flatbed") {
       // No POSTSCAN drain — UNLOCKING's onEnter sends the unlock packet.
       return { next: "UNLOCKING" };
@@ -390,6 +453,8 @@ g.state("INIT_POLL_FS_Y", {
 g.state(
   "INIT_POLL_STAT",
   decision<Esci2Ctx>((ctx, packet) => {
+    const typeGuard = expectIsType(packet, 0xa000, "INIT_POLL_STAT");
+    if (typeGuard) return typeGuard;
     const header = parseEsci2ReplyHeader(packet.payload);
     if (header === null) {
       return { error: new Error("INIT_POLL_STAT: unparseable reply header") };
@@ -434,7 +499,9 @@ g.state("INIT_POLL_STAT_DRAIN", {
 // loops; else sends FS X and moves to MODE_SWITCH.
 g.state(
   "INIT_POLL_FIN",
-  decision<Esci2Ctx>((ctx, _packet) => {
+  decision<Esci2Ctx>((ctx, packet) => {
+    const typeGuard = expectIsType(packet, 0xa000, "INIT_POLL_FIN");
+    if (typeGuard) return typeGuard;
     ctx.initPollIteration += 1;
     if (ctx.initPollIteration < INIT_POLL_ITERATIONS) {
       return {
@@ -486,6 +553,8 @@ g.state("MODE_SWITCH", {
 g.state(
   "POST_MODE_STAT",
   decision<Esci2Ctx>((ctx, packet) => {
+    const typeGuard = expectIsType(packet, 0xa000, "POST_MODE_STAT");
+    if (typeGuard) return typeGuard;
     const header = parseEsci2ReplyHeader(packet.payload);
     if (header === null) {
       return { error: new Error("POST_MODE_STAT: unparseable reply header") };
@@ -504,10 +573,11 @@ g.state(
 // Decision (rather than static) so buildParaSend resolves once per dispatch.
 g.state(
   "POST_MODE_STAT_DRAIN",
-  decision<Esci2Ctx>((ctx, _packet) => ({
-    next: "PARA",
-    send: buildParaSend(ctx),
-  })),
+  decision<Esci2Ctx>((ctx, packet) => {
+    const typeGuard = expectIsType(packet, 0xa000, "POST_MODE_STAT_DRAIN");
+    if (typeGuard) return typeGuard;
+    return { next: "PARA", send: buildParaSend(ctx) };
+  }),
 );
 
 // PARA: validates printer's acceptance of parameters (#parOK), sends TRDT.
@@ -553,6 +623,8 @@ g.state("TRDT", {
 g.state(
   "IMG_META",
   decision<Esci2Ctx>((ctx, packet) => {
+    const typeGuard = expectIsType(packet, 0xa000, "IMG_META");
+    if (typeGuard) return typeGuard;
     const header = parseEsci2ReplyHeader(packet.payload);
     if (!header) {
       return { error: new Error("IMG_META: unparseable reply header") };
@@ -656,6 +728,8 @@ g.state(
 g.state(
   "IMG_DATA",
   decision<Esci2Ctx>((ctx, packet) => {
+    const typeGuard = expectIsType(packet, 0xa000, "IMG_DATA");
+    if (typeGuard) return typeGuard;
     if (packet.payload.length !== ctx.imgChunkSize) {
       return {
         error: new Error(
