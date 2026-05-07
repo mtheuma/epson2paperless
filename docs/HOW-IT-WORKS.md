@@ -106,7 +106,7 @@ The command bytes are either:
 
 **PARA is sent in two passthru packets**, not one. The first packet carries the 12-byte `PARAx<hex-len>` header with `reply_size=0`. The second carries the raw parameter bytes with `reply_size=64`. The printer responds only to the second packet, with a 64-byte `PARAx0000000#parOK…` reply if the parameters were accepted or `#parFAIL` if not. This two-phase structure was discovered from the Frida capture: the Windows driver never batches the two sends into a single passthru.
 
-ESC/I-2 command builders are in `src/esci2/commands.ts`. `buildFsY`, `buildFsX`, `buildFsZ` produce the legacy 2-byte initialization commands. `buildEsci2Command` builds the generic 12-byte ESC/I-2 header. `buildParaHeader` and `buildParaPayload` build the two PARA phases. Reply parsing is done by `parseEsci2ReplyHeader` (extracts the 12-byte reply header's `cmd` and `length` fields) and `parseTokens` (splits the `#KEY value` token stream from reply bodies).
+ESC/I-2 command builders are in `src/esci2/commands.ts`. The legacy 2-byte initialization commands (`buildFsY`, `buildFsX`, `buildFsZ`) live in `src/commands-fs.ts` and are shared with the WF-3620 ESC/I path (which uses `buildFsY` for the `DIAGNOSE_PROTOCOL` probe). `buildEsci2Command` builds the generic 12-byte ESC/I-2 header. `buildParaHeader` and `buildParaPayload` build the two PARA phases. Reply parsing is done by `parseEsci2ReplyHeader` (extracts the 12-byte reply header's `cmd` and `length` fields) and `parseTokens` (splits the `#KEY value` token stream from reply bodies).
 
 The SANE `epsonds` backend provides a useful cross-reference: its passthru framing — IS header layout, `0x000C` data offset, 8-byte data header with `cmd_size` / `reply_size` — is byte-identical to what the ET-4950 expects. However, `epsonds` targets older scanners that do not require the legacy ESC/I initialization loop before ESC/I-2 commands. The ET-4950's firmware requires `FS Y → STAT → FIN` polling repeated until the printer reports ready, followed by a `FS X` mode switch, before any ESC/I-2 command will be accepted.
 
@@ -379,8 +379,10 @@ Because the protocol was built from these captures, the replay tests are both re
 | `src/pushscan.ts`         | TCP server for push-scan trigger, SOAP parsing, x-uid echo                 |
 | `src/esci2/scanner.ts`    | ESC/I-2 TLS scan session state machine                                     |
 | `src/esci2/commands.ts`   | ESC/I-2 command builders, PARA payload blobs, reply parsers                |
+| `src/commands-fs.ts`      | Legacy 2-byte `FS Y` / `FS X` / `FS Z` builders shared by both protocols   |
 | `src/esci/scanner.ts`     | ESC/I plain-TCP scan session state machine                                 |
 | `src/esci/commands.ts`    | ESC/I command builders and reply parsers                                   |
+| `src/graph-helpers.ts`    | Shared graph-state helpers (`expectIsType`, `expectLength`, `ackByte`)     |
 | `src/esci/luts.ts`        | Gamma LUT tables for the ESC/I scan path                                   |
 | `src/esci/raw-to-jpeg.ts` | Raw 24-bit RGB → JPEG encoding via sharp                                   |
 | `src/protocol.ts`         | IS-frame encode/decode, lock/unlock/passthru/pureread packet builders      |

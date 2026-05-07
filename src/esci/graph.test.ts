@@ -6,10 +6,10 @@ function makeCtx(overrides: Partial<EsciCtx> = {}): EsciCtx {
     duplex: false,
     forcedSource: null,
     source: "adf-simplex",
+    sourceDetected: false,
     format: "jpg",
     jpegQuality: 90,
     diagnoseProtocol: false,
-    onSourceDetected: undefined,
     inInterPageLoop: false,
     pageCount: 0,
     gammaChannelIdx: 0,
@@ -208,15 +208,19 @@ describe("esciGraph IDENTITY / STATUS_1A / STATUS_1B / STATUS_2", () => {
     }
   });
 
-  it("STATUS_2 calls onSourceDetected with the resolved source", () => {
+  it("STATUS_2 sets ctx.sourceDetected once the source has been resolved", () => {
+    // The graph-level contract is: STATUS_2 records the decision on the
+    // ctx flag; the scanner shell reads the flag post-DONE to decide
+    // whether to fire the public onSourceDetected hook (success-only).
     const state = esciGraph.states.STATUS_2;
     if (state.kind === "decision") {
-      const seen: string[] = [];
-      const ctx = makeCtx({ onSourceDetected: (s) => seen.push(s) });
+      const ctx = makeCtx();
+      expect(ctx.sourceDetected).toBe(false);
       const payload = Buffer.alloc(16);
       payload[0] = 0x01;
       state.decide(ctx, { type: ESCI_REPLY, payload });
-      expect(seen).toEqual(["adf-simplex"]);
+      expect(ctx.sourceDetected).toBe(true);
+      expect(ctx.source).toBe("adf-simplex");
     }
   });
 });

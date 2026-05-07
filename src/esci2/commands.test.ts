@@ -1,8 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { buildFsY, buildFsX, buildFsZ } from "../commands-fs.js";
 import {
-  buildFsY,
-  buildFsX,
-  buildFsZ,
   buildEsci2Command,
   buildParaHeader,
   buildParaPayload,

@@ -13,42 +13,29 @@ describe("esci2Graph (smoke)", () => {
     expect(esci2Graph.states.WELCOME).toBeDefined();
   });
 
-  it("has globalIgnoreFilter defined for empty 0xa000 envelopes outside POSTSCAN drain", () => {
+  it("has globalIgnoreFilter defined as a pure shape predicate (state-blind)", () => {
     expect(esci2Graph.globalIgnoreFilter).toBeDefined();
-    // Empty 0xa000 in image-flow / init / mode-switch states → ignored
-    // (these are "wait for body" pre-data signals).
-    expect(
-      esci2Graph.globalIgnoreFilter!({ type: 0xa000, payload: Buffer.alloc(0) }, "IMG_META"),
-    ).toBe(true);
-    expect(
-      esci2Graph.globalIgnoreFilter!({ type: 0xa000, payload: Buffer.alloc(0) }, "WELCOME"),
-    ).toBe(true);
-    // Non-empty 0xa000 → not ignored regardless of state
-    expect(
-      esci2Graph.globalIgnoreFilter!({ type: 0xa000, payload: Buffer.from([0x01]) }, "IMG_META"),
-    ).toBe(false);
-    // Other types → not ignored
-    expect(
-      esci2Graph.globalIgnoreFilter!({ type: 0x2000, payload: Buffer.alloc(0) }, "IMG_META"),
-    ).toBe(false);
+    // Empty 0xa000 → ignored.
+    expect(esci2Graph.globalIgnoreFilter!({ type: 0xa000, payload: Buffer.alloc(0) })).toBe(true);
+    // Non-empty 0xa000 → not ignored.
+    expect(esci2Graph.globalIgnoreFilter!({ type: 0xa000, payload: Buffer.from([0x01]) })).toBe(
+      false,
+    );
+    // Other types → not ignored.
+    expect(esci2Graph.globalIgnoreFilter!({ type: 0x2000, payload: Buffer.alloc(0) })).toBe(false);
   });
 
-  it("globalIgnoreFilter passes through empty 0xa000 in POSTSCAN_*_STAT_DRAIN (drain-complete reply)", () => {
+  it("POSTSCAN_*_STAT_DRAIN states opt out of the filter via bypassIgnoreFilter", () => {
     // After our pure-read(0) for a length=0 STAT, the printer's empty
-    // 0xa000 reply IS the drain-complete signal — must not be filtered
-    // out, or _STAT_DRAIN hangs waiting on a packet that never comes.
-    expect(
-      esci2Graph.globalIgnoreFilter!(
-        { type: 0xa000, payload: Buffer.alloc(0) },
-        "POSTSCAN_1_STAT_DRAIN",
-      ),
-    ).toBe(false);
-    expect(
-      esci2Graph.globalIgnoreFilter!(
-        { type: 0xa000, payload: Buffer.alloc(0) },
-        "POSTSCAN_2_STAT_DRAIN",
-      ),
-    ).toBe(false);
+    // 0xa000 reply IS the drain-complete signal — the engine must NOT
+    // run the filter for these states, or _STAT_DRAIN hangs waiting on
+    // a packet that never reaches its transition table.
+    expect(esci2Graph.states.POSTSCAN_1_STAT_DRAIN.bypassIgnoreFilter).toBe(true);
+    expect(esci2Graph.states.POSTSCAN_2_STAT_DRAIN.bypassIgnoreFilter).toBe(true);
+    // Other states (e.g. POST_MODE / INIT_POLL drain) do NOT need the
+    // bypass — their _STAT decisions skip the drain entirely on length=0.
+    expect(esci2Graph.states.POST_MODE_STAT_DRAIN.bypassIgnoreFilter).toBeUndefined();
+    expect(esci2Graph.states.INIT_POLL_STAT_DRAIN.bypassIgnoreFilter).toBeUndefined();
   });
 
   it("has globalAbortHandlers covering 0x9000", () => {

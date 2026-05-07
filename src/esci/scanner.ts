@@ -9,6 +9,7 @@ import {
 import { resolveSessionTimestamp } from "../output.js";
 import { esciGraph, type EsciCtx } from "./graph.js";
 import type { Source, Format } from "./commands.js";
+import { socketAsTransport } from "../esci2/transport.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
 
 export { appendImageChunk } from "./graph.js";
@@ -49,12 +50,16 @@ function makeTcpTransportFactory(
 ): SessionTransportFactory {
   return () =>
     new Promise<SessionTransport>((resolve, reject) => {
-      // net.Socket structurally satisfies SessionTransport; plain TCP needs
-      // no app-level wrapper (no TLS pin, no unlock-on-destroy semantics
-      // peculiar to ESC/I-2). If a future ESC/I quirk needs one, introduce
-      // a sibling src/esci/transport.ts.
+      // Plain TCP needs no app-level wrapper (no TLS pin, no
+      // unlock-on-destroy semantics peculiar to ESC/I-2). The
+      // socketAsTransport bridge is just an explicit-cast shim so the
+      // engine's SessionTransport.end(data?) signature is honoured —
+      // net.Socket.end has its own overload set that doesn't directly
+      // satisfy the interface as a structural subtype. If a future
+      // ESC/I quirk needs a wrapper, introduce a sibling
+      // src/esci/transport.ts.
       const socket = socketFactory(session.printerIp, session.port, () => {
-        resolve(socket);
+        resolve(socketAsTransport(socket));
       });
       socket.once("error", reject);
     });
@@ -80,12 +85,15 @@ export async function runEsciScan(
       duplex: session.duplex,
       forcedSource: session.forcedSource,
       // Safe default — STATUS_2 overwrites this from the FS F byte (or
-      // forcedSource) before any state downstream reads it.
+      // forcedSource) before any state downstream reads it. The
+      // `sourceDetected` flag below disambiguates "this default" from
+      // "STATUS_2 actually ran" so the shell only fires onSourceDetected
+      // on success paths.
       source: session.forcedSource ?? "adf-simplex",
+      sourceDetected: false,
       format: session.format,
       jpegQuality: session.jpegQuality,
       diagnoseProtocol: session.diagnoseProtocol ?? false,
-      onSourceDetected: session.onSourceDetected,
       inInterPageLoop: false,
       pageCount: 0,
       gammaChannelIdx: 0,
@@ -100,5 +108,13 @@ export async function runEsciScan(
     action: session.format === "pdf" ? "pdf" : "jpg",
     paperless: session.paperless,
   });
+
+  // Fire the public onSourceDetected hook only on success paths AND only
+  // when STATUS_2 actually ran. Production callers don't pass this hook;
+  // the replay-test matrix uses it to assert per-fixture detection.
+  if (result.ok && result.finalCtx.sourceDetected) {
+    session.onSourceDetected?.(result.finalCtx.source);
+  }
+
   if (!result.ok) throw result.reason;
 }

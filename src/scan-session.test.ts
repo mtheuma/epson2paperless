@@ -743,22 +743,23 @@ describe("runScanSession (engine pump)", () => {
     expect(infoSeen).toBe(true);
   });
 
-  it("passes currentState to globalIgnoreFilter so it can scope itself per state", async () => {
-    // The filter bypasses itself in state DRAIN (drain-complete reply
-    // has the same wire shape as the wait-for-body signal in WAIT). The
-    // engine must thread currentState through, otherwise the filter
-    // can't distinguish and either over- or under-filters.
+  it("respects per-state bypassIgnoreFilter — opted-in states see filtered shapes unfiltered", async () => {
+    // The filter would normally discard empty 0xa000 packets (ESC/I-2's
+    // wait-for-body signal). The DRAIN state opts out via
+    // `bypassIgnoreFilter: true` because there, the empty 0xa000 IS the
+    // drain-complete trigger and must reach the state's transition table.
+    // The filter itself stays state-blind — a one-line shape predicate.
     const transport = new FakeTransport();
-    const observed: { state: string; payloadLen: number }[] = [];
-    const g = createGraph<Record<string, never>>("WAIT", 1_000).globalIgnoreFilter(
-      (packet, currentState) => {
-        observed.push({ state: currentState, payloadLen: packet.payload.length });
-        if (currentState === "DRAIN") return false;
-        return packet.type === 0xa000 && packet.payload.length === 0;
-      },
-    );
+    const filterCalls: number[] = [];
+    const g = createGraph<Record<string, never>>("WAIT", 1_000).globalIgnoreFilter((packet) => {
+      filterCalls.push(packet.payload.length);
+      return packet.type === 0xa000 && packet.payload.length === 0;
+    });
     g.state("WAIT", { on: { 0xa000: { next: "DRAIN" } } });
-    g.state("DRAIN", { on: { 0xa000: { next: "DONE" } } });
+    g.state("DRAIN", {
+      on: { 0xa000: { next: "DONE" } },
+      bypassIgnoreFilter: true,
+    });
 
     const promise = runScanSession({
       graph: g.build(),
@@ -774,17 +775,16 @@ describe("runScanSession (engine pump)", () => {
     setImmediate(() => {
       // First packet (non-empty in WAIT) → not filtered, advances to DRAIN.
       transport.emit("data", buildIsPacket(0xa000, Buffer.from([0xab])));
-      // Second packet (empty in DRAIN) — filter bypasses itself, advances to DONE.
+      // Second packet (empty 0xa000 in DRAIN) — filter is bypassed, packet
+      // reaches the DRAIN transition table and advances to DONE.
       setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
     });
 
     const result = await promise;
     expect(result.ok).toBe(true);
-    // Filter saw both packets with their respective states.
-    expect(observed).toEqual([
-      { state: "WAIT", payloadLen: 1 },
-      { state: "DRAIN", payloadLen: 0 },
-    ]);
+    // Filter ran exactly once (in WAIT). It was bypassed entirely in DRAIN —
+    // so the empty packet's length never made it to filterCalls.
+    expect(filterCalls).toEqual([1]);
   });
 
   it("silently discards packets matched by globalIgnoreFilter", async () => {
@@ -1330,6 +1330,80 @@ describe("runScanSession (engine pump)", () => {
     expect(transport.destroyCallCount).toBeGreaterThanOrEqual(1);
 
     fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  // 2e: IS payloadSize sanity-cap. A wild value in the size field is
+  // almost always framing desync — surface a clear diagnostic instead
+  // of waiting 30s for the timeout.
+  it("rejects with a framing-desync diagnostic when an IS header declares a payload larger than the cap", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("WAITING", 1_000);
+    g.state("WAITING", { on: { 0xa000: { next: "DONE" } } });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    // Hand-craft a full 12-byte IS header whose 4-byte size field
+    // declares 64 MB (well above the 32 MB default cap). Magic + type
+    // are valid so the initial-magic check passes; only the cap check
+    // should fail.
+    const desync = Buffer.alloc(12);
+    desync[0] = 0x49; // 'I'
+    desync[1] = 0x53; // 'S'
+    desync.writeUInt16BE(0xa000, 2);
+    desync.writeUInt32BE(64 * 1024 * 1024, 6);
+    setImmediate(() => transport.emit("data", desync));
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason.message).toMatch(/IS payload claims/);
+      expect(result.reason.message).toMatch(/exceeds 32MB cap/);
+      expect(result.reason.message).toMatch(/framing desync in state WAITING/);
+      // Hex prefix of the desync header is included for triage.
+      expect(result.reason.message).toMatch(/4953a000.*04000000/);
+    }
+  });
+
+  it("custom maxPayloadBytes on the graph overrides the default cap", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("WAITING", 1_000);
+    g.state("WAITING", { on: { 0xa000: { next: "DONE" } } });
+    const built = g.build();
+    // Override the cap to 1 KB — anything larger should trip immediately.
+    const tightGraph = { ...built, maxPayloadBytes: 1024 };
+
+    const promise = runScanSession({
+      graph: tightGraph,
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    const desync = Buffer.alloc(12);
+    desync[0] = 0x49;
+    desync[1] = 0x53;
+    desync.writeUInt16BE(0xa000, 2);
+    desync.writeUInt32BE(2048, 6); // 2 KB > 1 KB cap
+    setImmediate(() => transport.emit("data", desync));
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason.message).toMatch(/IS payload claims 2048 bytes/);
+    }
   });
 
   it("settles cleanly when 'error' arrives during a flushPage barrier", async () => {

@@ -13,16 +13,15 @@ import {
   buildPassthruPacket,
   buildPurereadPacket,
 } from "../protocol.js";
+import { buildFsY, buildFsX, buildFsZ } from "../commands-fs.js";
 import {
-  buildFsY,
-  buildFsX,
-  buildFsZ,
   buildEsci2Command,
   buildParaHeader,
   buildParaPayload,
   parseEsci2ReplyHeader,
   parseTokens,
 } from "./commands.js";
+import { ackByte, expectIsType } from "../graph-helpers.js";
 
 /**
  * Per-session mutable state threaded through every transition. The engine
@@ -70,74 +69,50 @@ const ASYNC_CANCEL_BYTES = new Set([0x03 /* ScanCancel */]);
 // =============================================================================
 
 /**
- * awaitAck — creates a static state that waits for `expectedReplyType` and
- * optionally validates the payload byte 0 (e.g. legacy ESC/I-2 ACKs are
- * 0x06 inside an 0xa000 envelope) before advancing.
+ * awaitReply — registers a static state that waits for `expectedReplyType`,
+ * runs `validate` against the payload, then advances to `next` (optionally
+ * emitting `send`). Local rename of what used to be `awaitAck` — both
+ * graphs now have a same-shaped helper but they intentionally stay
+ * per-graph (no shared abstraction) because the marginal cost of two
+ * copies is small and the graphs use the helper with different `Ctx`
+ * type parameters; lifting it would force a generic Ctx parameter that
+ * adds a layer of indirection without payoff. Revisit if a third graph
+ * appears.
  */
-function awaitAck(
+function awaitReply(
   g: GraphBuilder<Esci2Ctx>,
   name: string,
   expectedReplyType: number,
+  validate: (payload: Buffer) => boolean,
   next: string,
   send?: SendSpec<Esci2Ctx> | SendSpec<Esci2Ctx>[],
-  expectedAckByte?: number,
 ): void {
   g.state(name, {
     on: {
       [expectedReplyType]: {
+        validate,
         next,
         ...(send !== undefined ? { send } : {}),
-        ...(expectedAckByte !== undefined
-          ? { validate: (payload: Buffer) => payload[0] === expectedAckByte }
-          : {}),
       },
     },
   });
-}
-
-/**
- * Guard helper for decision states: ensure the incoming packet matches the
- * expected IS type. Returns an Error TransitionResult on mismatch (the engine
- * routes it through the normal failure path); returns null to continue.
- *
- * Static states fail fast on unmatched packet types automatically (engine
- * behaviour), but decision states see every packet, so each one needs its
- * own type guard to avoid acting on the wrong wire data.
- */
-function expectIsType(
-  packet: { type: number },
-  expected: number,
-  stateName: string,
-): { error: Error } | null {
-  if (packet.type !== expected) {
-    return {
-      error: new Error(
-        `${stateName}: expected packet type 0x${expected.toString(16).padStart(4, "0")}, got 0x${packet.type.toString(16).padStart(4, "0")}`,
-      ),
-    };
-  }
-  return null;
 }
 
 // =============================================================================
 // Graph builder
 // =============================================================================
 
+// Empty 0xa000 envelopes are "wait for body" pre-data signals on the
+// ESC/I-2 wire EXCEPT in POSTSCAN_*_STAT_DRAIN — there, after our
+// pure-read(0) for a length=0 STAT reply, the printer's empty 0xa000
+// IS the drain-complete trigger and must reach the state for it to
+// advance to FIN. The bypass is per-state via `bypassIgnoreFilter: true`
+// on the two drain states (declared below) — the filter itself stays a
+// pure shape predicate. INIT_POLL_STAT_DRAIN and POST_MODE_STAT_DRAIN
+// never need the bypass (their _STAT decisions skip the drain when
+// length === 0).
 const g = createGraph<Esci2Ctx>("WELCOME", ESCI2_TIMEOUT_MS)
-  // Empty 0xa000 envelopes are "wait for body" pre-data signals on the
-  // ESC/I-2 wire EXCEPT in POSTSCAN_*_STAT_DRAIN — there, after our
-  // pure-read(0) for a length=0 STAT reply, the printer's empty 0xa000
-  // IS the drain-complete trigger and must reach the state for it to
-  // advance to FIN. INIT_POLL_STAT_DRAIN and POST_MODE_STAT_DRAIN never
-  // have length=0 (their _STAT decision skips drain when length===0),
-  // so the bypass is scoped to the two POSTSCAN drains where
-  // alwaysDrain=true forces a pure-read regardless of length.
-  .globalIgnoreFilter((packet, currentState) => {
-    if (currentState === "POSTSCAN_1_STAT_DRAIN" || currentState === "POSTSCAN_2_STAT_DRAIN") {
-      return false;
-    }
-    return packet.type === 0xa000 && packet.payload.length === 0;
-  })
+  .globalIgnoreFilter((packet) => packet.type === 0xa000 && packet.payload.length === 0)
   // 0x9000 is the protocol-level async event channel: fatal/cancel
   // payloads abort the session regardless of state; ScanStart/Stop and
   // unknown bytes are info-only (return null to ignore).
@@ -160,47 +135,55 @@ const g = createGraph<Esci2Ctx>("WELCOME", ESCI2_TIMEOUT_MS)
 
 // WELCOME: 0x8000 from printer → host sends LOCK → LOCKING
 // Replaces the T21 placeholder.
-awaitAck(g, "WELCOME", 0x8000, "LOCKING", buildLockPacket());
+awaitReply(g, "WELCOME", 0x8000, () => true, "LOCKING", buildLockPacket());
 
 // LOCKING: 0xa100 lock-ack (payload[0] === 0x06) → send FS Y → INIT1_FS_Y
-awaitAck(
+awaitReply(
   g,
   "LOCKING",
   0xa100,
+  ackByte(0x06),
   "INIT1_FS_Y",
   buildPassthruPacket(buildFsY(), LEGACY_REPLY_SIZE),
-  0x06,
 );
 
 // INIT1_FS_Y: 0xa000 FS-Y-ack (1-byte 0x06) → send INFO META command → INIT1_INFO_META
-awaitAck(
+awaitReply(
   g,
   "INIT1_FS_Y",
   0xa000,
+  ackByte(0x06),
   "INIT1_INFO_META",
   buildPassthruPacket(buildEsci2Command("INFO"), ESCI2_REPLY_SIZE),
-  0x06,
 );
 
 // INIT1_FIN: 0xa000 FIN-ack → send FS Z → INIT2_FS_Z
 // (No ack-byte check here — FIN reply is a 64-byte envelope, not a 1-byte ACK.)
-awaitAck(g, "INIT1_FIN", 0xa000, "INIT2_FS_Z", buildPassthruPacket(buildFsZ(), LEGACY_REPLY_SIZE));
+awaitReply(
+  g,
+  "INIT1_FIN",
+  0xa000,
+  () => true,
+  "INIT2_FS_Z",
+  buildPassthruPacket(buildFsZ(), LEGACY_REPLY_SIZE),
+);
 
 // INIT2_FS_Z: 0xa000 FS-Z-ack (1-byte 0x06) → send INFO META command → INIT2_INFO_META
-awaitAck(
+awaitReply(
   g,
   "INIT2_FS_Z",
   0xa000,
+  ackByte(0x06),
   "INIT2_INFO_META",
   buildPassthruPacket(buildEsci2Command("INFO"), ESCI2_REPLY_SIZE),
-  0x06,
 );
 
 // INIT2_FIN: 0xa000 FIN-ack → reset initPollIteration, send FS Y → INIT_POLL_FS_Y.
-awaitAck(
+awaitReply(
   g,
   "INIT2_FIN",
   0xa000,
+  () => true,
   "INIT_POLL_FS_Y",
   buildPassthruPacket(buildFsY(), LEGACY_REPLY_SIZE),
 );
@@ -369,6 +352,13 @@ function statThenDrain(
         send: buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
       },
     },
+    // POSTSCAN drains run with `alwaysDrain=true` and the printer can
+    // reply length=0 — the empty 0xa000 IS the drain-complete trigger
+    // here, so opt this state out of `globalIgnoreFilter`. The
+    // POST_MODE / INIT_POLL drains never reach with length=0 (their
+    // _STAT decisions skip the drain entirely in that case), so the
+    // bypass is scoped to alwaysDrain cycles only.
+    ...(alwaysDrain ? { bypassIgnoreFilter: true as const } : {}),
   });
 
   g.state(`${prefix}_FIN`, {

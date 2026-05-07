@@ -2,36 +2,9 @@ import { createLogger } from "../logger.js";
 
 const log = createLogger("esci");
 
-// ─── Legacy ESC/I commands (2 raw bytes each) ─────────────────────────────
-
-/**
- * Legacy ESC/I "Inquire Extended Status" (FS Y). Two raw bytes.
- * Caller sends as passthru with cmd_size=2, reply_size=1.
- * Reply is 1 byte: 0x06 = ACK.
- */
-export function buildFsY(): Buffer {
-  return Buffer.from([0x1c, 0x59]);
-}
-
-/**
- * Legacy ESC/I "Switch to Extended Mode" (FS X). Two raw bytes.
- * Sent once after the init poll confirms the printer is ready, transitioning
- * the session from legacy ESC/I to ESC/I-2 framing.
- * Caller sends as passthru with cmd_size=2, reply_size=1.
- * Reply is 1 byte: 0x06 = ACK.
- */
-export function buildFsX(): Buffer {
-  return Buffer.from([0x1c, 0x58]);
-}
-
-/**
- * Legacy ESC/I FS Z (0x1C 0x5A). Used in the driver's cycle-2 init
- * polling to request a second, smaller capability-discovery pass.
- * Caller sends as passthru with cmd_size=2, reply_size=1; reply is 0x06.
- */
-export function buildFsZ(): Buffer {
-  return Buffer.from([0x1c, 0x5a]);
-}
+// Legacy ESC/I "FS *" commands shared with the WF-3620 path now live in
+// `src/commands-fs.ts`. They retain the same wire bytes; this comment is
+// the only thing that moved.
 
 // ─── ESC/I-2 commands ─────────────────────────────────────────────────────
 
