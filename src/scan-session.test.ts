@@ -1070,7 +1070,14 @@ describe("runScanSession (engine pump)", () => {
     }
   });
 
-  it("clean DONE success skips transport.destroy() (polite end already issued)", async () => {
+  it("settle always destroys — clean DONE success path also calls transport.destroy()", async () => {
+    // Engine-side resource-cleanup contract: settle owns the final
+    // destroy on every path, including natural-DONE success. Adapters
+    // that want to no-op a redundant destroy after a polite end()
+    // (e.g. withEsci2UnlockOnDestroy's politelyClosed gate) handle that
+    // at the adapter layer; the engine treats destroy as unconditional
+    // so raw-socket consumers don't leak handles when the peer never
+    // sends FIN.
     const transport = new FakeTransport();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
     const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
@@ -1102,16 +1109,13 @@ describe("runScanSession (engine pump)", () => {
 
     const result = await promise;
     expect(result.ok).toBe(true);
-    expect(transport.destroyCallCount).toBe(0);
+    expect(transport.destroyCallCount).toBeGreaterThanOrEqual(1);
 
     fs.rmSync(tempDir, { recursive: true, force: true });
     fs.rmSync(outputDir, { recursive: true, force: true });
   });
 
-  it("cleanupStates recovery still destroys the transport (abort settle ran first), then resolves ok", async () => {
-    // The cleanupStates fallback resolve()s ok directly inside its IIFE,
-    // but only AFTER the prior abort settle({ ok: false }) has destroyed
-    // the transport — so a recovered scan still tears down correctly.
+  it("cleanupStates recovery destroys the transport, then resolves ok", async () => {
     const transport = new FakeTransport();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
     const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
@@ -1250,8 +1254,9 @@ describe("runScanSession (engine pump)", () => {
 
     const result = await promise;
     expect(result.ok).toBe(true);
-    // Clean-DONE-skip-destroy contract still applies even though end() threw.
-    expect(transport.destroyCallCount).toBe(0);
+    // settle always destroys (uniform contract); end() throwing doesn't
+    // prevent the engine from reaching cleanup.
+    expect(transport.destroyCallCount).toBeGreaterThanOrEqual(1);
     const outputs = fs.readdirSync(outputDir);
     expect(outputs.some((f) => /^scan_.*\.jpg$/.test(f))).toBe(true);
 

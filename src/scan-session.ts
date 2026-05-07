@@ -311,18 +311,21 @@ export async function runScanSession<Ctx>(
       }
     }
 
-    const settle = (result: RunScanSessionResult<Ctx>, settleOpts?: { skipDestroy?: boolean }) => {
+    const settle = (result: RunScanSessionResult<Ctx>) => {
       if (settled) return; // idempotent — close handler may also call this
       settled = true;
       clearTimeoutTimer(); // (T15)
-      // Natural-DONE has already issued a polite transport.end(); only
-      // failure paths destroy.
-      if (!settleOpts?.skipDestroy) {
-        try {
-          transport.destroy();
-        } catch {
-          /* swallow — destroy may throw on already-closed sockets */
-        }
+      // Always destroy — final resource cleanup is the engine's job.
+      // Adapters that want to no-op a redundant destroy after a polite
+      // end() (DONE path) do so via their own clean-close state
+      // (e.g. withEsci2UnlockOnDestroy's politelyClosed gate). On raw
+      // sockets destroy is what ensures the handle is released when the
+      // peer never sends FIN — skipping it would leak one socket per
+      // successful scan in the daemon.
+      try {
+        transport.destroy();
+      } catch {
+        /* swallow — destroy may throw on already-closed sockets */
       }
 
       // Post-scan-save fallback (v0.3.0 §3.3) — see Graph.cleanupStates
@@ -437,7 +440,7 @@ export async function runScanSession<Ctx>(
           return;
         }
       }
-      settle({ ok: true, finalCtx: ctx }, { skipDestroy: true });
+      settle({ ok: true, finalCtx: ctx });
     }
 
     transport.on("error", (err) => {
