@@ -52,12 +52,11 @@ export const ESCI2_TIMEOUT_MS = 30_000;
 export const ESCI2_REPLY_SIZE = 64;
 const LEGACY_REPLY_SIZE = 1;
 const INIT_POLL_ITERATIONS = 3;
-// scanner.ts:120: 2000 zero-length retries gives ~40s of headroom for slow scan starts.
+// 2000 zero-length retries gives ~40s of headroom for slow scan starts.
 const MAX_ZERO_IMG_RETRIES = 2000;
 
 /**
  * Async-event dispatch bytes (type 0x9000 body[0]).
- * Verified against current src/esci2/scanner.ts:124-126.
  */
 const ASYNC_FATAL_BYTES = new Set([
   0x02, // Disconnect
@@ -126,14 +125,13 @@ function expectIsType(
 
 const g = createGraph<Esci2Ctx>("WELCOME", ESCI2_TIMEOUT_MS)
   // Empty 0xa000 envelopes are "wait for body" pre-data signals on the
-  // ESC/I-2 wire (current scanner.ts:393-396 silently logs and waits).
+  // ESC/I-2 wire.
   // Filter them out pre-dispatch so consumer states see only non-empty
   // 0xa000 packets.
   .globalIgnoreFilter((packet) => packet.type === 0xa000 && packet.payload.length === 0)
   // 0x9000 is the protocol-level async event channel: fatal/cancel
   // payloads abort the session regardless of state; ScanStart/Stop and
-  // unknown bytes are info-only (return null to ignore). Mirrors
-  // scanner.ts:345-387's existing handleAsyncEvent.
+  // unknown bytes are info-only (return null to ignore).
   .globalAbortHandlers({
     0x9000: (_ctx, packet) => {
       const dispatch = packet.payload.length > 0 ? packet.payload[0] : -1;
@@ -190,7 +188,6 @@ awaitAck(
 );
 
 // INIT2_FIN: 0xa000 FIN-ack → reset initPollIteration, send FS Y → INIT_POLL_FS_Y.
-// scanner.ts onInit2Fin: receives 0xa000, sets initPollIteration=0, sends buildPassthruPacket(buildFsY(), 1).
 awaitAck(
   g,
   "INIT2_FIN",
@@ -468,7 +465,7 @@ g.state("INIT_POLL_FS_Y", {
 // INIT_POLL_STAT: decision on STAT reply — drain if length>0, else FIN.
 // On the first iteration (ctx.initPollIteration === 0) also detects source:
 //   length 0 → ADF (no status queued); length 12 → flatbed (filler #---#---#---).
-//   Other lengths default to ADF (mirrors scanner.ts:619-633).
+//   Other lengths default to ADF, preserving the source-detection fallback.
 g.state(
   "INIT_POLL_STAT",
   decision<Esci2Ctx>((ctx, packet) => {
@@ -478,7 +475,7 @@ g.state(
     if (header === null) {
       return { error: new Error("INIT_POLL_STAT: unparseable reply header") };
     }
-    // Source detection — only on the FIRST iteration. Per scanner.ts:619-633:
+    // Source detection — only on the FIRST iteration:
     // length 0 → ADF (printer queued no status); length 12 → flatbed (queued
     // `#---#---#---` filler). Other lengths default to ADF with a comment.
     if (ctx.initPollIteration === 0) {
@@ -487,7 +484,7 @@ g.state(
       } else if (header.length === 12) {
         ctx.source = "flatbed";
       } else {
-        ctx.source = "adf"; // fallback per scanner.ts:626-627
+        ctx.source = "adf"; // fallback for unexpected status length
       }
     }
     if (header.length > 0) {
@@ -514,8 +511,8 @@ g.state("INIT_POLL_STAT_DRAIN", {
 });
 
 // INIT_POLL_FIN: decision on FIN reply — loop or advance to MODE_SWITCH.
-// scanner.ts onInitFin: increments initPollIteration; if <3 sends FS Y and
-// loops; else sends FS X and moves to MODE_SWITCH.
+// INIT_POLL_FIN increments initPollIteration; if <3 sends FS Y and loops;
+// else sends FS X and moves to MODE_SWITCH.
 g.state(
   "INIT_POLL_FIN",
   decision<Esci2Ctx>((ctx, packet) => {
@@ -529,7 +526,6 @@ g.state(
       };
     }
     // 3 iterations done — send FS X to enter extended mode → MODE_SWITCH.
-    // scanner.ts onInitFin: sends buildPassthruPacket(buildFsX(), LEGACY_REPLY_SIZE).
     return {
       next: "MODE_SWITCH",
       send: buildPassthruPacket(buildFsX(), LEGACY_REPLY_SIZE),
@@ -554,7 +550,6 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
 }
 
 // MODE_SWITCH: receives the FS X ack (payload[0]=0x06); sends STAT → POST_MODE_STAT.
-// scanner.ts onModeSwitch: validates ACK byte, sends STAT.
 g.state("MODE_SWITCH", {
   on: {
     0xa000: {
@@ -568,7 +563,6 @@ g.state("MODE_SWITCH", {
 // POST_MODE_STAT: decision on STAT reply.
 // If length>0 → pure-read drain → POST_MODE_STAT_DRAIN.
 // If length===0 → send PARA header + body → PARA.
-// scanner.ts onPostModeStat: same drain-or-skip logic; sendParaHeaderAndBody on both paths.
 g.state(
   "POST_MODE_STAT",
   decision<Esci2Ctx>((ctx, packet) => {
@@ -619,7 +613,6 @@ g.state("PARA", {
 });
 
 // TRDT: transfer-data handshake; sends IMG to start the image-receive loop.
-// scanner.ts onTrdt: receives 0xa000, sends IMG → IMG_META.
 g.state("TRDT", {
   on: {
     0xa000: {
@@ -636,7 +629,7 @@ g.state("TRDT", {
 // - Zero-length chunk with no page-end: zero-retry path (up to MAX_ZERO_IMG_RETRIES).
 // - Non-zero chunk size: resets zeroImgRetries, sends pure-read, advances to IMG_DATA.
 //
-// pageEndKind logic (mirrors scanner.ts:835-843):
+// pageEndKind logic:
 //   On flatbed, any #pen is terminal (glass is inherently single-page; #lft
 //   is never emitted on the flatbed path). On ADF, #lftd000 disambiguates
 //   "terminal" (last page) vs "page boundary, more coming".
@@ -662,7 +655,6 @@ g.state(
     }
     ctx.imgChunkSize = header.length;
     ctx.pageSide = tokens.get("typ") === "IMGB" ? "back" : "front";
-    // Per scanner.ts:835-842:
     // On flatbed, any #pen is terminal because the glass is single-page.
     // On ADF, #lftd000 disambiguates "terminal" vs "page boundary, more coming".
     if (tokens.has("pen")) {

@@ -446,7 +446,7 @@ export async function runScanSession<Ctx>(
      * either — against the current ctx into a flat array of byte buffers
      * to write in order. Empty array means "no writes."
      */
-    function resolveSend(send: SendSpec<Ctx> | SendSpec<Ctx>[] | Buffer | undefined): Buffer[] {
+    function resolveSend(send: SendSpec<Ctx> | SendSpec<Ctx>[] | undefined): Buffer[] {
       if (!send) return [];
       const items = Array.isArray(send) ? send : [send];
       return items.map((s) => (typeof s === "function" ? s(ctx) : s));
@@ -509,7 +509,7 @@ export async function runScanSession<Ctx>(
      * than calling parseIsPacket on a partial buffer, which would return
      * null for any packet whose payload exceeds the peek window).
      */
-    function tryParseHead(): { type: number; payload: Buffer; totalSize: number } | null {
+    function tryParseHead(): { type: number; payload: Buffer } | null {
       if (recvBytes < IS_HEADER_SIZE) return null;
 
       // Ensure first chunk has at least IS_HEADER_SIZE bytes so we can read
@@ -545,7 +545,7 @@ export async function runScanSession<Ctx>(
       const remainder = merged.subarray(totalSize);
       recvBytes = remainder.length;
       if (remainder.length > 0) recvChunks.push(remainder);
-      return { type, payload, totalSize };
+      return { type, payload };
     }
 
     async function dispatchPacket(packet: { type: number; payload: Buffer }): Promise<void> {
@@ -618,7 +618,7 @@ export async function runScanSession<Ctx>(
      */
     async function applyTransition(t: {
       next: string;
-      send?: SendSpec<Ctx> | SendSpec<Ctx>[] | Buffer | Buffer[];
+      send?: SendSpec<Ctx> | SendSpec<Ctx>[];
       flushPage?: PageFlush;
     }): Promise<void> {
       if (t.flushPage) {
