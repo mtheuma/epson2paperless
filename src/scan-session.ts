@@ -364,6 +364,12 @@ export async function runScanSession<Ctx>(
     function enterState(name: string): void {
       currentState = name;
       if (currentState === "DONE") {
+        // Clear any timer left armed by the prior state. Otherwise a non-flush
+        // final transition (e.g. UNLOCKING → DONE) leaves the prior state's
+        // timer alive; if doFinalize takes longer than timeoutMs the leftover
+        // timer fires "Timeout in state DONE" mid-finalize, races settle, and
+        // rms sessionTempDir while finalizeSession is still reading it.
+        clearTimeoutTimer();
         transport.end(); // polite close request; peer may ACK late or never
         // Schedule logical finalize independently — do NOT block on socket
         // close. setImmediate gives any in-flight microtasks (e.g. flushPage's

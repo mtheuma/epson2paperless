@@ -1,6 +1,6 @@
 // src/scan-session.test.ts
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -8,6 +8,13 @@ import * as path from "node:path";
 import { createGraph, decision, runScanSession } from "./scan-session.js";
 import type { SessionTransport } from "./scan-session.js";
 import { buildIsPacket } from "./protocol.js";
+
+// Allow per-test spies on finalizeSession via vi.spyOn while keeping the
+// default implementation (other tests rely on the real promote-and-write
+// path producing scan_*.jpg files).
+vi.mock("./output-tail.js", async () =>
+  vi.importActual<typeof import("./output-tail.js")>("./output-tail.js"),
+);
 
 describe("createGraph", () => {
   it("builds an empty graph with the given initial state", () => {
@@ -864,6 +871,75 @@ describe("runScanSession (engine pump)", () => {
     const result = await promise;
     expect(result.ok).toBe(true);
 
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
+  // Regression: enterState("DONE") must clear the timeout armed by the prior
+  // state. Otherwise on a non-flushPage final transition (e.g. UNLOCKING →
+  // DONE in the ESC/I-2 graph) the leftover timer fires "Timeout in state
+  // DONE" mid-finalize, racing settle and rm-ing the temp dir while
+  // finalizeSession is still reading from it.
+  it("clears prior-state timeout when entering DONE so a slow finalize doesn't race a leftover timer", async () => {
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+
+    const outputTail = await import("./output-tail.js");
+    const realFinalize = outputTail.finalizeSession;
+    const spy = vi.spyOn(outputTail, "finalizeSession").mockImplementation(async (opts) => {
+      // Hold finalize past the prior-state timeout so a leftover timer
+      // would have fired by the time we resolve.
+      await new Promise((r) => setTimeout(r, 80));
+      await realFinalize(opts);
+    });
+
+    // PAGE flushes (barrier clears + re-arms timer). INTER → DONE has no
+    // flushPage; DONE entry is the place that must clear INTER's timer.
+    const g = createGraph<Record<string, never>>("PAGE", 20);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "INTER",
+          flushPage: {
+            side: "front",
+            encode: () => Promise.resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+          },
+        },
+      },
+    });
+    g.state("INTER", { on: { 0xa000: { next: "DONE" } } });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+    });
+
+    setImmediate(() =>
+      transport.emit(
+        "data",
+        Buffer.concat([
+          buildIsPacket(0xa000, Buffer.alloc(0)),
+          buildIsPacket(0xa000, Buffer.alloc(0)),
+        ]),
+      ),
+    );
+
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      expect(result.reason.message).not.toMatch(/Timeout/);
+    }
+    // outputDir should contain a scan_*.jpg promoted by finalizeSession.
+    const outputs = fs.readdirSync(outputDir);
+    expect(outputs.some((f) => /^scan_.*\.jpg$/.test(f))).toBe(true);
+
+    spy.mockRestore();
     fs.rmSync(tempDir, { recursive: true, force: true });
     fs.rmSync(outputDir, { recursive: true, force: true });
   });
