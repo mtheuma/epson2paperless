@@ -486,14 +486,17 @@ describe("runScanSession (engine pump)", () => {
       action: "jpg",
     });
 
-    // First packet: triggers flushPage in PAGE → enter CLEANUP.
-    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
-    // Second packet: lands in CLEANUP and triggers the decision error.
-    // setImmediate-after-setImmediate gives the flushPage barrier its
-    // microtask budget before the next dispatch happens.
+    // Both packets in one chunk: tryParseHead handles multi-packet buffers,
+    // and the engine's pump loop picks up packet 2 from recvChunks after
+    // the flushPage barrier resolves. Reentrancy + recvChunks buffering
+    // make a hand-tuned tick budget unnecessary.
     setImmediate(() =>
-      setImmediate(() =>
-        setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0)))),
+      transport.emit(
+        "data",
+        Buffer.concat([
+          buildIsPacket(0xa000, Buffer.alloc(0)),
+          buildIsPacket(0xa000, Buffer.alloc(0)),
+        ]),
       ),
     );
 
@@ -550,10 +553,13 @@ describe("runScanSession (engine pump)", () => {
       action: "jpg",
     });
 
-    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
     setImmediate(() =>
-      setImmediate(() =>
-        setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0)))),
+      transport.emit(
+        "data",
+        Buffer.concat([
+          buildIsPacket(0xa000, Buffer.alloc(0)),
+          buildIsPacket(0xa000, Buffer.alloc(0)),
+        ]),
       ),
     );
 

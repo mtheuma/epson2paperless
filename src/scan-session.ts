@@ -266,10 +266,23 @@ export async function runScanSession<Ctx>(
 
   return new Promise<RunScanSessionResult<Ctx>>((resolve) => {
     let settled = false;
-    // Set true once any path has called finalizeSession (or is about to).
-    // Prevents the post-scan-save fallback in settle from re-entering
-    // finalize after doFinalize has already attempted (and failed) it.
+    // Gates settle's post-scan-save branch against doFinalize's own finalize
+    // attempt — without this, a finalize failure in doFinalize would route
+    // back through settle and retry the same call.
     let finalizeAttempted = false;
+
+    /** Promotes pages from sessionTempDir to outputDir via the output pipeline. */
+    async function runFinalize(tempDir: string): Promise<void> {
+      const { finalizeSession } = await import("./output-tail.js");
+      await finalizeSession({
+        sessionTempDir: tempDir,
+        outputDir: opts.outputDir,
+        sessionTs: opts.sessionTs,
+        action: opts.action,
+        backPageIndices,
+        paperless: opts.paperless,
+      });
+    }
 
     function armTimeout(): void {
       if (timeoutTimer) clearTimeout(timeoutTimer);
@@ -298,16 +311,9 @@ export async function runScanSession<Ctx>(
         /* swallow — destroy may throw on already-closed sockets */
       }
 
-      // Post-scan-save fallback (v0.3.0 §3.3). Restricted to states the
-      // graph explicitly declares as post-image cleanup: panel-hygiene
-      // failures (UNLOCK ack, async drain event, peer close after the
-      // last page) shouldn't discard scans the user already got out of
-      // the printer. Failures in image-acquisition states (IMG_META,
-      // IMG_DATA, etc.) still reject — partial multi-page output isn't
-      // silently promoted to success on page 2 of N.
-      // finalizeAttempted gates the doFinalize → settle({ok:false}) loop:
-      // if doFinalize already tried and failed, surface the original error
-      // instead of retrying.
+      // Post-scan-save fallback (v0.3.0 §3.3) — see Graph.cleanupStates
+      // JSDoc for the contract. If finalize itself fails, surface the
+      // original error rather than masking it with a finalize-side error.
       if (
         !result.ok &&
         sessionTempDir !== null &&
@@ -316,21 +322,11 @@ export async function runScanSession<Ctx>(
         !finalizeAttempted
       ) {
         finalizeAttempted = true;
-        const tempDirAtSettle = sessionTempDir;
         void (async () => {
           try {
-            const { finalizeSession } = await import("./output-tail.js");
-            await finalizeSession({
-              sessionTempDir: tempDirAtSettle,
-              outputDir: opts.outputDir,
-              sessionTs: opts.sessionTs,
-              action: opts.action,
-              backPageIndices,
-              paperless: opts.paperless,
-            });
+            await runFinalize(sessionTempDir);
             resolve({ ok: true, finalCtx: ctx });
           } catch {
-            // Finalize itself failed — surface original error.
             resolve(result);
           }
         })();
@@ -394,15 +390,7 @@ export async function runScanSession<Ctx>(
       if (sessionTempDir) {
         finalizeAttempted = true;
         try {
-          const { finalizeSession } = await import("./output-tail.js");
-          await finalizeSession({
-            sessionTempDir,
-            outputDir: opts.outputDir,
-            sessionTs: opts.sessionTs,
-            action: opts.action,
-            backPageIndices,
-            paperless: opts.paperless,
-          });
+          await runFinalize(sessionTempDir);
         } catch (err) {
           const reason = err instanceof Error ? err : new Error(String(err));
           settle({ ok: false, reason, finalCtx: ctx });
