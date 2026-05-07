@@ -328,9 +328,8 @@ function statThenDrain(
   prefix: string,
   next: string,
   finSend?: SendSpec<Esci2Ctx> | SendSpec<Esci2Ctx>[],
-  opts: { alwaysDrain?: boolean } = {},
+  alwaysDrain = false,
 ): void {
-  const alwaysDrain = opts.alwaysDrain ?? false;
   g.state(
     `${prefix}_STAT`,
     decision<Esci2Ctx>((_ctx, packet) => {
@@ -415,7 +414,7 @@ statThenDrain(
   "POSTSCAN_1",
   "POSTSCAN_FS_Y_2",
   buildPassthruPacket(buildFsY(), LEGACY_REPLY_SIZE),
-  { alwaysDrain: true },
+  true,
 );
 
 // POSTSCAN_FS_Y_2: receives FS Y ACK (0xa000, payload[0]=0x06); sends STAT.
@@ -431,7 +430,7 @@ g.state("POSTSCAN_FS_Y_2", {
 
 // POSTSCAN cycle 2: POSTSCAN_2_STAT → POSTSCAN_2_STAT_DRAIN → POSTSCAN_2_FIN → UNLOCKING
 // POSTSCAN_2_FIN has no further send — UNLOCKING's onEnter sends the unlock packet.
-statThenDrain(g, "POSTSCAN_2", "UNLOCKING", undefined, { alwaysDrain: true });
+statThenDrain(g, "POSTSCAN_2", "UNLOCKING", undefined, true);
 
 // =============================================================================
 // UNLOCKING state — onEnter sends unlock packet, awaits 0xa101 ack → DONE

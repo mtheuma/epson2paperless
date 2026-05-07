@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { esci2Graph, ESCI2_TIMEOUT_MS } from "./graph.js";
+import { IS_HEADER_SIZE } from "../protocol.js";
 
 describe("esci2Graph (smoke)", () => {
   it("builds with the expected initial state and timeout", () => {
@@ -871,9 +872,9 @@ describe("esci2Graph T26 — FIN_AFTER_IMG decision + POSTSCAN drain cycles", ()
       throw new Error("expected single Buffer send");
     }
     const send = result.send as Buffer;
-    // Pure-read packet: IS header (10 bytes) + 8-byte data header where
-    // bytes 4-7 are the declared reply size BE. Verify that's 0 here.
-    expect(send.readUInt32BE(10 + 4)).toBe(0);
+    // Pure-read packet layout: IS header + 8-byte data header where
+    // bytes 0-3 are the offset (0) and bytes 4-7 are the reply size BE.
+    expect(send.readUInt32BE(IS_HEADER_SIZE + 4)).toBe(0);
   });
 
   it("statThenDrain POSTSCAN_1_FIN advances to POSTSCAN_FS_Y_2 with FS Y send", () => {
@@ -922,7 +923,7 @@ describe("esci2Graph T26 — FIN_AFTER_IMG decision + POSTSCAN drain cycles", ()
     if (!("send" in result) || !result.send || Array.isArray(result.send)) {
       throw new Error("expected single Buffer send");
     }
-    expect((result.send as Buffer).readUInt32BE(10 + 4)).toBe(0);
+    expect((result.send as Buffer).readUInt32BE(IS_HEADER_SIZE + 4)).toBe(0);
   });
 
   it("cleanupStates does NOT include FIN_AFTER_IMG (matches v0.3.0 contract)", () => {
