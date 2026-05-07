@@ -5,9 +5,13 @@ import os from "node:os";
 import { PDFDocument } from "pdf-lib";
 import { runEsci2Scan, withUnlockOnDestroy } from "./scanner.js";
 import type * as tls from "node:tls";
-import { buildIsPacket } from "../protocol.js";
+import { buildIsPacket, IS_HEADER_SIZE } from "../protocol.js";
 import { parseEsci2ReplyHeader } from "./commands.js";
 import { FakeTlsSocket } from "./test-support/fake-tls-socket.js";
+
+function waitImmediate(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 // Fixed capability-body packets used by driveScannerToPara for both init cycles.
 // Scanner discards the body content (it just needs N bytes matching the declared
@@ -50,42 +54,42 @@ async function driveScannerToPara(args: {
 
   const feedEsci2Reply = async (bodyHex: string) => {
     fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
     fake.feed(buildIsPacket(0xa000, Buffer.from(bodyHex, "ascii")));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
   };
   const feedLegacyAck = async () => {
     fake.feed(buildIsPacket(0xa000, Buffer.from([0x06])));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
   };
 
   // Welcome + LOCK
   fake.feed(buildIsPacket(0x8000));
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
   fake.feed(buildIsPacket(0xa100, Buffer.from([0x06])));
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
 
   // Cycle 1: FS Y ACK, @INFO hdr+body, @CAPA hdr+body, FIN
   await feedLegacyAck();
   await feedEsci2Reply("INFOx00000F4");
   fake.feed(INFO_BODY_PACKET);
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
   await feedEsci2Reply("CAPAx0000150");
   fake.feed(CAPA_BODY_PACKET);
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
   await feedEsci2Reply("FIN x0000000");
 
   // Cycle 2: FS Z ACK, @INFO, @CAPA, @RESA, FIN
   await feedLegacyAck();
   await feedEsci2Reply("INFOx00000F4");
   fake.feed(INFO_BODY_PACKET);
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
   await feedEsci2Reply("CAPAx0000150");
   fake.feed(CAPA_BODY_PACKET);
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
   await feedEsci2Reply("RESAx00000A4");
   fake.feed(RESA_BODY_PACKET);
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
   await feedEsci2Reply("FIN x0000000");
 
   // INIT_POLL cycle 1 with the test-provided STAT reply; drain if length > 0
@@ -95,9 +99,9 @@ async function driveScannerToPara(args: {
     parseEsci2ReplyHeader(Buffer.from(firstStatReplyHex, "ascii"))?.length ?? 0;
   if (firstStatLength > 0) {
     fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
     fake.feed(buildIsPacket(0xa000, Buffer.alloc(firstStatLength, 0x2d)));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
   }
   await feedEsci2Reply("FIN x0000000");
 
@@ -134,14 +138,14 @@ async function drivePastImgTerminator(
   });
   // PARA reply
   fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
   fake.feed(buildIsPacket(0xa000, Buffer.from("PARAx0000000#parOK", "ascii")));
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
   await feedEsci2Reply("TRDTx0000000");
   // One IMG packet with a 4-byte JPEG body, then a terminal #pen-without-#lft
   await feedEsci2Reply("IMG x0000004#pst");
   fake.feed(buildIsPacket(0xa000, Buffer.from("ffd8ffd9", "hex")));
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
   // Snapshot writes before the page-end feed; wait for the engine's response
   // (FIN for flatbed-terminal, IMG for ADF-more) before returning.
   const writesBeforePageEnd = fake.writes.length;
@@ -282,7 +286,7 @@ async function replayCapture(
   for (const rec of filtered) {
     if (rec.hook === "recv") {
       fake.feed(Buffer.from(rec.payload_hex ?? "", "hex"));
-      await new Promise((r) => setImmediate(r));
+      await waitImmediate();
     } else {
       // Wait for the scanner to produce this write — handles the engine's
       // async flushPage barrier (multi-microtask: await encode → file I/O →
@@ -295,9 +299,9 @@ async function replayCapture(
     }
   }
 
-  // Let finalizeScan's deferred writeFileSync run to completion.
-  await new Promise((r) => setImmediate(r));
-  await new Promise((r) => setImmediate(r));
+  // Let the DONE-path finalization task run to completion.
+  await waitImmediate();
+  await waitImmediate();
 
   const totalDriverSends = filtered.filter((r) => r.hook === "send").length;
   return { totalDriverSends, scannerWrites: fake.writes, sessionPromise };
@@ -504,9 +508,9 @@ describe("scanner targeted tests — error paths", () => {
     const rejectsAssertion = expect(sessionPromise).rejects.toThrow(/fatal/i);
     fake.simulateConnect();
     fake.feed(buildIsPacket(0x8000));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
     fake.feed(buildIsPacket(0x9000, Buffer.from([0xa0])));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
 
     const lastWrite = fake.writes[fake.writes.length - 1];
     expect(lastWrite.readUInt16BE(2)).toBe(0x2101); // UNLOCK packet type
@@ -534,10 +538,10 @@ describe("scanner targeted tests — error paths", () => {
     );
     fake.simulateConnect();
     fake.feed(buildIsPacket(0x8000));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
     const lockWriteIdx = fake.writes.length;
     fake.feed(buildIsPacket(0xffff));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
 
     const postErrorWrites = fake.writes.slice(lockWriteIdx);
     const sawUnlock = postErrorWrites.some((w) => w.length >= 4 && w.readUInt16BE(2) === 0x2101);
@@ -565,10 +569,10 @@ describe("scanner targeted tests — error paths", () => {
     const rejectsAssertion = expect(sessionPromise).rejects.toThrow(/TLS connection error/i);
     fake.simulateConnect();
     fake.feed(buildIsPacket(0x8000));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
     // Simulate a mid-scan socket error (e.g., printer reboots).
     fake.emit("error", Object.assign(new Error("EPIPE"), { code: "EPIPE" }));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
     // The promise should reject with a classified error message.
     await rejectsAssertion;
     // Last write should be the UNLOCK packet, proving transitionToError ran.
@@ -778,7 +782,7 @@ describe("withUnlockOnDestroy wrapper", () => {
   // IS-header byte 2-3 carries packet type. LOCK is 0x2100, UNLOCK 0x2101 —
   // the wrapper sniffs writes by these bytes to track session state.
   function makeIsTypeStub(typeLo: number): Buffer {
-    const buf = Buffer.alloc(12);
+    const buf = Buffer.alloc(IS_HEADER_SIZE);
     buf[2] = 0x21;
     buf[3] = typeLo;
     return buf;
@@ -934,7 +938,7 @@ describe("runEsci2Scan failure-mode matrix", () => {
       // rejection isn't momentarily unhandled (FakeTlsSocket.destroy() is sync,
       // so the close event fires inside advanceTimersByTimeAsync).
       const rejectsAssertion = expect(scanPromise).rejects.toThrow(/timeout/i);
-      // TIMEOUT_MS is 30_000 in scanner.ts (line 113); 60_000 overshoots safely.
+      // The graph timeout is 30_000 ms; 60_000 overshoots safely.
       await vi.advanceTimersByTimeAsync(60_000);
       await rejectsAssertion;
     } finally {
@@ -1005,9 +1009,8 @@ describe("runEsci2Scan failure-mode matrix", () => {
       fake.asFactory(),
     );
     fake.simulateConnect();
-    // ASYNC_FATAL in scanner.ts:124 contains 0x02 (Disconnect), 0x80 (Timeout),
-    // 0xa0 (ServerError). Use 0x02. (0x05 is "unknown" and falls through to
-    // log.warn with no rejection.)
+    // The ESC/I-2 graph treats 0x02 (Disconnect), 0x80 (Timeout), and
+    // 0xa0 (ServerError) as fatal. Use 0x02. (0x05 is info-only and does not reject.)
     const fatalPacket = buildIsPacket(0x9000, Buffer.from([0x02]));
     // Attach handler before feeding — FakeTlsSocket.destroy() fires "close"
     // synchronously, rejecting the promise inside fake.feed().
