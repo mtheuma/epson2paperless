@@ -276,6 +276,10 @@ export async function runScanSession<Ctx>(
     // attempt — without this, a finalize failure in doFinalize would route
     // back through settle and retry the same call.
     let finalizeAttempted = false;
+    // Hoisted above listener registration so synchronous-during-on() data
+    // replay doesn't TDZ this binding. Paired with the empty-state pump
+    // gate below.
+    let dispatching = false;
 
     /** Promotes pages from sessionTempDir to outputDir via the output pipeline. */
     async function runFinalize(tempDir: string): Promise<void> {
@@ -311,6 +315,13 @@ export async function runScanSession<Ctx>(
       if (settled) return; // idempotent — close handler may also call this
       settled = true;
       clearTimeoutTimer(); // (T15)
+      // Always destroy — final resource cleanup is the engine's job.
+      // Adapters that want to no-op a redundant destroy after a polite
+      // end() (DONE path) do so via their own clean-close state
+      // (e.g. withEsci2UnlockOnDestroy's politelyClosed gate). On raw
+      // sockets destroy is what ensures the handle is released when the
+      // peer never sends FIN — skipping it would leak one socket per
+      // successful scan in the daemon.
       try {
         transport.destroy();
       } catch {
@@ -376,7 +387,13 @@ export async function runScanSession<Ctx>(
         // timer fires "Timeout in state DONE" mid-finalize, races settle, and
         // rms sessionTempDir while finalizeSession is still reading it.
         clearTimeoutTimer();
-        transport.end(); // polite close request; peer may ACK late or never
+        // Polite close request; peer may ACK late or never. Real sockets
+        // can throw on already-destroyed; swallow so doFinalize still runs.
+        try {
+          transport.end();
+        } catch {
+          /* swallow */
+        }
         // Schedule logical finalize independently — do NOT block on socket
         // close. setImmediate gives any in-flight microtasks (e.g. flushPage's
         // last file-write) a tick to settle before we run finalize.
@@ -468,18 +485,19 @@ export async function runScanSession<Ctx>(
       for (const buf of buffers) transport.write(buf);
     }
 
-    let dispatching = false;
-
     /**
      * Async pump loop. Reentrancy is prevented by the `dispatching` guard:
      * concurrent calls (from `'data'` events that fire while the loop is
      * awaiting an applyTransition) short-circuit; the active loop drains
      * any chunks they buffered on its next iteration.
      *
-     * The loop checks `paused`, `settled`, and `currentState === "DONE"` at
-     * every step — set during a flushPage barrier or after the session is
-     * finalized — so a buffered second packet in the same TCP chunk doesn't
-     * keep dispatching after the session has already completed or errored.
+     * The loop checks `paused`, `settled`, `currentState === ""` (initial-
+     * entry gate — handles transports that synchronously fire `data` during
+     * listener registration, before enterState(graph.initial) has run), and
+     * `currentState === "DONE"` at every step — set during a flushPage
+     * barrier or after the session is finalized — so a buffered second
+     * packet in the same TCP chunk doesn't keep dispatching after the
+     * session has already completed or errored.
      *
      * Hook exceptions (from validate, decision, onEnter, send thunks, etc.)
      * are caught here and routed through settle so they surface as
@@ -490,7 +508,7 @@ export async function runScanSession<Ctx>(
       dispatching = true;
       try {
         while (true) {
-          if (paused || settled || currentState === "DONE") return;
+          if (paused || settled || currentState === "" || currentState === "DONE") return;
           const packet = tryParseHead();
           if (!packet) return;
           try {
@@ -508,7 +526,7 @@ export async function runScanSession<Ctx>(
             }
             return;
           }
-          if (paused || settled || currentState === "DONE") return;
+          if (paused || settled || currentState === "" || currentState === "DONE") return;
         }
       } finally {
         dispatching = false;
@@ -648,11 +666,19 @@ export async function runScanSession<Ctx>(
         pageIndex += 1;
         const myPageIndex = pageIndex;
 
+        // settled-bailouts after each await skip side-effects (file write,
+        // staged send, ctx mutation, entering staged next state). They do
+        // NOT clear `paused`: once settled is true, the pump's gate checks
+        // settled before paused, and the run resolves shortly after — no
+        // reader of paused remains. The catch arm below DOES clear paused
+        // for flag-consistency since it can race with the pump's own
+        // catch path.
         try {
           const jpegBytes = await t.flushPage.encode();
+          if (settled) return;
 
-          // Track back-page index regardless of action (PDF mode needs it for
-          // pdf-lib /Rotate=180 in finalizeSession).
+          // Back-page index needed by both the JPG EXIF path and the PDF
+          // /Rotate=180 path in finalizeSession.
           if (t.flushPage.side === "back") {
             backPageIndices.push(myPageIndex);
           }
@@ -661,16 +687,19 @@ export async function runScanSession<Ctx>(
           let outputBytes = jpegBytes;
           if (t.flushPage.side === "back" && opts.action === "jpg") {
             const { setJpegOrientation } = await import("./exif.js");
+            if (settled) return;
             outputBytes = setJpegOrientation(jpegBytes, 3);
           }
 
-          // Write to temp file.
           if (!sessionTempDir) {
             sessionTempDir = await createSessionTempDir(opts.tempDir);
+            if (settled) return;
           }
           const filename = `page_${String(myPageIndex).padStart(2, "0")}.jpg`;
           await fs.promises.writeFile(path.join(sessionTempDir, filename), outputBytes);
+          if (settled) return;
         } catch (err) {
+          paused = false;
           const reason = err instanceof Error ? err : new Error(String(err));
           settle({ ok: false, reason, finalCtx: ctx });
           return;
@@ -702,6 +731,9 @@ export async function runScanSession<Ctx>(
     // call site, since callers await the result, not a thrown error).
     try {
       enterState(graph.initial);
+      // Drain anything queued in recvChunks during listener registration
+      // (the pump's empty-state gate held those chunks).
+      void tryDispatch();
     } catch (err) {
       const reason = err instanceof Error ? err : new Error(String(err));
       settle({

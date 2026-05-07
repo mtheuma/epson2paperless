@@ -55,16 +55,23 @@ describe("decision", () => {
 
 class FakeTransport extends EventEmitter implements SessionTransport {
   written: Buffer[] = [];
-  destroyed = false;
+  destroyCallCount = 0;
+  /** Test hook: when set, end() throws this error and clears the field. */
+  endThrowsOnce: Error | null = null;
   write(buf: Buffer): boolean {
     this.written.push(buf);
     return true;
   }
   end(): void {
+    if (this.endThrowsOnce) {
+      const err = this.endThrowsOnce;
+      this.endThrowsOnce = null;
+      throw err;
+    }
     this.emit("close");
   }
   destroy(err?: Error): void {
-    this.destroyed = true;
+    this.destroyCallCount += 1;
     if (err) this.emit("error", err);
     this.emit("close");
   }
@@ -1061,5 +1068,331 @@ describe("runScanSession (engine pump)", () => {
       expect(result.reason.message).toMatch(/Engine error in state WAITING/);
       expect(result.reason.message).toMatch(/bad payload parse/);
     }
+  });
+
+  it("settle always destroys — clean DONE success path also calls transport.destroy()", async () => {
+    // Engine-side resource-cleanup contract: settle owns the final
+    // destroy on every path, including natural-DONE success. Adapters
+    // that want to no-op a redundant destroy after a polite end()
+    // (e.g. withEsci2UnlockOnDestroy's politelyClosed gate) handle that
+    // at the adapter layer; the engine treats destroy as unconditional
+    // so raw-socket consumers don't leak handles when the peer never
+    // sends FIN.
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "DONE",
+          flushPage: {
+            side: "front",
+            encode: () => Promise.resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+          },
+        },
+      },
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    expect(transport.destroyCallCount).toBeGreaterThanOrEqual(1);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
+  it("cleanupStates recovery destroys the transport, then resolves ok", async () => {
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "CLEANUP",
+          flushPage: {
+            side: "front",
+            encode: () => Promise.resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+          },
+        },
+      },
+    });
+    g.state("CLEANUP", {
+      ...decision(() => ({ error: new Error("cleanup glitch after flush") })),
+    });
+    g.cleanupStates(["CLEANUP"]);
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+    });
+
+    setImmediate(() =>
+      transport.emit(
+        "data",
+        Buffer.concat([
+          buildIsPacket(0xa000, Buffer.alloc(0)),
+          buildIsPacket(0xa000, Buffer.alloc(0)),
+        ]),
+      ),
+    );
+
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    expect(transport.destroyCallCount).toBeGreaterThanOrEqual(1);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
+  it("tolerates synchronous data replay during transport.on('data', ...) registration", async () => {
+    // Three coordinated engine fixes converge here: hoisted `dispatching`
+    // (avoid TDZ), empty-state pump gate (avoid graph.states[""] lookup),
+    // and post-initial-entry tryDispatch (drain buffered chunks).
+    class SyncReplayFakeTransport extends EventEmitter implements SessionTransport {
+      pending: Buffer[] = [];
+      written: Buffer[] = [];
+      destroyCallCount = 0;
+      write(buf: Buffer): boolean {
+        this.written.push(buf);
+        return true;
+      }
+      end(): void {
+        this.emit("close");
+      }
+      destroy(): void {
+        this.destroyCallCount += 1;
+        this.emit("close");
+      }
+      override on(event: string | symbol, listener: (...args: unknown[]) => void): this {
+        const wasFirst = this.listenerCount(event) === 0;
+        super.on(event, listener);
+        if (event === "data" && wasFirst && this.pending.length > 0) {
+          // Synchronously replay each queued chunk during the on() call —
+          // before it returns. Real Node sockets don't do this, but this is
+          // the contract the engine should be robust to.
+          const queue = this.pending.splice(0);
+          for (const chunk of queue) listener(chunk);
+        }
+        return this;
+      }
+    }
+
+    const transport = new SyncReplayFakeTransport();
+    // Queue the trigger packet *before* runScanSession registers its data
+    // listener, so the .on("data", cb) call in runScanSession synchronously
+    // replays the chunk before returning.
+    transport.pending.push(buildIsPacket(0xa000, Buffer.alloc(0)));
+
+    const g = createGraph<Record<string, never>>("WAITING", 1_000);
+    g.state("WAITING", { on: { 0xa000: { next: "DONE" } } });
+
+    const result = await runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("keeps a valid scan ok when transport.end() throws on DONE entry", async () => {
+    const transport = new FakeTransport();
+    transport.endThrowsOnce = new Error("simulated already-destroyed throw");
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "DONE",
+          flushPage: {
+            side: "front",
+            encode: () => Promise.resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+          },
+        },
+      },
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    // settle always destroys (uniform contract); end() throwing doesn't
+    // prevent the engine from reaching cleanup.
+    expect(transport.destroyCallCount).toBeGreaterThanOrEqual(1);
+    const outputs = fs.readdirSync(outputDir);
+    expect(outputs.some((f) => /^scan_.*\.jpg$/.test(f))).toBe(true);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
+  it("settles cleanly when 'close' arrives during a flushPage barrier (no double-settle, no post-settle writes)", async () => {
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+
+    let resolveEncode: ((bytes: Buffer) => void) | null = null;
+    let signalEncodeEntered: () => void = () => {};
+    const encodeEntered = new Promise<void>((r) => {
+      signalEncodeEntered = r;
+    });
+    const encodePromise = new Promise<Buffer>((r) => {
+      resolveEncode = r;
+    });
+    const settleSpyWrites: Buffer[] = [];
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "AFTER",
+          send: Buffer.from([0xca, 0xfe]), // staged send — must NOT fire post-close
+          flushPage: {
+            side: "front",
+            encode: () => {
+              signalEncodeEntered();
+              return encodePromise;
+            },
+          },
+        },
+      },
+    });
+    g.state("AFTER", { on: {} });
+
+    // Wrap write to catch any post-close staged-send leak.
+    const origWrite = transport.write.bind(transport);
+    transport.write = (buf: Buffer) => {
+      settleSpyWrites.push(buf);
+      return origWrite(buf);
+    };
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: tempDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+
+    // Wait for the barrier to actually start (encode invoked), then close
+    // mid-encode and let it resolve. Deterministic — no timed sleeps.
+    await encodeEntered;
+    transport.emit("close");
+    await Promise.resolve(); // let close-handler's settle land
+    resolveEncode!(Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason.message).toMatch(/closed unexpectedly/);
+    expect(settleSpyWrites.some((b) => b.equals(Buffer.from([0xca, 0xfe])))).toBe(false);
+    expect(transport.destroyCallCount).toBeGreaterThanOrEqual(1);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("settles cleanly when 'error' arrives during a flushPage barrier", async () => {
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+
+    let resolveEncode: ((bytes: Buffer) => void) | null = null;
+    let signalEncodeEntered: () => void = () => {};
+    const encodeEntered = new Promise<void>((r) => {
+      signalEncodeEntered = r;
+    });
+    const encodePromise = new Promise<Buffer>((r) => {
+      resolveEncode = r;
+    });
+    const stagedSendObserved: Buffer[] = [];
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "AFTER",
+          send: Buffer.from([0xde, 0xad]),
+          flushPage: {
+            side: "front",
+            encode: () => {
+              signalEncodeEntered();
+              return encodePromise;
+            },
+          },
+        },
+      },
+    });
+    g.state("AFTER", { on: {} });
+
+    const origWrite = transport.write.bind(transport);
+    transport.write = (buf: Buffer) => {
+      stagedSendObserved.push(buf);
+      return origWrite(buf);
+    };
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: tempDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+
+    await encodeEntered;
+    transport.emit("error", new Error("network blip mid-encode"));
+    await Promise.resolve();
+    resolveEncode!(Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason.message).toMatch(/network blip mid-encode/);
+    expect(stagedSendObserved.some((b) => b.equals(Buffer.from([0xde, 0xad])))).toBe(false);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 });

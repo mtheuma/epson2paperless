@@ -39,11 +39,8 @@ export class FakeSocketBase extends EventEmitter {
     if (event === "data" && this.pendingChunks.length > 0) {
       const chunks = this.pendingChunks;
       this.pendingChunks = [];
-      // Defer to microtask: the engine declares `let dispatching = false`
-      // immediately AFTER transport.on("data", ...) registers, so a
-      // synchronous replay would dispatch while `dispatching` is still in
-      // the temporal dead zone. queueMicrotask also runs before any test
-      // setImmediate, preserving ordering vs. live feeds on later iterations.
+      // queueMicrotask runs before any test setImmediate, preserving
+      // ordering vs. live feeds on later iterations.
       queueMicrotask(() => {
         for (const chunk of chunks) this.emit("data", chunk);
       });
