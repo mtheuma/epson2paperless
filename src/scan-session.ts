@@ -43,10 +43,14 @@ export interface Graph<Ctx> {
     (ctx: Ctx, packet: { type: number; payload: Buffer }) => Error | null
   >;
   /**
-   * Pre-dispatch packet filter — returns true to discard. Used for the
-   * "wait for body" empty-envelope pattern (ESC/I-2 empty 0xa000).
+   * Pre-dispatch packet filter — returns true to discard. Receives the
+   * current state name as a second arg so a filter can scope itself
+   * (e.g. ESC/I-2 filters empty 0xa000 as "wait for body" pre-data
+   * signals during image flow, but POSTSCAN_*_STAT_DRAIN treats the
+   * same wire shape as the drain-complete reply and bypasses the
+   * filter).
    */
-  globalIgnoreFilter?: (packet: { type: number; payload: Buffer }) => boolean;
+  globalIgnoreFilter?: (packet: { type: number; payload: Buffer }, currentState: string) => boolean;
   /**
    * States in which a failure is treated as post-image cleanup and
    * recovered to success via the post-scan-save fallback (v0.3.0 §3.3) —
@@ -134,7 +138,9 @@ export interface GraphBuilder<Ctx> {
     handlers: Record<number, (ctx: Ctx, packet: { type: number; payload: Buffer }) => Error | null>,
   ): this;
   /** Set the graph's pre-dispatch packet filter. */
-  globalIgnoreFilter(filter: (packet: { type: number; payload: Buffer }) => boolean): this;
+  globalIgnoreFilter(
+    filter: (packet: { type: number; payload: Buffer }, currentState: string) => boolean,
+  ): this;
   /**
    * Declare the post-image cleanup states. Failures in any of these
    * states are recovered to success via the post-scan-save fallback when
@@ -556,8 +562,11 @@ export async function runScanSession<Ctx>(
 
     async function dispatchPacket(packet: { type: number; payload: Buffer }): Promise<void> {
       // Step 1: globalIgnoreFilter — silently discard packets the protocol
-      // wants to filter pre-dispatch (e.g. ESC/I-2 empty 0xa000 envelopes).
-      if (graph.globalIgnoreFilter && graph.globalIgnoreFilter(packet)) {
+      // wants to filter pre-dispatch (e.g. ESC/I-2 empty 0xa000 envelopes
+      // during image flow). The filter receives `currentState` so it can
+      // bypass itself in states where the otherwise-filtered shape is
+      // semantically meaningful (e.g. POSTSCAN_*_STAT_DRAIN).
+      if (graph.globalIgnoreFilter && graph.globalIgnoreFilter(packet, currentState)) {
         return;
       }
 

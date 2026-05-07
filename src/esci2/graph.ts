@@ -125,10 +125,19 @@ function expectIsType(
 
 const g = createGraph<Esci2Ctx>("WELCOME", ESCI2_TIMEOUT_MS)
   // Empty 0xa000 envelopes are "wait for body" pre-data signals on the
-  // ESC/I-2 wire.
-  // Filter them out pre-dispatch so consumer states see only non-empty
-  // 0xa000 packets.
-  .globalIgnoreFilter((packet) => packet.type === 0xa000 && packet.payload.length === 0)
+  // ESC/I-2 wire EXCEPT in POSTSCAN_*_STAT_DRAIN — there, after our
+  // pure-read(0) for a length=0 STAT reply, the printer's empty 0xa000
+  // IS the drain-complete trigger and must reach the state for it to
+  // advance to FIN. INIT_POLL_STAT_DRAIN and POST_MODE_STAT_DRAIN never
+  // have length=0 (their _STAT decision skips drain when length===0),
+  // so the bypass is scoped to the two POSTSCAN drains where
+  // alwaysDrain=true forces a pure-read regardless of length.
+  .globalIgnoreFilter((packet, currentState) => {
+    if (currentState === "POSTSCAN_1_STAT_DRAIN" || currentState === "POSTSCAN_2_STAT_DRAIN") {
+      return false;
+    }
+    return packet.type === 0xa000 && packet.payload.length === 0;
+  })
   // 0x9000 is the protocol-level async event channel: fatal/cancel
   // payloads abort the session regardless of state; ScanStart/Stop and
   // unknown bytes are info-only (return null to ignore).

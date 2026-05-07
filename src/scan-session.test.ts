@@ -736,6 +736,50 @@ describe("runScanSession (engine pump)", () => {
     expect(infoSeen).toBe(true);
   });
 
+  it("passes currentState to globalIgnoreFilter so it can scope itself per state", async () => {
+    // The filter bypasses itself in state DRAIN (drain-complete reply
+    // has the same wire shape as the wait-for-body signal in WAIT). The
+    // engine must thread currentState through, otherwise the filter
+    // can't distinguish and either over- or under-filters.
+    const transport = new FakeTransport();
+    const observed: { state: string; payloadLen: number }[] = [];
+    const g = createGraph<Record<string, never>>("WAIT", 1_000).globalIgnoreFilter(
+      (packet, currentState) => {
+        observed.push({ state: currentState, payloadLen: packet.payload.length });
+        if (currentState === "DRAIN") return false;
+        return packet.type === 0xa000 && packet.payload.length === 0;
+      },
+    );
+    g.state("WAIT", { on: { 0xa000: { next: "DRAIN" } } });
+    g.state("DRAIN", { on: { 0xa000: { next: "DONE" } } });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    setImmediate(() => {
+      // First packet (non-empty in WAIT) → not filtered, advances to DRAIN.
+      transport.emit("data", buildIsPacket(0xa000, Buffer.from([0xab])));
+      // Second packet (empty in DRAIN) — filter bypasses itself, advances to DONE.
+      setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    });
+
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    // Filter saw both packets with their respective states.
+    expect(observed).toEqual([
+      { state: "WAIT", payloadLen: 1 },
+      { state: "DRAIN", payloadLen: 0 },
+    ]);
+  });
+
   it("silently discards packets matched by globalIgnoreFilter", async () => {
     const transport = new FakeTransport();
     const g = createGraph<Record<string, never>>("WAITING", 1_000).globalIgnoreFilter(
