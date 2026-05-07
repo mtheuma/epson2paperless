@@ -816,11 +816,35 @@ describe("withUnlockOnDestroy wrapper", () => {
     expect(calls.destroy).toBe(0); // <-- the invariant
   });
 
-  it("destroy() force-closes when end() was never called (true error path)", () => {
+  it("destroy() force-closes when LOCK was never sent (true error path, pre-LOCK)", () => {
     const { socket, calls } = makeStubSocket();
     const wrapped = withUnlockOnDestroy(socket);
     wrapped.destroy();
     expect(calls.destroy).toBe(1);
+    expect(calls.end).toBe(0);
+  });
+
+  it("destroy() gracefully closes when both LOCK and UNLOCK landed (cleanup-state error)", () => {
+    // Scenario: engine errored after UNLOCKING.onEnter wrote UNLOCK but
+    // before the ack landed (timeout, validate fail, async fatal). The
+    // application protocol close is already on the wire — graceful TCP
+    // close preserves close_notify timing for the printer's panel
+    // hygiene. Hard destroy here reintroduces the panel errors the
+    // wrapper is meant to prevent.
+    const { socket, calls } = makeStubSocket();
+    const wrapped = withUnlockOnDestroy(socket);
+    const lock = Buffer.alloc(12);
+    lock[2] = 0x21;
+    lock[3] = 0x00;
+    const unlock = Buffer.alloc(12);
+    unlock[2] = 0x21;
+    unlock[3] = 0x01;
+    wrapped.write(lock);
+    wrapped.write(unlock);
+    wrapped.destroy();
+    expect(calls.destroy).toBe(0);
+    expect(calls.end).toBe(1);
+    expect(calls.endData).toBeNull(); // graceful close, no payload
   });
 
   it("destroy() sends UNLOCK via end(unlock) when LOCK was sent but UNLOCK wasn't", () => {

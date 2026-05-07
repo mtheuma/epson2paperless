@@ -856,18 +856,24 @@ describe("esci2Graph T26 — FIN_AFTER_IMG decision + POSTSCAN drain cycles", ()
   });
 
   it("POSTSCAN_1_STAT always pure-reads into _STAT_DRAIN, even on zero-length reply", () => {
-    // POSTSCAN cycles must mirror the legacy scanner's wire sequence:
-    // pure-read with the declared length (or 12 as fallback) before
-    // FIN, regardless of the reply's status length. Skipping the drain
-    // on zero-length leaves printer-side cleanup state pending on
-    // firmware variants that emit empty STAT replies.
+    // POSTSCAN cycles must mirror the legacy scanner's wire sequence —
+    // it always sent a pure-read with the declared length before FIN.
+    // The declared length is replayed verbatim, including 0; substituting
+    // a 12-byte fallback would request bytes the printer never said it
+    // would send and stall STAT_DRAIN waiting on them.
     const state = esci2Graph.states.POSTSCAN_1_STAT;
     if (state.kind !== "decision") return;
     const zeroLengthHeader = Buffer.from("STATx0000000" + " ".repeat(52), "ascii");
     const result = state.decide(makeCtx({}), { type: 0xa000, payload: zeroLengthHeader });
     if ("error" in result) throw result.error;
     expect(result.next).toBe("POSTSCAN_1_STAT_DRAIN");
-    expect("send" in result && result.send).toBeDefined();
+    if (!("send" in result) || !result.send || Array.isArray(result.send)) {
+      throw new Error("expected single Buffer send");
+    }
+    const send = result.send as Buffer;
+    // Pure-read packet: IS header (10 bytes) + 8-byte data header where
+    // bytes 4-7 are the declared reply size BE. Verify that's 0 here.
+    expect(send.readUInt32BE(10 + 4)).toBe(0);
   });
 
   it("statThenDrain POSTSCAN_1_FIN advances to POSTSCAN_FS_Y_2 with FS Y send", () => {
@@ -913,7 +919,10 @@ describe("esci2Graph T26 — FIN_AFTER_IMG decision + POSTSCAN drain cycles", ()
     const result = state.decide(makeCtx({}), { type: 0xa000, payload: zeroLengthHeader });
     if ("error" in result) throw result.error;
     expect(result.next).toBe("POSTSCAN_2_STAT_DRAIN");
-    expect("send" in result && result.send).toBeDefined();
+    if (!("send" in result) || !result.send || Array.isArray(result.send)) {
+      throw new Error("expected single Buffer send");
+    }
+    expect((result.send as Buffer).readUInt32BE(10 + 4)).toBe(0);
   });
 
   it("cleanupStates does NOT include FIN_AFTER_IMG (matches v0.3.0 contract)", () => {

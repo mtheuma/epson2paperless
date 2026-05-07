@@ -311,10 +311,12 @@ twoPhaseRead(
  *                            advances to _STAT_DRAIN with a pure-read or jumps
  *                            straight to _FIN. POST_MODE skips the drain when
  *                            length === 0; POSTSCAN always drains (legacy
- *                            scanner sent buildPurereadPacket(length || 12)
- *                            before FIN unconditionally — firmware variants
- *                            that emit zero-length status replies still need
- *                            the drain to clear printer-side cleanup state).
+ *                            scanner sent buildPurereadPacket(header?.length ??
+ *                            12) before FIN unconditionally — firmware
+ *                            variants that emit zero-length status replies
+ *                            still need the drain to clear printer-side
+ *                            cleanup state, and the declared length is what
+ *                            we replay back to the printer regardless).
  *   `${prefix}_STAT_DRAIN` — static: 0xa000 → sends FIN, goes to _FIN.
  *   `${prefix}_FIN`        — static: 0xa000 → next (with optional finSend).
  *
@@ -339,9 +341,13 @@ function statThenDrain(
         return { error: new Error(`${prefix}_STAT: unparseable reply header`) };
       }
       if (header.length > 0 || alwaysDrain) {
+        // Use the declared length verbatim — including 0 — to mirror
+        // the legacy scanner's wire sequence. The 12-byte fallback in
+        // the old code applied only to unparseable headers (which we
+        // now error on above), not to valid length=0 replies.
         return {
           next: `${prefix}_STAT_DRAIN`,
-          send: buildPurereadPacket(header.length > 0 ? header.length : 12),
+          send: buildPurereadPacket(header.length),
         };
       }
       return {

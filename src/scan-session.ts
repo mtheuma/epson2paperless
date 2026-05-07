@@ -327,10 +327,24 @@ export async function runScanSession<Ctx>(
             await runFinalize(sessionTempDir);
             resolve({ ok: true, finalCtx: ctx });
           } catch {
+            // finalizeSession's own `finally` already removes
+            // sessionTempDir before throwing — no extra cleanup here.
             resolve(result);
           }
         })();
         return;
+      }
+
+      // Non-recovery failure path — make sure flushed temp pages don't
+      // outlive the session. Successful DONE goes through doFinalize →
+      // finalizeSession (which rms in its own `finally`); only the
+      // unrecoverable-error branches leave the dir behind. Best-effort.
+      if (!result.ok && sessionTempDir !== null) {
+        try {
+          fs.rmSync(sessionTempDir, { recursive: true, force: true });
+        } catch {
+          /* swallow — best-effort cleanup */
+        }
       }
 
       resolve(result);

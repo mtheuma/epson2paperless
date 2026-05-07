@@ -86,15 +86,29 @@ export function withUnlockOnDestroy(socket: tls.TLSSocket): SessionTransport {
       if (politelyClosed) return;
       endCalled = true;
       if (lockSent && !unlockSent) {
-        // Use end(unlock) — half-closes the connection after writing the
-        // unlock bytes, so they actually leave the host. Plain `write` +
-        // immediate `destroy` can discard queued bytes or send TCP RST.
+        // Mid-session error: send unlock then half-close, so the bytes
+        // actually leave the host. Plain `write` + immediate `destroy`
+        // can discard queued bytes or send TCP RST.
         try {
           socket.end(buildUnlockPacket());
         } catch {
           socket.destroy(err);
         }
+      } else if (lockSent && unlockSent) {
+        // Cleanup-state error after UNLOCK was already on the wire
+        // (e.g., bad ack on the unlock reply, timeout in UNLOCKING,
+        // async fatal during POSTSCAN drain). Application-layer
+        // protocol close has happened — graceful TCP/TLS close
+        // preserves close_notify timing, which the legacy scanner
+        // relied on for panel hygiene.
+        try {
+          socket.end();
+        } catch {
+          socket.destroy(err);
+        }
       } else {
+        // Never locked — straight destroy is fine, no protocol state
+        // to preserve.
         socket.destroy(err);
       }
     },
