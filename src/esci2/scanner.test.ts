@@ -714,7 +714,12 @@ describe("runEsci2Scan — printer cert pinning", () => {
       "AB:CD:EF:01:23:45:67:89:0A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78";
     fake.setPeerCertificate(FP);
 
-    void runEsci2Scan(
+    // Capture the promise so we can drive the session to a clean settle
+    // before the test exits — otherwise the 30s scanner timeout stays
+    // armed and may reject later as an unhandled rejection in an
+    // unrelated test. Pre-attached catch swallows the expected
+    // close-mid-session rejection.
+    const scanPromise = runEsci2Scan(
       {
         printerIp: "192.0.2.58",
         port: 1865,
@@ -727,12 +732,18 @@ describe("runEsci2Scan — printer cert pinning", () => {
       },
       fake.asFactory(),
     );
+    const settled = scanPromise.catch(() => {
+      /* expected: we tear the session down once we've verified LOCK landed */
+    });
 
     fake.simulateConnect();
     // Feed the Welcome packet so the scanner can send the first protocol record (LOCK).
     fake.feed(buildIsPacket(0x8000));
     await fake.waitForWriteCount(1);
     expect(fake.writes.length).toBeGreaterThan(0);
+
+    fake.destroy(); // close socket → engine settles { ok: false }, caught above
+    await settled;
   });
 
   it("aborts before any send when fingerprint mismatches", async () => {

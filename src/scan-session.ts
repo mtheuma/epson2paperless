@@ -238,6 +238,10 @@ export async function runScanSession<Ctx>(
 
   return new Promise<RunScanSessionResult<Ctx>>((resolve) => {
     let settled = false;
+    // Set true once any path has called finalizeSession (or is about to).
+    // Prevents the post-scan-save fallback in settle from re-entering
+    // finalize after doFinalize has already attempted (and failed) it.
+    let finalizeAttempted = false;
 
     function armTimeout(): void {
       if (timeoutTimer) clearTimeout(timeoutTimer);
@@ -265,6 +269,39 @@ export async function runScanSession<Ctx>(
       } catch {
         /* swallow — destroy may throw on already-closed sockets */
       }
+
+      // Post-scan-save fallback (v0.3.0 §3.3). If pages were already
+      // flushed before this failure fired, the failure is happening in
+      // post-image cleanup territory (panel hygiene — UNLOCK ack, async
+      // event, peer close mid-handshake). Promote the captured pages to
+      // outputDir and resolve as success. Discarding scans the user
+      // already got out of the printer is the worse outcome here.
+      // finalizeAttempted gates the doFinalize → settle({ok:false}) loop:
+      // if doFinalize already tried and failed, surface the original error
+      // instead of retrying.
+      if (!result.ok && sessionTempDir !== null && pageIndex > 0 && !finalizeAttempted) {
+        finalizeAttempted = true;
+        const tempDirAtSettle = sessionTempDir;
+        void (async () => {
+          try {
+            const { finalizeSession } = await import("./output-tail.js");
+            await finalizeSession({
+              sessionTempDir: tempDirAtSettle,
+              outputDir: opts.outputDir,
+              sessionTs: opts.sessionTs,
+              action: opts.action,
+              backPageIndices,
+              paperless: opts.paperless,
+            });
+            resolve({ ok: true, finalCtx: ctx });
+          } catch {
+            // Finalize itself failed — surface original error.
+            resolve(result);
+          }
+        })();
+        return;
+      }
+
       resolve(result);
     };
 
@@ -320,6 +357,7 @@ export async function runScanSession<Ctx>(
       }
 
       if (sessionTempDir) {
+        finalizeAttempted = true;
         try {
           const { finalizeSession } = await import("./output-tail.js");
           await finalizeSession({

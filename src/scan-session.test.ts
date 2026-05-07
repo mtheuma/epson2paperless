@@ -447,6 +447,97 @@ describe("runScanSession (engine pump)", () => {
     fs.rmSync(outputDir, { recursive: true, force: true });
   });
 
+  it("post-scan-save fallback: failure after flushPage still finalizes captured pages and resolves ok", async () => {
+    // Mirrors v0.3.0 §3.3 contract: once pages have flushed to the temp
+    // dir, panel-hygiene errors in cleanup states (UNLOCK ack timeout,
+    // unexpected close, async fatal event, etc.) shouldn't discard the
+    // scan the user already got out of the printer.
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    // PAGE flushes a page on the first packet, then advances to CLEANUP.
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "CLEANUP",
+          flushPage: {
+            side: "front",
+            encode: () => Promise.resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+          },
+        },
+      },
+    });
+    // CLEANUP fails on the next packet — simulates a post-image cleanup
+    // error (e.g. UNLOCK validation NAK, async fatal during drain).
+    g.state("CLEANUP", {
+      ...decision(() => ({ error: new Error("cleanup glitch after flush") })),
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+    });
+
+    // First packet: triggers flushPage in PAGE → enter CLEANUP.
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    // Second packet: lands in CLEANUP and triggers the decision error.
+    // setImmediate-after-setImmediate gives the flushPage barrier its
+    // microtask budget before the next dispatch happens.
+    setImmediate(() =>
+      setImmediate(() =>
+        setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0)))),
+      ),
+    );
+
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    const outputs = fs.readdirSync(outputDir);
+    expect(outputs.some((f) => /^scan_.*\.jpg$/.test(f))).toBe(true);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
+  it("post-scan-save fallback skipped when zero pages flushed", async () => {
+    // The opposite half of the contract: failures BEFORE any flushPage
+    // surface as { ok: false } unchanged. No promotion is attempted —
+    // there's nothing to promote.
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+
+    const g = createGraph<Record<string, never>>("WAIT", 1_000);
+    g.state("WAIT", {
+      ...decision(() => ({ error: new Error("init failed before any image") })),
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason.message).toMatch(/init failed before any image/);
+    expect(fs.readdirSync(outputDir).length).toBe(0);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
   it("resolves a (ctx) => Buffer send at dispatch time using current ctx", async () => {
     const transport = new FakeTransport();
     type Ctx = { token: number };
