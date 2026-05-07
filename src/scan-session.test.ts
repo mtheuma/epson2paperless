@@ -1351,14 +1351,10 @@ describe("runScanSession (engine pump)", () => {
       allowZeroPages: true,
     });
 
-    // Hand-craft a full 12-byte IS header whose 4-byte size field
-    // declares 64 MB (well above the 32 MB default cap). Magic + type
-    // are valid so the initial-magic check passes; only the cap check
-    // should fail.
-    const desync = Buffer.alloc(12);
-    desync[0] = 0x49; // 'I'
-    desync[1] = 0x53; // 'S'
-    desync.writeUInt16BE(0xa000, 2);
+    // Build a valid IS header, then mutate the 4-byte size field at
+    // offset 6 to declare 64 MB (well above the 32 MB default cap).
+    // Magic + type pass the initial check; only the cap trips.
+    const desync = buildIsPacket(0xa000);
     desync.writeUInt32BE(64 * 1024 * 1024, 6);
     setImmediate(() => transport.emit("data", desync));
 
@@ -1392,10 +1388,7 @@ describe("runScanSession (engine pump)", () => {
       allowZeroPages: true,
     });
 
-    const desync = Buffer.alloc(12);
-    desync[0] = 0x49;
-    desync[1] = 0x53;
-    desync.writeUInt16BE(0xa000, 2);
+    const desync = buildIsPacket(0xa000);
     desync.writeUInt32BE(2048, 6); // 2 KB > 1 KB cap
     setImmediate(() => transport.emit("data", desync));
 
