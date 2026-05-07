@@ -45,6 +45,9 @@ import {
 import { buildFsY } from "../esci2/commands.js";
 import { GAMMA_LUT_R, GAMMA_LUT_G, GAMMA_LUT_B } from "./luts.js";
 import { encodeRawGbrToJpeg } from "./raw-to-jpeg.js";
+import { createLogger } from "../logger.js";
+
+const log = createLogger("scanner-esci");
 
 /**
  * Per-session mutable state threaded through every transition. The engine
@@ -245,26 +248,42 @@ g.state(
     if (packet.type === ESCI_REPLY && isAck(packet.payload)) {
       return { next: "IDENTITY", send: sendFsI() };
     }
+    const detail = `type=0x${packet.type.toString(16)} payload=${packet.payload.toString("hex")}`;
     if (ctx.diagnoseProtocol) {
+      // Compatibility-report breadcrumb. README + config.ts both promise this
+      // [diagnose] line; the terminal error in DIAGNOSE_INIT_PROBE asks the
+      // user to share these lines on the GitHub issue.
+      log.info(
+        `[diagnose] ESC @ returned non-ACK (${detail}) — sending FS Y probe to classify protocol`,
+      );
       return { next: "DIAGNOSE_INIT_PROBE", send: passthru(buildFsY(), 1) };
     }
-    return {
-      error: new Error(
-        `expected ESC @ ack, got type=0x${packet.type.toString(16)} payload=${packet.payload.toString("hex")}`,
-      ),
-    };
+    return { error: new Error(`expected ESC @ ack, got ${detail}`) };
   }),
 );
 
-// DIAGNOSE_INIT_PROBE: terminal diagnostic state. Whatever comes back, fail
-// with the "diagnostic probe complete" message the test pins.
+// DIAGNOSE_INIT_PROBE: terminal diagnostic state. Log the FS Y outcome with
+// enough detail for a compatibility-issue triage, then fail with the
+// "diagnostic probe complete" message the test pins.
 g.state(
   "DIAGNOSE_INIT_PROBE",
-  decision<EsciCtx>(() => ({
-    error: new Error(
-      "diagnostic probe complete — please share the [diagnose] log lines on the GitHub issue",
-    ),
-  })),
+  decision<EsciCtx>((_ctx, packet) => {
+    const detail = `type=0x${packet.type.toString(16)} payload=${packet.payload.toString("hex")}`;
+    if (packet.type === ESCI_REPLY && isAck(packet.payload)) {
+      log.info(
+        `[diagnose] FS Y returned ACK (${detail}) — printer likely speaks ESC/I-2 over plain TCP (ET-4950-style init, no TLS).`,
+      );
+    } else {
+      log.info(
+        `[diagnose] FS Y returned non-ACK (${detail}) — printer rejects both legacy ESC @ and ESC/I-2 FS Y; protocol family unknown.`,
+      );
+    }
+    return {
+      error: new Error(
+        "diagnostic probe complete — please share the [diagnose] log lines on the GitHub issue",
+      ),
+    };
+  }),
 );
 
 // =============================================================================

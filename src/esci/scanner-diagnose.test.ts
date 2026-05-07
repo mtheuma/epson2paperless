@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { runEsciScan } from "./scanner.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
 import { buildIsPacket, parseIsPacket } from "../protocol.js";
@@ -33,6 +33,26 @@ function passthruCommand(buf: Buffer): Buffer {
 const yieldEngine = () => new Promise((r) => setImmediate(r));
 
 describe("scanner-esci DIAGNOSE_PROTOCOL probe", () => {
+  // The README + config.ts promise users that DIAGNOSE_PROTOCOL=true emits
+  // [diagnose] log lines they can share on a compatibility-issue ticket;
+  // the terminal error message asks them to do so. Pin the log output so
+  // the breadcrumbs can't silently regress through a future refactor.
+  let logSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+  });
+
+  function diagnoseLogLines(): string[] {
+    return logSpy.mock.calls
+      .map((args) => (typeof args[0] === "string" ? args[0] : String(args[0] ?? "")))
+      .filter((line) => line.includes("[diagnose]"));
+  }
+
   it("sends FS Y after ESC @ NAK and rejects with a diagnostic message", async () => {
     const fake = new FakeTcpSocket();
     const promise = runEsciScan(
@@ -67,6 +87,15 @@ describe("scanner-esci DIAGNOSE_PROTOCOL probe", () => {
     fake.feed(ackReply);
 
     await expect(promise).rejects.toThrow(/diagnostic probe complete/);
+
+    const lines = diagnoseLogLines();
+    expect(lines.length).toBe(2);
+    expect(lines[0]).toMatch(
+      /\[diagnose\] ESC @ returned non-ACK \(type=0xa000 payload=15\) — sending FS Y probe/,
+    );
+    expect(lines[1]).toMatch(
+      /\[diagnose\] FS Y returned ACK \(type=0xa000 payload=06\) — printer likely speaks ESC\/I-2 over plain TCP/,
+    );
   });
 
   it("rejects with a diagnostic message even when FS Y is also NAK'd", async () => {
@@ -97,6 +126,12 @@ describe("scanner-esci DIAGNOSE_PROTOCOL probe", () => {
     fake.feed(nakReply);
 
     await expect(promise).rejects.toThrow(/diagnostic probe complete/);
+
+    const lines = diagnoseLogLines();
+    expect(lines.length).toBe(2);
+    expect(lines[1]).toMatch(
+      /\[diagnose\] FS Y returned non-ACK \(type=0xa000 payload=15\) — printer rejects both legacy ESC @ and ESC\/I-2 FS Y/,
+    );
   });
 
   it("preserves existing behaviour when DIAGNOSE_PROTOCOL is off", async () => {
@@ -125,5 +160,7 @@ describe("scanner-esci DIAGNOSE_PROTOCOL probe", () => {
     await expect(promise).rejects.toThrow(/expected ESC @ ack, got type=0xa000 payload=15/);
     // No FS Y probe — only the lock packet and ESC @ should have been sent.
     expect(fake.writes.length).toBe(2);
+    // No [diagnose] log lines when the flag is off.
+    expect(diagnoseLogLines().length).toBe(0);
   });
 });
