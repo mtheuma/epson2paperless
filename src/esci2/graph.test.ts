@@ -549,6 +549,7 @@ function makeCtx(
     pageSide: "front",
     zeroImgRetries: 0,
     imageChunks: [],
+    tprDeclaredLength: 0,
     ...overrides,
   };
 }

@@ -39,6 +39,13 @@ export interface Esci2Ctx {
   zeroImgRetries: number;
   /** Accumulated image-chunk bytes for the current page. Reset on each page flush. */
   imageChunks: Buffer[];
+  /**
+   * Declared body length captured by the most recent two-phase-read META
+   * state, consumed by its paired DATA state for length validation. Lives
+   * on ctx (not in a graph-builder closure) so concurrent sessions sharing
+   * the singleton `esci2Graph` don't overwrite each other's value.
+   */
+  tprDeclaredLength: number;
 }
 
 export const ESCI2_TIMEOUT_MS = 30_000;
@@ -212,13 +219,9 @@ function twoPhaseRead(
   nextSend: SendSpec<Esci2Ctx> | SendSpec<Esci2Ctx>[],
   next: string,
 ): void {
-  // Per-helper-instance closure storing the META-declared body length so
-  // the DATA state can validate the follow-up payload length matches.
-  let declaredLength = 0;
-
   g.state(
     `${prefix}_META`,
-    decision<Esci2Ctx>((_ctx, packet) => {
+    decision<Esci2Ctx>((ctx, packet) => {
       const typeGuard = expectIsType(packet, 0xa000, `${prefix}_META`);
       if (typeGuard) return typeGuard;
       const header = parseEsci2ReplyHeader(packet.payload);
@@ -229,7 +232,9 @@ function twoPhaseRead(
           ),
         };
       }
-      declaredLength = header.length;
+      // Store on ctx (not closure) so concurrent sessions sharing the
+      // singleton graph don't overwrite each other's expected length.
+      ctx.tprDeclaredLength = header.length;
       return {
         next: `${prefix}_DATA`,
         send: buildPurereadPacket(header.length),
@@ -239,13 +244,13 @@ function twoPhaseRead(
 
   g.state(
     `${prefix}_DATA`,
-    decision<Esci2Ctx>((_ctx, packet) => {
+    decision<Esci2Ctx>((ctx, packet) => {
       const typeGuard = expectIsType(packet, 0xa000, `${prefix}_DATA`);
       if (typeGuard) return typeGuard;
-      if (packet.payload.length !== declaredLength) {
+      if (packet.payload.length !== ctx.tprDeclaredLength) {
         return {
           error: new Error(
-            `${prefix}_DATA: expected ${declaredLength} bytes, got ${packet.payload.length}`,
+            `${prefix}_DATA: expected ${ctx.tprDeclaredLength} bytes, got ${packet.payload.length}`,
           ),
         };
       }
@@ -440,6 +445,7 @@ g.state("UNLOCKING", {
 g.state("INIT_POLL_FS_Y", {
   on: {
     0xa000: {
+      validate: (payload) => payload[0] === 0x06,
       next: "INIT_POLL_STAT",
       send: buildPassthruPacket(buildEsci2Command("STAT"), ESCI2_REPLY_SIZE),
     },
@@ -580,12 +586,16 @@ g.state(
   }),
 );
 
-// PARA: validates printer's acceptance of parameters (#parOK), sends TRDT.
-// scanner.ts onPara: parses tokens, checks #parOK, sends TRDT.
+// PARA: validates printer's acceptance of parameters — header must parse,
+// cmd must be "PARA", and the body must contain #parOK. The bare token
+// check would otherwise accept a malformed reply that happened to contain
+// "#parOK" at the right offset.
 g.state("PARA", {
   on: {
     0xa000: {
       validate: (payload) => {
+        const header = parseEsci2ReplyHeader(payload);
+        if (header === null || header.cmd !== "PARA") return false;
         const tokens = parseTokens(payload.subarray(12));
         return tokens.get("par")?.trim() === "OK";
       },

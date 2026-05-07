@@ -177,6 +177,7 @@ export async function runEsci2Scan(
       pageSide: "front",
       zeroImgRetries: 0,
       imageChunks: [],
+      tprDeclaredLength: 0,
     },
     transportFactory: makeTlsTransportFactory(session, socketFactory),
     outputDir: session.outputDir,
