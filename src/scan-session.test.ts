@@ -56,11 +56,7 @@ describe("decision", () => {
 class FakeTransport extends EventEmitter implements SessionTransport {
   written: Buffer[] = [];
   destroyCallCount = 0;
-  /**
-   * Test hook: when set, end() throws this error. Used to verify the engine
-   * tolerates a throwing transport.end() (e.g. real sockets can throw on
-   * already-destroyed) without rerouting a valid scan into the failure path.
-   */
+  /** Test hook: when set, end() throws this error and clears the field. */
   endThrowsOnce: Error | null = null;
   write(buf: Buffer): boolean {
     this.written.push(buf);
@@ -1074,16 +1070,7 @@ describe("runScanSession (engine pump)", () => {
     }
   });
 
-  // ---------------------------------------------------------------------------
-  // PR 1 lifecycle hardening regression suite
-  // ---------------------------------------------------------------------------
-
   it("clean DONE success skips transport.destroy() (polite end already issued)", async () => {
-    // Regression: prior to PR 1, settle() unconditionally called destroy()
-    // even after enterState("DONE") had already issued a polite end(). That
-    // forced adapters to special-case "we already closed." Now: natural-DONE
-    // success skips destroy; only failure paths (and the cleanupStates
-    // recovery's prior abort settle) destroy.
     const transport = new FakeTransport();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
     const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
@@ -1122,12 +1109,9 @@ describe("runScanSession (engine pump)", () => {
   });
 
   it("cleanupStates recovery still destroys the transport (abort settle ran first), then resolves ok", async () => {
-    // Companion to the previous test. The cleanupStates fallback path
-    // bypasses settle for its ok-resolution (it resolve()s the promise
-    // directly inside an IIFE), but it has *already* gone through a prior
-    // settle({ ok: false }) — which destroys. So a recovered scan still
-    // tears down the transport correctly, even though the final result
-    // is { ok: true }.
+    // The cleanupStates fallback resolve()s ok directly inside its IIFE,
+    // but only AFTER the prior abort settle({ ok: false }) has destroyed
+    // the transport — so a recovered scan still tears down correctly.
     const transport = new FakeTransport();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
     const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
@@ -1178,14 +1162,9 @@ describe("runScanSession (engine pump)", () => {
   });
 
   it("tolerates synchronous data replay during transport.on('data', ...) registration", async () => {
-    // Pre-fix behaviour: `let dispatching` was declared after the data
-    // listener was registered, so a synchronous-during-registration replay
-    // would TDZ when the resulting tryDispatch read `dispatching`. Then,
-    // even with `dispatching` hoisted, dispatch would crash on a
-    // graph.states[""] lookup because enterState(graph.initial) hadn't
-    // run yet. Then, even with the empty-state gate, the chunk would sit
-    // in recvChunks forever because nothing scheduled tryDispatch after
-    // initial entry. All three fixes are required for this test to pass.
+    // Three coordinated engine fixes converge here: hoisted `dispatching`
+    // (avoid TDZ), empty-state pump gate (avoid graph.states[""] lookup),
+    // and post-initial-entry tryDispatch (drain buffered chunks).
     class SyncReplayFakeTransport extends EventEmitter implements SessionTransport {
       pending: Buffer[] = [];
       written: Buffer[] = [];
@@ -1239,12 +1218,6 @@ describe("runScanSession (engine pump)", () => {
   });
 
   it("keeps a valid scan ok when transport.end() throws on DONE entry", async () => {
-    // Regression: prior to PR 1, a throw from transport.end() inside
-    // enterState("DONE") propagated up through applyTransition into
-    // tryDispatch's catch, which routed through settle({ ok: false }) —
-    // misclassifying a successful scan (all pages flushed, finalize would
-    // have succeeded) as a failure. Post-fix the throw is swallowed and
-    // doFinalize runs normally.
     const transport = new FakeTransport();
     transport.endThrowsOnce = new Error("simulated already-destroyed throw");
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
@@ -1277,9 +1250,7 @@ describe("runScanSession (engine pump)", () => {
 
     const result = await promise;
     expect(result.ok).toBe(true);
-    // Clean-DONE-skip-destroy contract still applies — even though end()
-    // threw, the engine treats DONE as a clean exit and doesn't escalate
-    // to destroy.
+    // Clean-DONE-skip-destroy contract still applies even though end() threw.
     expect(transport.destroyCallCount).toBe(0);
     const outputs = fs.readdirSync(outputDir);
     expect(outputs.some((f) => /^scan_.*\.jpg$/.test(f))).toBe(true);
@@ -1289,14 +1260,14 @@ describe("runScanSession (engine pump)", () => {
   });
 
   it("settles cleanly when 'close' arrives during a flushPage barrier (no double-settle, no post-settle writes)", async () => {
-    // While encode is pending, the transport closes unexpectedly. The
-    // engine's barrier code re-checks `settled` after each await before
-    // performing any side-effect (file write, staged send, ctx mutation,
-    // entering the staged next state).
     const transport = new FakeTransport();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
 
     let resolveEncode: ((bytes: Buffer) => void) | null = null;
+    let signalEncodeEntered: () => void = () => {};
+    const encodeEntered = new Promise<void>((r) => {
+      signalEncodeEntered = r;
+    });
     const encodePromise = new Promise<Buffer>((r) => {
       resolveEncode = r;
     });
@@ -1308,7 +1279,13 @@ describe("runScanSession (engine pump)", () => {
         0xa000: {
           next: "AFTER",
           send: Buffer.from([0xca, 0xfe]), // staged send — must NOT fire post-close
-          flushPage: { side: "front", encode: () => encodePromise },
+          flushPage: {
+            side: "front",
+            encode: () => {
+              signalEncodeEntered();
+              return encodePromise;
+            },
+          },
         },
       },
     });
@@ -1334,31 +1311,31 @@ describe("runScanSession (engine pump)", () => {
 
     setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
 
-    // Wait long enough for the barrier to start, then close the transport
-    // mid-encode and let encode resolve.
-    await new Promise((r) => setTimeout(r, 20));
+    // Wait for the barrier to actually start (encode invoked), then close
+    // mid-encode and let it resolve. Deterministic — no timed sleeps.
+    await encodeEntered;
     transport.emit("close");
-    await new Promise((r) => setTimeout(r, 5));
+    await Promise.resolve(); // let close-handler's settle land
     resolveEncode!(Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
 
     const result = await promise;
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.reason.message).toMatch(/closed unexpectedly/);
-    // Staged send (0xca 0xfe) must NOT have been written post-settle.
     expect(settleSpyWrites.some((b) => b.equals(Buffer.from([0xca, 0xfe])))).toBe(false);
-    // Close path destroys the transport.
     expect(transport.destroyCallCount).toBeGreaterThanOrEqual(1);
 
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it("settles cleanly when 'error' arrives during a flushPage barrier", async () => {
-    // Mirror of the close-mid-barrier test, but with an error event. Same
-    // settled-recheck contract applies.
     const transport = new FakeTransport();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
 
     let resolveEncode: ((bytes: Buffer) => void) | null = null;
+    let signalEncodeEntered: () => void = () => {};
+    const encodeEntered = new Promise<void>((r) => {
+      signalEncodeEntered = r;
+    });
     const encodePromise = new Promise<Buffer>((r) => {
       resolveEncode = r;
     });
@@ -1370,7 +1347,13 @@ describe("runScanSession (engine pump)", () => {
         0xa000: {
           next: "AFTER",
           send: Buffer.from([0xde, 0xad]),
-          flushPage: { side: "front", encode: () => encodePromise },
+          flushPage: {
+            side: "front",
+            encode: () => {
+              signalEncodeEntered();
+              return encodePromise;
+            },
+          },
         },
       },
     });
@@ -1395,9 +1378,9 @@ describe("runScanSession (engine pump)", () => {
 
     setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
 
-    await new Promise((r) => setTimeout(r, 20));
+    await encodeEntered;
     transport.emit("error", new Error("network blip mid-encode"));
-    await new Promise((r) => setTimeout(r, 5));
+    await Promise.resolve();
     resolveEncode!(Buffer.from([0xff, 0xd8, 0xff, 0xd9]));
 
     const result = await promise;

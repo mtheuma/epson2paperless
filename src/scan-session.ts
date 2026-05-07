@@ -276,11 +276,9 @@ export async function runScanSession<Ctx>(
     // attempt — without this, a finalize failure in doFinalize would route
     // back through settle and retry the same call.
     let finalizeAttempted = false;
-    // Pump-loop reentrancy guard. Hoisted above listener registration so a
-    // transport that fires `data` synchronously during `transport.on("data", …)`
-    // doesn't TDZ on this `let` when the resulting tryDispatch invocation
-    // reads it. Pair this with the `currentState === ""` gate inside the
-    // pump and the post-initial-entry tryDispatch trigger below.
+    // Hoisted above listener registration so synchronous-during-on() data
+    // replay doesn't TDZ this binding. Paired with the empty-state pump
+    // gate below.
     let dispatching = false;
 
     /** Promotes pages from sessionTempDir to outputDir via the output pipeline. */
@@ -317,12 +315,8 @@ export async function runScanSession<Ctx>(
       if (settled) return; // idempotent — close handler may also call this
       settled = true;
       clearTimeoutTimer(); // (T15)
-      // Natural-DONE success has already issued a polite transport.end() in
-      // enterState; calling destroy on top of it is redundant and forces
-      // adapters to special-case "we already closed." All failure paths still
-      // destroy. Recovery via cleanupStates bypasses settle's ok-resolution
-      // (it resolves directly inside the IIFE), so a recovered scan still
-      // tears down via the prior abort settle that ran before recovery.
+      // Natural-DONE has already issued a polite transport.end(); only
+      // failure paths destroy.
       if (!settleOpts?.skipDestroy) {
         try {
           transport.destroy();
@@ -390,16 +384,12 @@ export async function runScanSession<Ctx>(
         // timer fires "Timeout in state DONE" mid-finalize, races settle, and
         // rms sessionTempDir while finalizeSession is still reading it.
         clearTimeoutTimer();
-        // Polite close request; peer may ACK late or never. Wrap in
-        // try/catch — a real socket can throw on already-destroyed (e.g.
-        // peer RST during DONE entry). Swallowing keeps doFinalize on the
-        // schedule; a valid scan that just had a flaky close still settles
-        // ok rather than getting reported as failure when the throw routes
-        // through tryDispatch's catch.
+        // Polite close request; peer may ACK late or never. Real sockets
+        // can throw on already-destroyed; swallow so doFinalize still runs.
         try {
           transport.end();
         } catch {
-          /* swallow — already-closed sockets can throw on .end() */
+          /* swallow */
         }
         // Schedule logical finalize independently — do NOT block on socket
         // close. setImmediate gives any in-flight microtasks (e.g. flushPage's
@@ -673,18 +663,19 @@ export async function runScanSession<Ctx>(
         pageIndex += 1;
         const myPageIndex = pageIndex;
 
+        // settled-bailouts after each await skip side-effects (file write,
+        // staged send, ctx mutation, entering staged next state). They do
+        // NOT clear `paused`: once settled is true, the pump's gate checks
+        // settled before paused, and the run resolves shortly after — no
+        // reader of paused remains. The catch arm below DOES clear paused
+        // for flag-consistency since it can race with the pump's own
+        // catch path.
         try {
           const jpegBytes = await t.flushPage.encode();
-          // If the transport errored or closed during the encode, settle has
-          // already run; bail before any further side-effect (file write,
-          // staged send, ctx mutation).
-          if (settled) {
-            paused = false;
-            return;
-          }
+          if (settled) return;
 
-          // Track back-page index regardless of action (PDF mode needs it for
-          // pdf-lib /Rotate=180 in finalizeSession).
+          // Back-page index needed by both the JPG EXIF path and the PDF
+          // /Rotate=180 path in finalizeSession.
           if (t.flushPage.side === "back") {
             backPageIndices.push(myPageIndex);
           }
@@ -693,31 +684,18 @@ export async function runScanSession<Ctx>(
           let outputBytes = jpegBytes;
           if (t.flushPage.side === "back" && opts.action === "jpg") {
             const { setJpegOrientation } = await import("./exif.js");
-            if (settled) {
-              paused = false;
-              return;
-            }
+            if (settled) return;
             outputBytes = setJpegOrientation(jpegBytes, 3);
           }
 
-          // Write to temp file.
           if (!sessionTempDir) {
             sessionTempDir = await createSessionTempDir(opts.tempDir);
-            if (settled) {
-              paused = false;
-              return;
-            }
+            if (settled) return;
           }
           const filename = `page_${String(myPageIndex).padStart(2, "0")}.jpg`;
           await fs.promises.writeFile(path.join(sessionTempDir, filename), outputBytes);
-          if (settled) {
-            paused = false;
-            return;
-          }
+          if (settled) return;
         } catch (err) {
-          // Flag-consistency: barrier always exits with paused=false, even on
-          // the error path, so a subsequent settled-gated re-entry doesn't
-          // see a stale `paused = true`.
           paused = false;
           const reason = err instanceof Error ? err : new Error(String(err));
           settle({ ok: false, reason, finalCtx: ctx });
@@ -750,10 +728,8 @@ export async function runScanSession<Ctx>(
     // call site, since callers await the result, not a thrown error).
     try {
       enterState(graph.initial);
-      // Drain anything that arrived synchronously during listener
-      // registration. The pump's `currentState === ""` gate held those
-      // chunks in recvChunks; nothing schedules tryDispatch on its own
-      // once we've left the empty state, so trigger it explicitly.
+      // Drain anything queued in recvChunks during listener registration
+      // (the pump's empty-state gate held those chunks).
       void tryDispatch();
     } catch (err) {
       const reason = err instanceof Error ? err : new Error(String(err));
