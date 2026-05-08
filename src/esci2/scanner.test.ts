@@ -3,10 +3,12 @@ import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { PDFDocument } from "pdf-lib";
-import { runEsci2Scan } from "./scanner.js";
+import { runEsci2Scan, runEsci2ScanOverPlain } from "./scanner.js";
 import { buildIsPacket } from "../protocol.js";
 import { parseEsci2ReplyHeader } from "./commands.js";
 import { FakeTlsSocket } from "./test-support/fake-tls-socket.js";
+import { FakePlainSocket } from "./test-support/fake-plain-socket.js";
+import { loadFixture, driveFixture } from "./test-support/replay.js";
 
 function waitImmediate(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
@@ -952,4 +954,77 @@ describe("runEsci2Scan failure-mode matrix", () => {
     fake.feed(wrongTypePacket);
     await rejectsAssertion;
   });
+});
+
+// ─── ET-2750 (esci2-plain) replay ────────────────────────────────────────
+
+describe("runEsci2ScanOverPlain — ET-2750 fixture replay", () => {
+  let outputDir: string;
+  let tempDir: string;
+
+  beforeEach(() => {
+    outputDir = mkdtempSync(path.join(os.tmpdir(), "et2750-out-"));
+    tempDir = mkdtempSync(path.join(os.tmpdir(), "et2750-tmp-"));
+  });
+
+  afterEach(() => {
+    rmSync(outputDir, { recursive: true, force: true });
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("flatbed-single-page-pdf: drives the captured wire and produces one PDF", async () => {
+    // Source: tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl
+    // Provenance documented in `.reference/wireshark-captures/et-2750/protocol-decode.md`.
+    // ET-2750 is flatbed-only hardware; no ADF or duplex variants exist.
+    // The fixture is large (~3.9 MB) because each ESC/I-2 IMG cycle wraps
+    // pixel data in 0xa000 IS frames — there's no 0xa200 image-stream
+    // summary path here. Replay is byte-exact regardless.
+    const fixturePath = path.join(
+      "tools",
+      "pcap-extract",
+      "captures",
+      "et-2750",
+      "flatbed-single-page-pdf.jsonl",
+    );
+    const fixture = loadFixture(fixturePath);
+    const fake = new FakePlainSocket();
+
+    const sessionPromise = runEsci2ScanOverPlain(
+      {
+        printerIp: "10.31.50.16",
+        port: 1865,
+        destId: 0x02,
+        outputDir,
+        tempDir,
+        duplex: false,
+        action: "pdf",
+      },
+      fake.asFactory(),
+    );
+    await driveFixture(fixture, fake, sessionPromise);
+
+    // Wait briefly for the async PDF compose chain (setImmediate hop in
+    // doFinalize → composePdfFromJpegs).
+    for (
+      let i = 0;
+      i < 50 && readdirSync(outputDir).filter((f) => f.endsWith(".pdf")).length === 0;
+      i++
+    ) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    const files = readdirSync(outputDir);
+    const pdfs = files.filter((f) => f.endsWith(".pdf"));
+    const jpgs = files.filter((f) => f.endsWith(".jpg"));
+    expect(jpgs).toEqual([]); // session temp dir is cleaned by finalizeSession
+    expect(pdfs.length).toBe(1);
+    expect(pdfs[0]).toMatch(/^scan_\d{4}-\d{2}-\d{2}_\d{6}\.pdf$/);
+
+    const pdfBytes = readFileSync(path.join(outputDir, pdfs[0]));
+    expect(pdfBytes.subarray(0, 5).toString("ascii")).toBe("%PDF-");
+    const doc = await PDFDocument.load(pdfBytes);
+    expect(doc.getPageCount()).toBe(1);
+    // Flatbed front side — no 180° rotation.
+    expect(doc.getPage(0).getRotation().angle).toBe(0);
+  }, 60_000);
 });

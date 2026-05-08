@@ -557,6 +557,7 @@ function makeCtx(
   return {
     duplex: false,
     source: "adf",
+    profile: "esci2-tls",
     initPollIteration: 0,
     imgChunkSize: 0,
     pageEndKind: "none",

@@ -20,6 +20,7 @@ import {
   buildParaPayload,
   parseEsci2ReplyHeader,
   parseTokens,
+  type Esci2Profile,
 } from "./commands.js";
 import { ackByte, expectIsType } from "../graph-helpers.js";
 
@@ -31,6 +32,14 @@ import { ackByte, expectIsType } from "../graph-helpers.js";
 export interface Esci2Ctx {
   duplex: boolean;
   source: "adf" | "flatbed"; // detected at INIT_POLL iteration 0
+  /**
+   * Transport variant for this session — `esci2-tls` (ET-4950 family,
+   * default) or `esci2-plain` (ET-2750, plain TCP). Threaded through
+   * ctx so the PARA builder closure picks the right flatbed blob; the
+   * graph itself is profile-blind. Always `esci2-tls` on graph
+   * construction, overwritten by the scanner shell's `initialCtx`.
+   */
+  profile: Esci2Profile;
   initPollIteration: number;
   imgChunkSize: number;
   pageEndKind: "none" | "more" | "last";
@@ -50,7 +59,18 @@ export interface Esci2Ctx {
 export const ESCI2_TIMEOUT_MS = 30_000;
 export const ESCI2_REPLY_SIZE = 64;
 const LEGACY_REPLY_SIZE = 1;
-const INIT_POLL_ITERATIONS = 3;
+/**
+ * INIT_POLL cycle counts per transport profile:
+ * - `esci2-tls` (ET-4950): 3 iterations of FS Y → STAT → FIN before FS X
+ *   switches to extended mode. Established by the Frida captures.
+ * - `esci2-plain` (ET-2750): 2 iterations only. The ET-2750 fixture
+ *   (`tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl`)
+ *   shows the host driver issuing only two FS Y / STAT / FIN cycles
+ *   before sending FS X. Sending a third FS Y after the printer has
+ *   moved on returns a non-ACK that fails MODE_SWITCH validation.
+ */
+const INIT_POLL_ITERATIONS_TLS = 3;
+const INIT_POLL_ITERATIONS_PLAIN = 2;
 // 2000 zero-length retries gives ~40s of headroom for slow scan starts.
 const MAX_ZERO_IMG_RETRIES = 2000;
 
@@ -474,10 +494,18 @@ g.state(
     if (header === null) {
       return { error: new Error("INIT_POLL_STAT: unparseable reply header") };
     }
-    // Source detection — only on the FIRST iteration:
-    // length 0 → ADF (printer queued no status); length 12 → flatbed (queued
-    // `#---#---#---` filler). Other lengths default to ADF with a comment.
-    if (ctx.initPollIteration === 0) {
+    // Source detection — only on the FIRST iteration of `esci2-tls`.
+    // ET-4950 fixtures: length 0 → ADF (printer queued no status);
+    // length 12 → flatbed (queued `#---#---#---` filler). Other lengths
+    // default to ADF.
+    //
+    // ET-2750 (`esci2-plain`) is flatbed-only hardware AND its STAT
+    // replies declare length=0 even though the IS frame packs an inline
+    // 52-byte filler — applying the ET-4950 heuristic would misclassify
+    // it as ADF, so skip the override entirely on this profile and trust
+    // the `source: "flatbed"` value the scanner shell pre-set in
+    // `initialCtx`.
+    if (ctx.initPollIteration === 0 && ctx.profile === "esci2-tls") {
       if (header.length === 0) {
         ctx.source = "adf";
       } else if (header.length === 12) {
@@ -510,21 +538,24 @@ g.state("INIT_POLL_STAT_DRAIN", {
 });
 
 // INIT_POLL_FIN: decision on FIN reply — loop or advance to MODE_SWITCH.
-// INIT_POLL_FIN increments initPollIteration; if <3 sends FS Y and loops;
-// else sends FS X and moves to MODE_SWITCH.
+// INIT_POLL_FIN increments initPollIteration; if below the profile's
+// target iteration count sends FS Y and loops; else sends FS X and
+// moves to MODE_SWITCH.
 g.state(
   "INIT_POLL_FIN",
   decision<Esci2Ctx>((ctx, packet) => {
     const typeGuard = expectIsType(packet, 0xa000, "INIT_POLL_FIN");
     if (typeGuard) return typeGuard;
     ctx.initPollIteration += 1;
-    if (ctx.initPollIteration < INIT_POLL_ITERATIONS) {
+    const target =
+      ctx.profile === "esci2-plain" ? INIT_POLL_ITERATIONS_PLAIN : INIT_POLL_ITERATIONS_TLS;
+    if (ctx.initPollIteration < target) {
       return {
         next: "INIT_POLL_FS_Y",
         send: buildPassthruPacket(buildFsY(), LEGACY_REPLY_SIZE),
       };
     }
-    // 3 iterations done — send FS X to enter extended mode → MODE_SWITCH.
+    // Target iterations done — send FS X to enter extended mode → MODE_SWITCH.
     return {
       next: "MODE_SWITCH",
       send: buildPassthruPacket(buildFsX(), LEGACY_REPLY_SIZE),
@@ -536,12 +567,19 @@ g.state(
 // MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_META states
 // =============================================================================
 
-// Builds the PARA header + body send pair, resolving source + duplex from ctx.
-// Called once per dispatch in POST_MODE_STAT and POST_MODE_STAT_DRAIN — each
-// site is now a decision so the result is computed once and embedded as a
-// concrete Buffer[] in the returned TransitionResult.send.
+// Builds the PARA header + body send pair, resolving source + duplex +
+// profile from ctx. Called once per dispatch in POST_MODE_STAT and
+// POST_MODE_STAT_DRAIN — each site is a decision, so the result is
+// computed once and embedded as a concrete Buffer[] in the returned
+// TransitionResult.send. ctx.profile selects between the ET-4950 and
+// ET-2750 flatbed blobs; ADF combos remain TLS-only (ET-2750 is
+// flatbed-only hardware, enforced at config time).
 function buildParaSend(ctx: Esci2Ctx): Buffer[] {
-  const paraPayload = buildParaPayload({ source: ctx.source, duplex: ctx.duplex });
+  const paraPayload = buildParaPayload({
+    source: ctx.source,
+    duplex: ctx.duplex,
+    profile: ctx.profile,
+  });
   return [
     buildPassthruPacket(buildParaHeader(paraPayload.length), 0),
     buildPassthruPacket(paraPayload, ESCI2_REPLY_SIZE),

@@ -1,3 +1,4 @@
+import net from "node:net";
 import tls from "node:tls";
 import fs from "node:fs";
 import os from "node:os";
@@ -34,6 +35,46 @@ export type TlsSocketFactory = (
   options: tls.ConnectionOptions,
   onSecureConnect?: () => void,
 ) => tls.TLSSocket;
+
+/**
+ * Factory for the plain TCP socket used by the ET-2750 (`esci2-plain`)
+ * variant. Defaults to a lambda over `net.connect(port, host, cb)`.
+ * Tests inject a fake here; see src/esci2/test-support/fake-plain-socket.ts.
+ */
+export type PlainSocketFactory = (host: string, port: number, onConnect?: () => void) => net.Socket;
+
+function validateTempBase(session: ScanSession): void {
+  // Stat the temp-dir base before opening any socket so a bad path fails
+  // fast — no waiting until first flushPage (which a no-data scan would
+  // never reach). One stat-level syscall, no probe directory created.
+  const tempBase = session.tempDir || os.tmpdir();
+  try {
+    fs.accessSync(tempBase, fs.constants.W_OK);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    throw new Error(`Failed to create session temp dir under ${tempBase}: ${msg}`);
+  }
+}
+
+function buildInitialCtx(session: ScanSession, profile: "esci2-tls" | "esci2-plain"): Esci2Ctx {
+  return {
+    duplex: session.duplex,
+    // ET-2750 hardware is flatbed-only; pre-set the source so INIT_POLL's
+    // first iteration can still run its source-detect logic, but the
+    // graph's flatbed branch is the only valid outcome under
+    // `esci2-plain`. ET-4950 keeps the legacy "adf" default which the
+    // INIT_POLL_STAT decision overrides per fixture.
+    source: profile === "esci2-plain" ? "flatbed" : "adf",
+    profile,
+    initPollIteration: 0,
+    imgChunkSize: 0,
+    pageEndKind: "none",
+    pageSide: "front",
+    zeroImgRetries: 0,
+    imageChunks: [],
+    tprDeclaredLength: 0,
+  };
+}
 
 function makeTlsTransportFactory(
   session: ScanSession,
@@ -83,36 +124,63 @@ function makeTlsTransportFactory(
     });
 }
 
+function makePlainEsci2TransportFactory(
+  session: ScanSession,
+  socketFactory: PlainSocketFactory,
+): SessionTransportFactory {
+  return () =>
+    new Promise<SessionTransport>((resolve, reject) => {
+      // Plain TCP — no TLS layer to label or to swallow post-FIN resets
+      // from. Compose only the unlock adapter so panel hygiene
+      // (UNLOCK-on-abort, polite end before destroy) still works the
+      // same as the TLS path. Cert fingerprint is meaningless here and
+      // is rejected at config-time when paired with `esci2-plain`.
+      const socket = socketFactory(session.printerIp, session.port, () => {
+        resolve(withEsci2UnlockOnDestroy(socketAsTransport(socket)));
+      });
+      socket.once("error", reject);
+    });
+}
+
+/**
+ * Run an ESC/I-2 scan over TLS (port 1865, ET-4950 family).
+ */
 export async function runEsci2Scan(
   session: ScanSession,
   socketFactory: TlsSocketFactory = tls.connect,
 ): Promise<void> {
-  // Validate the temp dir base before opening the TLS connection so a bad
-  // path fails fast (rather than waiting until first flushPage, which a
-  // no-data scan would never reach). One stat-level syscall — no probe
-  // directory is created.
-  const tempBase = session.tempDir || os.tmpdir();
-  try {
-    fs.accessSync(tempBase, fs.constants.W_OK);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(`Failed to create session temp dir under ${tempBase}: ${msg}`);
-  }
+  validateTempBase(session);
 
   const result = await runScanSession<Esci2Ctx>({
     graph: esci2Graph,
-    initialCtx: {
-      duplex: session.duplex,
-      source: "adf",
-      initPollIteration: 0,
-      imgChunkSize: 0,
-      pageEndKind: "none",
-      pageSide: "front",
-      zeroImgRetries: 0,
-      imageChunks: [],
-      tprDeclaredLength: 0,
-    },
+    initialCtx: buildInitialCtx(session, "esci2-tls"),
     transportFactory: makeTlsTransportFactory(session, socketFactory),
+    outputDir: session.outputDir,
+    tempDir: session.tempDir,
+    sessionTs: resolveSessionTimestamp(new Date(), session.outputDir),
+    action: session.action,
+    paperless: session.paperless,
+  });
+  if (!result.ok) throw result.reason;
+}
+
+/**
+ * Run an ESC/I-2 scan over plain TCP (port 1865, ET-2750). Same
+ * graph and command vocabulary as `runEsci2Scan`; the only differences
+ * are at the socket layer (no TLS) and in the PARA payload (selected
+ * by `ctx.profile = "esci2-plain"`). ET-2750 is flatbed-only hardware,
+ * so the graph's ADF branches are unreachable under this entry point.
+ */
+export async function runEsci2ScanOverPlain(
+  session: ScanSession,
+  socketFactory: PlainSocketFactory = (host, port, cb) => net.connect(port, host, cb),
+): Promise<void> {
+  validateTempBase(session);
+
+  const result = await runScanSession<Esci2Ctx>({
+    graph: esci2Graph,
+    initialCtx: buildInitialCtx(session, "esci2-plain"),
+    transportFactory: makePlainEsci2TransportFactory(session, socketFactory),
     outputDir: session.outputDir,
     tempDir: session.tempDir,
     sessionTs: resolveSessionTimestamp(new Date(), session.outputDir),

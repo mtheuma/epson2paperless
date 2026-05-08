@@ -311,6 +311,45 @@ describe("loadConfig", () => {
     expect(config.esciForceSource).toBe("adf-simplex");
   });
 
+  // ─── PRINTER_PROTOCOL=esci2-plain (ET-2750) ─────────────────────────────
+
+  it("accepts PRINTER_PROTOCOL=esci2-plain", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.PRINTER_PROTOCOL = "esci2-plain";
+    const config = loadConfig();
+    expect(config.printerProtocol).toBe("esci2-plain");
+  });
+
+  it("rejects PRINTER_CERT_FINGERPRINT with PRINTER_PROTOCOL=esci2-plain", () => {
+    // ET-2750 has no TLS layer to pin against; reject the combo at
+    // startup rather than silently ignoring the fingerprint.
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.PRINTER_PROTOCOL = "esci2-plain";
+    process.env.PRINTER_CERT_FINGERPRINT =
+      "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89";
+    expect(() => loadConfig()).toThrow(/no TLS layer/i);
+  });
+
+  it("rejects ESCI_FORCE_SOURCE with PRINTER_PROTOCOL=esci2-plain", () => {
+    // ESC/I-2 (TLS or plain) does its own source detection via
+    // INIT_POLL_STAT — the legacy ESCI_FORCE_SOURCE lever doesn't apply.
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.PRINTER_PROTOCOL = "esci2-plain";
+    process.env.ESCI_FORCE_SOURCE = "flatbed";
+    expect(() => loadConfig()).toThrow(/no effect/i);
+  });
+
+  it("accepts PRINTER_PROTOCOL=esci2-plain alongside Paperless config", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.PRINTER_PROTOCOL = "esci2-plain";
+    process.env.PAPERLESS_URL = "http://paperless.example/";
+    process.env.PAPERLESS_TOKEN = "deadbeef";
+    const config = loadConfig();
+    expect(config.printerProtocol).toBe("esci2-plain");
+    expect(config.paperlessUrl).toBe("http://paperless.example/");
+    expect(config.paperlessToken).toBe("deadbeef");
+  });
+
   it("rejects LEGACY_FORCE_SOURCE at startup with a helpful migration error", () => {
     process.env.PRINTER_IP = "192.0.2.58";
     process.env.LEGACY_FORCE_SOURCE = "adf-simplex";
