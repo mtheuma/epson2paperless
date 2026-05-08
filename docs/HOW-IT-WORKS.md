@@ -22,7 +22,7 @@ Each channel is independent enough to be developed and tested separately.
 
 ### Discovery and keepalive (UDP multicast)
 
-The printer periodically broadcasts a 12-byte `02 06` announcement packet to the multicast address `239.255.255.253:2968` — roughly once every 60 seconds, and also immediately after the printer wakes from sleep. Byte 11 of the announcement is a sequence counter that increments with each broadcast cycle.
+The printer periodically broadcasts an `02 06` announcement packet to the multicast address `239.255.255.253:2968` — roughly once every 60 seconds, and also immediately after the printer wakes from sleep. The announcement carries service identification (typically ~80 bytes total: `02 06` magic + 12-byte header + service descriptor + capability list). Byte 11 of the header is a sequence counter that increments with each broadcast cycle.
 
 A client registers itself as a scan destination by:
 
@@ -185,7 +185,7 @@ DONE             ← compose/promote output files, then resolve
 
 **INIT_POLL iterations.** The init poll runs three times on `esci2-tls` and twice on `esci2-plain` (ET-2750's host driver only loops twice before sending FS X — sending a third FS Y after the printer has moved on returns a non-ACK that fails MODE_SWITCH validation). The Windows driver ran the ET-4950 loop up to 14 times in one capture because the printer was still waking up; three iterations is sufficient for a printer that is already active. The loop is driven by a counter, not a ready-state signal from the printer — the status values returned by STAT during INIT_POLL are not examined for readiness; they are simply consumed.
 
-**Async events.** At any point during the session, the printer can send an IS `0x9000` async event packet. The scanner handles these as follows: `0x01` (ScanStart) and `0x04` (Stop) are logged and ignored. `0x03` (ScanCancel) transitions to the ERROR state. `0x02` (Disconnect), `0x80` (Timeout), and `0xa0` (ServerError) are fatal — they transition to ERROR and abort the scan. In practice, a `0x9000`/`0xa0` ServerError always means the printer rejected a command (typically a malformed PARA or an unexpected command sequence), and the TLS connection closes within milliseconds of the event.
+**Async events.** At any point during the session, the printer can send an IS `0x9000` async event packet. The graph's `globalAbortHandlers` entry for `0x9000` inspects the dispatch byte and returns `null` (info-only) for `0x01` (ScanStart) and `0x04` (Stop), or an `Error` for `0x03` (ScanCancel — cancel) and the fatal set `0x02`/`0x80`/`0xa0` (Disconnect/Timeout/ServerError). The engine settles with `{ ok: false, reason }` on any returned `Error`, regardless of which fatal it was. In practice, a `0x9000`/`0xa0` ServerError always means the printer rejected a command (typically a malformed PARA or an unexpected command sequence), and the TLS connection closes within milliseconds of the event.
 
 **IMG loop mechanics.** Each `IMG` command returns a 64-byte metadata envelope whose `IMGx<hex-length>` prefix declares the byte count of the following image data chunk. The scanner issues a pure-read (passthru with `cmd_size=0`, `reply_size=chunk_length`) to pull those bytes, which accumulate into the in-memory JPEG buffer for the current page. Zero-length replies (`IMG x0000000`) indicate the printer is not ready yet — the scanner retries up to 2,000 times before treating it as a timeout. When the IMG metadata reply contains a `#pen` token in its token stream, the current page-side has ended and the accumulated JPEG buffer is flushed to a `page_NN.jpg` file in the session temp directory.
 
@@ -248,7 +248,9 @@ Flatbed scans are always single-sided regardless of the `PushScanIDIn[0]` value.
 
 The panel's Action selection is the second character of `PushScanIDIn`, interpreted as a bitmask: `1` = JPG, `2` = PDF, `4` = Preview on Computer. The service resolves this to an effective action via `resolveEffectiveAction` in `src/pushscan.ts`.
 
-A key protocol finding: **the wire traffic is identical for JPG and PDF panel selections**. The printer always streams JPEG-encoded image data on the TLS channel regardless of the panel's Action setting. PDF is composed on the host side using pdf-lib after all pages have been received. This was confirmed by capturing a PDF-mode scan with Frida and comparing its TLS payload byte-for-byte against a JPG-mode scan from the same printer — the payloads are identical.
+A key protocol finding for the ESC/I-2 path (ET-4950 family + ET-2750): **the wire traffic is identical for JPG and PDF panel selections**. The printer always streams JPEG-encoded image data regardless of the panel's Action setting; PDF is composed on the host side using pdf-lib after all pages have been received. This was confirmed by capturing a PDF-mode scan with Frida and comparing its TLS payload byte-for-byte against a JPG-mode scan from the same printer — the payloads are identical.
+
+The ESC/I path (WF-3620) is different: the firmware locks the scan resolution to the panel's format choice (600 DPI for JPG, 300 DPI for PDF), so the wire bytes do differ between the two — see [ESC/I variant (WF-3620)](#esci-variant-wf-3620) below. Composition still happens host-side via pdf-lib in PDF mode, but the underlying pixel stream is captured at the lower resolution.
 
 Preview on Computer (`PushScanIDIn[1] = 4`) is rejected by default (the scan does not proceed). The `PREVIEW_ACTION` environment variable overrides this: setting it to `jpg` or `pdf` redirects preview scans through the normal capture flow.
 
@@ -362,7 +364,7 @@ Wireshark packet captures revealed the discovery and push-scan layers in full. B
 - The sequence echo requirement in keepalives — and the consequence of getting it wrong (no entry in the destination list).
 - The push-scan HTTP request format, including the non-standard header spacing and the `x-uid` counter.
 - The `PushScanIDIn` encoding for Sides and Action.
-- That the printer initiates a TLS connection to the host (not the other way around for push-scan initiation) — important for understanding which side opens port 1865.
+- That the printer initiates the push-scan trigger (a plain-TCP connection from the printer to the host's event port 2968), but the _host_ initiates the scan-session connection on port 1865 (TLS for ESC/I-2, plain TCP for ET-2750 and WF-3620). Knowing which side opens which port turned out to matter for both the firewall rules in `README.md` and the listener / connector roles in `pushscan.ts` vs the scanner shells.
 
 Capturing UDP multicast and non-standard HTTP required binding a promiscuous-mode capture on the Ethernet interface rather than using a loopback filter. On Windows, `dumpcap` (bundled with Wireshark) works well from the command line — identify the target interface via `dumpcap -D` (using the interface GUID rather than a numerical index, since numerical indexes change when USB network adapters are connected or disconnected).
 
@@ -410,11 +412,11 @@ Investigation via paired Wireshark captures (one from the Epson driver, one from
 
 `src/esci2/scanner.test.ts` is the regression shield for the ESC/I-2 path. It loads a Frida capture JSONL file, connects the real `runEsci2Scan` state machine to a fake TLS socket that feeds the captured RECV records one-by-one, and asserts that every byte the state machine sends matches the corresponding SEND record from the capture. Any state-machine edit that changes the outgoing byte sequence will fail this test.
 
-The TLS suite runs six parametrized replay entries: the 1p-simplex, 3p-simplex, and 1p-duplex ADF captures in both JPG mode and PDF mode (reusing the same capture data with `action='pdf'`). JPG replay entries assert JPEG files on disk with correct EXIF orientation on back-side pages. PDF replay entries assert a single composed PDF with correct page count and `/Rotate = 180` on back pages.
+The TLS suite runs eight parametrized replay entries: 1p-simplex, 3p-simplex, 1p-duplex (ADF), and 1p-flatbed each in both JPG and PDF mode. The ADF entries reuse a single capture per scenario with `action='jpg'` and `action='pdf'`; the flatbed entries use separate captures for each format because the original Frida session captured them as distinct runs. JPG replay entries assert JPEG files on disk with correct EXIF orientation on back-side pages; PDF replay entries assert a single composed PDF with correct page count and `/Rotate = 180` on back pages.
 
-The same file adds an ET-2750 replay entry (`runEsci2ScanOverPlain` — `esci2-plain` profile) driven by a pcap-extracted JSONL fixture in `tools/pcap-extract/captures/et-2750/`. The fixture is larger than the WF-3620 ones (~3.9 MB vs ~80 KB each) because ET-2750's IMG cycles wrap pixel data in `0xa000` ESC/I-2 frames — there's no `0xa200` image-stream summary path to fold the chunks into a single record like the WF-3620 fixtures use.
+The same file adds an ET-2750 replay entry (`runEsci2ScanOverPlain` — `esci2-plain` profile) driven by a pcap-extracted JSONL fixture in `tools/pcap-extract/captures/et-2750/`. The fixture is roughly 3.9 MB — a couple of orders of magnitude larger than the WF-3620 fixtures (8-30 KB each) — because ET-2750's IMG cycles wrap pixel data in `0xa000` ESC/I-2 frames; there's no `0xa200` image-stream summary path to fold the per-chunk records into a single summary line like the WF-3620 extractor uses.
 
-`src/esci/scanner.test.ts` applies the same replay approach to the WF-3620 ESC/I path using pcap-derived JSONL fixtures in `tools/pcap-extract/captures/wf-3620/`.
+`src/esci/scanner.test.ts` applies the same replay approach to the WF-3620 ESC/I path using ten pcap-derived JSONL fixtures in `tools/pcap-extract/captures/wf-3620/` (single-page, 2-page duplex, 3-page simplex, 4-page duplex, and flatbed-single-page, each in JPG and PDF mode).
 
 Because the protocol was built from these captures, the replay tests are both regression tests and specifications: each state machine is, by construction, correct if and only if it produces the exact byte sequence that the Windows driver produced on the same printer.
 
@@ -475,17 +477,27 @@ The test suite uses Vitest and runs with `npm test` (481 passing tests plus 1 sk
 
 **Unit tests** cover each module independently:
 
+- `src/scan-session.test.ts` — engine pump: graph dispatch, decision-state evaluation, flushPage barrier, settlement lifecycle, IS-payload sanity-cap, `bypassIgnoreFilter` per-state opt-out.
+- `src/protocol.test.ts` — IS-frame encode/decode round-trips, all packet builder variants.
+- `src/protocol-probe.test.ts` — three-arm probe (TLS / plain-TCP-welcome / `ESC @`), cache rules, override paths.
 - `src/keepalive.test.ts` — announcement parsing, keepalive packet construction, burst timing.
 - `src/pushscan.test.ts` — SOAP request parsing, `PushScanIDIn` decoding, `x-uid` echo, action resolution.
-- `src/protocol.test.ts` — IS-frame encode/decode round-trips, all packet builder variants.
-- `src/esci2/commands.test.ts` — ESC/I-2 command builders, PARA payload size assertions, token parser.
-- `src/esci/commands.test.ts` — ESC/I command builders and reply parsers.
+- `src/esci2/commands.test.ts` — ESC/I-2 command builders, PARA payload byte-exact assertions (TLS + plain), token parser.
+- `src/esci2/graph.test.ts` — ESC/I-2 graph shape, key state transitions, source-detect heuristic, `bypassIgnoreFilter` flags on POSTSCAN drains.
+- `src/esci2/transport.test.ts` — `withEsci2UnlockOnDestroy` + `withTlsErrorLabels` adapters and their composition.
+- `src/esci/commands.test.ts` — ESC/I command builders, FS W block, gamma LUTs, FS G reply parser.
+- `src/esci/graph.test.ts` — ESC/I graph shape, STATUS_2 source-detect, gamma cycle, IMG_RECEIVING flush logic.
+- `src/esci/raw-to-jpeg.test.ts` — raw 24-bit RGB → JPEG encoding round-trip.
+- `src/esci/scanner-diagnose.test.ts` — `DIAGNOSE_PROTOCOL` mode: ESC @ NAK + FS Y probe behaviour.
+- `src/output-tail.test.ts` — finalize pipeline (JPG promote / PDF compose / Paperless upload).
+- `src/output.test.ts` — filename generation, sorted page file enumeration.
+- `src/paperless-upload.test.ts` — multipart POST, retention-flag handling, error paths.
 - `src/pdf.test.ts` — PDF composition from sample JPEGs, page-count and rotation assertions.
 - `src/exif.test.ts` — EXIF APP1 injection, orientation byte placement, SOI/SOF preservation.
-- `src/output.test.ts` — filename generation, sorted page file enumeration.
-- `src/config.test.ts` — Zod validation, required-field and default-value handling.
+- `src/config.test.ts` — Zod validation, required-field and default-value handling, pair-validation rules.
 - `src/health.test.ts` — HTTP health endpoint response codes and body.
 - `src/lifecycle.test.ts` — graceful shutdown signal handling.
+- `src/logger.test.ts` — text vs JSON formatting, level filtering, structured-record fields.
 
 The test fixture for `src/pdf.test.ts` is `test-fixtures/sample-page.jpg`, a small JPEG extracted from the 1p-simplex Frida capture by `tools/extract-test-jpeg.ts`.
 
