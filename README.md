@@ -18,11 +18,12 @@ What you get:
 
 ## Compatible printers
 
-| Model                 | Status      | Notes                             |
-| --------------------- | ----------- | --------------------------------- |
-| **ET-3950**           | ✅ Verified |                                   |
-| **ET-4950 / ET-4956** | ✅ Verified | Same hardware, different colours  |
-| **WF-3620**           | ✅ Verified | Plain TCP scanner, no TLS pinning |
+| Model                 | Status      | Notes                                                 |
+| --------------------- | ----------- | ----------------------------------------------------- |
+| **ET-3950**           | ✅ Verified |                                                       |
+| **ET-4950 / ET-4956** | ✅ Verified | Same hardware, different colours                      |
+| **WF-3620**           | ✅ Verified | Plain TCP scanner, no TLS pinning                     |
+| **ET-2750**           | ✅ Verified | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS |
 
 Compatibility reports are welcome whether your model works or doesn't — [open an issue](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) using the compatibility template.
 
@@ -86,7 +87,7 @@ Configuration is via environment variables. Only `PRINTER_IP` is required.
 | `LOG_LEVEL`        |          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                    |
 | `LOG_FORMAT`       |          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line — for `docker logs` + Loki / `jq`).                                                      |
 | `PREVIEW_ACTION`   |          | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen. |
-| `PRINTER_PROTOCOL` |          | `auto`           | `auto` (TLS-probe each session), `esci2` (force ESC/I-2 over TLS), `esci` (force plain-TCP ESC/I).                                                      |
+| `PRINTER_PROTOCOL` |          | `auto`           | `auto` (probe each session), `esci2` (force ESC/I-2 over TLS), `esci2-plain` (force ESC/I-2 over plain TCP — ET-2750), `esci` (force plain-TCP ESC/I).  |
 | `JPEG_QUALITY`     |          | `90`             | JPEG encoder quality 1–100 for the ESC/I (WF-3620) path.                                                                                                |
 | `TEMP_DIR`         |          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                               |
 | `HEALTH_PORT`      |          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                   |
@@ -94,14 +95,14 @@ Configuration is via environment variables. Only `PRINTER_IP` is required.
 <details>
 <summary>Advanced (leave as default unless you know why)</summary>
 
-| Variable                   | Default | What it does                                                                                                                                                                                               |
-| -------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SCAN_DEST_ID`             | `0x02`  | Destination ID byte sent in keepalive packets.                                                                                                                                                             |
-| `LANGUAGE`                 | `en`    | 2-letter locale sent to the printer; no observed user-visible effect.                                                                                                                                      |
-| `ESCI_FORCE_SOURCE`        | —       | Diagnostic override for the ESC/I path when FS F autodetection misfires. Set to `flatbed`, `adf-simplex`, or `adf-duplex` to bypass the wire-byte detection.                                               |
-| `PRINTER_CERT_FINGERPRINT` | —       | Optional SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`). When set, scans abort if the peer cert doesn't match. **Requires `PRINTER_PROTOCOL=esci2`** (auto-detection cannot pin reliably). |
-| `DIAGNOSE_PROTOCOL`        | `false` | Compatibility-report aid. On a legacy `ESC @` non-ACK, sends one extra `FS Y` probe and aborts with annotated `[diagnose]` log lines. Leave off in normal use.                                             |
-| `SHUTDOWN_TIMEOUT_MS`      | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                                                                                                  |
+| Variable                   | Default | What it does                                                                                                                                                                                                                                                                       |
+| -------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SCAN_DEST_ID`             | `0x02`  | Destination ID byte sent in keepalive packets.                                                                                                                                                                                                                                     |
+| `LANGUAGE`                 | `en`    | 2-letter locale sent to the printer; no observed user-visible effect.                                                                                                                                                                                                              |
+| `ESCI_FORCE_SOURCE`        | —       | Diagnostic override for the ESC/I path when FS F autodetection misfires. Set to `flatbed`, `adf-simplex`, or `adf-duplex` to bypass the wire-byte detection.                                                                                                                       |
+| `PRINTER_CERT_FINGERPRINT` | —       | Optional SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`). When set, scans abort if the peer cert doesn't match. **Requires `PRINTER_PROTOCOL=esci2`** — auto-detection can't pin reliably, and the non-TLS variants (`esci`, `esci2-plain`) have no cert to verify. |
+| `DIAGNOSE_PROTOCOL`        | `false` | Compatibility-report aid. On a legacy `ESC @` non-ACK, sends one extra `FS Y` probe and aborts with annotated `[diagnose]` log lines. Leave off in normal use.                                                                                                                     |
+| `SHUTDOWN_TIMEOUT_MS`      | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                                                                                                                                                                          |
 
 </details>
 
@@ -181,7 +182,7 @@ Equally valuable: reporting your printer's compatibility so the [Compatible prin
 
 MIT. See [`LICENSE`](LICENSE) for the full text.
 
-**Not affiliated with Seiko Epson Corporation.** This project is an independent, clean-room re-implementation of the network behavior of an Epson "Scan to Computer" workflow, developed by analyzing the wire protocol of a device the author owns. No Epson source code, firmware, or binaries are included or distributed. "EPSON", "EcoTank", "ET-4950", and "ET-4956" are trademarks of Seiko Epson Corporation, used here descriptively to identify the hardware this software interoperates with.
+**Not affiliated with Seiko Epson Corporation.** This project is an independent, clean-room re-implementation of the network behavior of an Epson "Scan to Computer" workflow, developed by analyzing the wire protocol of a device the author owns. No Epson source code, firmware, or binaries are included or distributed. "EPSON", "EcoTank", "ET-2750", "ET-4950", "ET-4956", and "WorkForce" are trademarks of Seiko Epson Corporation, used here descriptively to identify the hardware this software interoperates with.
 
 ---
 

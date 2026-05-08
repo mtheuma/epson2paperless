@@ -19,7 +19,7 @@ const configSchema = z
     jpegQuality: z.coerce.number().int().min(1).max(100).default(90),
     previewAction: z.enum(["reject", "jpg", "pdf"]).default("reject"),
     esciForceSource: z.enum(["flatbed", "adf-simplex", "adf-duplex"]).optional(),
-    printerProtocol: z.enum(["auto", "esci2", "esci"]).default("auto"),
+    printerProtocol: z.enum(["auto", "esci2", "esci2-plain", "esci"]).default("auto"),
     // Diagnostic-only. When true and the legacy `ESC @` init returns a non-ACK,
     // the legacy scanner sends one extra `FS Y` probe (the ET-4950 ESC/I-2 path's
     // first command) before failing, and logs both replies in detail. Used to
@@ -41,28 +41,36 @@ const configSchema = z
       .optional(),
   })
   .superRefine((cfg, ctx) => {
-    if (cfg.printerProtocol === "esci" && cfg.printerCertFingerprint) {
+    // PRINTER_CERT_FINGERPRINT only makes sense on the TLS path. Reject
+    // the combo for both legacy plain-TCP variants (esci, esci2-plain),
+    // and for `auto` (where a probe failure could downgrade silently to
+    // a non-TLS path and bypass the pin).
+    const noTlsProtocol = cfg.printerProtocol === "esci" || cfg.printerProtocol === "esci2-plain";
+    if (noTlsProtocol && cfg.printerCertFingerprint) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message:
-          "PRINTER_CERT_FINGERPRINT is incompatible with PRINTER_PROTOCOL=esci (ESC/I uses plain TCP, not TLS).",
+        message: `PRINTER_CERT_FINGERPRINT is incompatible with PRINTER_PROTOCOL=${cfg.printerProtocol} (no TLS layer to verify).`,
         path: ["printerCertFingerprint"],
-      });
-    }
-    if (cfg.printerProtocol === "esci2" && cfg.esciForceSource) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "ESCI_FORCE_SOURCE has no effect with PRINTER_PROTOCOL=esci2; remove one or the other.",
-        path: ["esciForceSource"],
       });
     }
     if (cfg.printerProtocol === "auto" && cfg.printerCertFingerprint) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "PRINTER_CERT_FINGERPRINT requires PRINTER_PROTOCOL=esci2 explicitly. Under PRINTER_PROTOCOL=auto, a probe failure can downgrade silently to legacy (plain TCP, no TLS), which would bypass the pin.",
+          "PRINTER_CERT_FINGERPRINT requires PRINTER_PROTOCOL=esci2 explicitly. Under PRINTER_PROTOCOL=auto, a probe failure can downgrade silently to a non-TLS path (esci2-plain or esci), which would bypass the pin.",
         path: ["printerCertFingerprint"],
+      });
+    }
+    // ESCI_FORCE_SOURCE only applies to the legacy ESC/I scanner —
+    // ESC/I-2 (TLS or plain) detects source via INIT_POLL_STAT.
+    if (
+      (cfg.printerProtocol === "esci2" || cfg.printerProtocol === "esci2-plain") &&
+      cfg.esciForceSource
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `ESCI_FORCE_SOURCE has no effect with PRINTER_PROTOCOL=${cfg.printerProtocol}; remove one or the other.`,
+        path: ["esciForceSource"],
       });
     }
   });

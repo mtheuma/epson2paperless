@@ -6,6 +6,26 @@ const log = createLogger("esci");
 // `src/commands-fs.ts`. They retain the same wire bytes; this comment is
 // the only thing that moved.
 
+// ─── ESC/I-2 transport profile ────────────────────────────────────────────
+
+/**
+ * Which ESC/I-2 transport variant the session is running on:
+ *
+ * - `esci2-tls` — TLS over port 1865. ET-4950, ET-3950, ET-4956. The
+ *   original Frida-captured profile.
+ * - `esci2-plain` — same ESC/I-2 vocabulary, plain TCP on port 1865 (no
+ *   TLS). ET-2750. Decoded from `flatbed-single-page-pdf.pcapng` —
+ *   wire-level handshake is identical to the TLS profile (printer sends
+ *   `0x8000` welcome → host LOCK → ack → FS Y init poll), so the graph
+ *   is shared. The two variants diverge only on (a) socket type at
+ *   connect time and (b) the flatbed PARA payload, which is
+ *   8 bytes longer with different gamma / CMX / extents tokens.
+ *
+ * Threaded through `Esci2Ctx` so the PARA builder closure picks the
+ * right blob; the engine and graph stay profile-blind.
+ */
+export type Esci2Profile = "esci2-tls" | "esci2-plain";
+
 // ─── ESC/I-2 commands ─────────────────────────────────────────────────────
 
 /**
@@ -33,18 +53,25 @@ export function buildParaHeader(payloadLength: number): Buffer {
 }
 
 /**
- * PARA phase-2 raw parameter bytes. Source + Sides both vary; content
- * depends on which physical path the printer is using.
- *   - source="adf"     duplex=false → 936 bytes, `#ADF`      tokens (announce 0x3A8)
- *   - source="adf"     duplex=true  → 940 bytes, `#ADFDPLX`  tokens (announce 0x3AC)
- *   - source="flatbed"              → 928 bytes, `#FB `      tokens (announce 0x3A0)
+ * PARA phase-2 raw parameter bytes. Source + Sides + transport profile
+ * all vary the payload:
+ *   - profile=esci2-tls source=adf     duplex=false → 936 bytes, `#ADF`      tokens (announce 0x3A8)
+ *   - profile=esci2-tls source=adf     duplex=true  → 940 bytes, `#ADFDPLX`  tokens (announce 0x3AC)
+ *   - profile=esci2-tls source=flatbed              → 928 bytes, `#FB `      tokens (announce 0x3A0)
+ *   - profile=esci2-plain source=flatbed            → 936 bytes, `#FB `      tokens (announce 0x3A8)
  *
  * `duplex` is ignored when `source === "flatbed"` (glass cannot duplex).
- * Caller sends as passthru with cmd_size=<returned.length>, reply_size=64.
- * See `docs/HOW-IT-WORKS.md` for the protocol layering and per-source
- * variant rationale.
+ * `profile=esci2-plain` + ADF is rejected — ET-2750 is flatbed-only
+ * hardware, and config-time validation should already prevent that combo
+ * from reaching the builder. Caller sends as passthru with
+ * `cmd_size=<returned.length>`, `reply_size=64`. See `docs/HOW-IT-WORKS.md`
+ * for the protocol layering and per-source variant rationale.
  */
-export function buildParaPayload(opts: { source: "adf" | "flatbed"; duplex: boolean }): Buffer {
+export function buildParaPayload(opts: {
+  source: "adf" | "flatbed";
+  duplex: boolean;
+  profile: Esci2Profile;
+}): Buffer {
   if (opts.source === "flatbed") {
     if (opts.duplex) {
       // Physically impossible — glass is single-sided. Defensive log so we
@@ -52,7 +79,15 @@ export function buildParaPayload(opts: { source: "adf" | "flatbed"; duplex: bool
       // fail: treat the same as flatbed + simplex.
       log.warn("buildParaPayload: source=flatbed with duplex=true is impossible; ignoring duplex");
     }
-    return buildParaFlatbed();
+    return opts.profile === "esci2-plain" ? buildParaFlatbedPlain() : buildParaFlatbedTls();
+  }
+  if (opts.profile === "esci2-plain") {
+    // ET-2750 is flatbed-only hardware. Config-layer Zod validation
+    // should already prevent this combo, but guard at the builder
+    // boundary too so a future caller that mis-threads ctx fails loudly.
+    throw new Error(
+      "buildParaPayload: source=adf is not supported on profile=esci2-plain (ET-2750 has no ADF)",
+    );
   }
   return buildParaAdf(opts.duplex);
 }
@@ -101,7 +136,7 @@ function buildParaAdf(duplex: boolean): Buffer {
 //   - #ACQi0000069 → #ACQi0000000 (y-start offset; same length)
 // Flatbed PDF's PARA body is byte-identical to flatbed JPG's — PDF is
 // host-composed, the wire is format-agnostic. One blob covers both.
-function buildParaFlatbed(): Buffer {
+function buildParaFlatbedTls(): Buffer {
   const bodyHex =
     "234642202352534d693030303033303023525353693030303033303023434f4c" +
     "4330323423464d544a504720234a50476430393023474d4d5547313023474d54" +
@@ -132,6 +167,57 @@ function buildParaFlatbed(): Buffer {
     "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff" +
     "235149544f46462023434354434f4c2023414351693030303030303069303030" +
     "30303030693030303234383169303030333530362342535a6931303438353736";
+  return Buffer.from(bodyHex, "hex");
+}
+
+// Blob transcribed byte-for-byte from
+// tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl
+// (the host→printer 0x2000 frame whose IS payload size is 944 bytes;
+// the inner ESC/I-2 PARA body is 936 bytes after the 8-byte cmd_size +
+// reply_size preamble). Differs from buildParaFlatbedTls() by:
+//   - #GMMUG10 → #GMMUG18              (gamma constant: 0x10 → 0x18)
+//   - #QITOFF #CCTCOL  block omitted   (15 bytes removed)
+//   - inline #CMXUM08h009 + 12-byte    (24 bytes added — ICC matrix?)
+//     "<sp>\x00\x00\x00" triplet block
+//   - #ACQi extents trimmed by 4/6:    i0002481 i0003506 → i0002477 i0003500
+// Net size delta vs ET-4950 flatbed: +8 bytes (928 → 936). Source token
+// stays "#FB " (trailing space). The protocol-decode notes claimed a
+// "#ACS" token here; the actual fixture has "#ACQ" — same token name as
+// ET-4950, just with different extents. The decode also reversed the
+// direction of the 0x8000 welcome packet (printer-side, not host-side);
+// neither error reaches code because the fixture is the spec.
+function buildParaFlatbedPlain(): Buffer {
+  const bodyHex =
+    "234642202352534d693030303033303023525353693030303033303023434f4c" +
+    "4330323423464d544a504720234a50476430393023474d4d5547313823474d54" +
+    "47524e2068313030000102030405060708090a0b0c0d0e0f1011121314151617" +
+    "18191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f3031323334353637" +
+    "38393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f5051525354555657" +
+    "58595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f7071727374757677" +
+    "78797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f9091929394959697" +
+    "98999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7" +
+    "b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7" +
+    "d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7" +
+    "f8f9fafbfcfdfeff23474d545245442068313030000102030405060708090a0b" +
+    "0c0d0e0f1011121315161718191a1b1c1d1e1f202122232425262728292a2b2c" +
+    "2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c" +
+    "4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c" +
+    "6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c" +
+    "8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabac" +
+    "adaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c6c7c8c9cacb" +
+    "cccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaeb" +
+    "ecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff23474d54424c552068313030" +
+    "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f" +
+    "20212223242425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e" +
+    "3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e" +
+    "5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e" +
+    "7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e" +
+    "9fa0a1a2a3a4a5a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf" +
+    "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf" +
+    "e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff" +
+    "23434d58554d3038683030392000000020000000200000002341435169303030" +
+    "303030306930303030303030693030303234373769303030333530302342535a" +
+    "6931303438353736";
   return Buffer.from(bodyHex, "hex");
 }
 

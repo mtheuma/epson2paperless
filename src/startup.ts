@@ -4,7 +4,7 @@ import { getLocalIpForTarget } from "./network.js";
 import { createKeepaliveResponder, type KeepaliveResponder } from "./keepalive.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import { detectVariant, type Variant } from "./protocol-probe.js";
-import { runEsci2Scan } from "./esci2/scanner.js";
+import { runEsci2Scan, runEsci2ScanOverPlain } from "./esci2/scanner.js";
 import { runEsciScan } from "./esci/scanner.js";
 
 const log = createLogger("startup");
@@ -116,6 +116,23 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
       action: args.action,
       paperless: args.paperless,
       printerCertFingerprint: args.config.printerCertFingerprint,
+    });
+  }
+  if (variant === "esci2-plain") {
+    // Same ScanSession shape as the TLS path; the shell threads
+    // `profile = "esci2-plain"` through `initialCtx` itself, so the
+    // dispatcher only chooses which entry point to call. Cert
+    // fingerprint is ignored on this path (no TLS layer); config-time
+    // Zod validation rejects the combo at startup.
+    return runEsci2ScanOverPlain({
+      printerIp: args.config.printerIp,
+      port: 1865,
+      destId: args.config.scanDestId,
+      outputDir: args.config.outputDir,
+      tempDir: args.config.tempDir,
+      duplex: args.duplex,
+      action: args.action,
+      paperless: args.paperless,
     });
   }
   // Legacy. Source is autodetected from the FS F status byte (see esci/scanner.ts
