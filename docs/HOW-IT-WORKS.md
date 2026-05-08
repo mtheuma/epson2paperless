@@ -62,13 +62,13 @@ Offset  Len  Field
 ──────  ───  ─────
   0      2   ASCII magic "IS"
   2      2   Packet type (big-endian uint16)
-  4      2   Data offset (always 0x000C from host; printer-side varies — see below)
+  4      2   Data offset (host-side: 0x000C; printer-side: 0x300C — see below)
   6      4   Payload size (big-endian uint32)
  10      2   Padding (zeros)
  12      N   Payload
 ```
 
-The host-side data-offset field is always `0x000C` (12). On the printer→host side the value varies by hardware: `0x000C` from the ET-4950, `0x300C` from the ET-2750. Our parser reads only the type and length fields and ignores offset 4-5 on inbound, so this variation requires no code change.
+The data-offset field is asymmetric: host-side is always `0x000C` (12); printer-side is always `0x300C` — confirmed across all seven ET-4950 Frida captures and the ET-2750 pcap. The `0x300C` is a printer-firmware constant that the SANE `epsonds` source treats as opaque too. Our builders write `0x000C` on outbound; our parser reads only the type and length fields and ignores offset 4-5 on inbound, so the asymmetry requires no code change.
 
 The packet type field determines the semantics of the payload:
 
@@ -123,9 +123,17 @@ The INFO and CAPA replies declare the scanner's capabilities — supported resol
 
 ## The scanner state machine
 
-`runEsci2Scan` in `src/esci2/scanner.ts` is a thin orchestration shell. It builds a `SessionTransport` (TLS socket wrapped in two protocol-aware adapters — see [Transport adapters](#transport-adapters) below) and calls the shared `runScanSession` engine in `src/scan-session.ts`. The state machine itself is plain frozen data: a `Graph<Esci2Ctx>` defined in `src/esci2/graph.ts` whose states the engine walks one IS packet at a time. Each transition is either a static rewrite (incoming IS type → next state + bytes to send) or a decision function that inspects the packet payload and returns the same shape. State threading uses a typed `Esci2Ctx` object the engine carries through every transition.
+Each protocol variant lives in a thin orchestration shell that builds a `SessionTransport` and calls the shared `runScanSession` engine in `src/scan-session.ts`. The state machine itself is plain frozen data: a `Graph<Ctx>` defined in a per-protocol `graph.ts` file whose states the engine walks one IS packet at a time. Each transition is either a static rewrite (incoming IS type → next state + bytes to send) or a decision function that inspects the packet payload and returns the same shape. State threading uses a typed ctx object the engine carries through every transition.
 
-The same engine drives the WF-3620 ESC/I scanner (`src/esci/graph.ts` + `runEsciScan` in `src/esci/scanner.ts`) and the ET-2750 ESC/I-2-over-plain-TCP scanner (`runEsci2ScanOverPlain`, also in `src/esci2/scanner.ts`, sharing the ESC/I-2 graph with the TLS path via a `Esci2Profile` discriminator on ctx). The deterministic single-IS-packet-per-transition contract holds for all three.
+The shells / graphs / transports map to the variants like so:
+
+| Variant       | Shell entry point       | Graph             | Transport composition                                                                                                               |
+| ------------- | ----------------------- | ----------------- | ----------------------------------------------------------------------------------------------------------------------------------- |
+| `esci2-tls`   | `runEsci2Scan`          | `src/esci2/graph` | `withEsci2UnlockOnDestroy(withTlsErrorLabels(socketAsTransport(tls.connect(...))))` — see [Transport adapters](#transport-adapters) |
+| `esci2-plain` | `runEsci2ScanOverPlain` | `src/esci2/graph` | `withEsci2UnlockOnDestroy(socketAsTransport(net.connect(...)))` — same graph, profile-conditional decisions                         |
+| `esci`        | `runEsciScan`           | `src/esci/graph`  | `socketAsTransport(net.connect(...))` — no adapters, no LOCK/UNLOCK record on the wire                                              |
+
+Both ESC/I-2 entry points share the same graph via an `Esci2Profile = "esci2-tls" | "esci2-plain"` discriminator threaded through `Esci2Ctx`. The deterministic single-IS-packet-per-transition contract holds for all three.
 
 ```
 CONNECTING
@@ -240,7 +248,7 @@ Within the `esci2-tls` profile, the per-source variants differ in three places: 
 
 The panel's Sides selection is carried in `PushScanIDIn[0]`: `0` = 1-Sided, `1` = 2-Sided. For ADF scans, the scanner passes this as the `duplex` flag to `buildParaPayload`. Duplex replaces the `#ADF` source token with `#ADFDPLX` (four bytes wider), increasing the announced PARA length from `0x3A8` to `0x3AC`. The rest of the blob is identical.
 
-Duplex scans produce image sides in the order front/back/front/back/... The back side of each sheet comes out physically flipped 180° because of the ADF's U-turn paper path — the sheet is pulled through, reversed, and re-fed, so the physical image is upside-down relative to the front side. Back sides are identified by the `#typIMGB` token in their `#pst` (page-start) and `#pen` (page-end) responses; front sides carry `#typIMGA`. Because the `#pst` token arrives at the beginning of a page-side's IMG stream, the scanner can determine orientation at page-start and record it in a `backPages` array without waiting for the full image.
+Duplex scans produce image sides in the order front/back/front/back/... The back side of each sheet comes out physically flipped 180° because of the ADF's U-turn paper path — the sheet is pulled through, reversed, and re-fed, so the physical image is upside-down relative to the front side. Back sides are identified by the `#typIMGB` token in their `#pst` / `#pen` responses; front sides carry `#typIMGA`. The graph updates `ctx.pageSide` on every `IMG_META` reply (the `typ` token is consistent across all packets within a page); when the page completes, the engine reads `ctx.pageSide` from the `flushPage` barrier and pushes the 1-based page index into a `backPageIndices: number[]` array. The array is forwarded to `finalizeSession` so the EXIF / `/Rotate` injection path knows which pages need rotation.
 
 For JPEG output, back-side images have a minimal EXIF APP1 segment prepended after the JPEG SOI marker (via `src/exif.ts`) that sets `Orientation = 3` (rotate 180°). This is a 36-byte synthetic APP1 — the minimum valid structure — since the scanner-produced JPEGs contain no EXIF data of their own. For PDF output, the page's PDF dictionary `/Rotate` entry is set to 180° (via `src/pdf.ts` using pdf-lib). Both approaches allow the viewing application to display pages right-side up without modifying the raw pixel data.
 
@@ -284,7 +292,6 @@ A second ESC/I-2 hardware variant — the ET-2750 — uses the same protocol voc
 Wire differences from the ET-4950, decoded from `flatbed-single-page-pdf.pcapng`:
 
 - **No TLS handshake.** The printer sends the welcome IS packet (type `0x8000`) immediately after TCP connect.
-- **Printer-side IS frames carry `0x300C` at offset 4-5** (the data-offset field) rather than `0x000C`. Host-side stays at `0x000C` for everything. Our parser reads only the type and length fields and ignores offset 4-5 on inbound, so this requires no code change.
 - **INIT_POLL runs 2 iterations** (not 3). Profile-conditional in `INIT_POLL_FIN`'s decision; sending a third FS Y after the printer has moved on returns a non-ACK that fails MODE_SWITCH validation.
 - **STAT replies pack a 52-byte filler inline** in a single 64-byte IS frame. The 12-byte ESC/I-2 reply header still declares `length=0`, so the ET-4950 length-based source-detection heuristic would misclassify ET-2750 as ADF. The graph skips the override on `esci2-plain` and trusts the `source: "flatbed"` value from `initialCtx`. ET-2750 hardware is flatbed-only, so this is correct.
 - **PARA flatbed payload is 936 bytes** (vs ET-4950 flatbed's 928): different gamma constant, no `#QITOFF`/`#CCTCOL` block, new inline `#CMXUM08` ICC-matrix block, slightly different `#ACQ` extents. See the [PARA table above](#source-adf-vs-flatbed) for the full row.
@@ -378,7 +385,7 @@ The TLS payload was captured by hooking `CISProtocolStream::SendISPacket` and `C
 
 The Frida setup has a Windows-specific complication: the target process (`es2projectrunner.exe`) is spawned on demand by `EEventManager.exe` when a scan is triggered, and Windows does not support `device.enable_spawn_gating` (the Frida API for intercepting child processes before they execute). The solution is to hook `EEventManager.exe` directly and instrument it to watch for child-process spawns, then attach to `es2projectrunner.exe` at spawn time via a custom hook in the parent. This is implemented in `tools/frida-capture/host.py` and `tools/frida-capture/agent.js`.
 
-Each captured session is written to a JSONL file in `tools/frida-capture/captures/` where each record is a `{"dir": "SEND"|"RECV", "type": <hex>, "data": <hex>}` object. The captures cover:
+Each captured session is written to a JSONL file in `tools/frida-capture/captures/`. The wire records have shape `{"hook": "send"|"recv", "type_hex": "0xNNNN", "payload_hex": "<hex>", "payload_size": N, "ts": "<iso8601>"}`; lifecycle records (`hook: "startup"`, `hook: "waiting"`) appear at the head of each file with agent-specific metadata. The captures cover:
 
 | File                                           | Scenario                          |
 | ---------------------------------------------- | --------------------------------- |
@@ -412,7 +419,7 @@ Investigation via paired Wireshark captures (one from the Epson driver, one from
 
 ### The byte-for-byte replay test
 
-`src/esci2/scanner.test.ts` is the regression shield for the ESC/I-2 path. It loads a Frida capture JSONL file, connects the real `runEsci2Scan` state machine to a fake TLS socket that feeds the captured RECV records one-by-one, and asserts that every byte the state machine sends matches the corresponding SEND record from the capture. Any state-machine edit that changes the outgoing byte sequence will fail this test.
+`src/esci2/scanner.test.ts` is the regression shield for the ESC/I-2 path. It loads a capture JSONL file, connects the real shell entry point (`runEsci2Scan` for the TLS path, `runEsci2ScanOverPlain` for the plain-TCP path) to the matching fake socket (`FakeTlsSocket` or `FakePlainSocket` from `src/esci2/test-support/`), feeds the captured printer-side records one-by-one, and asserts that every byte the state machine sends matches the corresponding host-side record from the capture. Any state-machine edit that changes the outgoing byte sequence will fail this test.
 
 The TLS suite runs eight parametrized replay entries: 1p-simplex, 3p-simplex, 1p-duplex (ADF), and 1p-flatbed each in both JPG and PDF mode. The ADF entries reuse a single capture per scenario with `action='jpg'` and `action='pdf'`; the flatbed entries use separate captures for each format because the original Frida session captured them as distinct runs. JPG replay entries assert JPEG files on disk with correct EXIF orientation on back-side pages; PDF replay entries assert a single composed PDF with correct page count and `/Rotate = 180` on back pages.
 
@@ -475,7 +482,7 @@ Reverse-engineering artifacts:
 
 The test suite uses Vitest and runs with `npm test` (481 passing tests plus 1 skipped test across 25 files, completing in roughly 5 seconds).
 
-**The replay harnesses** are the most important test files. `src/esci2/scanner.test.ts` instantiates the real `runEsci2Scan` function with a fake TLS socket factory. The fake socket replays the RECV side of a Frida capture (the bytes the printer sent), advancing one IS packet at a time, and records every byte the state machine sends. After the session completes, the test asserts byte-for-byte equality against the SEND side of the capture. On-disk output files are also asserted — JPEG files for JPG-mode runs (including EXIF orientation verification), and a composed PDF for PDF-mode runs (including page count and `/Rotate` metadata on back pages). `src/esci/scanner.test.ts` applies the same approach to the WF-3620 ESC/I path using pcap-derived JSONL fixtures.
+**The replay harnesses** are the most important test files. `src/esci2/scanner.test.ts` instantiates the real shell entry points — `runEsci2Scan` against a `FakeTlsSocket` for the ET-4950 TLS suite, and `runEsci2ScanOverPlain` against a `FakePlainSocket` for the ET-2750 plain-TCP entry — and replays printer-side bytes from a capture, advancing one IS packet at a time, while recording every byte the state machine sends. After the session completes, the test asserts byte-for-byte equality against the host-side bytes from the capture. On-disk output files are also asserted — JPEG files for JPG-mode runs (including EXIF orientation verification), and a composed PDF for PDF-mode runs (including page count and `/Rotate` metadata on back pages). `src/esci/scanner.test.ts` applies the same approach to the WF-3620 ESC/I path using pcap-derived JSONL fixtures.
 
 **Unit tests** cover each module independently:
 
