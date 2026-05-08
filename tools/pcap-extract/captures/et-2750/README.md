@@ -4,9 +4,9 @@ JSONL fixtures used by `src/esci2/scanner.test.ts`'s
 `runEsci2ScanOverPlain` replay test. Generated from gitignored Wireshark
 captures in `.reference/wireshark-captures/et-2750/` via `npm run pcap:extract`.
 
-| Fixture                          | Source pcap                       | Scenario                       |
-| -------------------------------- | --------------------------------- | ------------------------------ |
-| `flatbed-single-page-pdf.jsonl`  | `flatbed-single-page-pdf.pcapng`  | 1 page, flatbed, PDF (300 DPI) |
+| Fixture                         | Source pcap                      | Scenario                       |
+| ------------------------------- | -------------------------------- | ------------------------------ |
+| `flatbed-single-page-pdf.jsonl` | `flatbed-single-page-pdf.pcapng` | 1 page, flatbed, PDF (300 DPI) |
 
 ET-2750 is flatbed-only hardware (no ADF, no duplex), so the matrix is one
 cell. PDF and JPG share the same wire — the panel-PDF case is composed
