@@ -74,7 +74,7 @@ The packet type field determines the semantics of the payload:
 
 | Type   | Direction      | Meaning                                                 |
 | ------ | -------------- | ------------------------------------------------------- |
-| 0x8000 | Printer → host | Welcome — first packet after TLS handshake              |
+| 0x8000 | Printer → host | Welcome — first packet on a fresh session connection    |
 | 0x9000 | Printer → host | Async event (scan start, cancel, timeout, error)        |
 | 0xa000 | Printer → host | Passthru data reply (response to a command)             |
 | 0xa100 | Printer → host | Lock acknowledgement                                    |
@@ -129,7 +129,7 @@ The same engine drives the WF-3620 ESC/I scanner (`src/esci/graph.ts` + `runEsci
 
 ```
 CONNECTING
-    │  TLS handshake
+    │  session handshake (TLS for esci2-tls; plain TCP for esci2-plain)
     ▼
 WELCOME          ← receive IS 0x8000 welcome
     │  send Lock (IS 0x2100)
@@ -217,9 +217,11 @@ The WF-3620 ESC/I path uses no adapters: plain TCP with no LOCK/UNLOCK record on
 
 ### Source: ADF vs flatbed
 
-The scanner detects the physical source from the first `@STAT` reply in INIT_POLL cycle 1. A reply length of 0 indicates ADF; a reply length greater than 0 (12 on the ET-4950) indicates flatbed. When the length is non-zero, those bytes are drained with a pure-read before the next command is sent — the printer queues them as pending output, and failing to drain them desynchronises the IS framing for all subsequent packets.
+On the **`esci2-tls` profile** (ET-4950 family), the scanner detects the physical source from the first `@STAT` reply in INIT_POLL cycle 1: declared length `0` → ADF; declared length `12` → flatbed; any other non-zero length falls back to ADF (no other lengths have been observed in practice — the fallback exists for diagnostic resilience). When the declared length is non-zero, those bytes are drained with a pure-read before the next command is sent — the printer queues them as pending output, and failing to drain them desynchronises the IS framing for all subsequent packets.
 
-ADF precedence: when the ADF feeder has paper loaded, the printer picks ADF regardless of whether a document is also present on the glass. The INIT_POLL STAT reply returns length 0 in this case. Users who want flatbed must clear the ADF first.
+On the **`esci2-plain` profile** (ET-2750), this heuristic is skipped entirely. ET-2750 hardware is flatbed-only, but its STAT reply declares length `0` (with a 52-byte filler packed inline in the same 64-byte IS frame), so applying the ET-4950 rule would misclassify it as ADF. The scanner shell pre-sets `source: "flatbed"` in `initialCtx`, and the `INIT_POLL_STAT` decision is gated on `ctx.profile === "esci2-tls"` — the override path doesn't run on the plain profile and the pre-set value survives.
+
+ADF precedence (ET-4950 family only): when the ADF feeder has paper loaded, the printer picks ADF regardless of whether a document is also present on the glass. The INIT_POLL STAT reply returns length 0 in this case. Users who want flatbed must clear the ADF first.
 
 The PARA payload differs by source and protocol profile:
 
@@ -232,7 +234,7 @@ The PARA payload differs by source and protocol profile:
 
 The three ET-4950 (`esci2-tls`) variants are hardcoded in `src/esci2/commands.ts` from byte-for-byte Frida captures. The ET-2750 (`esci2-plain`) flatbed blob is also in `src/esci2/commands.ts` and is byte-transcribed from a pcap capture (see `tools/pcap-extract/captures/et-2750/`); it differs from the ET-4950 flatbed blob by more than length — different gamma constant (`#GMMUG18` vs `#GMMUG10`), no `#QITOFF`/`#CCTCOL` block, new inline `#CMXUM08` ICC-matrix block, slightly different `#ACQ` extents — so it could not be derived by editing the ET-4950 blob.
 
-The rest of the PARA blob — three gamma correction tables, color correction matrix, acquisition geometry, buffer size — is identical across sources within a profile.
+Within the `esci2-tls` profile, the per-source variants differ in three places: the source token (`#ADF` / `#ADFDPLX` / `#FB `), the `#PAG` page-count token (present for ADF, omitted for flatbed), and the `#ACQ` y-start offset (`0000069` for ADF, `0000000` for flatbed). The remainder — the three RGB gamma correction tables (`#GMTRED` / `#GMTGRN` / `#GMTBLU`), color correction matrix, scan-area extents, and 1 MB buffer-size token — is byte-identical across sources within the profile.
 
 ### Sides: 1-sided vs 2-sided
 
@@ -254,7 +256,7 @@ The ESC/I path (WF-3620) is different: the firmware locks the scan resolution to
 
 Preview on Computer (`PushScanIDIn[1] = 4`) is rejected by default (the scan does not proceed). The `PREVIEW_ACTION` environment variable overrides this: setting it to `jpg` or `pdf` redirects preview scans through the normal capture flow.
 
-After `DONE`, the end-of-scan step runs in a `setImmediate` callback (to allow the TLS session to close before the synchronous disk writes):
+After `DONE`, the end-of-scan step runs in a `setImmediate` callback (to allow the session connection to close before the synchronous disk writes):
 
 - `action='jpg'`: `promoteTempPagesToOutput` renames `page_NN.jpg` files in the session temp directory to `scan_<timestamp>[_NN].jpg` in the output directory.
 - `action='pdf'`: `composePdfFromJpegs` in `src/pdf.ts` embeds each temp JPEG into a pdf-lib `PDFDocument`, applies `/Rotate = 180` on back-side pages, and writes `scan_<timestamp>.pdf`. If composition fails, it falls back to the JPEG promote path.
@@ -268,7 +270,7 @@ The temp directory is removed in a `finally` block regardless of outcome.
 Three protocol variants ride on port 1865, decided per scan session by `src/protocol-probe.ts`:
 
 1. **TLS handshake** against `1865`. Success → `esci2` (ET-4950 family). The probe socket is destroyed before the real scan begins.
-2. **Plain TCP connect**, await an unsolicited IS-`0x8000` welcome packet within the timeout. The ET-2750 sends one immediately after the TCP handshake completes; ET-4950 also does, but inside TLS, so it's only reachable via this arm if TLS already failed. Success → `esci2-plain`.
+2. **Plain TCP connect**, await an unsolicited IS-`0x8000` welcome packet within the timeout. The ET-2750 sends one immediately after the TCP handshake completes; the ET-4950 also sends a welcome but only inside its TLS tunnel, so this plain-TCP arm doesn't see it — connecting to an ET-4950 over plain TCP yields no `0x8000` and the arm times out. Success → `esci2-plain` (matches ET-2750-class hardware only).
 3. **Plain TCP connect**, send `ESC @` (`1b 40`), await a 1-byte `0x06` ACK. Success → `esci` (WF-3620).
 
 If all three arms fail, the dispatcher resolves to `esci` so the legacy scanner's connect path can surface the underlying socket error in a meaningful way (rather than throwing a generic "no protocol matched" message).
@@ -498,6 +500,8 @@ The test suite uses Vitest and runs with `npm test` (481 passing tests plus 1 sk
 - `src/health.test.ts` — HTTP health endpoint response codes and body.
 - `src/lifecycle.test.ts` — graceful shutdown signal handling.
 - `src/logger.test.ts` — text vs JSON formatting, level filtering, structured-record fields.
+- `tools/pcap-extract/extract.test.ts` — end-to-end smoke test of the tshark-driven pcap extractor against a tiny fixture pcap; skipped on CI when `tshark` isn't on PATH (this is the one skipped test in the count above).
+- `tools/frida-capture/pretty-print.test.ts` — `formatRecord` annotating welcome / lock / passthru / async-event / unknown / malformed IS packets in the human-readable replay log.
 
 The test fixture for `src/pdf.test.ts` is `test-fixtures/sample-page.jpg`, a small JPEG extracted from the 1p-simplex Frida capture by `tools/extract-test-jpeg.ts`.
 
