@@ -119,15 +119,21 @@ function probeTls(host: string, port: number, timeoutMs: number): Promise<boolea
 
 /**
  * Plain-TCP probe: connect, then wait for an inbound IS frame. ET-2750
- * sends an unsolicited `0x8000` welcome packet (5-byte payload, IS-header
- * offset-4 byte = `0x300C`) immediately after the TCP handshake completes.
- * WF-3620 doesn't send anything until it receives `ESC @` — so on a
- * legacy printer this probe times out, returns false, and the caller
- * falls through to the legacy probe.
+ * sends an unsolicited `0x8000` welcome packet (5-byte payload)
+ * immediately after the TCP handshake completes. WF-3620 doesn't send
+ * anything until it receives `ESC @` — so on a legacy printer this
+ * probe times out, returns false, and the caller falls through to the
+ * legacy probe. (ET-4950 also sends a welcome immediately, but only
+ * inside its TLS tunnel; this plain-TCP arm doesn't see it — connecting
+ * to an ET-4950 over plain TCP yields no `0x8000` and the arm times
+ * out, so this arm matches ET-2750-class hardware only.)
  *
  * Returns true if a `0x8000` IS frame is observed within `timeoutMs`,
  * false otherwise (timeout, connection refused, peer RST, or any other
- * inbound type).
+ * inbound type). Only the IS magic and type field are validated; the
+ * offset-4 data-offset byte is `0x300C` on the printer side for both
+ * ET-2750 and ET-4950 (host-side is always `0x000C`), so it carries no
+ * disambiguating signal and the parser ignores it.
  */
 function probePlainEsci2(host: string, port: number, timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {
