@@ -1,8 +1,10 @@
 // src/scan-session.ts
 
 import * as fs from "node:fs";
+import type * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import type * as tls from "node:tls";
 import { IS_HEADER_SIZE } from "./protocol.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 
@@ -14,14 +16,37 @@ export type SessionTransportFactory = () => Promise<SessionTransport>;
 
 export interface SessionTransport {
   write(buf: Buffer): boolean | void;
-  /** Polite close after normal completion. */
-  end(): void;
+  /**
+   * Polite close after normal completion. The optional `data` payload is
+   * written-then-half-closed in one call — `net.Socket.end(buf)` and
+   * `tls.TLSSocket.end(buf)` both accept this shape, so adapters that need
+   * to flush a final record (e.g. ESC/I-2's UNLOCK on destroy) can do so
+   * without a separate write+end pair that could be reordered after the
+   * FIN. The engine itself only ever calls `end()` with no argument (DONE
+   * entry); the parameter exists for adapter composition.
+   */
+  end(data?: Buffer): void;
   /** Fail-fast destroy for error paths. */
   destroy(err?: Error): void;
 
   on(event: "data", cb: (chunk: Buffer) => void): this;
   on(event: "error", cb: (err: Error) => void): this;
   on(event: "close", cb: (hadError?: boolean) => void): this;
+}
+
+/**
+ * Bridges a raw Node socket (`net.Socket` / `tls.TLSSocket`) onto the
+ * engine's `SessionTransport` interface. Both socket types already
+ * structurally implement `write` / `end(data?)` / `destroy(err?)` / `on`,
+ * so the cast is safe; the named function makes the boundary explicit
+ * and gives wrapper modules a single place to reason about "this is the
+ * raw-socket leaf of the transport stack." Lives here (next to
+ * `SessionTransport`) rather than in any single protocol's transport
+ * module so neither protocol has to import across the boundary to
+ * reach it.
+ */
+export function socketAsTransport(socket: net.Socket | tls.TLSSocket): SessionTransport {
+  return socket as unknown as SessionTransport;
 }
 
 // =============================================================================
@@ -43,14 +68,15 @@ export interface Graph<Ctx> {
     (ctx: Ctx, packet: { type: number; payload: Buffer }) => Error | null
   >;
   /**
-   * Pre-dispatch packet filter — returns true to discard. Receives the
-   * current state name as a second arg so a filter can scope itself
-   * (e.g. ESC/I-2 filters empty 0xa000 as "wait for body" pre-data
-   * signals during image flow, but POSTSCAN_*_STAT_DRAIN treats the
-   * same wire shape as the drain-complete reply and bypasses the
-   * filter).
+   * Pre-dispatch packet filter — returns true to discard. Scoped via the
+   * per-state `bypassIgnoreFilter` flag below: graphs declare which states
+   * treat the otherwise-filtered shape as semantically meaningful (e.g.
+   * ESC/I-2 filters empty 0xa000 as a "wait for body" signal during image
+   * flow, but POSTSCAN_*_STAT_DRAIN reads the same wire shape as the
+   * drain-complete reply). The filter itself stays state-agnostic so it
+   * can be a one-line shape predicate.
    */
-  globalIgnoreFilter?: (packet: { type: number; payload: Buffer }, currentState: string) => boolean;
+  globalIgnoreFilter?: (packet: { type: number; payload: Buffer }) => boolean;
   /**
    * States in which a failure is treated as post-image cleanup and
    * recovered to success via the post-scan-save fallback (v0.3.0 §3.3) —
@@ -60,24 +86,68 @@ export interface Graph<Ctx> {
    * states (IMG_META, IMG_DATA, etc.) still reject the session even on
    * page 2 of N — partial multi-page output should not be silently
    * promoted as success.
+   *
+   * `DONE` is implicitly excluded from the fallback because it's reserved
+   * as the engine's terminal state and `g.state("DONE", ...)` throws — a
+   * failure can't reach DONE through the dispatch path. The combination
+   * of the reserved-name guard and the engine's `finalizeAttempted` gate
+   * also ensures a finalize failure inside `doFinalize` is not retried
+   * via this branch.
    */
   cleanupStates?: ReadonlySet<string>;
+  /**
+   * Upper bound on the `payloadSize` field of any IS frame the engine
+   * will accept. A value larger than this means we've lost framing
+   * synchronisation — a header byte landed at the wrong offset, or the
+   * peer is sending corrupt data — and waiting for `payloadSize` more
+   * bytes would manifest as a 30-second timeout-in-state instead of
+   * the genuine "framing desync" diagnostic.
+   *
+   * Default 32 MB. Real fixtures top out around 28 KB (ESC/I-2 IMG
+   * chunks); 32 MB is roughly 1000× that, so legitimate captures never
+   * approach it, but a wild size field (e.g. 0xFFFFFFFF from random
+   * bytes in the size slot) trips the check immediately. Override via
+   * the graph builder if a future protocol genuinely sends bigger
+   * payloads.
+   */
+  maxPayloadBytes?: number;
 }
+
+/**
+ * Default upper bound on IS payload size — see `Graph.maxPayloadBytes`.
+ * Exported for tests that need to assert the default applies to graphs
+ * which don't override it.
+ */
+export const DEFAULT_MAX_PAYLOAD_BYTES = 32 * 1024 * 1024;
 
 /** Single write spec — concrete bytes or a ctx-thunk resolved at dispatch time. */
 export type SendSpec<Ctx> = Buffer | ((ctx: Ctx) => Buffer);
 
-export type GraphState<Ctx> =
-  | {
-      kind: "static";
-      on: Record<number, StaticTransition<Ctx>>;
-      onEnter?: (ctx: Ctx) => Buffer | null;
-    }
-  | {
-      kind: "decision";
-      decide: DecisionFn<Ctx>;
-      onEnter?: (ctx: Ctx) => Buffer | null;
-    };
+/**
+ * Per-state flag that opts THIS state out of `Graph.globalIgnoreFilter` —
+ * the filter still fires on every other state, but packets that reach a
+ * state with `bypassIgnoreFilter: true` are dispatched to its handlers
+ * unfiltered. Used in ESC/I-2 to let POSTSCAN_*_STAT_DRAIN observe the
+ * empty-0xa000 packet that acts as the drain-complete trigger, without
+ * complicating the filter itself with state-name knowledge.
+ */
+export interface CommonStateProps {
+  bypassIgnoreFilter?: true;
+}
+
+export type GraphState<Ctx> = CommonStateProps &
+  (
+    | {
+        kind: "static";
+        on: Record<number, StaticTransition<Ctx>>;
+        onEnter?: (ctx: Ctx) => Buffer | null;
+      }
+    | {
+        kind: "decision";
+        decide: DecisionFn<Ctx>;
+        onEnter?: (ctx: Ctx) => Buffer | null;
+      }
+  );
 
 export interface StaticTransition<Ctx> {
   next: string;
@@ -138,9 +208,7 @@ export interface GraphBuilder<Ctx> {
     handlers: Record<number, (ctx: Ctx, packet: { type: number; payload: Buffer }) => Error | null>,
   ): this;
   /** Set the graph's pre-dispatch packet filter. */
-  globalIgnoreFilter(
-    filter: (packet: { type: number; payload: Buffer }, currentState: string) => boolean,
-  ): this;
+  globalIgnoreFilter(filter: (packet: { type: number; payload: Buffer }) => boolean): this;
   /**
    * Declare the post-image cleanup states. Failures in any of these
    * states are recovered to success via the post-scan-save fallback when
@@ -150,9 +218,11 @@ export interface GraphBuilder<Ctx> {
   build(): Graph<Ctx>;
 }
 
-export type StateDef<Ctx> =
-  | { on: Record<number, StaticTransition<Ctx>>; onEnter?: (ctx: Ctx) => Buffer | null }
-  | DecisionDef<Ctx>;
+export type StateDef<Ctx> = CommonStateProps &
+  (
+    | { on: Record<number, StaticTransition<Ctx>>; onEnter?: (ctx: Ctx) => Buffer | null }
+    | DecisionDef<Ctx>
+  );
 
 export interface DecisionDef<Ctx> {
   __decision: true;
@@ -173,10 +243,21 @@ export function createGraph<Ctx>(initial: string, timeoutMs: number): GraphBuild
         );
       }
       if (states[name]) throw new Error(`Duplicate state name: ${name}`);
+      const bypass = def.bypassIgnoreFilter;
       if ("__decision" in def) {
-        states[name] = { kind: "decision", decide: def.decide, onEnter: def.onEnter };
+        states[name] = {
+          kind: "decision",
+          decide: def.decide,
+          onEnter: def.onEnter,
+          ...(bypass ? { bypassIgnoreFilter: true } : {}),
+        };
       } else {
-        states[name] = { kind: "static", on: def.on, onEnter: def.onEnter };
+        states[name] = {
+          kind: "static",
+          on: def.on,
+          onEnter: def.onEnter,
+          ...(bypass ? { bypassIgnoreFilter: true } : {}),
+        };
       }
       return this;
     },
@@ -564,6 +645,24 @@ export async function runScanSession<Ctx>(
       }
       const type = head.readUInt16BE(2);
       const payloadSize = head.readUInt32BE(6);
+      const cap = graph.maxPayloadBytes ?? DEFAULT_MAX_PAYLOAD_BYTES;
+      if (payloadSize > cap) {
+        // Framing desync — almost certainly a header byte landed at the
+        // wrong offset and we read garbage as the size. Surface the
+        // diagnostic immediately so operators don't see a misleading
+        // "Timeout in state X" 30 seconds later. Captures the first 32
+        // bytes as hex so the report shows what we were looking at.
+        const peek = head.subarray(0, Math.min(32, head.length)).toString("hex");
+        const capMb = (cap / (1024 * 1024)).toFixed(0);
+        settle({
+          ok: false,
+          reason: new Error(
+            `IS payload claims ${payloadSize} bytes, exceeds ${capMb}MB cap — likely framing desync in state ${currentState}. First 32 bytes: ${peek}`,
+          ),
+          finalCtx: ctx,
+        });
+        return null;
+      }
       const totalSize = IS_HEADER_SIZE + payloadSize;
 
       if (recvBytes < totalSize) return null; // need more bytes
@@ -581,10 +680,16 @@ export async function runScanSession<Ctx>(
     async function dispatchPacket(packet: { type: number; payload: Buffer }): Promise<void> {
       // Step 1: globalIgnoreFilter — silently discard packets the protocol
       // wants to filter pre-dispatch (e.g. ESC/I-2 empty 0xa000 envelopes
-      // during image flow). The filter receives `currentState` so it can
-      // bypass itself in states where the otherwise-filtered shape is
-      // semantically meaningful (e.g. POSTSCAN_*_STAT_DRAIN).
-      if (graph.globalIgnoreFilter && graph.globalIgnoreFilter(packet, currentState)) {
+      // during image flow). States with `bypassIgnoreFilter: true` opt out
+      // — the otherwise-filtered shape is semantically meaningful for them
+      // (e.g. POSTSCAN_*_STAT_DRAIN reads the empty 0xa000 as the drain-
+      // complete reply), so the filter never runs there.
+      const state = graph.states[currentState];
+      if (
+        graph.globalIgnoreFilter &&
+        !state.bypassIgnoreFilter &&
+        graph.globalIgnoreFilter(packet)
+      ) {
         return;
       }
 
@@ -602,7 +707,6 @@ export async function runScanSession<Ctx>(
       }
 
       // Step 3: state-specific dispatch
-      const state = graph.states[currentState];
       if (state.kind === "static") {
         const transition = state.on[packet.type];
         if (!transition) {

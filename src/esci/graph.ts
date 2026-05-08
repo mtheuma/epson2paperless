@@ -39,10 +39,12 @@ import {
   type Format,
   type ScanGeometry,
 } from "./commands.js";
-// FS Y is the ET-4950 ESC/I-2 init's first command. Used here only for the
-// DIAGNOSE_PROTOCOL probe — sent after ESC @ NAKs to classify printers
-// stuck between ESC/I and ESC/I-2.
-import { buildFsY } from "../esci2/commands.js";
+// FS Y is the ET-4950 ESC/I-2 init's first command, now lifted to the
+// shared `commands-fs.ts` module. Used here only for the DIAGNOSE_PROTOCOL
+// probe — sent after ESC @ NAKs to classify printers stuck between ESC/I
+// and ESC/I-2.
+import { buildFsY } from "../commands-fs.js";
+import { expectIsType, expectLength } from "../graph-helpers.js";
 import { GAMMA_LUT_R, GAMMA_LUT_G, GAMMA_LUT_B } from "./luts.js";
 import { encodeRawGbrToJpeg } from "./raw-to-jpeg.js";
 import { createLogger } from "../logger.js";
@@ -63,8 +65,17 @@ export interface EsciCtx {
   jpegQuality: number;
   /** When true, a non-ACK reply to ESC @ triggers an FS Y diagnostic probe. */
   diagnoseProtocol: boolean;
-  /** Optional test hook fired once when STATUS_2 has decided the source. */
-  onSourceDetected?: (source: Source) => void;
+  /**
+   * True once STATUS_2 has actually run and assigned `ctx.source` (either
+   * from the FS F status byte via `legacyDetectSource` or from
+   * `ctx.forcedSource`). The shell uses this flag — not just the presence
+   * of `ctx.source` — to decide whether to fire `LegacyScanSession.onSourceDetected`,
+   * because `source` is initialized to `forcedSource ?? "adf-simplex"` in
+   * the scanner shell before any state has run, so a session that fails
+   * inside WELCOME / LOCKING / INIT could otherwise produce a spurious
+   * detection callback on the failure path.
+   */
+  sourceDetected: boolean;
   /** True when looping back for the back side of a duplex sheet (or next ADF page). */
   inInterPageLoop: boolean;
   /** Page count, 1-indexed during dispatch (incremented just before flush). */
@@ -128,32 +139,16 @@ const sendEscEPlusCtxSource: SendSpec<EsciCtx>[] = [
 ];
 
 /**
- * Guard helper for decision states (mirrors src/esci2/graph.ts:expectIsType):
- * ensure the incoming packet matches the expected IS type. Returns an Error
- * TransitionResult on mismatch (engine routes through the failure path);
- * returns null to continue.
- */
-function expectIsType(
-  packet: { type: number },
-  expected: number,
-  stateName: string,
-): { error: Error } | null {
-  if (packet.type !== expected) {
-    return {
-      error: new Error(
-        `${stateName}: expected packet type 0x${expected.toString(16).padStart(4, "0")}, got 0x${packet.type.toString(16).padStart(4, "0")}`,
-      ),
-    };
-  }
-  return null;
-}
-
-/**
  * awaitReply — registers a static state that waits for `expectedReplyType`,
  * runs `validate` against the payload, then advances to `next` (optionally
- * emitting `send`). Mirrors the role of esci2/graph.ts:awaitAck but accepts
- * a custom payload validator (ESC/I has length-based replies of 1, 14, 16
- * and 80 bytes — not just the single-byte ack pattern).
+ * emitting `send`). Same shape as the per-graph helper in
+ * `src/esci2/graph.ts`; intentionally not lifted to a shared module —
+ * each graph parameterises it with its own `Ctx`, and the cost of two
+ * copies is smaller than the cost of a generic shared abstraction. The
+ * ESC/I path additionally needs custom validators (length-based replies
+ * of 1 / 14 / 16 / 80 bytes, not just single-byte ACKs), which the
+ * shape predicates in `src/graph-helpers.ts` like `ackByte` cover for
+ * the simple cases.
  */
 function awaitReply(
   g: GraphBuilder<EsciCtx>,
@@ -191,25 +186,6 @@ function escEThenAck(
 ): void {
   awaitReply(g, `${prefix}_ACK1`, ESCI_REPLY, isAck, `${prefix}_ACK2`);
   awaitReply(g, `${prefix}_ACK2`, ESCI_REPLY, isAck, next, nextSend);
-}
-
-/**
- * Decision-state guard for length-checked ESC/I replies. Companion to
- * `expectIsType` — returns an error TransitionResult on length mismatch
- * so the engine routes through the standard failure path; null to continue.
- */
-function expectLength(
-  payload: Buffer,
-  expected: number,
-  stateName: string,
-  label: string,
-): { error: Error } | null {
-  if (payload.length !== expected) {
-    return {
-      error: new Error(`${stateName}: expected ${expected}-byte ${label}, got ${payload.length}`),
-    };
-  }
-  return null;
 }
 
 /** Strip the leading status byte from an IS-0xa200 chunk and copy pixel tail. */
@@ -359,7 +335,7 @@ g.state(
       }
       ctx.source = result.source;
     }
-    ctx.onSourceDetected?.(ctx.source);
+    ctx.sourceDetected = true;
 
     if (statusByte === 0x81) {
       return { next: "RESET_PAREN", send: passthru(buildEscParen(), 1) };

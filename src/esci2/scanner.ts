@@ -3,12 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import {
   runScanSession,
+  socketAsTransport,
   type SessionTransport,
   type SessionTransportFactory,
 } from "../scan-session.js";
 import { resolveSessionTimestamp } from "../output.js";
 import { esci2Graph, type Esci2Ctx } from "./graph.js";
-import { withEsci2UnlockOnDestroy } from "./transport.js";
+import { withEsci2UnlockOnDestroy, withTlsErrorLabels } from "./transport.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
 
 export interface ScanSession {
@@ -70,7 +71,13 @@ function makeTlsTransportFactory(
             return;
           }
         }
-        resolve(withEsci2UnlockOnDestroy(socket));
+        // Composition order matters: the unlock wrapper is OUTER so its
+        // destroy-time `inner.end(buildUnlockPacket())` flows through the
+        // TLS-error wrapper's `end(data?)`, setting that wrapper's
+        // `endCalled = true` before the bytes leave the host. Without that
+        // ordering, a printer-side RST during the close handshake could
+        // surface as a labelled error instead of being swallowed.
+        resolve(withEsci2UnlockOnDestroy(withTlsErrorLabels(socketAsTransport(socket))));
       });
       socket.once("error", reject);
     });
