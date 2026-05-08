@@ -62,11 +62,13 @@ Offset  Len  Field
 ──────  ───  ─────
   0      2   ASCII magic "IS"
   2      2   Packet type (big-endian uint16)
-  4      2   Data offset, always 0x000C (12)
+  4      2   Data offset (always 0x000C from host; printer-side varies — see below)
   6      4   Payload size (big-endian uint32)
  10      2   Padding (zeros)
  12      N   Payload
 ```
+
+The host-side data-offset field is always `0x000C` (12). On the printer→host side the value varies by hardware: `0x000C` from the ET-4950, `0x300C` from the ET-2750. Our parser reads only the type and length fields and ignores offset 4-5 on inbound, so this variation requires no code change.
 
 The packet type field determines the semantics of the payload:
 
@@ -120,7 +122,9 @@ The INFO and CAPA replies declare the scanner's capabilities — supported resol
 
 ## The scanner state machine
 
-`runEsci2Scan` in `src/esci2/scanner.ts` implements a deterministic state machine. Each incoming IS packet advances the state by exactly one transition; all state is kept in local variables within a single TLS socket callback.
+`runEsci2Scan` in `src/esci2/scanner.ts` is a thin orchestration shell. It builds a `SessionTransport` (TLS socket wrapped in two protocol-aware adapters — see [Transport adapters](#transport-adapters) below) and calls the shared `runScanSession` engine in `src/scan-session.ts`. The state machine itself is plain frozen data: a `Graph<Esci2Ctx>` defined in `src/esci2/graph.ts` whose states the engine walks one IS packet at a time. Each transition is either a static rewrite (incoming IS type → next state + bytes to send) or a decision function that inspects the packet payload and returns the same shape. State threading uses a typed `Esci2Ctx` object the engine carries through every transition.
+
+The same engine drives the WF-3620 ESC/I scanner (`src/esci/graph.ts` + `runEsciScan` in `src/esci/scanner.ts`) and the ET-2750 ESC/I-2-over-plain-TCP scanner (`runEsci2ScanOverPlain`, also in `src/esci2/scanner.ts`, sharing the ESC/I-2 graph with the TLS path via a `Esci2Profile` discriminator on ctx). The deterministic single-IS-packet-per-transition contract holds for all three.
 
 ```
 CONNECTING
@@ -138,7 +142,7 @@ INIT1_FIN        ← send FIN, await 64-byte reply
 INIT2_FS_Z       ← send FS Z (legacy 2-byte), await 1-byte ACK
 INIT2_FIN        ← send FIN, await 64-byte reply
     │
-INIT_POLL × 3:
+INIT_POLL × 3 (or × 2 on esci2-plain):
   INIT_POLL_FS_Y    ← send FS Y, await ACK
   INIT_POLL_STAT    ← send STAT, await 64-byte envelope
   INIT_POLL_STAT_DRAIN  ← drain N bytes if STAT reply declares length > 0 (flatbed only)
@@ -173,7 +177,7 @@ UNLOCKING        ← send Unlock (IS 0x2101), await IS 0xa100 ack
 DONE             ← compose/promote output files, then resolve
 ```
 
-**INIT_POLL iterations.** The init poll runs three times. The Windows driver ran it up to 14 times in one capture because the printer was still waking up; three iterations is sufficient for a printer that is already active. The loop is driven by a counter, not a ready-state signal from the printer — the status values returned by STAT during INIT_POLL are not examined for readiness; they are simply consumed.
+**INIT_POLL iterations.** The init poll runs three times on `esci2-tls` and twice on `esci2-plain` (ET-2750's host driver only loops twice before sending FS X — sending a third FS Y after the printer has moved on returns a non-ACK that fails MODE_SWITCH validation). The Windows driver ran the ET-4950 loop up to 14 times in one capture because the printer was still waking up; three iterations is sufficient for a printer that is already active. The loop is driven by a counter, not a ready-state signal from the printer — the status values returned by STAT during INIT_POLL are not examined for readiness; they are simply consumed.
 
 **Async events.** At any point during the session, the printer can send an IS `0x9000` async event packet. The scanner handles these as follows: `0x01` (ScanStart) and `0x04` (Stop) are logged and ignored. `0x03` (ScanCancel) transitions to the ERROR state. `0x02` (Disconnect), `0x80` (Timeout), and `0xa0` (ServerError) are fatal — they transition to ERROR and abort the scan. In practice, a `0x9000`/`0xa0` ServerError always means the printer rejected a command (typically a malformed PARA or an unexpected command sequence), and the TLS connection closes within milliseconds of the event.
 
@@ -186,7 +190,20 @@ The IMG loop's termination condition differs by source:
 
 **POSTSCAN drain.** After ADF scans the printer queues a final `#ERRADF PE` (ADF Paper End) status message in its output buffer. If this message is not consumed before the session closes, the printer's internal state machine does not advance cleanly, and the panel displays "Scanning Error" on subsequent scans. The two POSTSCAN cycles (`FS Y → STAT → pure-read(12) → FIN`, twice) drain this queued status. Each cycle's `STAT` reply declares a length of 12, and the subsequent pure-read consumes those 12 bytes (`#ERRADF PE  `). The structure mirrors the `INIT_POLL_STAT_DRAIN` mechanism: the printer uses the IS payload-length field as a general signal that the host should issue a drain read before continuing. Flatbed scans do not produce an ADF status message and skip these two POSTSCAN cycles entirely, going directly from `FIN_AFTER_IMG` to `UNLOCKING`.
 
-**Source detection.** The push-scan SOAP body does not indicate whether the printer will scan from the ADF or the flatbed glass — the panel does not expose a source selector. Instead, the printer detects its own source (via the ADF paper sensor) and signals the result in the first `@STAT` reply during INIT_POLL cycle 1. An ADF-mode printer returns a zero-length `STATx0000000` reply; a flatbed-mode printer returns a 12-byte `STATx000000C` reply with filler content. The scanner reads this length field and sets its internal `source` variable, which governs the PARA blob selection, the IMG loop terminator, and the POSTSCAN branching.
+**Source detection.** The push-scan SOAP body does not indicate whether the printer will scan from the ADF or the flatbed glass — the panel does not expose a source selector. Instead, the printer detects its own source (via the ADF paper sensor) and signals the result in the first `@STAT` reply during INIT_POLL cycle 1. On the `esci2-tls` profile (ET-4950 family), an ADF-mode printer returns a zero-length `STATx0000000` reply and a flatbed-mode printer returns a 12-byte `STATx000000C` reply with filler content. The scanner reads this length field and sets its internal `source` variable, which governs the PARA blob selection, the IMG loop terminator, and the POSTSCAN branching.
+
+The `esci2-plain` profile (ET-2750) skips this heuristic: ET-2750's STAT reply declares `length=0` in its 12-byte ESC/I-2 header but packs a 52-byte filler (`#---#---#---…`) inline in the same 64-byte IS frame, so applying the ET-4950 rule would misclassify it as ADF. ET-2750 hardware is flatbed-only — there's no ADF to detect — so the graph trusts the `source: "flatbed"` value the scanner shell pre-sets in `initialCtx` and the `INIT_POLL_STAT` decision is conditioned on `ctx.profile === "esci2-tls"` for the override path.
+
+### Transport adapters
+
+The engine consumes a generic `SessionTransport` interface (`write` / `end(data?)` / `destroy(err?)` / `on`) — both `tls.TLSSocket` and `net.Socket` satisfy it structurally. ESC/I-2 panel hygiene depends on application-level teardown timing that doesn't belong in the engine itself, so the ESC/I-2 path composes the raw socket through two transport-shape adapters before handing it to `runScanSession` (defined in `src/esci2/transport.ts`):
+
+- **`withEsci2UnlockOnDestroy(inner)`** — protocol-aware. Tracks LOCK/UNLOCK on the wire (by IS type byte at offset 2-3); on destroy, if LOCK was sent but UNLOCK wasn't, calls `inner.end(buildUnlockPacket())` so the unlock bytes leave before FIN. Also gates a polite-close `end()` against a follow-up `destroy()` so the engine's settlement doesn't RST the socket mid-`close_notify`.
+- **`withTlsErrorLabels(inner)`** — TLS-only. Labels mid-session error events with `"TLS connection error: …"` and swallows benign post-`end()` resets (`ECONNRESET` / `EPIPE` after the printer FINs first).
+
+The TLS factory composes both: `withEsci2UnlockOnDestroy(withTlsErrorLabels(socketAsTransport(socket)))`. The unlock wrapper is OUTER so its destroy-time `inner.end(buildUnlockPacket())` flows through the TLS-error wrapper, setting that wrapper's `endCalled` flag before bytes leave the host. The plain-TCP factory (ET-2750) composes only the unlock adapter — there's no TLS layer to label or to swallow post-FIN resets from.
+
+The WF-3620 ESC/I path uses no adapters: plain TCP with no LOCK/UNLOCK record on the wire (the protocol manages session teardown differently).
 
 ---
 
@@ -198,15 +215,18 @@ The scanner detects the physical source from the first `@STAT` reply in INIT_POL
 
 ADF precedence: when the ADF feeder has paper loaded, the printer picks ADF regardless of whether a document is also present on the glass. The INIT_POLL STAT reply returns length 0 in this case. Users who want flatbed must clear the ADF first.
 
-The PARA payload differs by source:
+The PARA payload differs by source and protocol profile:
 
-| Source       | Token      | `#PAG` token | ACQ y-start | Announced length |
-| ------------ | ---------- | ------------ | ----------- | ---------------- |
-| ADF          | `#ADF`     | `#PAGd000`   | `0000069`   | `0x3A8` (936 B)  |
-| ADF + duplex | `#ADFDPLX` | `#PAGd000`   | `0000069`   | `0x3AC` (940 B)  |
-| Flatbed      | `#FB `     | (omitted)    | `0000000`   | `0x3A0` (928 B)  |
+| Source       | Profile       | Token      | `#PAG` token | ACQ y-start | Announced length |
+| ------------ | ------------- | ---------- | ------------ | ----------- | ---------------- |
+| ADF          | `esci2-tls`   | `#ADF`     | `#PAGd000`   | `0000069`   | `0x3A8` (936 B)  |
+| ADF + duplex | `esci2-tls`   | `#ADFDPLX` | `#PAGd000`   | `0000069`   | `0x3AC` (940 B)  |
+| Flatbed      | `esci2-tls`   | `#FB `     | (omitted)    | `0000000`   | `0x3A0` (928 B)  |
+| Flatbed      | `esci2-plain` | `#FB `     | (omitted)    | `0000000`   | `0x3A8` (936 B)  |
 
-The rest of the PARA blob — three gamma correction tables, color correction matrix, acquisition geometry, buffer size — is identical across sources and is hardcoded in `src/esci.ts` from the byte-for-byte Frida capture.
+The four ET-4950 (`esci2-tls`) variants are hardcoded in `src/esci2/commands.ts` from byte-for-byte Frida captures. The ET-2750 (`esci2-plain`) flatbed blob is also in `src/esci2/commands.ts` and is byte-transcribed from a pcap capture (see `tools/pcap-extract/captures/et-2750/`); it differs from the ET-4950 flatbed blob by more than length — different gamma constant (`#GMMUG18` vs `#GMMUG10`), no `#QITOFF`/`#CCTCOL` block, new inline `#CMXUM08` ICC-matrix block, slightly different `#ACQ` extents — so it could not be derived by editing the ET-4950 blob.
+
+The rest of the PARA blob — three gamma correction tables, color correction matrix, acquisition geometry, buffer size — is identical across sources within a profile.
 
 ### Sides: 1-sided vs 2-sided
 
@@ -235,16 +255,40 @@ The temp directory is removed in a `finally` block regardless of outcome.
 
 ---
 
+## Protocol probe (three arms)
+
+Three protocol variants ride on port 1865, decided per scan session by `src/protocol-probe.ts`:
+
+1. **TLS handshake** against `1865`. Success → `esci2` (ET-4950 family). The probe socket is destroyed before the real scan begins.
+2. **Plain TCP connect**, await an unsolicited IS-`0x8000` welcome packet within the timeout. The ET-2750 sends one immediately after the TCP handshake completes; ET-4950 also does, but inside TLS, so it's only reachable via this arm if TLS already failed. Success → `esci2-plain`.
+3. **Plain TCP connect**, send `ESC @` (`1b 40`), await a 1-byte `0x06` ACK. Success → `esci` (WF-3620).
+
+If all three arms fail, the dispatcher resolves to `esci` so the legacy scanner's connect path can surface the underlying socket error in a meaningful way (rather than throwing a generic "no protocol matched" message).
+
+Only `esci2` (TLS) results are cached for the daemon's lifetime. The two non-TLS arms re-probe each scan because plain-TCP probes are cheap and a transient ECONNRESET — which can happen mid-handshake against a real ET-4950 too — shouldn't pin a misclassification.
+
+## ESC/I-2 over plain TCP (ET-2750)
+
+A second ESC/I-2 hardware variant — the ET-2750 — uses the same protocol vocabulary as the ET-4950 family **without the TLS layer**. The wire is plain TCP on port 1865; the IS framing, command names, PARA structure, IMG pull loop, and async-event mechanics are otherwise identical. The scanner shell (`runEsci2ScanOverPlain` in `src/esci2/scanner.ts`) shares the protocol graph (`src/esci2/graph.ts`) with the TLS path — the only differences are at the socket factory (`net.connect` instead of `tls.connect`, no cert pinning, no TLS-error label adapter) and a small set of profile-conditional decisions inside the graph.
+
+Wire differences from the ET-4950, decoded from `flatbed-single-page-pdf.pcapng`:
+
+- **No TLS handshake.** The printer sends the welcome IS packet (type `0x8000`) immediately after TCP connect.
+- **Printer-side IS frames carry `0x300C` at offset 4-5** (the data-offset field) rather than `0x000C`. Host-side stays at `0x000C` for everything. Our parser reads only the type and length fields and ignores offset 4-5 on inbound, so this requires no code change.
+- **INIT_POLL runs 2 iterations** (not 3). Profile-conditional in `INIT_POLL_FIN`'s decision; sending a third FS Y after the printer has moved on returns a non-ACK that fails MODE_SWITCH validation.
+- **STAT replies pack a 52-byte filler inline** in a single 64-byte IS frame. The 12-byte ESC/I-2 reply header still declares `length=0`, so the ET-4950 length-based source-detection heuristic would misclassify ET-2750 as ADF. The graph skips the override on `esci2-plain` and trusts the `source: "flatbed"` value from `initialCtx`. ET-2750 hardware is flatbed-only, so this is correct.
+- **PARA flatbed payload is 936 bytes** (vs ET-4950 flatbed's 928): different gamma constant, no `#QITOFF`/`#CCTCOL` block, new inline `#CMXUM08` ICC-matrix block, slightly different `#ACQ` extents. See the [PARA table above](#source-adf-vs-flatbed) for the full row.
+
+The variant is selected by an `Esci2Profile = "esci2-tls" | "esci2-plain"` discriminator threaded through `Esci2Ctx`. The PARA builder dispatches on profile (`buildParaFlatbedTls` vs `buildParaFlatbedPlain`); the scanner shell selects which entry point (`runEsci2Scan` vs `runEsci2ScanOverPlain`) and pre-sets the profile in initial ctx. ET-2750 is flatbed-only hardware — config-time validation rejects `esci2-plain + ESCI_FORCE_SOURCE` and `esci2-plain + PRINTER_CERT_FINGERPRINT` combinations at startup.
+
 ## ESC/I variant (WF-3620)
 
 The WF-3620 (and other 2014-era Epson printers using the same firmware
 generation) speaks **plain TCP on port 1865** with **ESC/I commands**
-inside the same IS framing the ET-4950 uses. The protocol is decided per
-session by `protocol-probe.ts`: a quick TLS handshake against port 1865
-distinguishes the two — TLS success means ESC/I-2, `ERR_SSL_WRONG_VERSION_NUMBER`
-or `ECONNRESET` means ESC/I. Successful ESC/I-2 probes are cached for the
-daemon's lifetime; ESC/I is never cached so a flaky network blip during a
-TLS handshake doesn't pin the wrong scanner.
+inside the same IS framing the ET-4950 uses. It's the third arm of the
+[protocol probe](#protocol-probe-three-arms): when TLS fails and the
+printer doesn't send an IS-`0x8000` welcome on plain TCP, sending `ESC @`
+elicits a 1-byte ACK from a WF-3620-class device.
 
 Key wire differences (full table in
 `.reference/wireshark-captures/wf-3620/protocol-decode.md`):
@@ -361,9 +405,11 @@ Investigation via paired Wireshark captures (one from the Epson driver, one from
 
 `src/esci2/scanner.test.ts` is the regression shield for the ESC/I-2 path. It loads a Frida capture JSONL file, connects the real `runEsci2Scan` state machine to a fake TLS socket that feeds the captured RECV records one-by-one, and asserts that every byte the state machine sends matches the corresponding SEND record from the capture. Any state-machine edit that changes the outgoing byte sequence will fail this test.
 
-The suite runs six parametrized replay entries: the 1p-simplex, 3p-simplex, and 1p-duplex ADF captures in both JPG mode and PDF mode (reusing the same capture data with `action='pdf'`). JPG replay entries assert JPEG files on disk with correct EXIF orientation on back-side pages. PDF replay entries assert a single composed PDF with correct page count and `/Rotate = 180` on back pages.
+The TLS suite runs six parametrized replay entries: the 1p-simplex, 3p-simplex, and 1p-duplex ADF captures in both JPG mode and PDF mode (reusing the same capture data with `action='pdf'`). JPG replay entries assert JPEG files on disk with correct EXIF orientation on back-side pages. PDF replay entries assert a single composed PDF with correct page count and `/Rotate = 180` on back pages.
 
-`src/esci/scanner.test.ts` applies the same replay approach to the WF-3620 ESC/I path using pcap-derived JSONL fixtures (see `tools/pcap-extract/`).
+The same file adds an ET-2750 replay entry (`runEsci2ScanOverPlain` — `esci2-plain` profile) driven by a pcap-extracted JSONL fixture in `tools/pcap-extract/captures/et-2750/`. The fixture is larger than the WF-3620 ones (~3.9 MB vs ~80 KB each) because ET-2750's IMG cycles wrap pixel data in `0xa000` ESC/I-2 frames — there's no `0xa200` image-stream summary path to fold the chunks into a single record like the WF-3620 fixtures use.
+
+`src/esci/scanner.test.ts` applies the same replay approach to the WF-3620 ESC/I path using pcap-derived JSONL fixtures in `tools/pcap-extract/captures/wf-3620/`.
 
 Because the protocol was built from these captures, the replay tests are both regression tests and specifications: each state machine is, by construction, correct if and only if it produces the exact byte sequence that the Windows driver produced on the same printer.
 
@@ -371,28 +417,37 @@ Because the protocol was built from these captures, the replay tests are both re
 
 ## Code layout
 
-| File                      | Responsibility                                                             |
-| ------------------------- | -------------------------------------------------------------------------- |
-| `src/index.ts`            | Service entry point — wires together all modules and starts the event loop |
-| `src/config.ts`           | Zod-validated configuration from environment variables                     |
-| `src/keepalive.ts`        | UDP multicast listener and keepalive responder                             |
-| `src/pushscan.ts`         | TCP server for push-scan trigger, SOAP parsing, x-uid echo                 |
-| `src/esci2/scanner.ts`    | ESC/I-2 TLS scan session state machine                                     |
-| `src/esci2/commands.ts`   | ESC/I-2 command builders, PARA payload blobs, reply parsers                |
-| `src/commands-fs.ts`      | Legacy 2-byte `FS Y` / `FS X` / `FS Z` builders shared by both protocols   |
-| `src/esci/scanner.ts`     | ESC/I plain-TCP scan session state machine                                 |
-| `src/esci/commands.ts`    | ESC/I command builders and reply parsers                                   |
-| `src/graph-helpers.ts`    | Shared graph-state helpers (`expectIsType`, `expectLength`, `ackByte`)     |
-| `src/esci/luts.ts`        | Gamma LUT tables for the ESC/I scan path                                   |
-| `src/esci/raw-to-jpeg.ts` | Raw 24-bit RGB → JPEG encoding via sharp                                   |
-| `src/protocol.ts`         | IS-frame encode/decode, lock/unlock/passthru/pureread packet builders      |
-| `src/exif.ts`             | JPEG EXIF APP1 injection for back-side orientation                         |
-| `src/pdf.ts`              | PDF composition from per-page JPEGs using pdf-lib                          |
-| `src/output.ts`           | Output filename generation and temp-file promotion                         |
-| `src/health.ts`           | HTTP health-check endpoint on port 3000                                    |
-| `src/logger.ts`           | Hand-rolled structured logger; text or JSON output via `LOG_FORMAT`        |
-| `src/lifecycle.ts`        | Graceful shutdown coordination                                             |
-| `src/network.ts`          | Resolves the local IP that can reach the printer (UDP `connect()` trick)   |
+| File                      | Responsibility                                                                                                |
+| ------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `src/index.ts`            | Service entry point — long-running daemon. Wires modules together and starts the event loop.                  |
+| `src/one-shot.ts`         | One-shot CLI variant of the daemon (`npm run scan`). Same wire behaviour, exits after the first scan.         |
+| `src/startup.ts`          | Startup banner + scan dispatcher: routes each push-scan to the right scanner shell based on detected variant. |
+| `src/config.ts`           | Zod-validated configuration from environment variables.                                                       |
+| `src/keepalive.ts`        | UDP multicast listener and keepalive responder.                                                               |
+| `src/pushscan.ts`         | TCP server for push-scan trigger, SOAP parsing, x-uid echo.                                                   |
+| `src/protocol.ts`         | IS-frame encode/decode, lock/unlock/passthru/pureread packet builders.                                        |
+| `src/protocol-probe.ts`   | Three-arm probe (TLS → plain-TCP-await-`0x8000` → `ESC @` ACK) classifying each scan's protocol variant.      |
+| `src/scan-session.ts`     | Generic graph-driven scan-session engine. Walks a `Graph<Ctx>` one IS packet at a time; protocol-blind.       |
+| `src/esci2/scanner.ts`    | Orchestration shell for the ESC/I-2 path (TLS + plain-TCP entry points). Builds the transport, calls engine.  |
+| `src/esci2/graph.ts`      | ESC/I-2 protocol graph (states, transitions, PARA dispatch). Driven by `src/scan-session.ts`.                 |
+| `src/esci2/commands.ts`   | ESC/I-2 command builders, PARA payload blobs (TLS + plain), reply parsers.                                    |
+| `src/esci2/transport.ts`  | TLS-error-label and ESC/I-2 unlock-on-destroy adapters that wrap a raw socket as a `SessionTransport`.        |
+| `src/esci/scanner.ts`     | Orchestration shell for the WF-3620 ESC/I path. Plain TCP, no transport adapters.                             |
+| `src/esci/graph.ts`       | ESC/I (WF-3620) protocol graph.                                                                               |
+| `src/esci/commands.ts`    | ESC/I command builders and reply parsers.                                                                     |
+| `src/esci/luts.ts`        | Gamma LUT tables for the ESC/I scan path.                                                                     |
+| `src/esci/raw-to-jpeg.ts` | Raw 24-bit RGB → JPEG encoding via sharp (ESC/I path only).                                                   |
+| `src/commands-fs.ts`      | Legacy 2-byte `FS Y` / `FS X` / `FS Z` builders shared by both protocols.                                     |
+| `src/graph-helpers.ts`    | Shared graph-state helpers (`expectIsType`, `expectLength`, `ackByte`).                                       |
+| `src/exif.ts`             | JPEG EXIF APP1 injection for back-side orientation.                                                           |
+| `src/pdf.ts`              | PDF composition from per-page JPEGs using pdf-lib.                                                            |
+| `src/output.ts`           | Output filename generation and temp-file promotion.                                                           |
+| `src/output-tail.ts`      | End-of-scan finalize pipeline: JPG promote / PDF compose, EXIF / `/Rotate` injection, Paperless upload.       |
+| `src/paperless-upload.ts` | Paperless-ngx HTTP upload + post-upload local-file cleanup (when `PAPERLESS_URL` + `PAPERLESS_TOKEN` set).    |
+| `src/health.ts`           | HTTP health-check endpoint on port 3000.                                                                      |
+| `src/logger.ts`           | Hand-rolled structured logger; text or JSON output via `LOG_FORMAT`.                                          |
+| `src/lifecycle.ts`        | Graceful shutdown coordination.                                                                               |
+| `src/network.ts`          | Resolves the local IP that can reach the printer (UDP `connect()` trick).                                     |
 
 Test files mirror the module they cover (`src/esci2/scanner.test.ts`, `src/esci/scanner.test.ts`, `src/keepalive.test.ts`, etc.). The replay test harness support code lives in `src/esci2/test-support/` and `src/esci/test-support/`.
 
@@ -409,7 +464,7 @@ Reverse-engineering artifacts:
 
 ## Testing
 
-The test suite uses Vitest and runs with `npm test` (298 tests across 19 files, completing in roughly 5 seconds).
+The test suite uses Vitest and runs with `npm test` (481 tests across 25 files, completing in roughly 5 seconds).
 
 **The replay harnesses** are the most important test files. `src/esci2/scanner.test.ts` instantiates the real `runEsci2Scan` function with a fake TLS socket factory. The fake socket replays the RECV side of a Frida capture (the bytes the printer sent), advancing one IS packet at a time, and records every byte the state machine sends. After the session completes, the test asserts byte-for-byte equality against the SEND side of the capture. On-disk output files are also asserted — JPEG files for JPG-mode runs (including EXIF orientation verification), and a composed PDF for PDF-mode runs (including page count and `/Rotate` metadata on back pages). `src/esci/scanner.test.ts` applies the same approach to the WF-3620 ESC/I path using pcap-derived JSONL fixtures.
 
