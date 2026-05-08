@@ -47,7 +47,7 @@ The SOAP body's `<PushScanIDIn>` element is the only channel through which the p
 
 The service must reply with an HTTP 200 OK. The response must echo the request's `x-uid` header value verbatim. The printer increments this counter on each scan and uses it to verify the response came from the correct session. A mismatched `x-uid` causes the printer to display "Scanning Error" on the panel after the scan completes — even though the scan data transfers correctly and the output file is produced. This is a panel-state signal, not a data-integrity issue; the root cause and fix are documented in the panel-error investigation (see Reverse Engineering below).
 
-After the push-scan response is sent, the service parses the `PushScanIDIn` value and opens a TLS session to the printer on port 1865. The push-scan TCP connection is then closed with a FIN (not RST — using RST causes the printer to tear down its end aggressively).
+After the push-scan response is sent, the service parses the `PushScanIDIn` value and opens the scan-session connection to the printer on port 1865. In `PRINTER_PROTOCOL=auto` mode the dispatcher probes that port first and chooses the TLS ESC/I-2, plain-TCP ESC/I-2, or legacy ESC/I scanner. The push-scan TCP connection is then closed with a FIN (not RST — using RST causes the printer to tear down its end aggressively).
 
 Implemented in `src/pushscan.ts`. `parsePushScanRequest` extracts the SOAP fields; `buildPushScanResponse` constructs the echoed response; `resolveEffectiveAction` maps the raw action bitmask to one of `jpg`, `pdf`, or `preview`, applying the `PREVIEW_ACTION` env-var gate (default: reject preview silently; `jpg`/`pdf` redirect it to a real scan).
 
@@ -77,7 +77,8 @@ The packet type field determines the semantics of the payload:
 | 0x8000 | Printer → host | Welcome — first packet after TLS handshake              |
 | 0x9000 | Printer → host | Async event (scan start, cancel, timeout, error)        |
 | 0xa000 | Printer → host | Passthru data reply (response to a command)             |
-| 0xa100 | Printer → host | Lock / unlock acknowledgement                           |
+| 0xa100 | Printer → host | Lock acknowledgement                                    |
+| 0xa101 | Printer → host | Unlock acknowledgement                                  |
 | 0x2000 | Host → printer | Passthru command (sends a command, declares reply size) |
 | 0x2100 | Host → printer | Lock request                                            |
 | 0x2101 | Host → printer | Unlock request                                          |
@@ -110,11 +111,11 @@ The command bytes are either:
 
 ESC/I-2 command builders are in `src/esci2/commands.ts`. The legacy 2-byte initialization commands (`buildFsY`, `buildFsX`, `buildFsZ`) live in `src/commands-fs.ts` and are shared with the WF-3620 ESC/I path (which uses `buildFsY` for the `DIAGNOSE_PROTOCOL` probe). `buildEsci2Command` builds the generic 12-byte ESC/I-2 header. `buildParaHeader` and `buildParaPayload` build the two PARA phases. Reply parsing is done by `parseEsci2ReplyHeader` (extracts the 12-byte reply header's `cmd` and `length` fields) and `parseTokens` (splits the `#KEY value` token stream from reply bodies).
 
-The SANE `epsonds` backend provides a useful cross-reference: its passthru framing — IS header layout, `0x000C` data offset, 8-byte data header with `cmd_size` / `reply_size` — is byte-identical to what the ET-4950 expects. However, `epsonds` targets older scanners that do not require the legacy ESC/I initialization loop before ESC/I-2 commands. The ET-4950's firmware requires `FS Y → STAT → FIN` polling repeated until the printer reports ready, followed by a `FS X` mode switch, before any ESC/I-2 command will be accepted.
+The SANE `epsonds` backend provides a useful cross-reference: its passthru framing — IS header layout, `0x000C` data offset, 8-byte data header with `cmd_size` / `reply_size` — is byte-identical to what the ET-4950 expects. However, `epsonds` targets older scanners that do not require the legacy ESC/I initialization loop before ESC/I-2 commands. The ET-4950's firmware requires a legacy preamble (`FS Y` / `FS Z`, then repeated `FS Y → STAT → FIN` polling, then `FS X`) before the scan-parameter and image-transfer half of the session will be accepted.
 
 #### Capability discovery cycles
 
-After the mode switch, the driver performs two capability discovery cycles, each consisting of an `INFO` query followed by a `CAPA` query. (The `@` prefix in the Frida capture naming convention is not a wire prefix — the actual command bytes on the wire are `INFOx0000000` and `CAPAx0000000` in the ESC/I-2 format.) A final `RESA` (resolution announce) command is sent before `PARA`. These cycles appear in the Frida captures with consistent counts across all scan scenarios (2 × INFO, 2 × CAPA, 1 × RESA), which suggests they are mandatory initialization steps rather than optional feature queries.
+During the pre-mode-switch init sequence, the driver performs two capability discovery cycles. The first follows the initial `FS Y` ACK and sends `INFO → CAPA → FIN`; the second follows the `FS Z` ACK and sends `INFO → CAPA → RESA → FIN`. (The `@` prefix in the Frida capture naming convention is not a wire prefix — the actual command bytes on the wire are `INFOx0000000` and `CAPAx0000000` in the ESC/I-2 format.) These cycles appear in the Frida captures with consistent counts across all scan scenarios (2 × INFO, 2 × CAPA, 1 × RESA), which suggests they are mandatory initialization steps rather than optional feature queries.
 
 The INFO and CAPA replies declare the scanner's capabilities — supported resolutions, color modes, document sources, and similar parameters. In a host-initiated (pull-scan) flow — how the vendor driver's own UI works — these values would populate a scan dialog. In the push-scan flow implemented here, the replies are consumed and discarded; the PARA payload is hardcoded from the Frida capture rather than being dynamically constructed from capability discovery. This is a deliberate simplification: the ET-4950's capabilities are fixed for the scanning parameters used (300 dpi, color, JPEG), and adding runtime capability negotiation would require additional Frida captures and reverse-engineering work without changing the end result.
 
@@ -137,9 +138,14 @@ LOCKING          ← receive IS 0xa100 lock ack (expect 0x06)
     │
     ▼
 INIT1_FS_Y       ← send FS Y (legacy 2-byte), await 1-byte ACK
+INIT1_INFO       ← send INFO, drain declared capability body
+INIT1_CAPA       ← send CAPA, drain declared capability body
 INIT1_FIN        ← send FIN, await 64-byte reply
     │
 INIT2_FS_Z       ← send FS Z (legacy 2-byte), await 1-byte ACK
+INIT2_INFO       ← send INFO, drain declared capability body
+INIT2_CAPA       ← send CAPA, drain declared capability body
+INIT2_RESA       ← send RESA, drain declared resolution body
 INIT2_FIN        ← send FIN, await 64-byte reply
     │
 INIT_POLL × 3 (or × 2 on esci2-plain):
@@ -172,7 +178,7 @@ FIN_AFTER_IMG    ← send FIN, await reply
   └───────────────────────────────────────────────────────────────────┘
   (flatbed skips POSTSCAN entirely)
     │
-UNLOCKING        ← send Unlock (IS 0x2101), await IS 0xa100 ack
+UNLOCKING        ← send Unlock (IS 0x2101), await IS 0xa101 ack
     │
 DONE             ← compose/promote output files, then resolve
 ```
@@ -224,7 +230,7 @@ The PARA payload differs by source and protocol profile:
 | Flatbed      | `esci2-tls`   | `#FB `     | (omitted)    | `0000000`   | `0x3A0` (928 B)  |
 | Flatbed      | `esci2-plain` | `#FB `     | (omitted)    | `0000000`   | `0x3A8` (936 B)  |
 
-The four ET-4950 (`esci2-tls`) variants are hardcoded in `src/esci2/commands.ts` from byte-for-byte Frida captures. The ET-2750 (`esci2-plain`) flatbed blob is also in `src/esci2/commands.ts` and is byte-transcribed from a pcap capture (see `tools/pcap-extract/captures/et-2750/`); it differs from the ET-4950 flatbed blob by more than length — different gamma constant (`#GMMUG18` vs `#GMMUG10`), no `#QITOFF`/`#CCTCOL` block, new inline `#CMXUM08` ICC-matrix block, slightly different `#ACQ` extents — so it could not be derived by editing the ET-4950 blob.
+The three ET-4950 (`esci2-tls`) variants are hardcoded in `src/esci2/commands.ts` from byte-for-byte Frida captures. The ET-2750 (`esci2-plain`) flatbed blob is also in `src/esci2/commands.ts` and is byte-transcribed from a pcap capture (see `tools/pcap-extract/captures/et-2750/`); it differs from the ET-4950 flatbed blob by more than length — different gamma constant (`#GMMUG18` vs `#GMMUG10`), no `#QITOFF`/`#CCTCOL` block, new inline `#CMXUM08` ICC-matrix block, slightly different `#ACQ` extents — so it could not be derived by editing the ET-4950 blob.
 
 The rest of the PARA blob — three gamma correction tables, color correction matrix, acquisition geometry, buffer size — is identical across sources within a profile.
 
@@ -313,18 +319,17 @@ pipeline.
 ### Source selection (ESC/I)
 
 The PushScan SOAP carries `duplex` and `action` (Sides + Format) but no
-explicit ADF-vs-flatbed selector. v1 ships a simpler mapping than the
-Windows driver's probe-and-fallback:
+explicit ADF-vs-flatbed selector. The legacy graph probes with `ESC e 0x01`
+and reads the following `FS F` status reply to detect the physical source:
 
-| Panel selection | ESC/I source  |
-| --------------- | ------------- |
-| 2-paged: On     | `adf-duplex`  |
-| 2-paged: Off    | `adf-simplex` |
+| `FS F` status byte | ESC/I source                           |
+| ------------------ | -------------------------------------- |
+| `0x81`             | `flatbed`                              |
+| `0x01`             | `adf-simplex` or `adf-duplex` by panel |
 
 Setting `ESCI_FORCE_SOURCE=flatbed` (or `adf-simplex` / `adf-duplex`)
-overrides the mapping. **Future work**: mirror the driver's probe-and-
-fallback (ESC e 0x01 → FS F → bit-7 of byte 0 selects ADF vs flatbed)
-so the panel button auto-detects without env-var configuration.
+overrides the detected value for edge cases whose status byte has not been
+captured yet.
 
 ### Multi-page termination
 
@@ -387,7 +392,7 @@ The PDF capture was particularly diagnostic: its TLS payload is byte-identical t
 
 Ghidra static analysis of `ES2Command.dll` (32-bit x86) provided the semantic layer that the Frida captures alone could not: function names, the IS type-code map, the async-event dispatch table, the lock-packet payload format, and the dual command-stack architecture (legacy ESC/I and ESC/I-2 co-existing over the same IS framing). The key findings were:
 
-- The complete IS type-code table (`0x8000` welcome, `0x9000` async event, `0xa000` passthru reply, `0xa100` lock/unlock ack, `0x2000` passthru request, `0x2100`/`0x2101` lock/unlock). These are not documented anywhere publicly; Ghidra's decompilation of `CISProtocolStream::CheckEvent` and its dispatcher made them explicit.
+- The complete IS type-code table (`0x8000` welcome, `0x9000` async event, `0xa000` passthru reply, `0xa100` lock ack, `0xa101` unlock ack, `0x2000` passthru request, `0x2100`/`0x2101` lock/unlock). These are not documented anywhere publicly; Ghidra's decompilation of `CISProtocolStream::CheckEvent` and its dispatcher made them explicit.
 - The async-event dispatch byte table in `CISProtocolStream::DidReceiveAsyncEvent` — specifically that `0xa0` is `ServerError`, which the driver treats as an unrecoverable error requiring session teardown. Early implementation attempts received `IS 0x9000` + `0xa0` on every session and interpreted it as a "write acknowledge" needing a follow-up read, which was incorrect. Ghidra definitively resolved this: `0x9000`/`0xa0` means the printer has rejected the session and will close the connection; there is no recovery.
 - The lock-packet payload format: 7 bytes, `01 a0 04 <timeout_BE_u32>`. This exact payload is in `buildLockPacket` in `src/protocol.ts`.
 - The existence of two parallel command stacks: `CESCI2Command` for ESC/I-2 text commands and `CESCICommand` for legacy binary ESC/I — both multiplexed through `CISProtocolStream` over the same IS type `0x2000` envelope. This explained why the scanner needs to speak both command languages in a single session.
@@ -464,7 +469,7 @@ Reverse-engineering artifacts:
 
 ## Testing
 
-The test suite uses Vitest and runs with `npm test` (481 tests across 25 files, completing in roughly 5 seconds).
+The test suite uses Vitest and runs with `npm test` (481 passing tests plus 1 skipped test across 25 files, completing in roughly 5 seconds).
 
 **The replay harnesses** are the most important test files. `src/esci2/scanner.test.ts` instantiates the real `runEsci2Scan` function with a fake TLS socket factory. The fake socket replays the RECV side of a Frida capture (the bytes the printer sent), advancing one IS packet at a time, and records every byte the state machine sends. After the session completes, the test asserts byte-for-byte equality against the SEND side of the capture. On-disk output files are also asserted — JPEG files for JPG-mode runs (including EXIF orientation verification), and a composed PDF for PDF-mode runs (including page count and `/Rotate` metadata on back pages). `src/esci/scanner.test.ts` applies the same approach to the WF-3620 ESC/I path using pcap-derived JSONL fixtures.
 
