@@ -1,19 +1,5 @@
-import type net from "node:net";
-import type tls from "node:tls";
 import type { SessionTransport } from "../scan-session.js";
 import { buildUnlockPacket } from "../protocol.js";
-
-/**
- * Bridges a raw Node socket (`net.Socket` / `tls.TLSSocket`) onto the
- * engine's `SessionTransport` interface. Both socket types already
- * structurally implement `write` / `end(data?)` / `destroy(err?)` / `on`,
- * so the cast is safe; the named function makes the boundary explicit and
- * gives the wrappers below a single place to reason about "this is the
- * raw-socket leaf of the transport stack."
- */
-export function socketAsTransport(socket: net.Socket | tls.TLSSocket): SessionTransport {
-  return socket as unknown as SessionTransport;
-}
 
 /**
  * Adds TLS-flavoured error handling on top of any `SessionTransport`:

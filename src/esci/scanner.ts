@@ -3,13 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import {
   runScanSession,
+  socketAsTransport,
   type SessionTransport,
   type SessionTransportFactory,
 } from "../scan-session.js";
 import { resolveSessionTimestamp } from "../output.js";
 import { esciGraph, type EsciCtx } from "./graph.js";
 import type { Source, Format } from "./commands.js";
-import { socketAsTransport } from "../esci2/transport.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
 
 export { appendImageChunk } from "./graph.js";

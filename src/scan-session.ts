@@ -1,8 +1,10 @@
 // src/scan-session.ts
 
 import * as fs from "node:fs";
+import type * as net from "node:net";
 import * as os from "node:os";
 import * as path from "node:path";
+import type * as tls from "node:tls";
 import { IS_HEADER_SIZE } from "./protocol.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 
@@ -30,6 +32,21 @@ export interface SessionTransport {
   on(event: "data", cb: (chunk: Buffer) => void): this;
   on(event: "error", cb: (err: Error) => void): this;
   on(event: "close", cb: (hadError?: boolean) => void): this;
+}
+
+/**
+ * Bridges a raw Node socket (`net.Socket` / `tls.TLSSocket`) onto the
+ * engine's `SessionTransport` interface. Both socket types already
+ * structurally implement `write` / `end(data?)` / `destroy(err?)` / `on`,
+ * so the cast is safe; the named function makes the boundary explicit
+ * and gives wrapper modules a single place to reason about "this is the
+ * raw-socket leaf of the transport stack." Lives here (next to
+ * `SessionTransport`) rather than in any single protocol's transport
+ * module so neither protocol has to import across the boundary to
+ * reach it.
+ */
+export function socketAsTransport(socket: net.Socket | tls.TLSSocket): SessionTransport {
+  return socket as unknown as SessionTransport;
 }
 
 // =============================================================================

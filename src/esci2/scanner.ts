@@ -3,12 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import {
   runScanSession,
+  socketAsTransport,
   type SessionTransport,
   type SessionTransportFactory,
 } from "../scan-session.js";
 import { resolveSessionTimestamp } from "../output.js";
 import { esci2Graph, type Esci2Ctx } from "./graph.js";
-import { socketAsTransport, withEsci2UnlockOnDestroy, withTlsErrorLabels } from "./transport.js";
+import { withEsci2UnlockOnDestroy, withTlsErrorLabels } from "./transport.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
 
 export interface ScanSession {
