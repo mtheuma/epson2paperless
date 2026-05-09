@@ -1,10 +1,15 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 
-// IPv4 dotted-quad — each octet bounded to 0-255. Leading zeros allowed
-// for compatibility with operators who paste pre-formatted addresses.
+// IPv4 dotted-quad — each octet bounded to 0-255 with no leading zeros on
+// multi-digit values. Leading zeros are rejected at this layer because
+// Node's `dgram.connect()` does NOT treat strings like `001.002.003.004`
+// as IPv4 literals — it silently picks `0.0.0.0` as the local interface,
+// and `getLocalIpForTarget()` returns `0.0.0.0` rather than failing
+// loudly. Catching them here surfaces a clear "must be a valid IPv4
+// address" error at startup instead of a confusing late binding failure.
 const ipv4Regex =
-  /^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+  /^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/;
 
 const configSchema = z
   .object({

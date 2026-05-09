@@ -81,6 +81,13 @@ describe("loadConfig", () => {
     ["1.2.3", "only three octets"],
     ["1.2.3.4.5", "five components"],
     ["", "empty string"],
+    // Leading zeros: Node's dgram.connect() silently resolves these to
+    // 0.0.0.0 instead of the intended address, so a confusing "binds to
+    // 0.0.0.0" failure appears later in network.ts rather than a clear
+    // startup error. Reject at the config layer instead.
+    ["001.002.003.004", "leading zeros on every octet"],
+    ["192.168.01.1", "leading zero in third octet"],
+    ["010.0.0.1", "leading zero in first octet"],
   ])("rejects PRINTER_IP=%s (%s)", (value) => {
     process.env.PRINTER_IP = value;
     expect(() => loadConfig()).toThrow(/PRINTER_IP/);
