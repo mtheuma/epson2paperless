@@ -110,17 +110,32 @@ class FakeNetSocket extends EventEmitter {
   }
 }
 
-/** Build an `IS` welcome frame: 12-byte header, type=0x8000, payload size 5. */
-function welcomeBytes(): Buffer {
+/**
+ * Build an `IS` welcome frame: 12-byte header, type=0x8000, payload size 5.
+ * Payload shape matches real fixtures: `01 <discriminator> 00 00 00`.
+ * The discriminator sits at payload[1] / frame offset 13 — verified against
+ *   - `tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl`
+ *     line 1: `49538000300c0000000500000104000000` (discriminator = 0x04)
+ *   - `tools/pcap-extract/captures/wf-3620/*.jsonl` line 1
+ *     (e.g. `adf-single-page-jpeg.jsonl`):
+ *     `49538000300c0000000500000102000000` (discriminator = 0x02)
+ */
+function welcomeBytes(discriminator: number = 0x04): Buffer {
   const header = Buffer.alloc(12);
   header[0] = 0x49;
   header[1] = 0x53;
   header.writeUInt16BE(0x8000, 2);
   header.writeUInt16BE(0x300c, 4);
   header.writeUInt32BE(5, 6);
-  const payload = Buffer.from([0x00, 0x00, 0x01, 0x04, 0x00]);
+  const payload = Buffer.from([0x01, discriminator, 0x00, 0x00, 0x00]);
   return Buffer.concat([header, payload]);
 }
+
+/** Real fixture welcomes — load the literal first line from each pcap fixture
+ * and feed THOSE bytes through the probe. Anchors the test to wire reality so
+ * an off-by-one in `welcomeBytes()` (or in the probe) can't go undetected. */
+const WF3620_REAL_WELCOME_HEX = "49538000300c0000000500000102000000";
+const ET2750_REAL_WELCOME_HEX = "49538000300c0000000500000104000000";
 
 /** Install a `net.connect` mock that hands out the given fakes in order. */
 function mockNetConnect(...fakes: FakeNetSocket[]): void {
@@ -187,6 +202,67 @@ describe("protocol-probe", () => {
       port: 1865,
       override: "auto",
       timeoutMs: 100,
+    });
+    expect(variant).toBe("esci2-plain");
+  });
+
+  it("returns esci when TLS fails and plain-TCP welcome carries the WF-3620 discriminator (synthetic frame)", async () => {
+    // Regression guard: a real WF-3620 emits an unsolicited 0x8000 welcome
+    // on plain TCP (every wf-3620 fixture under tools/pcap-extract/captures/
+    // begins with one). The plain-esci2 arm must reject it on the
+    // payload[1] discriminator and fall through to the legacy ESC @ probe.
+    vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
+    mockNetConnect(
+      new FakeNetSocket({ kind: "welcome", bytes: welcomeBytes(0x02) }), // WF-3620 shape
+      new FakeNetSocket({ kind: "ack", bytes: Buffer.from([0x06]) }), // legacy probe ACKs
+    );
+
+    const variant = await detectVariant({
+      printerIp: "10.0.0.9",
+      port: 1865,
+      override: "auto",
+      timeoutMs: 50,
+    });
+    expect(variant).toBe("esci");
+  });
+
+  it("returns esci when fed the actual WF-3620 fixture welcome bytes (wire-anchored regression)", async () => {
+    // Strongest anchor: feed the literal first IS frame from a committed
+    // WF-3620 pcap-extract fixture into the probe. If `welcomeBytes()` ever
+    // drifts off by a byte (or the probe reads the wrong offset), this
+    // test fails because synthetic and real shapes diverge.
+    vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
+    mockNetConnect(
+      new FakeNetSocket({
+        kind: "welcome",
+        bytes: Buffer.from(WF3620_REAL_WELCOME_HEX, "hex"),
+      }),
+      new FakeNetSocket({ kind: "ack", bytes: Buffer.from([0x06]) }),
+    );
+
+    const variant = await detectVariant({
+      printerIp: "10.0.0.10",
+      port: 1865,
+      override: "auto",
+      timeoutMs: 50,
+    });
+    expect(variant).toBe("esci");
+  });
+
+  it("returns esci2-plain when fed the actual ET-2750 fixture welcome bytes (wire-anchored regression)", async () => {
+    vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
+    mockNetConnect(
+      new FakeNetSocket({
+        kind: "welcome",
+        bytes: Buffer.from(ET2750_REAL_WELCOME_HEX, "hex"),
+      }),
+    );
+
+    const variant = await detectVariant({
+      printerIp: "10.0.0.11",
+      port: 1865,
+      override: "auto",
+      timeoutMs: 50,
     });
     expect(variant).toBe("esci2-plain");
   });
