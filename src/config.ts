@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 
-const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
+// IPv4 dotted-quad — each octet bounded to 0-255. Leading zeros allowed
+// for compatibility with operators who paste pre-formatted addresses.
+const ipv4Regex =
+  /^((25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
 
 const configSchema = z
   .object({

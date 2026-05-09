@@ -69,6 +69,34 @@ describe("loadConfig", () => {
     expect(() => loadConfig()).toThrow();
   });
 
+  // Table-driven octet-range checks. The earlier regex `(\d{1,3}\.){3}\d{1,3}`
+  // accepted any 4-component dotted decimal regardless of octet value; that
+  // let `999.999.999.999` and similar through, only failing later at socket
+  // connect time with a far less helpful error. The tightened regex bounds
+  // each octet to 0-255 at config validation.
+  it.each([
+    ["256.0.0.0", "octet just above max"],
+    ["999.999.999.999", "all-out-of-range"],
+    ["0.0.0.300", "trailing octet over 255"],
+    ["1.2.3", "only three octets"],
+    ["1.2.3.4.5", "five components"],
+    ["", "empty string"],
+  ])("rejects PRINTER_IP=%s (%s)", (value) => {
+    process.env.PRINTER_IP = value;
+    expect(() => loadConfig()).toThrow(/PRINTER_IP/);
+  });
+
+  it.each([
+    ["0.0.0.0", "all zeros"],
+    ["255.255.255.255", "all max"],
+    ["192.168.1.1", "common LAN"],
+    ["10.0.0.255", "broadcast-end"],
+  ])("accepts PRINTER_IP=%s (%s)", (value) => {
+    process.env.PRINTER_IP = value;
+    const config = loadConfig();
+    expect(config.printerIp).toBe(value);
+  });
+
   it("defaults previewAction to 'reject'", () => {
     process.env.PRINTER_IP = "192.0.2.58";
     const config = loadConfig();
