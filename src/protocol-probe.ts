@@ -118,7 +118,8 @@ function probeTls(host: string, port: number, timeoutMs: number): Promise<boolea
 }
 
 /** WF-3620 family discriminator at IS-`0x8000` payload byte 2 (frame offset 14).
- * Stable across 11 captured WF-3620 sessions; ET-2750 emits `0x04` here. */
+ * Stable across every committed WF-3620 fixture in
+ * `tools/pcap-extract/captures/wf-3620/`; ET-2750 emits `0x04` here. */
 const WF3620_WELCOME_DISCRIMINATOR = 0x02;
 
 /**
@@ -133,10 +134,11 @@ const WF3620_WELCOME_DISCRIMINATOR = 0x02;
  * Returns true on any `0x8000` welcome whose payload byte 2 is NOT the
  * WF-3620 marker; false on the WF-3620 marker, timeout, connection
  * refused, peer RST, or any other inbound type. The negative-form check
- * is deliberate: we have one ET-2750 capture but eleven WF-3620 captures,
- * so the WF-3620 byte is the better-evidenced anchor. A future ET-2750-
- * class device that emits something other than `0x04` here is still
- * accepted, as long as it isn't the WF-3620 shape.
+ * is deliberate: the WF-3620 byte is consistent across every committed
+ * WF-3620 fixture, while we have only one ET-2750 capture, so the WF-3620
+ * byte is the better-evidenced anchor. A future ET-2750-class device that
+ * emits something other than `0x04` here is still accepted, as long as
+ * it isn't the WF-3620 shape.
  */
 function probePlainEsci2(host: string, port: number, timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {

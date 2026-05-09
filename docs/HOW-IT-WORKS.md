@@ -49,7 +49,7 @@ The service must reply with an HTTP 200 OK. The response must echo the request's
 
 The service parses the `PushScanIDIn` value from the request body, sends the HTTP 200 OK response, and half-closes the push-scan TCP connection with a FIN (not RST — using RST causes the printer to tear down its end aggressively). Once that response has been written, the daemon's callback opens the scan-session connection to the printer on port 1865. In `PRINTER_PROTOCOL=auto` mode the dispatcher probes that port first and chooses the TLS ESC/I-2, plain-TCP ESC/I-2, or legacy ESC/I scanner.
 
-Implemented in `src/pushscan.ts`. `parsePushScanRequest` extracts the SOAP fields; `buildPushScanResponse` constructs the echoed response; `resolveEffectiveAction` maps the raw action bitmask to one of `jpg`, `pdf`, or `preview`, applying the `PREVIEW_ACTION` env-var gate (default: reject preview silently; `jpg`/`pdf` redirect it to a real scan).
+Implemented in `src/pushscan.ts`. `parsePushScanRequest` extracts the SOAP fields; `buildPushScanResponse` constructs the echoed response. Action handling is two-stage: `computeActionFromId` decodes the raw `PushScanIDIn` action bitmask into one of `jpg`, `pdf`, `preview`, or `unknown`; `resolveEffectiveAction` then applies the `PREVIEW_ACTION` env-var gate and returns `jpg`, `pdf`, or `null` (default: reject preview silently → `null`; `PREVIEW_ACTION=jpg`/`pdf` redirects preview into a real scan).
 
 ### The scan session (TLS + ESC/I-2 over "IS" framing)
 
@@ -281,10 +281,10 @@ The temp directory is removed in a `finally` block regardless of outcome.
 Three protocol variants ride on port 1865, decided per scan session by `src/protocol-probe.ts`:
 
 1. **TLS handshake** against `1865`. Success → `esci2` (ET-4950 family). The probe socket is destroyed before the real scan begins.
-2. **Plain TCP connect**, await an unsolicited IS-`0x8000` welcome packet within the timeout, then disambiguate by the welcome's payload byte 2: WF-3620 emits `0x02` here on every captured session (n=11) and is rejected; the ET-2750 emits `0x04` and is accepted. The ET-4950 also sends a welcome immediately, but only inside its TLS tunnel — connecting to an ET-4950 over plain TCP yields no `0x8000` and the arm times out. Success → `esci2-plain`.
+2. **Plain TCP connect**, await an unsolicited IS-`0x8000` welcome packet within the timeout, then disambiguate by the welcome's payload byte 2: WF-3620 emits `0x02` here on every committed WF-3620 fixture and is rejected; the ET-2750 emits `0x04` and is accepted. The ET-4950 also sends a welcome immediately, but only inside its TLS tunnel — connecting to an ET-4950 over plain TCP yields no `0x8000` and the arm times out. Success → `esci2-plain`.
 3. **Plain TCP connect**, send `ESC @` (`1b 40`), await a 1-byte `0x06` ACK. Success → `esci` (WF-3620).
 
-The byte-2 discriminator in arm 2 is the load-bearing piece: a real WF-3620 also sends an unsolicited `0x8000` welcome on plain TCP (a misconception in the original probe design said it stayed silent until prompted), so welcomes alone don't separate the two families. The check is encoded as a negative — accept any `0x8000` whose payload[2] is NOT the WF-3620 byte — because the WF-3620 anchor has 11 captures backing it while the ET-2750 anchor has only one, so a hypothetical future ET-2750-class device that emits a different byte at payload[2] would still be accepted.
+The byte-2 discriminator in arm 2 is the load-bearing piece: a real WF-3620 also sends an unsolicited `0x8000` welcome on plain TCP (a misconception in the original probe design said it stayed silent until prompted), so welcomes alone don't separate the two families. The check is encoded as a negative — accept any `0x8000` whose payload[2] is NOT the WF-3620 byte — because the WF-3620 anchor is well-supported (the byte is `0x02` across every committed WF-3620 fixture) while the ET-2750 anchor has only one capture, so a hypothetical future ET-2750-class device that emits a different byte at payload[2] would still be accepted.
 
 If all three arms fail, the dispatcher resolves to `esci` so the legacy scanner's connect path can surface the underlying socket error in a meaningful way (rather than throwing a generic "no protocol matched" message).
 
@@ -464,7 +464,7 @@ The TLS replay's byte-for-byte guarantee is the strongest regression shield in t
 | `src/esci/graph.ts`       | ESC/I (WF-3620) protocol graph.                                                                                                                                                                                                              |
 | `src/esci/commands.ts`    | ESC/I command builders and reply parsers.                                                                                                                                                                                                    |
 | `src/esci/luts.ts`        | Gamma LUT tables for the ESC/I scan path.                                                                                                                                                                                                    |
-| `src/esci/raw-to-jpeg.ts` | Raw 24-bit RGB → JPEG encoding via sharp (ESC/I path only).                                                                                                                                                                                  |
+| `src/esci/raw-to-jpeg.ts` | Raw 24-bit GBR (wire order) → permute to RGB → JPEG encoding via sharp (ESC/I path only).                                                                                                                                                    |
 | `src/commands-fs.ts`      | Legacy 2-byte `FS Y` / `FS X` / `FS Z` builders shared by both protocols.                                                                                                                                                                    |
 | `src/graph-helpers.ts`    | Shared graph-state helpers (`expectIsType`, `expectLength`, `ackByte`).                                                                                                                                                                      |
 | `src/exif.ts`             | JPEG EXIF APP1 injection for back-side orientation.                                                                                                                                                                                          |
@@ -494,7 +494,7 @@ Reverse-engineering artifacts:
 
 The test suite uses Vitest and runs with `npm test` (482 passing tests plus 1 skipped test across 25 files, completing in roughly 5 seconds).
 
-**The replay harnesses** are the most important test files. `src/esci2/scanner.test.ts` instantiates the real shell entry points — `runEsci2Scan` against a `FakeTlsSocket` for the ET-4950 TLS suite, and `runEsci2ScanOverPlain` against a `FakePlainSocket` for the ET-2750 plain-TCP entry — and replays printer-side bytes from a capture, advancing one IS packet at a time, while recording every byte the state machine sends. After the session completes, the test asserts byte-for-byte equality against the host-side bytes from the capture. On-disk output files are also asserted — JPEG files for JPG-mode runs (including EXIF orientation verification), and a composed PDF for PDF-mode runs (including page count and `/Rotate` metadata on back pages). `src/esci/scanner.test.ts` applies the same approach to the WF-3620 ESC/I path using pcap-derived JSONL fixtures.
+**The replay harnesses** are the most important test files. They run in two modes — see [The byte-for-byte replay test](#the-byte-for-byte-replay-test) above for the full account. In short: `src/esci2/scanner.test.ts` runs `runEsci2Scan` against a `FakeTlsSocket` for the ET-4950 Frida captures and asserts byte-for-byte equality on every host send; for the ET-2750 (`runEsci2ScanOverPlain` against `FakePlainSocket`) the harness feeds only printer-side fixture events and asserts on-disk output, not host-byte equality. `src/esci/scanner.test.ts` follows the same behavioural pattern for the WF-3620 ESC/I path using pcap-derived JSONL fixtures. On-disk output is asserted in both modes — JPEG files for JPG-mode runs (including EXIF orientation verification), and a composed PDF for PDF-mode runs (including page count and `/Rotate` metadata on back pages).
 
 **Unit tests** cover each module independently:
 
@@ -508,7 +508,7 @@ The test suite uses Vitest and runs with `npm test` (482 passing tests plus 1 sk
 - `src/esci2/transport.test.ts` — `withEsci2UnlockOnDestroy` + `withTlsErrorLabels` adapters and their composition.
 - `src/esci/commands.test.ts` — ESC/I command builders, FS W block, gamma LUTs, FS G reply parser.
 - `src/esci/graph.test.ts` — ESC/I graph shape, STATUS_2 source-detect, gamma cycle, IMG_RECEIVING flush logic.
-- `src/esci/raw-to-jpeg.test.ts` — raw 24-bit RGB → JPEG encoding round-trip.
+- `src/esci/raw-to-jpeg.test.ts` — raw 24-bit GBR → RGB permutation + JPEG encoding round-trip.
 - `src/esci/scanner-diagnose.test.ts` — `DIAGNOSE_PROTOCOL` mode: ESC @ NAK + FS Y probe behaviour.
 - `src/output-tail.test.ts` — finalize pipeline (JPG promote, PDF compose, temp-dir cleanup on failure). Paperless upload coverage is in `src/paperless-upload.test.ts`.
 - `src/output.test.ts` — filename generation, sorted page file enumeration.
