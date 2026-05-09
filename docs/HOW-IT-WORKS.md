@@ -492,7 +492,7 @@ Reverse-engineering artifacts:
 
 ## Testing
 
-The test suite uses Vitest and runs with `npm test` (494 passing tests plus 1 skipped test across 26 files, completing in roughly 5 seconds).
+The test suite uses Vitest and runs with `npm test` (495 passing tests plus 1 skipped test across 26 files, completing in roughly 5 seconds).
 
 **The replay harnesses** are the most important test files. They run in two modes — see [The byte-for-byte replay test](#the-byte-for-byte-replay-test) above for the full account. In short: `src/esci2/scanner.test.ts` runs `runEsci2Scan` against a `FakeTlsSocket` for the ET-4950 Frida captures and asserts byte-for-byte equality on every host send; for the ET-2750 (`runEsci2ScanOverPlain` against `FakePlainSocket`) the harness feeds only printer-side fixture events and asserts on-disk output, not host-byte equality. `src/esci/scanner.test.ts` follows the same behavioural pattern for the WF-3620 ESC/I path using pcap-derived JSONL fixtures. On-disk output is asserted in both modes — JPEG files for JPG-mode runs (including EXIF orientation verification), and a composed PDF for PDF-mode runs (including page count and `/Rotate` metadata on back pages).
 
