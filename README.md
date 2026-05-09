@@ -147,7 +147,7 @@ If you'd rather POST scans straight into Paperless-ngx's API than drop them into
 | `PAPERLESS_TOKEN_FILE`          |                            | —       | Alternative to `PAPERLESS_TOKEN` — read the token from a file. For Docker secrets / Kubernetes. Takes precedence if both are set.            |
 | `PAPERLESS_DELETE_AFTER_UPLOAD` |                            | `true`  | Delete the local file after a successful upload. Set to `false` to keep a local copy.                                                        |
 
-When both URL and token are set, every scan is uploaded **after** the local file is written. The local file stays by default — the upload is additive. If the upload fails (network blip, Paperless-ngx down), the scan is still safe in `OUTPUT_DIR` and you can re-upload manually or fall back to the consume-folder path.
+When both URL and token are set, every scan is uploaded **after** the local file is written. By default the local file is removed once the upload succeeds; set `PAPERLESS_DELETE_AFTER_UPLOAD=false` to keep a copy alongside the upload. If the upload fails (network blip, Paperless-ngx down), the local file is preserved — the scan is safe in `OUTPUT_DIR` and you can re-upload manually or fall back to the consume-folder path.
 
 Multi-page ADF scans in JPG mode upload one document per page. Pick **PDF** on the printer panel if you'd rather have them grouped into a single Paperless-ngx document.
 
