@@ -117,23 +117,26 @@ function probeTls(host: string, port: number, timeoutMs: number): Promise<boolea
   });
 }
 
+/** WF-3620 family discriminator at IS-`0x8000` payload byte 2 (frame offset 14).
+ * Stable across 11 captured WF-3620 sessions; ET-2750 emits `0x04` here. */
+const WF3620_WELCOME_DISCRIMINATOR = 0x02;
+
 /**
- * Plain-TCP probe: connect, then wait for an inbound IS frame. ET-2750
- * sends an unsolicited `0x8000` welcome packet (5-byte payload)
- * immediately after the TCP handshake completes. WF-3620 doesn't send
- * anything until it receives `ESC @` — so on a legacy printer this
- * probe times out, returns false, and the caller falls through to the
- * legacy probe. (ET-4950 also sends a welcome immediately, but only
- * inside its TLS tunnel; this plain-TCP arm doesn't see it — connecting
- * to an ET-4950 over plain TCP yields no `0x8000` and the arm times
- * out, so this arm matches ET-2750-class hardware only.)
+ * Plain-TCP probe: connect, then wait for an inbound IS-`0x8000` welcome
+ * frame. Both ET-2750 and WF-3620 emit one unsolicited on TCP connect
+ * (the original plan to use the welcome's *presence* as the ET-2750
+ * signal turned out wrong — the WF-3620 emits one too). Disambiguates by
+ * the welcome's payload byte 2: WF-3620 = `0x02`, ET-2750 = `0x04`. ET-4950
+ * also sends a welcome immediately, but only inside its TLS tunnel; this
+ * plain-TCP arm doesn't see it.
  *
- * Returns true if a `0x8000` IS frame is observed within `timeoutMs`,
- * false otherwise (timeout, connection refused, peer RST, or any other
- * inbound type). Only the IS magic and type field are validated; the
- * offset-4 data-offset byte is `0x300C` on the printer side for both
- * ET-2750 and ET-4950 (host-side is always `0x000C`), so it carries no
- * disambiguating signal and the parser ignores it.
+ * Returns true on any `0x8000` welcome whose payload byte 2 is NOT the
+ * WF-3620 marker; false on the WF-3620 marker, timeout, connection
+ * refused, peer RST, or any other inbound type. The negative-form check
+ * is deliberate: we have one ET-2750 capture but eleven WF-3620 captures,
+ * so the WF-3620 byte is the better-evidenced anchor. A future ET-2750-
+ * class device that emits something other than `0x04` here is still
+ * accepted, as long as it isn't the WF-3620 shape.
  */
 function probePlainEsci2(host: string, port: number, timeoutMs: number): Promise<boolean> {
   return new Promise((resolve) => {
@@ -167,18 +170,23 @@ function probePlainEsci2(host: string, port: number, timeoutMs: number): Promise
     socket.on("data", (chunk: Buffer) => {
       recvChunks.push(chunk);
       recvBytes += chunk.length;
-      if (recvBytes < 12) return; // need full IS header before deciding
+      // Need 12 bytes (IS header) + 3 payload bytes to read the
+      // family-discriminator at payload[2] (frame offset 14).
+      if (recvBytes < 15) return;
       const head = recvChunks.length === 1 ? recvChunks[0] : Buffer.concat(recvChunks, recvBytes);
       const isMagic = head[0] === 0x49 && head[1] === 0x53;
       const type = head.readUInt16BE(2);
-      const isWelcome = isMagic && type === 0x8000;
-      settle(isWelcome, () => {
+      const discriminator = head[14];
+      const isEsci2Welcome =
+        isMagic && type === 0x8000 && discriminator !== WF3620_WELCOME_DISCRIMINATOR;
+      settle(isEsci2Welcome, () => {
         clearTimeout(timer);
         socket.destroy();
-        if (!isWelcome) {
+        if (!isEsci2Welcome) {
           const typeHex = `0x${type.toString(16).padStart(4, "0")}`;
+          const discHex = `0x${discriminator.toString(16).padStart(2, "0")}`;
           log.debug(
-            `Plain-esci2 probe got non-welcome packet from ${host}:${port}: magic=${isMagic} type=${typeHex}`,
+            `Plain-esci2 probe got non-esci2-welcome packet from ${host}:${port}: magic=${isMagic} type=${typeHex} payload[2]=${discHex}`,
           );
         }
       });

@@ -110,15 +110,22 @@ class FakeNetSocket extends EventEmitter {
   }
 }
 
-/** Build an `IS` welcome frame: 12-byte header, type=0x8000, payload size 5. */
-function welcomeBytes(): Buffer {
+/**
+ * Build an `IS` welcome frame: 12-byte header, type=0x8000, payload size 5.
+ * Payload shape matches real fixtures: `00 01 <discriminator> 00 00`.
+ *   - `discriminator = 0x04` → ET-2750 (default, matches
+ *     `tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl`).
+ *   - `discriminator = 0x02` → WF-3620 (matches every capture in
+ *     `tools/pcap-extract/captures/wf-3620/`).
+ */
+function welcomeBytes(discriminator: number = 0x04): Buffer {
   const header = Buffer.alloc(12);
   header[0] = 0x49;
   header[1] = 0x53;
   header.writeUInt16BE(0x8000, 2);
   header.writeUInt16BE(0x300c, 4);
   header.writeUInt32BE(5, 6);
-  const payload = Buffer.from([0x00, 0x00, 0x01, 0x04, 0x00]);
+  const payload = Buffer.from([0x00, 0x01, discriminator, 0x00, 0x00]);
   return Buffer.concat([header, payload]);
 }
 
@@ -189,6 +196,26 @@ describe("protocol-probe", () => {
       timeoutMs: 100,
     });
     expect(variant).toBe("esci2-plain");
+  });
+
+  it("returns esci when TLS fails and plain-TCP welcome carries the WF-3620 discriminator (payload[2]=0x02)", async () => {
+    // Regression guard: a real WF-3620 emits an unsolicited 0x8000 welcome
+    // on plain TCP (every wf-3620 fixture under tools/pcap-extract/captures/
+    // begins with one). The plain-esci2 arm must reject it on the byte-2
+    // discriminator and fall through to the legacy ESC @ probe.
+    vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
+    mockNetConnect(
+      new FakeNetSocket({ kind: "welcome", bytes: welcomeBytes(0x02) }), // WF-3620 shape
+      new FakeNetSocket({ kind: "ack", bytes: Buffer.from([0x06]) }), // legacy probe ACKs
+    );
+
+    const variant = await detectVariant({
+      printerIp: "10.0.0.9",
+      port: 1865,
+      override: "auto",
+      timeoutMs: 50,
+    });
+    expect(variant).toBe("esci");
   });
 
   it("returns esci when TLS fails, plain-TCP gives no welcome, and ESC @ ACKs", async () => {
