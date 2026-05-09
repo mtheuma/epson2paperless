@@ -12,10 +12,14 @@ export interface ExtractOptions {
   /**
    * Optional `tcp.stream` index to isolate a single TCP conversation.
    * Useful when a pcap contains multiple connect attempts (e.g. an
-   * aborted SYN/RST followed by the real session) — without this, both
+   * aborted SYN/RST followed by the real session); without this, both
    * streams' bytes interleave in the output and confuse the replay
-   * driver. Find the right index via
-   * `tshark -r <pcap> -z conv,tcp` and pick the long-running entry.
+   * driver. List the indices via
+   * `tshark -r <pcap> -Y "tcp.port==<port>" -T fields -e tcp.stream -e ip.src -e ip.dst | sort -u`
+   * (the `-z conv,tcp` summary table does NOT expose the stream index)
+   * and pick the one whose endpoints are the host/printer IP pair you
+   * captured. Wireshark's GUI also shows this as the `tcp.stream` field
+   * on any selected packet.
    */
   tcpStream?: number;
 }
