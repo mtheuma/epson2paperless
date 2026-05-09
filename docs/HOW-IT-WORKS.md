@@ -281,10 +281,10 @@ The temp directory is removed in a `finally` block regardless of outcome.
 Three protocol variants ride on port 1865, decided per scan session by `src/protocol-probe.ts`:
 
 1. **TLS handshake** against `1865`. Success → `esci2` (ET-4950 family). The probe socket is destroyed before the real scan begins.
-2. **Plain TCP connect**, await an unsolicited IS-`0x8000` welcome packet within the timeout, then disambiguate by the welcome's payload byte 2: WF-3620 emits `0x02` here on every committed WF-3620 fixture and is rejected; the ET-2750 emits `0x04` and is accepted. The ET-4950 also sends a welcome immediately, but only inside its TLS tunnel — connecting to an ET-4950 over plain TCP yields no `0x8000` and the arm times out. Success → `esci2-plain`.
+2. **Plain TCP connect**, await an unsolicited IS-`0x8000` welcome packet within the timeout, then disambiguate by the welcome's payload byte 1 (frame offset 13): WF-3620 emits `0x02` here on every committed WF-3620 fixture and is rejected; the ET-2750 emits `0x04` and is accepted. Real fixture payloads are `01 02 00 00 00` (WF-3620) and `01 04 00 00 00` (ET-2750). The ET-4950 also sends a welcome immediately, but only inside its TLS tunnel — connecting to an ET-4950 over plain TCP yields no `0x8000` and the arm times out. Success → `esci2-plain`.
 3. **Plain TCP connect**, send `ESC @` (`1b 40`), await a 1-byte `0x06` ACK. Success → `esci` (WF-3620).
 
-The byte-2 discriminator in arm 2 is the load-bearing piece: a real WF-3620 also sends an unsolicited `0x8000` welcome on plain TCP (a misconception in the original probe design said it stayed silent until prompted), so welcomes alone don't separate the two families. The check is encoded as a negative — accept any `0x8000` whose payload[2] is NOT the WF-3620 byte — because the WF-3620 anchor is well-supported (the byte is `0x02` across every committed WF-3620 fixture) while the ET-2750 anchor has only one capture, so a hypothetical future ET-2750-class device that emits a different byte at payload[2] would still be accepted.
+The byte-1 discriminator in arm 2 is the load-bearing piece: a real WF-3620 also sends an unsolicited `0x8000` welcome on plain TCP (a misconception in the original probe design said it stayed silent until prompted), so welcomes alone don't separate the two families. The check is encoded as a negative — accept any `0x8000` whose payload[1] is NOT the WF-3620 byte — because the WF-3620 anchor is well-supported (the byte is `0x02` across every committed WF-3620 fixture) while the ET-2750 anchor has only one capture, so a hypothetical future ET-2750-class device that emits a different byte at payload[1] would still be accepted.
 
 If all three arms fail, the dispatcher resolves to `esci` so the legacy scanner's connect path can surface the underlying socket error in a meaningful way (rather than throwing a generic "no protocol matched" message).
 
@@ -492,7 +492,7 @@ Reverse-engineering artifacts:
 
 ## Testing
 
-The test suite uses Vitest and runs with `npm test` (482 passing tests plus 1 skipped test across 25 files, completing in roughly 5 seconds).
+The test suite uses Vitest and runs with `npm test` (484 passing tests plus 1 skipped test across 25 files, completing in roughly 5 seconds).
 
 **The replay harnesses** are the most important test files. They run in two modes — see [The byte-for-byte replay test](#the-byte-for-byte-replay-test) above for the full account. In short: `src/esci2/scanner.test.ts` runs `runEsci2Scan` against a `FakeTlsSocket` for the ET-4950 Frida captures and asserts byte-for-byte equality on every host send; for the ET-2750 (`runEsci2ScanOverPlain` against `FakePlainSocket`) the harness feeds only printer-side fixture events and asserts on-disk output, not host-byte equality. `src/esci/scanner.test.ts` follows the same behavioural pattern for the WF-3620 ESC/I path using pcap-derived JSONL fixtures. On-disk output is asserted in both modes — JPEG files for JPG-mode runs (including EXIF orientation verification), and a composed PDF for PDF-mode runs (including page count and `/Rotate` metadata on back pages).
 
