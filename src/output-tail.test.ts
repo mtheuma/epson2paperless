@@ -161,6 +161,39 @@ describe("output-tail", () => {
     expect(paths[0]).toMatch(/\.jpg$/);
   });
 
+  it("preserves the local scan when uploadAllToPaperless rejects (defense-in-depth)", async () => {
+    // Pin the contract: a thrown rejection from uploadAllToPaperless must
+    // not turn a completed local scan into a failed scan from the
+    // dispatcher's perspective. one-shot.ts maps any rejection from the
+    // scan promise to exit code 1; without the catch around this await,
+    // a future refactor that lets uploadAllToPaperless throw would
+    // silently break user-facing semantics.
+    uploadMock.mockRejectedValueOnce(new Error("network blip"));
+
+    const fakeJpeg = Buffer.from("ffd8ffe000104a464946", "hex");
+    writeFileSync(path.join(tempDir, "page_001.jpg"), fakeJpeg);
+
+    await expect(
+      finalizeSession({
+        sessionTempDir: tempDir,
+        outputDir,
+        sessionTs: new Date("2026-07-07T07:07:07Z"),
+        action: "jpg",
+        backPageIndices: [],
+        paperless: PAPERLESS_OPTS,
+      }),
+    ).resolves.toBeUndefined();
+
+    // Local file is still on disk, exactly as written.
+    const files = readdirSync(outputDir);
+    expect(files).toHaveLength(1);
+    expect(files[0]).toMatch(/^scan_2026-07-07_070707\.jpg$/);
+    expect(readFileSync(path.join(outputDir, files[0]))).toEqual(fakeJpeg);
+
+    // Temp dir was still cleaned up (the finally block ran).
+    expect(() => readdirSync(tempDir)).toThrow(/ENOENT/);
+  });
+
   it("removes the temp dir even when promotion fails", async () => {
     // Point outputDir at a plain file so mkdirSync inside writeOutputFile throws
     const blockingFile = path.join(outputDir, "not-a-dir");
