@@ -198,6 +198,31 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
     }
   });
 
+  it("INIT_POLL_FIN loops on esci2-plain while initPollIteration < 2", () => {
+    const state = esci2Graph.states.INIT_POLL_FIN;
+    expect(state.kind).toBe("decision");
+    if (state.kind !== "decision") return;
+    // ET-2750 host driver only loops twice. After the first FIN reply,
+    // iteration goes 0 → 1 (still < INIT_POLL_ITERATIONS_PLAIN=2), so loop.
+    const ctx = makeCtx({ profile: "esci2-plain", initPollIteration: 0 });
+    const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
+    expect("next" in result && result.next).toBe("INIT_POLL_FS_Y");
+    expect(ctx.initPollIteration).toBe(1);
+  });
+
+  it("INIT_POLL_FIN advances to MODE_SWITCH on esci2-plain after 2 iterations", () => {
+    const state = esci2Graph.states.INIT_POLL_FIN;
+    expect(state.kind).toBe("decision");
+    if (state.kind !== "decision") return;
+    // Iteration was 1, bumps to 2 — equals INIT_POLL_ITERATIONS_PLAIN, advance.
+    // Sending a third FS Y after the printer has moved on returns a non-ACK
+    // that fails MODE_SWITCH validation, so this cap is load-bearing.
+    const ctx = makeCtx({ profile: "esci2-plain", initPollIteration: 1 });
+    const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
+    expect("next" in result && result.next).toBe("MODE_SWITCH");
+    expect(ctx.initPollIteration).toBe(2);
+  });
+
   it("INIT_POLL inline states are all defined", () => {
     expect(esci2Graph.states.INIT_POLL_STAT).toBeDefined();
     expect(esci2Graph.states.INIT_POLL_STAT_DRAIN).toBeDefined();
@@ -633,6 +658,24 @@ describe("esci2Graph INIT_POLL_STAT source detection", () => {
     const payload = Buffer.from("STATx000000c#---#---#---", "ascii");
     const result = state.decide(ctx, { type: 0xa000, payload });
     expect("next" in result && result.next).toBe("INIT_POLL_STAT_DRAIN");
+  });
+
+  it("skips source-detect override on esci2-plain (preserves pre-set source)", () => {
+    const state = esci2Graph.states.INIT_POLL_STAT;
+    expect(state.kind).toBe("decision");
+    if (state.kind !== "decision") return;
+    // ET-2750 STAT replies declare length=0 even though the IS frame packs
+    // a 52-byte filler inline. Applying the ET-4950 length-based heuristic
+    // would misclassify ET-2750 as ADF — the plain profile must skip the
+    // override and trust the `source: "flatbed"` pre-set by the scanner shell.
+    const ctx = makeCtx({
+      profile: "esci2-plain",
+      source: "flatbed",
+      initPollIteration: 0,
+    });
+    const payload = Buffer.from("STATx0000000" + " ".repeat(52), "ascii");
+    state.decide(ctx, { type: 0xa000, payload });
+    expect(ctx.source).toBe("flatbed");
   });
 });
 
