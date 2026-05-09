@@ -492,7 +492,7 @@ Reverse-engineering artifacts:
 
 ## Testing
 
-The test suite uses Vitest and runs with `npm test` (484 passing tests plus 1 skipped test across 25 files, completing in roughly 5 seconds).
+The test suite uses Vitest and runs with `npm test` (494 passing tests plus 1 skipped test across 26 files, completing in roughly 5 seconds).
 
 **The replay harnesses** are the most important test files. They run in two modes — see [The byte-for-byte replay test](#the-byte-for-byte-replay-test) above for the full account. In short: `src/esci2/scanner.test.ts` runs `runEsci2Scan` against a `FakeTlsSocket` for the ET-4950 Frida captures and asserts byte-for-byte equality on every host send; for the ET-2750 (`runEsci2ScanOverPlain` against `FakePlainSocket`) the harness feeds only printer-side fixture events and asserts on-disk output, not host-byte equality. `src/esci/scanner.test.ts` follows the same behavioural pattern for the WF-3620 ESC/I path using pcap-derived JSONL fixtures. On-disk output is asserted in both modes — JPEG files for JPG-mode runs (including EXIF orientation verification), and a composed PDF for PDF-mode runs (including page count and `/Rotate` metadata on back pages).
 
@@ -501,6 +501,7 @@ The test suite uses Vitest and runs with `npm test` (484 passing tests plus 1 sk
 - `src/scan-session.test.ts` — engine pump: graph dispatch, decision-state evaluation, flushPage barrier, settlement lifecycle, IS-payload sanity-cap, `bypassIgnoreFilter` per-state opt-out.
 - `src/protocol.test.ts` — IS-frame encode/decode round-trips, all packet builder variants.
 - `src/protocol-probe.test.ts` — three-arm probe (TLS / plain-TCP-welcome / `ESC @`), cache rules, override paths.
+- `src/startup.test.ts` — `dispatchScanSession` routing: each `Variant` selects the right scanner shell and threads config fields (`scanDestId`, `tempDir`, `printerCertFingerprint`, `esciForceSource`, `jpegQuality`, `diagnoseProtocol`, `paperless`) through correctly.
 - `src/keepalive.test.ts` — announcement parsing, keepalive packet construction, burst timing.
 - `src/pushscan.test.ts` — SOAP request parsing, `PushScanIDIn` decoding, `x-uid` echo, action resolution.
 - `src/esci2/commands.test.ts` — ESC/I-2 command builders, PARA payload byte-exact assertions (TLS + plain), token parser.
@@ -510,7 +511,7 @@ The test suite uses Vitest and runs with `npm test` (484 passing tests plus 1 sk
 - `src/esci/graph.test.ts` — ESC/I graph shape, STATUS_2 source-detect, gamma cycle, IMG_RECEIVING flush logic.
 - `src/esci/raw-to-jpeg.test.ts` — raw 24-bit GBR → RGB permutation + JPEG encoding round-trip.
 - `src/esci/scanner-diagnose.test.ts` — `DIAGNOSE_PROTOCOL` mode: ESC @ NAK + FS Y probe behaviour.
-- `src/output-tail.test.ts` — finalize pipeline (JPG promote, PDF compose, temp-dir cleanup on failure). Paperless upload coverage is in `src/paperless-upload.test.ts`.
+- `src/output-tail.test.ts` — finalize pipeline (JPG promote, PDF compose, PDF compose-failure → JPG fallback, Paperless upload boundary, temp-dir cleanup on failure). Per-upload mechanics live in `src/paperless-upload.test.ts`.
 - `src/output.test.ts` — filename generation, sorted page file enumeration.
 - `src/paperless-upload.test.ts` — multipart POST, retention-flag handling, error paths.
 - `src/pdf.test.ts` — PDF composition from sample JPEGs, page-count and rotation assertions.
