@@ -1,24 +1,33 @@
 # How it works
 
-Epson's "Scan to Computer" feature for the ET-4950 is a proprietary, closed-source protocol implemented by a vendor driver stack. The vendor software is available for Windows, macOS, and Linux; the reverse-engineering work for this project was done against the Windows build, where the driver chain is `EEventManager.exe` / `es2projectrunner.exe` / `ES2Command.dll`. On the wire, the printer speaks a layered protocol: a UDP multicast beacon for destination registration, a SOAP-ish HTTP push notification to announce a scan trigger, and a TLS session on port 1865 that carries the actual image data via a command framing system called "IS" with an embedded command language called ESC/I-2.
+Many networked Epson printers expose a panel feature called "Scan to Computer". Press Scan on the panel, pick a destination, and the file lands on the chosen device. The transport is a proprietary, closed-source protocol implemented by Epson's vendor driver stack (available for Windows, macOS, and Linux; reverse-engineering for this project was done against the Windows build, where the driver chain is `EEventManager.exe` / `es2projectrunner.exe` / `ES2Command.dll`). Across the printer families this project supports, the high-level shape is the same: UDP multicast for destination registration, an HTTP-shaped push-scan trigger, and a per-scan session on TCP port 1865. The wire details inside that session vary by family.
 
-This project reverse-engineers that stack and re-implements it as a Node.js/TypeScript service. Instead of requiring a desktop machine running Epson's driver GUI, the service runs headless on Linux or in Docker and presents itself to the printer as a named scan destination called "Paperless." When the user presses Scan on the panel, the service captures the image and writes a JPEG or composed PDF to disk. When `PAPERLESS_URL` and `PAPERLESS_TOKEN` are configured, completed scans are also POSTed to Paperless-ngx and (by default) deleted locally after a successful upload.
+The supported families fall into two protocol generations:
 
-The implementation is derived from three complementary sources: Wireshark packet captures of the discovery and push-scan phases, Frida dynamic instrumentation of `ES2Command.dll` to extract the plaintext TLS payload byte-for-byte, and Ghidra static analysis of the same DLL to understand the IS type-code map, the async-event dispatch table, and the lock/unlock framing. This document explains the protocol, the code structure, and the reverse-engineering methodology so that someone working on a related device could follow the same approach.
+- **ESC/I-2** (the modern stack). ET-4950 / ET-3950 / ET-4956 use it over TLS. ET-2750 uses the same vocabulary over plain TCP.
+- **Legacy ESC/I** (2014-era WorkForce family). WF-3620 and similar models speak a different command set over plain TCP.
+
+This project reverse-engineers those stacks and re-implements them as a single Node.js/TypeScript service. Instead of requiring a desktop machine running Epson's driver GUI, the service runs headless on Linux or in Docker and presents itself to the printer as a named scan destination called "Paperless". When the user presses Scan on the panel, the service captures the image and writes a JPEG or composed PDF to disk. When `PAPERLESS_URL` and `PAPERLESS_TOKEN` are configured, completed scans are also POSTed to Paperless-ngx and (by default) deleted locally after a successful upload.
+
+The work began on the ET-4950, the author's hardware. WF-3620 support followed an external compatibility report; ET-2750 followed once another reporter contributed a capture. v0.4.0 consolidated the three transport variants onto a shared scan-session engine.
+
+The implementation came from progressively cheaper reverse-engineering layers, picked per printer family. The original ET-4950 work needed all three: Wireshark for the cleartext discovery and push-scan phases, Frida to extract the TLS-tunneled payload byte-for-byte from `ES2Command.dll`, and Ghidra to decompile that DLL for the IS type-code map and async-event semantics. The plain-TCP printer families (ET-2750, WF-3620) needed only the Wireshark layer. Their wire is unencrypted, so captures alone were enough; `tools/pcap-extract/` converts a `.pcapng` straight into a JSONL replay fixture. The Frida and Ghidra investment paid for the TLS-tunnel family once and for all, and subsequent printer families came in cheaply.
+
+This document explains the protocol, the code structure, and the reverse-engineering methodology, so someone working on a related Epson printer can follow the same approach.
 
 ---
 
 ## The wire protocol
 
-The ET-4950 uses three distinct network channels in sequence:
+All supported printers use three distinct network channels in sequence. The first two are universal across families; the third (the scan session) is where the printer-family differences live.
 
 ```
 Printer (broadcast)  →  Service (multicast listener)     Discovery / keepalive
 Printer (unicast)    →  Service (TCP port 2968)          Push-scan trigger
-Service              →  Printer (TLS port 1865)          Scan session
+Service              →  Printer (TCP port 1865)          Scan session
 ```
 
-Each channel is independent enough to be developed and tested separately.
+Each channel is independent enough to be developed and tested separately. Inside the scan session, the same `IS` framing wraps either ESC/I-2 commands (ET-4950 family + ET-2750) or legacy ESC/I commands (WF-3620 family). TLS is layered around it for ET-4950; the other two run on plain TCP.
 
 ### Discovery and keepalive (UDP multicast)
 
@@ -51,11 +60,25 @@ The service parses the `PushScanIDIn` value from the request body, sends the HTT
 
 Implemented in `src/pushscan.ts`. `parsePushScanRequest` extracts the SOAP fields; `buildPushScanResponse` constructs the echoed response. Action handling is two-stage: `computeActionFromId` decodes the raw `PushScanIDIn` action bitmask into one of `jpg`, `pdf`, `preview`, or `unknown`; `resolveEffectiveAction` then applies the `PREVIEW_ACTION` env-var gate and returns `jpg`, `pdf`, or `null` (default: reject preview silently → `null`; `PREVIEW_ACTION=jpg`/`pdf` redirects preview into a real scan).
 
-### The scan session (TLS + ESC/I-2 over "IS" framing)
+### Scan session: three transport variants on port 1865
 
-The actual image transfer happens over a TLS 1.2 session that the service initiates outbound to the printer on port 1865. TLS chain validation is disabled — the printer presents a self-signed certificate and there is no trust chain to validate against. As an opt-in alternative, setting `PRINTER_CERT_FINGERPRINT` pins the peer's SHA-256 fingerprint and aborts the scan at handshake time on mismatch (see `README.md`). Pinning requires `PRINTER_PROTOCOL=esci2` set explicitly — under `auto` (or either of the non-TLS variants), the combination is rejected at startup, since a probe failure could downgrade silently to a non-TLS path and bypass the pin.
+Three transport variants ride on TCP port 1865, decided per scan session by `src/protocol-probe.ts` (covered in detail in [Protocol probe](#protocol-probe-three-arms) below):
 
-Inside the TLS tunnel, all traffic is wrapped in Epson's proprietary **IS framing**. Every message — in both directions — is an IS packet:
+| Variant       | Transport    | Command set          | Hardware                    |
+| ------------- | ------------ | -------------------- | --------------------------- |
+| `esci2-tls`   | TLS over TCP | ESC/I-2 over IS      | ET-4950 / ET-3950 / ET-4956 |
+| `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750 (flatbed-only)      |
+| `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family              |
+
+The rest of this section walks the **canonical `esci2-tls` path** in depth, since it's the most mechanically complex (TLS on top, both command generations layered inside) and the foundation that the other two variants peel back from. The plain-TCP ESC/I-2 differences (ET-2750) live in [ESC/I-2 over plain TCP](#esci-2-over-plain-tcp-et-2750), and the legacy ESC/I family (WF-3620) in [ESC/I variant](#esci-variant-wf-3620). Both are sibling sections, not appendices.
+
+#### TLS on the canonical path
+
+The `esci2-tls` image transfer happens over a TLS 1.2 session that the service initiates outbound to the printer on port 1865. TLS chain validation is disabled, since the printer presents a self-signed certificate and there is no trust chain to validate against. As an opt-in alternative, setting `PRINTER_CERT_FINGERPRINT` pins the peer's SHA-256 fingerprint and aborts the scan at handshake time on mismatch (see [README](../README.md#configure)). Pinning requires `PRINTER_PROTOCOL=esci2` set explicitly. Under `auto` (or either of the non-TLS variants), the combination is rejected at startup because a probe failure could downgrade silently to a non-TLS path and bypass the pin.
+
+#### IS framing (universal across all three variants)
+
+Whether the session runs over TLS (ET-4950) or plain TCP (ET-2750, WF-3620), all traffic is wrapped in Epson's proprietary **IS framing**. Every message in both directions is an IS packet:
 
 ```
 Offset  Len  Field
@@ -119,13 +142,15 @@ The SANE `epsonds` backend provides a useful cross-reference: its passthru frami
 
 During the pre-mode-switch init sequence, the driver performs two capability discovery cycles. The first follows the initial `FS Y` ACK and sends `INFO → CAPA → FIN`; the second follows the `FS Z` ACK and sends `INFO → CAPA → RESA → FIN`. (The `@` prefix in the Frida capture naming convention is not a wire prefix — the actual command bytes on the wire are `INFOx0000000` and `CAPAx0000000` in the ESC/I-2 format.) These cycles appear in the Frida captures with consistent counts across all scan scenarios (2 × INFO, 2 × CAPA, 1 × RESA), which suggests they are mandatory initialization steps rather than optional feature queries.
 
-The INFO and CAPA replies declare the scanner's capabilities — supported resolutions, color modes, document sources, and similar parameters. In a host-initiated (pull-scan) flow — how the vendor driver's own UI works — these values would populate a scan dialog. In the push-scan flow implemented here, the replies are consumed and discarded; the PARA payload is hardcoded from the Frida capture rather than being dynamically constructed from capability discovery. This is a deliberate simplification: the ET-4950's capabilities are fixed for the scanning parameters used (300 dpi, color, JPEG), and adding runtime capability negotiation would require additional Frida captures and reverse-engineering work without changing the end result.
+The INFO and CAPA replies declare the scanner's capabilities (supported resolutions, colour modes, document sources, and similar parameters). In a host-initiated pull-scan flow, the way the vendor driver's own UI works, these values would populate a scan dialog. In the push-scan flow implemented here, the replies are consumed and discarded. The PARA payload is hardcoded from the Frida capture rather than dynamically constructed from capability discovery. This is a deliberate simplification: every supported printer's capabilities are fixed in firmware for the parameters this project uses (300 dpi, colour, JPEG), and adding runtime negotiation would only restate what the captures already pin. The cost would be additional Frida captures and reverse-engineering work, with no change to the end result.
 
 ---
 
-## The scanner state machine
+## The scanner state machines
 
-Each protocol variant lives in a thin orchestration shell that builds a `SessionTransport` and calls the shared `runScanSession` engine in `src/scan-session.ts`. The state machine itself is plain frozen data: a `Graph<Ctx>` defined in a per-protocol `graph.ts` file whose states the engine walks one IS packet at a time. Each transition is either a static rewrite (incoming IS type → next state + bytes to send) or a decision function that inspects the packet payload and returns the same shape. State threading uses a typed ctx object the engine carries through every transition.
+The project has two protocol graphs sharing one engine. Each protocol variant lives in a thin orchestration shell that builds a `SessionTransport` and calls the shared `runScanSession` engine in `src/scan-session.ts`. The state machine itself is plain frozen data: a `Graph<Ctx>` defined in a per-protocol `graph.ts` file whose states the engine walks one IS packet at a time. Each transition is either a static rewrite (incoming IS type → next state + bytes to send) or a decision function that inspects the packet payload and returns the same shape. State threading uses a typed ctx object that the engine carries through every transition.
+
+This section walks the **ESC/I-2 graph** in detail, since it covers two of the three variants (`esci2-tls` and `esci2-plain` share it). The legacy ESC/I graph used by the WF-3620 family follows the same engine pattern with a different shape, summarised in [ESC/I variant (WF-3620)](#esci-variant-wf-3620) below.
 
 The shells / graphs / transports map to the variants like so:
 
@@ -374,7 +399,11 @@ mirrors the Windows driver's behaviour.
 
 ## Reverse engineering: how this was built
 
-The implementation was developed in three phases, each using a different tool to peel back one layer of the protocol.
+The implementation grew in two distinct waves, each using the lightest reverse-engineering toolchain that could decode the printer family at hand.
+
+The **first wave** (ET-4950) needed all three of Wireshark, Frida, and Ghidra because the scan session is wrapped in TLS. Frida hooked the Windows driver's pre-encryption send and post-decryption receive paths to dump the plaintext IS payload; Ghidra decompiled the same DLL to identify the hook offsets and decode the IS type-code map. Three steps, in order.
+
+The **second wave** (ET-2750 + WF-3620) needed only Wireshark. Both speak plain TCP, so the wire bytes are directly readable from a single capture. `tools/pcap-extract/` converts those captures into JSONL replay fixtures. This is "Step 4" below: the same methodology with one fewer tool, applicable to any future plain-TCP Epson printer family.
 
 ### Step 1: Wireshark
 
@@ -420,7 +449,24 @@ Ghidra static analysis of `ES2Command.dll` (32-bit x86) provided the semantic la
 - The existence of two parallel command stacks: `CESCI2Command` for ESC/I-2 text commands and `CESCICommand` for legacy binary ESC/I — both multiplexed through `CISProtocolStream` over the same IS type `0x2000` envelope. This explained why the scanner needs to speak both command languages in a single session.
 - Hook addresses used by the Frida agent (`FUN_100a5a40` for `SendISPacket`, `FUN_100a5bf0` for `ReceiveISPacket`), which were identified by following the call chain from the decompiled DLL entry point `ESCreateScanner` through the IS protocol layer.
 
-Ghidra alone could not reveal the exact byte sequences the driver sends during a scan session — that information is assembled at runtime from device state and query results. Ghidra established the structure and the semantics; Frida captured the runtime content. The combination of both tools was necessary.
+Ghidra alone could not reveal the exact byte sequences the driver sends during a scan session, since that information is assembled at runtime from device state and query results. Ghidra established the structure and the semantics; Frida captured the runtime content. The combination of both tools was necessary for the TLS-tunnel family.
+
+### Step 4: pcap-only decoding for plain-TCP variants
+
+The ET-2750 and WF-3620 families speak plain TCP on port 1865 (no TLS layer), so a Wireshark capture of one scan session shows every byte the driver and printer exchanged. Frida and Ghidra are not needed.
+
+The workflow:
+
+1. Run a Windows VM (or another machine with the vendor driver installed) on the same LAN as the printer.
+2. Start `dumpcap` (or Wireshark) on the LAN-side interface, filtering on `tcp port 1865 || udp port 2968`.
+3. Trigger a scan from the printer panel and let it complete.
+4. Save the resulting `.pcapng` (or `.pcap`).
+5. `npm run pcap:extract -- <input.pcap> <output.jsonl>` converts the capture into a JSONL replay fixture with the same shape as the Frida-captured ones (`{"hook": "send"|"recv", "type_hex": "0xNNNN", "payload_hex": "...", "ts": ...}`). Image-data chunks (`IS-0xa200` for the WF-3620 family) are summarised by total-byte-count rather than written out, keeping fixtures small.
+6. `npm run pcap:render -- <fixture.jsonl> <out.{jpg,pdf}>` reconstructs the scanned page from the fixture for eyeball validation.
+
+Capture sources (gitignored) live under `.reference/wireshark-captures/{wf-3620,et-2750}/`. The extracted JSONL replay fixtures are committed to `tools/pcap-extract/captures/{wf-3620,et-2750}/` and drive the per-variant replay tests; see [The byte-for-byte replay test](#the-byte-for-byte-replay-test) below.
+
+This is the methodology to reach for first when adding a new printer family. If TLS turns out to be in play (a `tcp.port == 1865` capture shows a TLS handshake, opaque ciphertext after, no readable IS frames), fall back to the Step 2 + 3 toolchain.
 
 ### The panel-error investigation
 
