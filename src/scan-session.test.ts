@@ -995,6 +995,70 @@ describe("runScanSession (engine pump)", () => {
     fs.rmSync(outputDir, { recursive: true, force: true });
   });
 
+  // Regression: a transport `error` event after enterState("DONE") must not
+  // race settle and rm the temp dir while finalizeSession is still reading
+  // from it. Sibling to the prior-state-timer variant above; this one
+  // covers the post-DONE socket-error variant — a printer-side RST after
+  // FIN, the documented Epson firmware quirk on plain-TCP variants
+  // (ET-2750 ESC/I-2-over-plain, WF-3620 legacy ESC/I) where the TLS
+  // adapter's post-end ECONNRESET/EPIPE swallow doesn't apply.
+  it("ignores transport errors after DONE so a slow finalize doesn't race a printer-side RST", async () => {
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+
+    const outputTail = await import("./output-tail.js");
+    const realFinalize = outputTail.finalizeSession;
+    const spy = vi.spyOn(outputTail, "finalizeSession").mockImplementation(async (opts) => {
+      // Hold finalize long enough for a post-DONE error event to land mid-flight.
+      await new Promise((r) => setTimeout(r, 100));
+      await realFinalize(opts);
+    });
+
+    const g = createGraph<Record<string, never>>("PAGE", 5_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "DONE",
+          flushPage: {
+            side: "front",
+            encode: () => Promise.resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+          },
+        },
+      },
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+    });
+
+    // Drive PAGE → DONE, then mid-finalize emit a printer-side RST.
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    setTimeout(() => {
+      const rst = Object.assign(new Error("read ECONNRESET"), { code: "ECONNRESET" });
+      transport.emit("error", rst);
+    }, 50);
+
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    if (!result.ok) {
+      expect(result.reason.message).not.toMatch(/ECONNRESET/);
+    }
+    // outputDir should contain a scan_*.jpg promoted by finalizeSession.
+    const outputs = fs.readdirSync(outputDir);
+    expect(outputs.some((f) => /^scan_.*\.jpg$/.test(f))).toBe(true);
+
+    spy.mockRestore();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
   // Fix 2: Pump stops dispatching after an error settle.
   it("stops the pump after an error settle even if more packets are buffered", async () => {
     const transport = new FakeTransport();

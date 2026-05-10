@@ -524,7 +524,19 @@ export async function runScanSession<Ctx>(
       settle({ ok: true, finalCtx: ctx });
     }
 
+    // Error handler — symmetric with the close handler below. The DONE
+    // guard matters on plain-TCP variants (ESC/I-2-over-plain ET-2750,
+    // legacy ESC/I WF-3620) where the printer firmware can RST the socket
+    // after our FIN — a benign post-end event from the engine's point of
+    // view, since enterState("DONE") has already scheduled doFinalize.
+    // Without the guard, that RST races doFinalize for settle() and would
+    // fall through to the unconditional rmSync in settle's failure branch
+    // mid-finalize, wiping the captured pages. The TLS path is shielded
+    // by withTlsErrorLabels swallowing post-end ECONNRESET/EPIPE, but
+    // that adapter doesn't apply to the plain-TCP transports.
     transport.on("error", (err) => {
+      if (settled) return;
+      if (currentState === "DONE") return; // doFinalize handles this path
       settle({ ok: false, reason: err, finalCtx: ctx });
     });
 
