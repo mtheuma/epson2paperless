@@ -68,3 +68,29 @@ body:
       label: epson2paperless version
       description: e.g. `v0.2.0` or a commit SHA.
       placeholder: v0.2.0
+
+  - type: markdown
+    attributes:
+      value: |
+        ### Sharing a Wireshark capture (optional)
+
+        For "Partially works" or "Doesn't work" reports, a `.pcap` of one
+        scan attempt is the fastest way to a fix.
+
+        1. Print the project's [`compatibility-test-page.pdf`](../../blob/main/tools/test-page/compatibility-test-page.pdf) and feed that page through the scan. It's a neutral test target, so the capture won't contain anything sensitive.
+        2. Capture with Wireshark's "Capture filter" field (or `tshark -f`) set to:
+            ```
+            host <PRINTER_IP>
+            ```
+        3. Email the `.pcap` to `epson2paperless.vineyard182@passmail.com`. (For larger captures, host it wherever and send the link.)
+
+        **Optional: encrypt before sending.** If you'd rather not put the
+        raw `.pcap` through unencrypted email, encrypt with my GitHub SSH
+        key as an age recipient:
+
+        ```bash
+        curl -s https://github.com/mtheuma.keys > matt.pubkey
+        age --recipients-file matt.pubkey -o capture.pcap.age capture.pcap
+        ```
+
+        Then send the `.age` file the same way.
