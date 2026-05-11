@@ -33,7 +33,7 @@ export default tseslint.config(
   {
     // Test files + test-support: relax strictness that fights fixtures and
     // fire-and-forget async patterns common in test setup.
-    files: ["**/*.test.ts", "src/test-support/**/*.ts", "tools/**/*.test.ts"],
+    files: ["**/*.test.ts", "src/**/test-support/**/*.ts", "tools/**/*.test.ts"],
     rules: {
       "@typescript-eslint/no-unsafe-assignment": "off",
       "@typescript-eslint/no-unsafe-member-access": "off",

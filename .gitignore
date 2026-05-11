@@ -5,8 +5,10 @@ dist/
 test-output/
 .claude/
 .reference/
+.superpowers/
 coverage/
 scan.log*
 command.bat
+command-test.bat
 CLAUDE.local.md
 AGENTS.md

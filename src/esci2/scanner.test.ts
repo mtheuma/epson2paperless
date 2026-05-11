@@ -3,10 +3,16 @@ import { readFileSync, readdirSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import { PDFDocument } from "pdf-lib";
-import { startScanSession } from "./scanner.js";
-import { buildIsPacket } from "./protocol.js";
-import { parseEsci2ReplyHeader } from "./esci.js";
+import { runEsci2Scan, runEsci2ScanOverPlain } from "./scanner.js";
+import { buildIsPacket } from "../protocol.js";
+import { parseEsci2ReplyHeader } from "./commands.js";
 import { FakeTlsSocket } from "./test-support/fake-tls-socket.js";
+import { FakePlainSocket } from "./test-support/fake-plain-socket.js";
+import { loadFixture, driveFixture } from "./test-support/replay.js";
+
+function waitImmediate(): Promise<void> {
+  return new Promise((resolve) => setImmediate(resolve));
+}
 
 // Fixed capability-body packets used by driveScannerToPara for both init cycles.
 // Scanner discards the body content (it just needs N bytes matching the declared
@@ -41,7 +47,7 @@ async function driveScannerToPara(args: {
 }> {
   const { outputDir, firstStatReplyHex, duplex = false, action = "jpg" } = args;
   const fake = new FakeTlsSocket();
-  const sessionPromise = startScanSession(
+  const sessionPromise = runEsci2Scan(
     { printerIp: "1.2.3.4", port: 1865, destId: 0x02, outputDir, tempDir: "", duplex, action },
     fake.asFactory(),
   );
@@ -49,42 +55,42 @@ async function driveScannerToPara(args: {
 
   const feedEsci2Reply = async (bodyHex: string) => {
     fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
     fake.feed(buildIsPacket(0xa000, Buffer.from(bodyHex, "ascii")));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
   };
   const feedLegacyAck = async () => {
     fake.feed(buildIsPacket(0xa000, Buffer.from([0x06])));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
   };
 
   // Welcome + LOCK
   fake.feed(buildIsPacket(0x8000));
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
   fake.feed(buildIsPacket(0xa100, Buffer.from([0x06])));
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
 
   // Cycle 1: FS Y ACK, @INFO hdr+body, @CAPA hdr+body, FIN
   await feedLegacyAck();
   await feedEsci2Reply("INFOx00000F4");
   fake.feed(INFO_BODY_PACKET);
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
   await feedEsci2Reply("CAPAx0000150");
   fake.feed(CAPA_BODY_PACKET);
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
   await feedEsci2Reply("FIN x0000000");
 
   // Cycle 2: FS Z ACK, @INFO, @CAPA, @RESA, FIN
   await feedLegacyAck();
   await feedEsci2Reply("INFOx00000F4");
   fake.feed(INFO_BODY_PACKET);
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
   await feedEsci2Reply("CAPAx0000150");
   fake.feed(CAPA_BODY_PACKET);
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
   await feedEsci2Reply("RESAx00000A4");
   fake.feed(RESA_BODY_PACKET);
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
   await feedEsci2Reply("FIN x0000000");
 
   // INIT_POLL cycle 1 with the test-provided STAT reply; drain if length > 0
@@ -94,9 +100,9 @@ async function driveScannerToPara(args: {
     parseEsci2ReplyHeader(Buffer.from(firstStatReplyHex, "ascii"))?.length ?? 0;
   if (firstStatLength > 0) {
     fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
     fake.feed(buildIsPacket(0xa000, Buffer.alloc(firstStatLength, 0x2d)));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
   }
   await feedEsci2Reply("FIN x0000000");
 
@@ -133,15 +139,19 @@ async function drivePastImgTerminator(
   });
   // PARA reply
   fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
   fake.feed(buildIsPacket(0xa000, Buffer.from("PARAx0000000#parOK", "ascii")));
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
   await feedEsci2Reply("TRDTx0000000");
   // One IMG packet with a 4-byte JPEG body, then a terminal #pen-without-#lft
   await feedEsci2Reply("IMG x0000004#pst");
   fake.feed(buildIsPacket(0xa000, Buffer.from("ffd8ffd9", "hex")));
-  await new Promise((r) => setImmediate(r));
+  await waitImmediate();
+  // Snapshot writes before the page-end feed; wait for the engine's response
+  // (FIN for flatbed-terminal, IMG for ADF-more) before returning.
+  const writesBeforePageEnd = fake.writes.length;
   await feedEsci2Reply("IMG x0000000#peni0002481i0003506#typIMGA#---#---#---#---#---");
+  await fake.waitForWriteCount(writesBeforePageEnd + 1);
   return { fake, sessionPromise, feedEsci2Reply };
 }
 
@@ -267,7 +277,7 @@ async function replayCapture(
   const filtered = records.filter((r) => r.hook === "send" || r.hook === "recv");
   const fake = new FakeTlsSocket();
 
-  const sessionPromise = startScanSession(
+  const sessionPromise = runEsci2Scan(
     { printerIp: "192.0.2.58", port: 1865, destId: 0x02, outputDir, tempDir: "", duplex, action },
     fake.asFactory(),
   );
@@ -277,14 +287,12 @@ async function replayCapture(
   for (const rec of filtered) {
     if (rec.hook === "recv") {
       fake.feed(Buffer.from(rec.payload_hex ?? "", "hex"));
-      await new Promise((r) => setImmediate(r));
+      await waitImmediate();
     } else {
-      if (expectedSendIdx >= fake.writes.length) {
-        throw new Error(
-          `At driver-send #${expectedSendIdx}: scanner hasn't written anything yet. ` +
-            `Last driver send type=${rec.type_hex} payload=${rec.payload_hex?.slice(0, 40)}…`,
-        );
-      }
+      // Wait for the scanner to produce this write — handles the engine's
+      // async flushPage barrier (multi-microtask: await encode → file I/O →
+      // unpause → write staged send) without hard-coding tick counts.
+      await fake.waitForWriteCount(expectedSendIdx + 1);
       const actual = fake.writes[expectedSendIdx].toString("hex");
       const expected = rec.payload_hex ?? "";
       expect(actual, `send #${expectedSendIdx} (driver type=${rec.type_hex})`).toBe(expected);
@@ -292,9 +300,9 @@ async function replayCapture(
     }
   }
 
-  // Let finalizeScan's deferred writeFileSync run to completion.
-  await new Promise((r) => setImmediate(r));
-  await new Promise((r) => setImmediate(r));
+  // Let the DONE-path finalization task run to completion.
+  await waitImmediate();
+  await waitImmediate();
 
   const totalDriverSends = filtered.filter((r) => r.hook === "send").length;
   return { totalDriverSends, scannerWrites: fake.writes, sessionPromise };
@@ -484,7 +492,7 @@ describe("scanner targeted tests — error paths", () => {
 
   it("aborts and attempts unlock when a 0x9000 ServerError arrives", async () => {
     const fake = new FakeTlsSocket();
-    const sessionPromise = startScanSession(
+    const sessionPromise = runEsci2Scan(
       {
         printerIp: "192.0.2.58",
         port: 1865,
@@ -501,9 +509,9 @@ describe("scanner targeted tests — error paths", () => {
     const rejectsAssertion = expect(sessionPromise).rejects.toThrow(/fatal/i);
     fake.simulateConnect();
     fake.feed(buildIsPacket(0x8000));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
     fake.feed(buildIsPacket(0x9000, Buffer.from([0xa0])));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
 
     const lastWrite = fake.writes[fake.writes.length - 1];
     expect(lastWrite.readUInt16BE(2)).toBe(0x2101); // UNLOCK packet type
@@ -513,7 +521,7 @@ describe("scanner targeted tests — error paths", () => {
 
   it("aborts on unexpected IS type received mid-session", async () => {
     const fake = new FakeTlsSocket();
-    const sessionPromise = startScanSession(
+    const sessionPromise = runEsci2Scan(
       {
         printerIp: "192.0.2.58",
         port: 1865,
@@ -526,13 +534,15 @@ describe("scanner targeted tests — error paths", () => {
       fake.asFactory(),
     );
     // Attach the rejection handler before feeding the error-causing packet.
-    const rejectsAssertion = expect(sessionPromise).rejects.toThrow(/protocol error/i);
+    const rejectsAssertion = expect(sessionPromise).rejects.toThrow(
+      /unexpected packet type|protocol error/i,
+    );
     fake.simulateConnect();
     fake.feed(buildIsPacket(0x8000));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
     const lockWriteIdx = fake.writes.length;
     fake.feed(buildIsPacket(0xffff));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
 
     const postErrorWrites = fake.writes.slice(lockWriteIdx);
     const sawUnlock = postErrorWrites.some((w) => w.length >= 4 && w.readUInt16BE(2) === 0x2101);
@@ -543,7 +553,7 @@ describe("scanner targeted tests — error paths", () => {
 
   it("socket 'error' event triggers transitionToError and rejects the promise", async () => {
     const fake = new FakeTlsSocket();
-    const sessionPromise = startScanSession(
+    const sessionPromise = runEsci2Scan(
       {
         printerIp: "192.0.2.58",
         port: 1865,
@@ -560,10 +570,10 @@ describe("scanner targeted tests — error paths", () => {
     const rejectsAssertion = expect(sessionPromise).rejects.toThrow(/TLS connection error/i);
     fake.simulateConnect();
     fake.feed(buildIsPacket(0x8000));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
     // Simulate a mid-scan socket error (e.g., printer reboots).
     fake.emit("error", Object.assign(new Error("EPIPE"), { code: "EPIPE" }));
-    await new Promise((r) => setImmediate(r));
+    await waitImmediate();
     // The promise should reject with a classified error message.
     await rejectsAssertion;
     // Last write should be the UNLOCK packet, proving transitionToError ran.
@@ -693,7 +703,7 @@ describe("scanner post-scan sequencing", () => {
   });
 });
 
-describe("startScanSession — printer cert pinning", () => {
+describe("runEsci2Scan — printer cert pinning", () => {
   let tempDir: string;
 
   beforeEach(() => {
@@ -704,13 +714,18 @@ describe("startScanSession — printer cert pinning", () => {
     rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("connects when fingerprint matches", () => {
+  it("connects when fingerprint matches", async () => {
     const fake = new FakeTlsSocket();
     const FP =
       "AB:CD:EF:01:23:45:67:89:0A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78";
     fake.setPeerCertificate(FP);
 
-    void startScanSession(
+    // Capture the promise so we can drive the session to a clean settle
+    // before the test exits — otherwise the 30s scanner timeout stays
+    // armed and may reject later as an unhandled rejection in an
+    // unrelated test. Pre-attached catch swallows the expected
+    // close-mid-session rejection.
+    const scanPromise = runEsci2Scan(
       {
         printerIp: "192.0.2.58",
         port: 1865,
@@ -723,11 +738,18 @@ describe("startScanSession — printer cert pinning", () => {
       },
       fake.asFactory(),
     );
+    const settled = scanPromise.catch(() => {
+      /* expected: we tear the session down once we've verified LOCK landed */
+    });
 
     fake.simulateConnect();
     // Feed the Welcome packet so the scanner can send the first protocol record (LOCK).
     fake.feed(buildIsPacket(0x8000));
+    await fake.waitForWriteCount(1);
     expect(fake.writes.length).toBeGreaterThan(0);
+
+    fake.destroy(); // close socket → engine settles { ok: false }, caught above
+    await settled;
   });
 
   it("aborts before any send when fingerprint mismatches", async () => {
@@ -736,7 +758,7 @@ describe("startScanSession — printer cert pinning", () => {
       "11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11:11",
     );
 
-    const done = startScanSession(
+    const done = runEsci2Scan(
       {
         printerIp: "192.0.2.58",
         port: 1865,
@@ -757,11 +779,11 @@ describe("startScanSession — printer cert pinning", () => {
   });
 });
 
-describe("startScanSession failure-mode matrix", () => {
+describe("runEsci2Scan failure-mode matrix", () => {
   it("rejects when the printer cert fingerprint does not match the pin", async () => {
     const fake = new FakeTlsSocket();
     fake.setPeerCertificate("AA:BB:CC"); // FakeTlsSocket.setPeerCertificate takes a string
-    const scanPromise = startScanSession(
+    const scanPromise = runEsci2Scan(
       {
         printerIp: "1.2.3.4",
         port: 1865,
@@ -782,7 +804,7 @@ describe("startScanSession failure-mode matrix", () => {
   it("rejects when the session temp dir cannot be created", async () => {
     const fake = new FakeTlsSocket();
     // tempDir points at a path that mkdtempSync cannot resolve.
-    const scanPromise = startScanSession(
+    const scanPromise = runEsci2Scan(
       {
         printerIp: "1.2.3.4",
         port: 1865,
@@ -799,14 +821,14 @@ describe("startScanSession failure-mode matrix", () => {
   });
 
   it("rejects on timeout (no response in TIMEOUT_MS)", async () => {
-    // CRITICAL: install fake timers BEFORE startScanSession runs. The scanner
+    // CRITICAL: install fake timers BEFORE runEsci2Scan runs. The scanner
     // schedules a setTimeout(TIMEOUT_MS) inside the connect callback fired by
     // simulateConnect(); if useFakeTimers is called after, the real timer is
     // already armed and advancing fake timers won't fire it.
     vi.useFakeTimers();
     try {
       const fake = new FakeTlsSocket();
-      const scanPromise = startScanSession(
+      const scanPromise = runEsci2Scan(
         {
           printerIp: "1.2.3.4",
           port: 1865,
@@ -824,7 +846,7 @@ describe("startScanSession failure-mode matrix", () => {
       // rejection isn't momentarily unhandled (FakeTlsSocket.destroy() is sync,
       // so the close event fires inside advanceTimersByTimeAsync).
       const rejectsAssertion = expect(scanPromise).rejects.toThrow(/timeout/i);
-      // TIMEOUT_MS is 30_000 in scanner.ts (line 113); 60_000 overshoots safely.
+      // The graph timeout is 30_000 ms; 60_000 overshoots safely.
       await vi.advanceTimersByTimeAsync(60_000);
       await rejectsAssertion;
     } finally {
@@ -834,7 +856,7 @@ describe("startScanSession failure-mode matrix", () => {
 
   it("rejects on socket error mid-session", async () => {
     const fake = new FakeTlsSocket();
-    const scanPromise = startScanSession(
+    const scanPromise = runEsci2Scan(
       {
         printerIp: "1.2.3.4",
         port: 1865,
@@ -857,7 +879,7 @@ describe("startScanSession failure-mode matrix", () => {
 
   it("rejects on async ScanCancel event mid-session", async () => {
     const fake = new FakeTlsSocket();
-    const scanPromise = startScanSession(
+    const scanPromise = runEsci2Scan(
       {
         printerIp: "1.2.3.4",
         port: 1865,
@@ -881,7 +903,7 @@ describe("startScanSession failure-mode matrix", () => {
 
   it("rejects on async fatal event mid-session", async () => {
     const fake = new FakeTlsSocket();
-    const scanPromise = startScanSession(
+    const scanPromise = runEsci2Scan(
       {
         printerIp: "1.2.3.4",
         port: 1865,
@@ -895,9 +917,8 @@ describe("startScanSession failure-mode matrix", () => {
       fake.asFactory(),
     );
     fake.simulateConnect();
-    // ASYNC_FATAL in scanner.ts:124 contains 0x02 (Disconnect), 0x80 (Timeout),
-    // 0xa0 (ServerError). Use 0x02. (0x05 is "unknown" and falls through to
-    // log.warn with no rejection.)
+    // The ESC/I-2 graph treats 0x02 (Disconnect), 0x80 (Timeout), and
+    // 0xa0 (ServerError) as fatal. Use 0x02. (0x05 is info-only and does not reject.)
     const fatalPacket = buildIsPacket(0x9000, Buffer.from([0x02]));
     // Attach handler before feeding — FakeTlsSocket.destroy() fires "close"
     // synchronously, rejecting the promise inside fake.feed().
@@ -908,7 +929,7 @@ describe("startScanSession failure-mode matrix", () => {
 
   it("rejects on per-state assertion failure (unexpected packet type)", async () => {
     const fake = new FakeTlsSocket();
-    const scanPromise = startScanSession(
+    const scanPromise = runEsci2Scan(
       {
         printerIp: "1.2.3.4",
         port: 1865,
@@ -927,8 +948,83 @@ describe("startScanSession failure-mode matrix", () => {
     const wrongTypePacket = buildIsPacket(0xa999, Buffer.alloc(0));
     // Attach handler before feeding — FakeTlsSocket.destroy() fires "close"
     // synchronously, rejecting the promise inside fake.feed().
-    const rejectsAssertion = expect(scanPromise).rejects.toThrow(/protocol error/i);
+    const rejectsAssertion = expect(scanPromise).rejects.toThrow(
+      /unexpected packet type|protocol error/i,
+    );
     fake.feed(wrongTypePacket);
     await rejectsAssertion;
   });
+});
+
+// ─── ET-2750 (esci2-plain) replay ────────────────────────────────────────
+
+describe("runEsci2ScanOverPlain — ET-2750 fixture replay", () => {
+  let outputDir: string;
+  let tempDir: string;
+
+  beforeEach(() => {
+    outputDir = mkdtempSync(path.join(os.tmpdir(), "et2750-out-"));
+    tempDir = mkdtempSync(path.join(os.tmpdir(), "et2750-tmp-"));
+  });
+
+  afterEach(() => {
+    rmSync(outputDir, { recursive: true, force: true });
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("flatbed-single-page-pdf: drives the captured wire and produces one PDF", async () => {
+    // Source: tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl
+    // Provenance documented in `.reference/wireshark-captures/et-2750/protocol-decode.md`.
+    // ET-2750 is flatbed-only hardware; no ADF or duplex variants exist.
+    // The fixture is large (~3.9 MB) because each ESC/I-2 IMG cycle wraps
+    // pixel data in 0xa000 IS frames — there's no 0xa200 image-stream
+    // summary path here. Replay is byte-exact regardless.
+    const fixturePath = path.join(
+      "tools",
+      "pcap-extract",
+      "captures",
+      "et-2750",
+      "flatbed-single-page-pdf.jsonl",
+    );
+    const fixture = loadFixture(fixturePath);
+    const fake = new FakePlainSocket();
+
+    const sessionPromise = runEsci2ScanOverPlain(
+      {
+        printerIp: "10.31.50.16",
+        port: 1865,
+        destId: 0x02,
+        outputDir,
+        tempDir,
+        duplex: false,
+        action: "pdf",
+      },
+      fake.asFactory(),
+    );
+    await driveFixture(fixture, fake, sessionPromise);
+
+    // Wait briefly for the async PDF compose chain (setImmediate hop in
+    // doFinalize → composePdfFromJpegs).
+    for (
+      let i = 0;
+      i < 50 && readdirSync(outputDir).filter((f) => f.endsWith(".pdf")).length === 0;
+      i++
+    ) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+
+    const files = readdirSync(outputDir);
+    const pdfs = files.filter((f) => f.endsWith(".pdf"));
+    const jpgs = files.filter((f) => f.endsWith(".jpg"));
+    expect(jpgs).toEqual([]); // session temp dir is cleaned by finalizeSession
+    expect(pdfs.length).toBe(1);
+    expect(pdfs[0]).toMatch(/^scan_\d{4}-\d{2}-\d{2}_\d{6}\.pdf$/);
+
+    const pdfBytes = readFileSync(path.join(outputDir, pdfs[0]));
+    expect(pdfBytes.subarray(0, 5).toString("ascii")).toBe("%PDF-");
+    const doc = await PDFDocument.load(pdfBytes);
+    expect(doc.getPageCount()).toBe(1);
+    // Flatbed front side — no 180° rotation.
+    expect(doc.getPage(0).getRotation().angle).toBe(0);
+  }, 60_000);
 });

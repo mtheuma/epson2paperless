@@ -9,6 +9,19 @@ export interface ExtractOptions {
   scanPort: number;
   /** Override tshark binary path. Defaults to env TSHARK_PATH or `tshark`. */
   tsharkPath?: string;
+  /**
+   * Optional `tcp.stream` index to isolate a single TCP conversation.
+   * Useful when a pcap contains multiple connect attempts (e.g. an
+   * aborted SYN/RST followed by the real session); without this, both
+   * streams' bytes interleave in the output and confuse the replay
+   * driver. List the indices via
+   * `tshark -r <pcap> -Y "tcp.port==<port>" -T fields -e tcp.stream -e ip.src -e ip.dst | sort -u`
+   * (the `-z conv,tcp` summary table does NOT expose the stream index)
+   * and pick the one whose endpoints are the host/printer IP pair you
+   * captured. Wireshark's GUI also shows this as the `tcp.stream` field
+   * on any selected packet.
+   */
+  tcpStream?: number;
 }
 
 export type FixtureEvent =
@@ -29,13 +42,14 @@ export const IS_IMAGE_CHUNK_HEX = IS_HEADER_HEX_PREFIX + IS_TYPE_A200_PREFIX;
 
 export async function extract(opts: ExtractOptions): Promise<FixtureEvent[]> {
   const tshark = opts.tsharkPath ?? process.env.TSHARK_PATH ?? TSHARK_DEFAULT;
+  const streamFilter = opts.tcpStream !== undefined ? ` && tcp.stream==${opts.tcpStream}` : "";
   const args = [
     "-r",
     opts.pcapPath,
     "-Y",
     `tcp.port==${opts.scanPort} && tcp.len>0 && ` +
       `((ip.src==${opts.hostIp} && ip.dst==${opts.printerIp}) || ` +
-      `(ip.src==${opts.printerIp} && ip.dst==${opts.hostIp}))`,
+      `(ip.src==${opts.printerIp} && ip.dst==${opts.hostIp}))${streamFilter}`,
     "-T",
     "fields",
     "-E",
@@ -194,10 +208,22 @@ function createImageChunkFolder(): ImageChunkFolder {
 }
 
 async function main(): Promise<void> {
-  const [pcapPath, hostIp, printerIp, portStr, outPath] = process.argv.slice(2);
+  // Strip optional `--stream N` from positional args so the existing
+  // five-positional CLI shape stays backwards-compatible.
+  const argv = process.argv.slice(2);
+  let tcpStream: number | undefined;
+  const positional: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    if (argv[i] === "--stream" && i + 1 < argv.length) {
+      tcpStream = parseInt(argv[++i], 10);
+    } else {
+      positional.push(argv[i]);
+    }
+  }
+  const [pcapPath, hostIp, printerIp, portStr, outPath] = positional;
   if (!pcapPath || !hostIp || !printerIp || !portStr || !outPath) {
     console.error(
-      "Usage: tsx tools/pcap-extract/extract.ts <pcap> <hostIp> <printerIp> <port> <out.jsonl>",
+      "Usage: tsx tools/pcap-extract/extract.ts <pcap> <hostIp> <printerIp> <port> <out.jsonl> [--stream N]",
     );
     process.exit(2);
   }
@@ -206,6 +232,7 @@ async function main(): Promise<void> {
     hostIp,
     printerIp,
     scanPort: parseInt(portStr, 10),
+    tcpStream,
   });
   const fs = await import("node:fs");
   const lines = events.map((e) => JSON.stringify(e)).join("\n") + "\n";

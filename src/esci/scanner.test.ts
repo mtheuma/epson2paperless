@@ -4,13 +4,13 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { PDFDocument } from "pdf-lib";
-import { startScanSessionLegacy, appendImageChunk } from "./scanner-legacy.js";
-import { parseIsPacket, buildIsPacket, IS_HEADER_SIZE } from "./protocol.js";
+import { runEsciScan, appendImageChunk } from "./scanner.js";
+import { parseIsPacket, buildIsPacket, IS_HEADER_SIZE } from "../protocol.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
-import { loadFixture, driveFixture } from "./test-support/legacy-replay.js";
+import { loadFixture, driveFixture } from "./test-support/replay.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURES = path.join(__dirname, "..", "tools", "pcap-extract", "captures", "wf-3620");
+const FIXTURES = path.join(__dirname, "..", "..", "tools", "pcap-extract", "captures", "wf-3620");
 
 // ---------------------------------------------------------------------------
 // Per-fixture metadata driving the it.each replay matrix
@@ -117,7 +117,7 @@ const FIXTURE_SPECS: FixtureSpec[] = [
 // Replay matrix
 // ---------------------------------------------------------------------------
 
-describe("scanner-legacy", () => {
+describe("scanner-esci", () => {
   let outputDir: string;
   let tempDir: string;
 
@@ -146,7 +146,7 @@ describe("scanner-legacy", () => {
       const fake = new FakeTcpSocket();
       let detectedSource: string | null = null;
 
-      const sessionPromise = startScanSessionLegacy(
+      const sessionPromise = runEsciScan(
         {
           printerIp: "1.2.3.4",
           port: 1865,
@@ -238,7 +238,7 @@ describe("scanner-legacy", () => {
     const fixture = loadFixture(path.join(FIXTURES, "adf-single-page-jpeg.jsonl"));
     const fake = new FakeTcpSocket();
 
-    const sessionPromise = startScanSessionLegacy(
+    const sessionPromise = runEsciScan(
       {
         printerIp: "1.2.3.4",
         port: 1865,
@@ -311,7 +311,7 @@ describe("appendImageChunk", () => {
 // Failure-mode matrix (from D.4)
 // ---------------------------------------------------------------------------
 
-describe("startScanSessionLegacy failure-mode matrix", () => {
+describe("runEsciScan failure-mode matrix", () => {
   let outputDir: string;
   let tempDir: string;
 
@@ -327,7 +327,7 @@ describe("startScanSessionLegacy failure-mode matrix", () => {
 
   it("rejects on socket error mid-session", async () => {
     const fake = new FakeTcpSocket();
-    const scanPromise = startScanSessionLegacy(
+    const scanPromise = runEsciScan(
       {
         printerIp: "1.2.3.4",
         port: 1865,
@@ -347,7 +347,7 @@ describe("startScanSessionLegacy failure-mode matrix", () => {
 
   it("rejects on protocol violation (welcome with wrong packet type)", async () => {
     const fake = new FakeTcpSocket();
-    const scanPromise = startScanSessionLegacy(
+    const scanPromise = runEsciScan(
       {
         printerIp: "1.2.3.4",
         port: 1865,
@@ -361,11 +361,11 @@ describe("startScanSessionLegacy failure-mode matrix", () => {
       fake.asFactory(),
     );
     fake.simulateConnect();
-    // WELCOME state expects type 0x8000 (scanner-legacy.ts:247).
-    // Feed type 0xa000 — fail() rejects with "expected welcome (0x8000), got 0xa000".
+    // WELCOME state expects IS type 0x8000. Feed type 0xa000 — engine routes
+    // through its "Unexpected packet type ... in state WELCOME" failure path.
     // (Raw garbage that doesn't form a valid IS header would just buffer until timeout.)
     fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
-    await expect(scanPromise).rejects.toThrow(/expected welcome \(0x8000\)/);
+    await expect(scanPromise).rejects.toThrow(/Unexpected packet type 0xa000 in state WELCOME/);
   });
 });
 
@@ -424,7 +424,7 @@ describe("FS F unknown-byte handling", () => {
     });
 
     const fake = new FakeTcpSocket();
-    const sessionPromise = startScanSessionLegacy(
+    const sessionPromise = runEsciScan(
       {
         printerIp: "1.2.3.4",
         port: 1865,

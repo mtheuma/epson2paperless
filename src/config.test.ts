@@ -26,6 +26,7 @@ describe("loadConfig", () => {
     delete process.env.JPEG_QUALITY;
     delete process.env.PRINTER_PROTOCOL;
     delete process.env.LEGACY_FORCE_SOURCE;
+    delete process.env.ESCI_FORCE_SOURCE;
   });
 
   it("throws if PRINTER_IP is missing", () => {
@@ -66,6 +67,41 @@ describe("loadConfig", () => {
   it("rejects invalid PRINTER_IP", () => {
     process.env.PRINTER_IP = "not-an-ip";
     expect(() => loadConfig()).toThrow();
+  });
+
+  // Table-driven octet-range checks. The earlier regex `(\d{1,3}\.){3}\d{1,3}`
+  // accepted any 4-component dotted decimal regardless of octet value; that
+  // let `999.999.999.999` and similar through, only failing later at socket
+  // connect time with a far less helpful error. The tightened regex bounds
+  // each octet to 0-255 at config validation.
+  it.each([
+    ["256.0.0.0", "octet just above max"],
+    ["999.999.999.999", "all-out-of-range"],
+    ["0.0.0.300", "trailing octet over 255"],
+    ["1.2.3", "only three octets"],
+    ["1.2.3.4.5", "five components"],
+    ["", "empty string"],
+    // Leading zeros: Node's dgram.connect() silently resolves these to
+    // 0.0.0.0 instead of the intended address, so a confusing "binds to
+    // 0.0.0.0" failure appears later in network.ts rather than a clear
+    // startup error. Reject at the config layer instead.
+    ["001.002.003.004", "leading zeros on every octet"],
+    ["192.168.01.1", "leading zero in third octet"],
+    ["010.0.0.1", "leading zero in first octet"],
+  ])("rejects PRINTER_IP=%s (%s)", (value) => {
+    process.env.PRINTER_IP = value;
+    expect(() => loadConfig()).toThrow(/PRINTER_IP/);
+  });
+
+  it.each([
+    ["0.0.0.0", "all zeros"],
+    ["255.255.255.255", "all max"],
+    ["192.168.1.1", "common LAN"],
+    ["10.0.0.255", "broadcast-end"],
+  ])("accepts PRINTER_IP=%s (%s)", (value) => {
+    process.env.PRINTER_IP = value;
+    const config = loadConfig();
+    expect(config.printerIp).toBe(value);
   });
 
   it("defaults previewAction to 'reject'", () => {
@@ -243,9 +279,9 @@ describe("loadConfig", () => {
     expect(loadConfig().printerProtocol).toBe("auto");
   });
 
-  it("rejects PRINTER_CERT_FINGERPRINT with PRINTER_PROTOCOL=legacy", () => {
+  it("rejects PRINTER_CERT_FINGERPRINT with PRINTER_PROTOCOL=esci", () => {
     process.env.PRINTER_IP = "10.0.0.1";
-    process.env.PRINTER_PROTOCOL = "legacy";
+    process.env.PRINTER_PROTOCOL = "esci";
     process.env.PRINTER_CERT_FINGERPRINT =
       "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89";
     expect(() => loadConfig()).toThrow(/incompatible/i);
@@ -278,29 +314,82 @@ describe("loadConfig", () => {
     );
   });
 
-  it("LEGACY_FORCE_SOURCE defaults to undefined", () => {
+  it("ESCI_FORCE_SOURCE defaults to undefined", () => {
     process.env.PRINTER_IP = "10.0.0.1";
-    delete process.env.LEGACY_FORCE_SOURCE;
-    expect(loadConfig().legacyForceSource).toBeUndefined();
+    delete process.env.ESCI_FORCE_SOURCE;
+    expect(loadConfig().esciForceSource).toBeUndefined();
   });
 
-  it("LEGACY_FORCE_SOURCE accepts flatbed", () => {
+  it("ESCI_FORCE_SOURCE accepts flatbed", () => {
     process.env.PRINTER_IP = "10.0.0.1";
-    process.env.LEGACY_FORCE_SOURCE = "flatbed";
-    expect(loadConfig().legacyForceSource).toBe("flatbed");
+    process.env.ESCI_FORCE_SOURCE = "flatbed";
+    expect(loadConfig().esciForceSource).toBe("flatbed");
   });
 
-  it("LEGACY_FORCE_SOURCE rejects invalid values", () => {
+  it("ESCI_FORCE_SOURCE rejects invalid values", () => {
     process.env.PRINTER_IP = "10.0.0.1";
-    process.env.LEGACY_FORCE_SOURCE = "garbage";
+    process.env.ESCI_FORCE_SOURCE = "garbage";
     expect(() => loadConfig()).toThrow();
   });
 
-  it("rejects LEGACY_FORCE_SOURCE with PRINTER_PROTOCOL=esci2", () => {
+  it("rejects ESCI_FORCE_SOURCE with PRINTER_PROTOCOL=esci2", () => {
     process.env.PRINTER_IP = "10.0.0.1";
     process.env.PRINTER_PROTOCOL = "esci2";
-    process.env.LEGACY_FORCE_SOURCE = "flatbed";
+    process.env.ESCI_FORCE_SOURCE = "flatbed";
     expect(() => loadConfig()).toThrow(/no effect/i);
+  });
+
+  it("accepts ESCI_FORCE_SOURCE=adf-simplex", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.ESCI_FORCE_SOURCE = "adf-simplex";
+    const config = loadConfig();
+    expect(config.esciForceSource).toBe("adf-simplex");
+  });
+
+  // ─── PRINTER_PROTOCOL=esci2-plain (ET-2750) ─────────────────────────────
+
+  it("accepts PRINTER_PROTOCOL=esci2-plain", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.PRINTER_PROTOCOL = "esci2-plain";
+    const config = loadConfig();
+    expect(config.printerProtocol).toBe("esci2-plain");
+  });
+
+  it("rejects PRINTER_CERT_FINGERPRINT with PRINTER_PROTOCOL=esci2-plain", () => {
+    // ET-2750 has no TLS layer to pin against; reject the combo at
+    // startup rather than silently ignoring the fingerprint.
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.PRINTER_PROTOCOL = "esci2-plain";
+    process.env.PRINTER_CERT_FINGERPRINT =
+      "AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89:AB:CD:EF:01:23:45:67:89";
+    expect(() => loadConfig()).toThrow(/no TLS layer/i);
+  });
+
+  it("rejects ESCI_FORCE_SOURCE with PRINTER_PROTOCOL=esci2-plain", () => {
+    // ESC/I-2 (TLS or plain) does its own source detection via
+    // INIT_POLL_STAT — the legacy ESCI_FORCE_SOURCE lever doesn't apply.
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.PRINTER_PROTOCOL = "esci2-plain";
+    process.env.ESCI_FORCE_SOURCE = "flatbed";
+    expect(() => loadConfig()).toThrow(/no effect/i);
+  });
+
+  it("accepts PRINTER_PROTOCOL=esci2-plain alongside Paperless config", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.PRINTER_PROTOCOL = "esci2-plain";
+    process.env.PAPERLESS_URL = "http://paperless.example/";
+    process.env.PAPERLESS_TOKEN = "deadbeef";
+    const config = loadConfig();
+    expect(config.printerProtocol).toBe("esci2-plain");
+    expect(config.paperlessUrl).toBe("http://paperless.example/");
+    expect(config.paperlessToken).toBe("deadbeef");
+  });
+
+  it("rejects LEGACY_FORCE_SOURCE at startup with a helpful migration error", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.LEGACY_FORCE_SOURCE = "adf-simplex";
+    // Old name produces an explicit migration error pointing at the new name.
+    expect(() => loadConfig()).toThrow(/LEGACY_FORCE_SOURCE has been renamed to ESCI_FORCE_SOURCE/);
   });
 
   it("DIAGNOSE_PROTOCOL defaults to false", () => {
@@ -322,6 +411,21 @@ describe("loadConfig", () => {
     expect(loadConfig().diagnoseProtocol).toBe(false);
     delete process.env.DIAGNOSE_PROTOCOL;
   });
+
+  it("accepts PRINTER_PROTOCOL=esci", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.PRINTER_PROTOCOL = "esci";
+    const config = loadConfig();
+    expect(config.printerProtocol).toBe("esci");
+  });
+
+  it("rejects PRINTER_PROTOCOL=legacy with a helpful migration error", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.PRINTER_PROTOCOL = "legacy";
+    // The Zod enum rejects "legacy" since v0.4.0; the error message should
+    // mention the new name "esci" so users get a clear migration signal.
+    expect(() => loadConfig()).toThrow(/esci/i);
+  });
 });
 
 describe("buildPaperlessOptions", () => {
@@ -332,7 +436,7 @@ describe("buildPaperlessOptions", () => {
     delete process.env.PAPERLESS_TOKEN_FILE;
     delete process.env.PAPERLESS_DELETE_AFTER_UPLOAD;
     delete process.env.PRINTER_PROTOCOL;
-    delete process.env.LEGACY_FORCE_SOURCE;
+    delete process.env.ESCI_FORCE_SOURCE;
   });
 
   it("returns undefined when either URL or token is missing", () => {
@@ -376,7 +480,7 @@ describe("PRINTER_CERT_FINGERPRINT", () => {
     delete process.env.PRINTER_IP;
     delete process.env.PRINTER_CERT_FINGERPRINT;
     delete process.env.PRINTER_PROTOCOL;
-    delete process.env.LEGACY_FORCE_SOURCE;
+    delete process.env.ESCI_FORCE_SOURCE;
   });
 
   it("accepts a 32-byte uppercase fingerprint", () => {

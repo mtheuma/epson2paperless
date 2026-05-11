@@ -1,7 +1,15 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 
-const ipv4Regex = /^(\d{1,3}\.){3}\d{1,3}$/;
+// IPv4 dotted-quad — each octet bounded to 0-255 with no leading zeros on
+// multi-digit values. Leading zeros are rejected at this layer because
+// Node's `dgram.connect()` does NOT treat strings like `001.002.003.004`
+// as IPv4 literals — it silently picks `0.0.0.0` as the local interface,
+// and `getLocalIpForTarget()` returns `0.0.0.0` rather than failing
+// loudly. Catching them here surfaces a clear "must be a valid IPv4
+// address" error at startup instead of a confusing late binding failure.
+const ipv4Regex =
+  /^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/;
 
 const configSchema = z
   .object({
@@ -18,8 +26,8 @@ const configSchema = z
     language: z.string().length(2).default("en"),
     jpegQuality: z.coerce.number().int().min(1).max(100).default(90),
     previewAction: z.enum(["reject", "jpg", "pdf"]).default("reject"),
-    legacyForceSource: z.enum(["flatbed", "adf-simplex", "adf-duplex"]).optional(),
-    printerProtocol: z.enum(["auto", "esci2", "legacy"]).default("auto"),
+    esciForceSource: z.enum(["flatbed", "adf-simplex", "adf-duplex"]).optional(),
+    printerProtocol: z.enum(["auto", "esci2", "esci2-plain", "esci"]).default("auto"),
     // Diagnostic-only. When true and the legacy `ESC @` init returns a non-ACK,
     // the legacy scanner sends one extra `FS Y` probe (the ET-4950 ESC/I-2 path's
     // first command) before failing, and logs both replies in detail. Used to
@@ -41,28 +49,36 @@ const configSchema = z
       .optional(),
   })
   .superRefine((cfg, ctx) => {
-    if (cfg.printerProtocol === "legacy" && cfg.printerCertFingerprint) {
+    // PRINTER_CERT_FINGERPRINT only makes sense on the TLS path. Reject
+    // the combo for both legacy plain-TCP variants (esci, esci2-plain),
+    // and for `auto` (where a probe failure could downgrade silently to
+    // a non-TLS path and bypass the pin).
+    const noTlsProtocol = cfg.printerProtocol === "esci" || cfg.printerProtocol === "esci2-plain";
+    if (noTlsProtocol && cfg.printerCertFingerprint) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message:
-          "PRINTER_CERT_FINGERPRINT is incompatible with PRINTER_PROTOCOL=legacy (the legacy variant uses plain TCP, not TLS).",
+        message: `PRINTER_CERT_FINGERPRINT is incompatible with PRINTER_PROTOCOL=${cfg.printerProtocol} (no TLS layer to verify).`,
         path: ["printerCertFingerprint"],
-      });
-    }
-    if (cfg.printerProtocol === "esci2" && cfg.legacyForceSource) {
-      ctx.addIssue({
-        code: z.ZodIssueCode.custom,
-        message:
-          "LEGACY_FORCE_SOURCE has no effect with PRINTER_PROTOCOL=esci2; remove one or the other.",
-        path: ["legacyForceSource"],
       });
     }
     if (cfg.printerProtocol === "auto" && cfg.printerCertFingerprint) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         message:
-          "PRINTER_CERT_FINGERPRINT requires PRINTER_PROTOCOL=esci2 explicitly. Under PRINTER_PROTOCOL=auto, a probe failure can downgrade silently to legacy (plain TCP, no TLS), which would bypass the pin.",
+          "PRINTER_CERT_FINGERPRINT requires PRINTER_PROTOCOL=esci2 explicitly. Under PRINTER_PROTOCOL=auto, a probe failure can downgrade silently to a non-TLS path (esci2-plain or esci), which would bypass the pin.",
         path: ["printerCertFingerprint"],
+      });
+    }
+    // ESCI_FORCE_SOURCE only applies to the legacy ESC/I scanner —
+    // ESC/I-2 (TLS or plain) detects source via INIT_POLL_STAT.
+    if (
+      (cfg.printerProtocol === "esci2" || cfg.printerProtocol === "esci2-plain") &&
+      cfg.esciForceSource
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: `ESCI_FORCE_SOURCE has no effect with PRINTER_PROTOCOL=${cfg.printerProtocol}; remove one or the other.`,
+        path: ["esciForceSource"],
       });
     }
   });
@@ -70,6 +86,14 @@ const configSchema = z
 export type Config = z.infer<typeof configSchema>;
 
 export function loadConfig(): Config {
+  if (process.env.LEGACY_FORCE_SOURCE !== undefined) {
+    throw new Error(
+      "LEGACY_FORCE_SOURCE has been renamed to ESCI_FORCE_SOURCE in v0.4.0. " +
+        "Please update your env / compose file. The values are unchanged " +
+        "(adf-simplex / adf-duplex / flatbed).",
+    );
+  }
+
   // Resolve PAPERLESS_TOKEN — PAPERLESS_TOKEN_FILE takes precedence when both
   // are set. A missing / unreadable _TOKEN_FILE is a startup error.
   let paperlessToken: string | undefined;
@@ -104,7 +128,7 @@ export function loadConfig(): Config {
       process.env.PAPERLESS_DELETE_AFTER_UPLOAD === undefined
         ? undefined
         : process.env.PAPERLESS_DELETE_AFTER_UPLOAD === "true",
-    legacyForceSource: process.env.LEGACY_FORCE_SOURCE || undefined,
+    esciForceSource: process.env.ESCI_FORCE_SOURCE || undefined,
     printerCertFingerprint: process.env.PRINTER_CERT_FINGERPRINT || undefined,
     printerProtocol: process.env.PRINTER_PROTOCOL || undefined,
     diagnoseProtocol:

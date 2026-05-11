@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createHash } from "node:crypto";
-import { GAMMA_LUT_R, GAMMA_LUT_G, GAMMA_LUT_B } from "./esci-legacy-luts.js";
+import { GAMMA_LUT_R, GAMMA_LUT_G, GAMMA_LUT_B } from "./luts.js";
 
 describe("esci-legacy gamma LUTs", () => {
   it("each LUT is exactly 256 bytes", () => {
@@ -32,7 +32,7 @@ import {
   buildEscCleanup,
   buildPageEject,
   buildEscZ,
-} from "./esci-legacy.js";
+} from "./commands.js";
 
 describe("esci-legacy command builders", () => {
   it("ESC @ (init) is 2 bytes 1b 40", () => {
@@ -68,7 +68,7 @@ describe("esci-legacy command builders", () => {
   });
 });
 
-import { buildFsWBlock } from "./esci-legacy.js";
+import { buildFsWBlock } from "./commands.js";
 
 describe("esci-legacy FS W block", () => {
   // Reference bytes captured verbatim from the six pcaps.
@@ -116,7 +116,7 @@ describe("esci-legacy FS W block", () => {
   });
 });
 
-import { parseFsGReply } from "./esci-legacy.js";
+import { parseFsGReply } from "./commands.js";
 
 describe("esci-legacy FS G reply parser", () => {
   // Reproduced from .reference/wireshark-captures/wf-3620/flatbed-single-page-jpeg.pcap
@@ -136,7 +136,7 @@ describe("esci-legacy FS G reply parser", () => {
   });
 });
 
-import { buildStreamConfigPayload } from "./esci-legacy.js";
+import { buildStreamConfigPayload } from "./commands.js";
 
 describe("esci-legacy IS-0x2200 stream-config payload", () => {
   // Reference bytes verified against capture frames 210+212 (JPEG)
@@ -161,7 +161,7 @@ describe("esci-legacy IS-0x2200 stream-config payload", () => {
   });
 });
 
-import { legacyDetectSource } from "./esci-legacy.js";
+import { legacyDetectSource } from "./commands.js";
 
 describe("legacyDetectSource", () => {
   it("0x81 + simplex → flatbed", () => {

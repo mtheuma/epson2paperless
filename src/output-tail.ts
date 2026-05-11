@@ -45,7 +45,20 @@ export async function finalizeSession(args: FinalizeSessionArgs): Promise<void> 
       }
     }
     if (paperless) {
-      await uploadAllToPaperless(savedPaths, paperless);
+      // Defense-in-depth: `uploadAllToPaperless` is engineered to never
+      // reject (per-file errors are .catch-wrapped inside the module), but
+      // a future refactor or a bug above the per-file catch would otherwise
+      // turn a completed local scan into a failed scan from one-shot's
+      // perspective (it maps any rejection here to exit code 1). Wrap the
+      // boundary so the local file is treated as authoritative.
+      try {
+        await uploadAllToPaperless(savedPaths, paperless);
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error(
+          `Paperless upload threw — local scan preserved at ${savedPaths.join(", ")}: ${msg}`,
+        );
+      }
     }
   } finally {
     fs.rmSync(sessionTempDir, { recursive: true, force: true });

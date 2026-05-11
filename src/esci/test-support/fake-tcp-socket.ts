@@ -1,8 +1,11 @@
-import { EventEmitter } from "node:events";
 import type * as net from "node:net";
+import { FakeSocketBase } from "../../test-support/fake-socket-base.js";
 
-export class FakeTcpSocket extends EventEmitter {
-  readonly writes: Buffer[] = [];
+/**
+ * Minimal `net.Socket`-shaped fake driving the ESC/I scanner in tests.
+ * Inherits buffering for `data` / `error` events from FakeSocketBase.
+ */
+export class FakeTcpSocket extends FakeSocketBase {
   private onConnect?: () => void;
 
   setOnConnect(cb?: () => void): void {
@@ -11,15 +14,6 @@ export class FakeTcpSocket extends EventEmitter {
 
   simulateConnect(): void {
     this.onConnect?.();
-  }
-
-  feed(chunk: Buffer): void {
-    this.emit("data", chunk);
-  }
-
-  write(data: Buffer): boolean {
-    this.writes.push(Buffer.from(data));
-    return true;
   }
 
   end(): void {

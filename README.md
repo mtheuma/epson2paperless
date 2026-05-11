@@ -1,6 +1,6 @@
 # epson2paperless
 
-**Send scans from compatible Epson printers straight to a folder on your computer — no Epson app in the middle.**
+**Send scans from compatible Epson printers straight to a folder on your computer. No Epson app in the middle.**
 
 `epson2paperless` is a small service that runs on a machine on your LAN. Press **Scan** on the printer panel, pick your destination, and the file appears in the folder of your choice a few seconds later.
 
@@ -12,25 +12,27 @@ What you get:
 
 ## Requirements
 
-- A compatible **Epson** printer on your LAN — see [Compatible printers](#compatible-printers) below.
+- A compatible **Epson** printer on your LAN. See [Compatible printers](#compatible-printers) below.
 - **Node.js 24.15.0 LTS** or newer (or Docker).
-- The PC running `epson2paperless` on the **same local network** as the printer — same Wi-Fi or Ethernet, not across a router. See [HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md#discovery-and-keepalive-udp-multicast) for why multicast matters.
+- The PC running `epson2paperless` on the **same local network** as the printer (same Wi-Fi or Ethernet, not across a router). See [HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md#discovery-and-keepalive-udp-multicast) for why multicast matters.
 
 ## Compatible printers
 
-| Model                 | Status      | Notes                             |
-| --------------------- | ----------- | --------------------------------- |
-| **ET-3950**           | ✅ Verified |                                   |
-| **ET-4950 / ET-4956** | ✅ Verified | Same hardware, different colours  |
-| **WF-3620**           | ✅ Verified | Plain TCP scanner, no TLS pinning |
+| Model                 | Status      | Notes                                                                                                                            |
+| --------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **ET-3950**           | ✅ Verified |                                                                                                                                  |
+| **ET-4950 / ET-4956** | ✅ Verified |                                                                                                                                  |
+| **WF-3620**           | ✅ Verified | Plain TCP scanner, no TLS pinning                                                                                                |
+| **ET-2750**           | ✅ Verified | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS                                                                            |
+| **XP-7100**           | 🟡 Partial  | Flatbed works; ADF support pending ([#65](https://github.com/mtheuma/epson2paperless/issues/65)). ESC/I-2 over plain TCP, no TLS |
 
-Compatibility reports are welcome whether your model works or doesn't — [open an issue](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) using the compatibility template.
+Compatibility reports are welcome whether your model works or doesn't. [Open an issue](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) using the compatibility template.
 
 ## Quick start
 
 ### Docker (recommended)
 
-Image: **`ghcr.io/mtheuma/epson2paperless`** — multi-arch (`linux/amd64`, `linux/arm64`). Published to GHCR on every `main` push (`:main`) and every `v*` git tag (`:vX.Y.Z` + `:latest`).
+Image: **`ghcr.io/mtheuma/epson2paperless`**. Multi-arch (`linux/amd64`, `linux/arm64`). Published to GHCR on every `main` push (`:main`) and every `v*` git tag (`:vX.Y.Z` + `:latest`).
 
 1. In `compose.yaml`, set `PRINTER_IP` to your printer's IPv4 address and `./output` to wherever you want scans written.
 2. `docker compose up -d`.
@@ -38,7 +40,7 @@ Image: **`ghcr.io/mtheuma/epson2paperless`** — multi-arch (`linux/amd64`, `lin
 
 Notes:
 
-- Uses host networking — the printer's multicast beacon can't reach a bridged container. [Why](docs/HOW-IT-WORKS.md#discovery-and-keepalive-udp-multicast).
+- Uses host networking. The printer's multicast beacon can't reach a bridged container. [Why](docs/HOW-IT-WORKS.md#discovery-and-keepalive-udp-multicast).
 - Container runs as UID 1000 (`node`). If your mount has a different owner, `chown` it to match.
 - Docker Desktop on macOS / Windows has caveats around host networking; the primary deployment target is a Linux server.
 
@@ -61,7 +63,7 @@ Within about 60 seconds, your destination (default `Paperless`) appears in the p
 
 **Windows:** copy `command.bat.example` to `command.bat` (gitignored, so your local `PRINTER_IP` / paths stay private), edit the values, then double-click. The script tees output to `scan.log`.
 
-**One-shot mode** — `npm run scan` runs a single scan and exits, handy for cron jobs or end-to-end tests. Exit codes: `0` success, `1` scan failure, `130` SIGINT (Ctrl-C), `143` SIGTERM. No health endpoint is opened, and any push-scan that arrives after the first is ignored with a warning.
+**One-shot mode.** `npm run scan` runs a single scan and exits, handy for cron jobs or end-to-end tests. Exit codes: `0` success, `1` scan failure, `130` SIGINT (Ctrl-C), `143` SIGTERM. No health endpoint is opened, and any push-scan that arrives after the first is ignored with a warning.
 
 ## Use it
 
@@ -84,30 +86,30 @@ Configuration is via environment variables. Only `PRINTER_IP` is required.
 | `SCAN_DEST_NAME`   |          | `Paperless`      | The label the printer shows on its panel.                                                                                                               |
 | `OUTPUT_DIR`       |          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                        |
 | `LOG_LEVEL`        |          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                    |
-| `LOG_FORMAT`       |          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line — for `docker logs` + Loki / `jq`).                                                      |
+| `LOG_FORMAT`       |          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line, for `docker logs` + Loki / `jq`).                                                       |
 | `PREVIEW_ACTION`   |          | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen. |
-| `PRINTER_PROTOCOL` |          | `auto`           | `auto` (TLS-probe each session), `esci2` (force ESC/I-2 over TLS), `legacy` (force plain-TCP ESC/I).                                                    |
-| `JPEG_QUALITY`     |          | `90`             | JPEG encoder quality 1–100 for the legacy (WF-3620) path.                                                                                               |
+| `PRINTER_PROTOCOL` |          | `auto`           | `auto` (probe each session), `esci2` (force ESC/I-2 over TLS), `esci2-plain` (force ESC/I-2 over plain TCP), `esci` (force plain-TCP ESC/I).            |
+| `JPEG_QUALITY`     |          | `90`             | JPEG encoder quality 1–100 for the ESC/I path (where raw pixels are host-encoded to JPEG).                                                              |
 | `TEMP_DIR`         |          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                               |
 | `HEALTH_PORT`      |          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                   |
 
 <details>
 <summary>Advanced (leave as default unless you know why)</summary>
 
-| Variable                   | Default | What it does                                                                                                                                                                                               |
-| -------------------------- | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SCAN_DEST_ID`             | `0x02`  | Destination ID byte sent in keepalive packets.                                                                                                                                                             |
-| `LANGUAGE`                 | `en`    | 2-letter locale sent to the printer; no observed user-visible effect.                                                                                                                                      |
-| `LEGACY_FORCE_SOURCE`      | —       | Diagnostic override for the legacy path when FS F autodetection misfires. Set to `flatbed`, `adf-simplex`, or `adf-duplex` to bypass the wire-byte detection.                                              |
-| `PRINTER_CERT_FINGERPRINT` | —       | Optional SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`). When set, scans abort if the peer cert doesn't match. **Requires `PRINTER_PROTOCOL=esci2`** (auto-detection cannot pin reliably). |
-| `DIAGNOSE_PROTOCOL`        | `false` | Compatibility-report aid. On a legacy `ESC @` non-ACK, sends one extra `FS Y` probe and aborts with annotated `[diagnose]` log lines. Leave off in normal use.                                             |
-| `SHUTDOWN_TIMEOUT_MS`      | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                                                                                                  |
+| Variable                   | Default | What it does                                                                                                                                                                                                                                                                      |
+| -------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SCAN_DEST_ID`             | `0x02`  | Destination ID byte sent in keepalive packets.                                                                                                                                                                                                                                    |
+| `LANGUAGE`                 | `en`    | 2-letter locale sent to the printer; no observed user-visible effect.                                                                                                                                                                                                             |
+| `ESCI_FORCE_SOURCE`        | —       | Diagnostic override for the ESC/I path when FS F autodetection misfires. Set to `flatbed`, `adf-simplex`, or `adf-duplex` to bypass the wire-byte detection.                                                                                                                      |
+| `PRINTER_CERT_FINGERPRINT` | —       | Optional SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`). When set, scans abort if the peer cert doesn't match. **Requires `PRINTER_PROTOCOL=esci2`.** Auto-detection can't pin reliably, and the non-TLS variants (`esci`, `esci2-plain`) have no cert to verify. |
+| `DIAGNOSE_PROTOCOL`        | `false` | Compatibility-report aid. On a legacy `ESC @` non-ACK, sends one extra `FS Y` probe and aborts with annotated `[diagnose]` log lines. Leave off in normal use.                                                                                                                    |
+| `SHUTDOWN_TIMEOUT_MS`      | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                                                                                                                                                                         |
 
 </details>
 
 ### Verifying the printer's TLS certificate
 
-By default, the service connects to the printer with TLS verification disabled — the printer ships a self-signed certificate with no published fingerprint, so standard validation can't apply. See [`SECURITY.md`](SECURITY.md) for the full rationale.
+By default, the service connects to the printer with TLS verification disabled. The printer ships a self-signed certificate with no published fingerprint, so standard validation can't apply. See [`SECURITY.md`](SECURITY.md) for the full rationale.
 
 If you run the service on a network you don't fully trust, you can pin the printer's certificate. Capture its current fingerprint:
 
@@ -116,7 +118,7 @@ npm run printer-fingerprint -- 192.0.2.58
 # AB:CD:EF:01:23:45:67:89:0A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78
 ```
 
-Set `PRINTER_CERT_FINGERPRINT` to that value (env var or `compose.yaml`), and **also set `PRINTER_PROTOCOL=esci2`** so the auto-protocol probe can't downgrade silently to plain-TCP legacy and bypass the pin. The scanner will refuse any TLS peer whose cert doesn't match. If you ever swap the printer for another unit (warranty, upgrade), re-run the helper and update the env var.
+Set `PRINTER_CERT_FINGERPRINT` to that value (env var or `compose.yaml`), and **also set `PRINTER_PROTOCOL=esci2`** so the auto-protocol probe can't downgrade silently to plain-TCP ESC/I and bypass the pin. The scanner will refuse any TLS peer whose cert doesn't match. If you ever swap the printer for another unit (warranty, upgrade), re-run the helper and update the env var.
 
 ## Pair with Paperless-ngx
 
@@ -134,10 +136,10 @@ If you'd rather POST scans straight into Paperless-ngx's API than drop them into
 | ------------------------------- | -------------------------- | ------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PAPERLESS_URL`                 | yes                        | —       | Base URL of your Paperless-ngx, e.g. `http://paperless:8000`. The service appends `/api/documents/post_document/`, so give it just the host. |
 | `PAPERLESS_TOKEN`               | yes                        | —       | API token. Create via Paperless-ngx admin → Users → your user → API token.                                                                   |
-| `PAPERLESS_TOKEN_FILE`          |                            | —       | Alternative to `PAPERLESS_TOKEN` — read the token from a file. For Docker secrets / Kubernetes. Takes precedence if both are set.            |
+| `PAPERLESS_TOKEN_FILE`          |                            | —       | Alternative to `PAPERLESS_TOKEN`; reads the token from a file. For Docker secrets / Kubernetes. Takes precedence if both are set.            |
 | `PAPERLESS_DELETE_AFTER_UPLOAD` |                            | `true`  | Delete the local file after a successful upload. Set to `false` to keep a local copy.                                                        |
 
-When both URL and token are set, every scan is uploaded **after** the local file is written. The local file stays by default — the upload is additive. If the upload fails (network blip, Paperless-ngx down), the scan is still safe in `OUTPUT_DIR` and you can re-upload manually or fall back to the consume-folder path.
+When both URL and token are set, every scan is uploaded **after** the local file is written. By default the local file is removed once the upload succeeds; set `PAPERLESS_DELETE_AFTER_UPLOAD=false` to keep a copy alongside the upload. If the upload fails (network blip, Paperless-ngx down), the local file is preserved. The scan is safe in `OUTPUT_DIR` and you can re-upload manually or fall back to the consume-folder path.
 
 Multi-page ADF scans in JPG mode upload one document per page. Pick **PDF** on the printer panel if you'd rather have them grouped into a single Paperless-ngx document.
 
@@ -147,8 +149,8 @@ Multi-page ADF scans in JPG mode upload one document per page. Pick **PDF** on t
 The printer broadcasts a discovery beacon roughly once a minute; wait at least 60 seconds. If it still doesn't appear:
 
 - Confirm the PC is on the same subnet as the printer. Try `ping <printer-ip>`.
-- Check your firewall — UDP port `2968` needs to be allowed for multicast traffic from the printer.
-- Make sure Epson Event Manager isn't running on the same PC — it binds the same port. Other Epson software (drivers, ScanSmart) is fine.
+- Check your firewall. UDP port `2968` needs to be allowed for multicast traffic from the printer.
+- Make sure Epson Event Manager isn't running on the same PC. It binds the same port. Other Epson software (drivers, ScanSmart) is fine.
 
 **Service hangs after a scan.**
 Rare edge case. Restart the service with `Ctrl-C` and relaunch.
@@ -172,7 +174,7 @@ Equally valuable: reporting your printer's compatibility so the [Compatible prin
 
 MIT. See [`LICENSE`](LICENSE) for the full text.
 
-**Not affiliated with Seiko Epson Corporation.** This project is an independent, clean-room re-implementation of the network behavior of an Epson "Scan to Computer" workflow, developed by analyzing the wire protocol of a device the author owns. No Epson source code, firmware, or binaries are included or distributed. "EPSON", "EcoTank", "ET-4950", and "ET-4956" are trademarks of Seiko Epson Corporation, used here descriptively to identify the hardware this software interoperates with.
+**Not affiliated with Seiko Epson Corporation.** This project is an independent, clean-room re-implementation of the network behavior of an Epson "Scan to Computer" workflow, developed by analyzing the wire protocol of a device the author owns. No Epson source code, firmware, or binaries are included or distributed. "EPSON", "EcoTank", "Expression", and "WorkForce" are trademarks of Seiko Epson Corporation, used here descriptively to identify the hardware this software interoperates with.
 
 ---
 
