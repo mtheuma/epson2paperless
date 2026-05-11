@@ -119,15 +119,6 @@ npm run printer-fingerprint -- 192.0.2.58
 
 Set `PRINTER_CERT_FINGERPRINT` to that value (env var or `compose.yaml`), and **also set `PRINTER_PROTOCOL=esci2`** so the auto-protocol probe can't downgrade silently to plain-TCP ESC/I and bypass the pin. The scanner will refuse any TLS peer whose cert doesn't match. If you ever swap the printer for another unit (warranty, upgrade), re-run the helper and update the env var.
 
-### Upgrade notes
-
-**v0.3.x → v0.4.0 migration:** rename your env vars / compose values:
-
-- `PRINTER_PROTOCOL=legacy` → `PRINTER_PROTOCOL=esci`
-- `LEGACY_FORCE_SOURCE=...` → `ESCI_FORCE_SOURCE=...` (values unchanged)
-
-The old names are rejected at startup with a clear error pointing at the new ones.
-
 ## Pair with Paperless-ngx
 
 Point `OUTPUT_DIR` at Paperless-ngx's consume directory (typically `./consume` or `/usr/src/paperless/consume` inside the container). Paperless picks up new files automatically.
