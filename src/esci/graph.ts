@@ -91,6 +91,16 @@ export interface EsciCtx {
   imageBufferOffset: number;
   /** Cached scan geometry (set in START alongside the imageBuffer allocation). */
   geom: ScanGeometry | null;
+  /**
+   * Trailing IS-0xa200 image chunks captured during the post-page-complete
+   * encoding window. In multi-page / ADF-duplex scans the printer eagerly
+   * streams the next page's first chunks before our flushPage barrier
+   * resolves; they're held here and drained into the next page's buffer on
+   * the next IMG_RECEIVING entry (see PAGE_ENCODING_DRAIN + IMG_RECEIVING
+   * drain prelude). In single-page-final scans the queue is harmless tail
+   * overflow that's never replayed. Issue #71 — regression from v0.4.0.
+   */
+  deferredImageChunks: Buffer[];
 }
 
 export const ESCI_TIMEOUT_MS = 60_000;
@@ -535,6 +545,34 @@ g.state(
         ),
       };
     }
+
+    // Issue #71: drain any chunks deferred during the previous page's
+    // encode window before processing the incoming chunk. In duplex /
+    // multi-page scans the printer eagerly streams the next page's first
+    // bytes while we're encoding the previous page; PAGE_ENCODING_DRAIN
+    // stashed them into ctx.deferredImageChunks. The drain runs only on
+    // the first chunk of the new page (after the first append the queue
+    // is empty for the rest of the page).
+    if (ctx.deferredImageChunks.length > 0) {
+      const chunks = ctx.deferredImageChunks;
+      ctx.deferredImageChunks = [];
+      for (let i = 0; i < chunks.length; i++) {
+        ctx.imageBufferOffset = appendImageChunk(chunks[i], ctx.imageBuffer, ctx.imageBufferOffset);
+        if (ctx.imageBufferOffset >= ctx.imageBuffer.length) {
+          // Deferred chunks alone filled the page (unlikely in practice
+          // — encode is ~100-500ms vs ~1-2s per page on the wire — but
+          // guard for safety). Re-stash the remaining deferred chunks
+          // plus the incoming chunk for the next page, then fall into
+          // the flush-completion branch.
+          for (let j = i + 1; j < chunks.length; j++) {
+            ctx.deferredImageChunks.push(chunks[j]);
+          }
+          ctx.deferredImageChunks.push(packet.payload);
+          return makeFlushTransition(ctx);
+        }
+      }
+    }
+
     ctx.imageBufferOffset = appendImageChunk(
       packet.payload,
       ctx.imageBuffer,
@@ -543,49 +581,73 @@ g.state(
     if (ctx.imageBufferOffset < ctx.imageBuffer.length) {
       return { next: "IMG_RECEIVING" };
     }
-
-    // Increment pageCount BEFORE computing side so pageCount represents the
-    // 1-indexed page we're about to flush; even pageCount → ADF-duplex back
-    // side (1=front, 2=back, 3=front, ...).
-    ctx.pageCount += 1;
-    const isBack = ctx.source === "adf-duplex" && ctx.pageCount % 2 === 0;
-    if (!ctx.geom) {
-      return { error: new Error("IMG_RECEIVING: page complete with no cached geometry") };
-    }
-    const { widthPx, heightPx } = ctx.geom;
-    const rawRgb = ctx.imageBuffer;
-    const quality = ctx.jpegQuality;
-    ctx.imageBuffer = Buffer.alloc(0);
-    ctx.imageBufferOffset = 0;
-
-    const flush = {
-      side: isBack ? ("back" as const) : ("front" as const),
-      encode: () => encodeRawGbrToJpeg(rawRgb, widthPx, heightPx, quality),
-    };
-    if (ctx.source === "flatbed") {
-      return { next: "POST_STATUS", send: sendFsF(), flushPage: flush };
-    }
-    return {
-      next: "PAGE_EJECT_WAIT",
-      send: passthru(buildPageEject(), 1),
-      flushPage: flush,
-    };
+    return makeFlushTransition(ctx);
   }),
 );
 
+/**
+ * Build the page-complete transition out of IMG_RECEIVING: snapshot the
+ * geometry/buffer for async encode, reset the per-page ctx fields, and
+ * route to PAGE_ENCODING_DRAIN (ADF) or POST_STATUS (flatbed) with the
+ * flushPage barrier attached. Factored out so the deferred-chunk overflow
+ * branch can re-use the same construction.
+ */
+function makeFlushTransition(
+  ctx: EsciCtx,
+):
+  | { next: string; send: SendSpec<EsciCtx> | SendSpec<EsciCtx>[]; flushPage: FlushPage }
+  | { error: Error } {
+  ctx.pageCount += 1;
+  const isBack = ctx.source === "adf-duplex" && ctx.pageCount % 2 === 0;
+  if (!ctx.geom) {
+    return { error: new Error("IMG_RECEIVING: page complete with no cached geometry") };
+  }
+  const { widthPx, heightPx } = ctx.geom;
+  const rawRgb = ctx.imageBuffer;
+  const quality = ctx.jpegQuality;
+  ctx.imageBuffer = Buffer.alloc(0);
+  ctx.imageBufferOffset = 0;
+  const flush: FlushPage = {
+    side: isBack ? "back" : "front",
+    encode: () => encodeRawGbrToJpeg(rawRgb, widthPx, heightPx, quality),
+  };
+  if (ctx.source === "flatbed") {
+    return { next: "POST_STATUS", send: sendFsF(), flushPage: flush };
+  }
+  return {
+    next: "PAGE_ENCODING_DRAIN",
+    send: passthru(buildPageEject(), 1),
+    flushPage: flush,
+  };
+}
+
+interface FlushPage {
+  side: "front" | "back";
+  encode: () => Promise<Buffer>;
+}
+
 // =============================================================================
-// PAGE_EJECT_WAIT — ADF only; ACKs the 0x0c 0x00 eject, sets the inter-page
-// flag, and routes back to STATUS_1A which decides whether to continue (more
-// paper) or wrap up (ADF empty). Decision so we can mutate ctx and emit FS F
-// in the same transition.
+// PAGE_ENCODING_DRAIN — ADF only; absorbs trailing IS-0xa200 image chunks
+// that arrive during the flushPage encode window (the printer eagerly
+// streams the next page's first bytes before we ACK the page-eject), then
+// ACKs the 0x0c 0x00 eject and routes back to STATUS_1A. Issue #71 —
+// without this state, trailing 0xa200 chunks landed in PAGE_EJECT_WAIT
+// and tripped its 0xa000-only validator, failing the whole scan.
 // =============================================================================
 
 g.state(
-  "PAGE_EJECT_WAIT",
+  "PAGE_ENCODING_DRAIN",
   decision<EsciCtx>((ctx, packet) => {
-    const typeGuard = expectIsType(packet, ESCI_REPLY, "PAGE_EJECT_WAIT");
+    if (packet.type === 0xa200) {
+      // Next page's pixel data, streamed eagerly by the printer. Stash
+      // for replay on the next IMG_RECEIVING entry; self-loop to keep
+      // absorbing further chunks until the eject ACK lands.
+      ctx.deferredImageChunks.push(packet.payload);
+      return { next: "PAGE_ENCODING_DRAIN" };
+    }
+    const typeGuard = expectIsType(packet, ESCI_REPLY, "PAGE_ENCODING_DRAIN");
     if (typeGuard) return typeGuard;
-    const lengthGuard = expectLength(packet.payload, 1, "PAGE_EJECT_WAIT", "page-eject ACK");
+    const lengthGuard = expectLength(packet.payload, 1, "PAGE_ENCODING_DRAIN", "page-eject ACK");
     if (lengthGuard) return lengthGuard;
     ctx.inInterPageLoop = true;
     return { next: "STATUS_1A", send: sendFsF() };

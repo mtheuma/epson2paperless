@@ -16,6 +16,7 @@ function makeCtx(overrides: Partial<EsciCtx> = {}): EsciCtx {
     geom: null,
     imageBuffer: Buffer.alloc(0),
     imageBufferOffset: 0,
+    deferredImageChunks: [],
     ...overrides,
   };
 }
@@ -323,7 +324,7 @@ describe("esciGraph reset / gamma / window / start cycles", () => {
   });
 });
 
-describe("esciGraph IMG_RECEIVING / PAGE_EJECT_WAIT / cleanup", () => {
+describe("esciGraph IMG_RECEIVING / PAGE_ENCODING_DRAIN / cleanup", () => {
   // Stub geometry sized so widthPx * heightPx * 3 = the test's pre-allocated
   // imageBuffer length. flush.encode() is never invoked from these tests, so
   // dpi / topYOffsetPx values don't matter — only the dimensions feed back
@@ -364,7 +365,7 @@ describe("esciGraph IMG_RECEIVING / PAGE_EJECT_WAIT / cleanup", () => {
     }
   });
 
-  it("IMG_RECEIVING flushes and routes to PAGE_EJECT_WAIT for ADF", () => {
+  it("IMG_RECEIVING flushes and routes to PAGE_ENCODING_DRAIN for ADF", () => {
     const state = esciGraph.states.IMG_RECEIVING;
     if (state.kind === "decision") {
       const ctx = makeCtx({
@@ -376,7 +377,7 @@ describe("esciGraph IMG_RECEIVING / PAGE_EJECT_WAIT / cleanup", () => {
       const chunk = Buffer.concat([Buffer.from([0x01]), Buffer.alloc(6, 0xb0)]);
       const result = state.decide(ctx, { type: 0xa200, payload: chunk });
       if ("error" in result) throw new Error("unexpected error result");
-      expect(result.next).toBe("PAGE_EJECT_WAIT");
+      expect(result.next).toBe("PAGE_ENCODING_DRAIN");
       expect(result.flushPage?.side).toBe("front"); // page 1 = front
     }
   });
@@ -398,13 +399,117 @@ describe("esciGraph IMG_RECEIVING / PAGE_EJECT_WAIT / cleanup", () => {
     }
   });
 
-  it("PAGE_EJECT_WAIT sets inInterPageLoop and routes to STATUS_1A", () => {
-    const state = esciGraph.states.PAGE_EJECT_WAIT;
+  it("PAGE_ENCODING_DRAIN: 0xa000 eject ACK sets inInterPageLoop and routes to STATUS_1A", () => {
+    const state = esciGraph.states.PAGE_ENCODING_DRAIN;
     if (state.kind === "decision") {
       const ctx = makeCtx({ inInterPageLoop: false });
       const result = state.decide(ctx, { type: ESCI_REPLY, payload: Buffer.from([0x06]) });
       expect("next" in result && result.next).toBe("STATUS_1A");
       expect(ctx.inInterPageLoop).toBe(true);
+    }
+  });
+
+  it("PAGE_ENCODING_DRAIN: trailing 0xa200 chunk is stashed and self-loops (issue #71)", () => {
+    // The regression: in duplex / multi-page scans the printer eagerly
+    // streams the next page's first bytes before our flushPage encode
+    // completes. Pre-v0.4.0 absorbed them in a PAGE_ENCODING state; the
+    // v0.4.0 rebuild lost this, sending the chunks to PAGE_EJECT_WAIT
+    // which rejected anything that wasn't a 0xa000 ACK.
+    const state = esciGraph.states.PAGE_ENCODING_DRAIN;
+    if (state.kind === "decision") {
+      const ctx = makeCtx();
+      const chunk = Buffer.concat([Buffer.from([0x01]), Buffer.alloc(12, 0xb0)]);
+      const result = state.decide(ctx, { type: 0xa200, payload: chunk });
+      expect("next" in result && result.next).toBe("PAGE_ENCODING_DRAIN");
+      expect(ctx.deferredImageChunks).toHaveLength(1);
+      expect(ctx.deferredImageChunks[0]).toBe(chunk);
+      // No state mutation that would affect the eject-ACK path.
+      expect(ctx.inInterPageLoop).toBe(false);
+    }
+  });
+
+  it("PAGE_ENCODING_DRAIN: stashes multiple trailing 0xa200 chunks in order", () => {
+    const state = esciGraph.states.PAGE_ENCODING_DRAIN;
+    if (state.kind === "decision") {
+      const ctx = makeCtx();
+      const first = Buffer.concat([Buffer.from([0x01]), Buffer.alloc(4, 0xa0)]);
+      const second = Buffer.concat([Buffer.from([0x01]), Buffer.alloc(4, 0xb0)]);
+      state.decide(ctx, { type: 0xa200, payload: first });
+      state.decide(ctx, { type: 0xa200, payload: second });
+      expect(ctx.deferredImageChunks).toEqual([first, second]);
+    }
+  });
+
+  it("PAGE_ENCODING_DRAIN: rejects unexpected packet types", () => {
+    const state = esciGraph.states.PAGE_ENCODING_DRAIN;
+    if (state.kind === "decision") {
+      const ctx = makeCtx();
+      const result = state.decide(ctx, { type: 0xa100, payload: Buffer.from([0x00]) });
+      expect("error" in result).toBe(true);
+    }
+  });
+
+  it("PAGE_ENCODING_DRAIN: rejects 0xa000 with wrong length", () => {
+    const state = esciGraph.states.PAGE_ENCODING_DRAIN;
+    if (state.kind === "decision") {
+      const ctx = makeCtx();
+      const result = state.decide(ctx, { type: ESCI_REPLY, payload: Buffer.from([0x06, 0x06]) });
+      expect("error" in result).toBe(true);
+    }
+  });
+
+  it("IMG_RECEIVING: drains deferredImageChunks into the new page buffer before processing the incoming chunk", () => {
+    // Engine flow after PAGE_ENCODING_DRAIN exits and the inter-page
+    // loop walks back to IMG_RECEIVING: first incoming 0xa200 triggers
+    // the drain prelude. Both deferred + incoming bytes land in the
+    // fresh imageBuffer.
+    const state = esciGraph.states.IMG_RECEIVING;
+    if (state.kind === "decision") {
+      const deferred = Buffer.concat([Buffer.from([0x01]), Buffer.alloc(5, 0xa0)]);
+      const ctx = makeCtx({
+        imageBuffer: Buffer.alloc(100),
+        imageBufferOffset: 0,
+        deferredImageChunks: [deferred],
+      });
+      const incoming = Buffer.concat([Buffer.from([0x01]), Buffer.alloc(7, 0xb0)]);
+      const result = state.decide(ctx, { type: 0xa200, payload: incoming });
+      expect("next" in result && result.next).toBe("IMG_RECEIVING");
+      // Deferred 5 bytes + incoming 7 bytes = 12 pixel bytes total.
+      expect(ctx.imageBufferOffset).toBe(12);
+      // First five bytes are the deferred chunk's pixel tail.
+      expect(ctx.imageBuffer.subarray(0, 5).every((b) => b === 0xa0)).toBe(true);
+      // Next seven are the incoming chunk's pixel tail.
+      expect(ctx.imageBuffer.subarray(5, 12).every((b) => b === 0xb0)).toBe(true);
+      // Queue is consumed.
+      expect(ctx.deferredImageChunks).toHaveLength(0);
+    }
+  });
+
+  it("IMG_RECEIVING: deferred-chunk drain that fills the page re-stashes the incoming chunk for the next page", () => {
+    // Defensive guard for the (unlikely) case where deferred chunks
+    // alone exceed the new page's buffer. The remaining deferred
+    // entries + the incoming chunk get re-stashed so the next page's
+    // IMG_RECEIVING can drain them.
+    const state = esciGraph.states.IMG_RECEIVING;
+    if (state.kind === "decision") {
+      const stubGeom2 = { dpi: 300, widthPx: 1, heightPx: 4, topYOffsetPx: 0 };
+      const fillsBuffer = Buffer.concat([Buffer.from([0x01]), Buffer.alloc(12, 0xa0)]);
+      const extraDeferred = Buffer.concat([Buffer.from([0x01]), Buffer.alloc(4, 0xc0)]);
+      const ctx = makeCtx({
+        source: "adf-duplex",
+        geom: stubGeom2,
+        imageBuffer: Buffer.alloc(12),
+        imageBufferOffset: 0,
+        deferredImageChunks: [fillsBuffer, extraDeferred],
+      });
+      const incoming = Buffer.concat([Buffer.from([0x01]), Buffer.alloc(4, 0xb0)]);
+      const result = state.decide(ctx, { type: 0xa200, payload: incoming });
+      if ("error" in result) throw new Error("unexpected error result");
+      // Page completes mid-drain → flushPage transition emitted.
+      expect(result.next).toBe("PAGE_ENCODING_DRAIN");
+      expect(result.flushPage?.side).toBe("front");
+      // The unconsumed deferred chunk + the incoming chunk are re-stashed.
+      expect(ctx.deferredImageChunks).toEqual([extraDeferred, incoming]);
     }
   });
 

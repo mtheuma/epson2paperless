@@ -100,6 +100,7 @@ export async function runEsciScan(
       geom: null,
       imageBuffer: Buffer.alloc(0),
       imageBufferOffset: 0,
+      deferredImageChunks: [],
     },
     transportFactory: makeTcpTransportFactory(session, socketFactory),
     outputDir: session.outputDir,
