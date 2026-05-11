@@ -505,13 +505,14 @@ g.state(
     // PAGE_ENCODING_DRAIN. Without this, IMG_RECEIVING would sit on its
     // deferred queue until the engine timeout (#71). The IMG_RECEIVING
     // drain prelude stays as a backstop for fragmented arrivals.
+    const streamConfig = buildIsPacket(0x2200, buildStreamConfigPayload(reply, ctx.format));
     if (drainDeferredIntoBuffer(ctx, null) === "overflowed") {
-      return makeFlushTransition(ctx);
+      // Bundle stream-config with the flush transition so the overflow
+      // path still emits IS-0x2200 — every non-overflow START path
+      // sends it, and the printer expects it before any page-eject.
+      return makeFlushTransition(ctx, streamConfig);
     }
-    return {
-      next: "IMG_RECEIVING",
-      send: buildIsPacket(0x2200, buildStreamConfigPayload(reply, ctx.format)),
-    };
+    return { next: "IMG_RECEIVING", send: streamConfig };
   }),
 );
 
@@ -545,8 +546,15 @@ awaitReply(g, "START_POLL_READY", ESCI_REPLY, length16, "START", passthru(buildF
  * for async encode, reset per-page ctx fields, route to
  * PAGE_ENCODING_DRAIN (ADF) or POST_STATUS (flatbed). Factored out so the
  * deferred-chunk overflow branch can reuse the same construction.
+ *
+ * `preSend` lets START's overflow branch prepend the per-page IS-0x2200
+ * stream-config in front of the staged send. Without it the overflow
+ * path would skip a packet that every non-overflow START path emits
+ * (PR #79 review). Both bytes are written by the engine after encode
+ * resolves, in array order, so the IS-0x2200 still precedes the
+ * page-eject on the wire.
  */
-function makeFlushTransition(ctx: EsciCtx): TransitionResult<EsciCtx> {
+function makeFlushTransition(ctx: EsciCtx, preSend?: SendSpec<EsciCtx>): TransitionResult<EsciCtx> {
   ctx.pageCount += 1;
   const isBack = ctx.source === "adf-duplex" && ctx.pageCount % 2 === 0;
   if (!ctx.geom) {
@@ -562,11 +570,17 @@ function makeFlushTransition(ctx: EsciCtx): TransitionResult<EsciCtx> {
     encode: () => encodeRawGbrToJpeg(rawRgb, widthPx, heightPx, quality),
   };
   if (ctx.source === "flatbed") {
-    return { next: "POST_STATUS", send: sendFsF(), flushPage: flush };
+    const trailing = sendFsF();
+    return {
+      next: "POST_STATUS",
+      send: preSend !== undefined ? [preSend, trailing] : trailing,
+      flushPage: flush,
+    };
   }
+  const trailing = passthru(buildPageEject(), 1);
   return {
     next: "PAGE_ENCODING_DRAIN",
-    send: passthru(buildPageEject(), 1),
+    send: preSend !== undefined ? [preSend, trailing] : trailing,
     flushPage: flush,
   };
 }

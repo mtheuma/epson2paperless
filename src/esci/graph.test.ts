@@ -363,6 +363,22 @@ describe("esciGraph reset / gamma / window / start cycles", () => {
       // pageCount advanced; ctx.imageBuffer reset.
       expect(ctx.pageCount).toBe(2);
       expect(ctx.imageBufferOffset).toBe(0);
+      // PR #79 review (P2): the overflow branch must still emit IS-0x2200
+      // stream-config before the page-eject — every non-overflow START
+      // path sends IS-0x2200, and skipping it on the overflow path would
+      // make this the only START exit that doesn't.
+      expect(Array.isArray(result.send)).toBe(true);
+      if (Array.isArray(result.send)) {
+        expect(result.send).toHaveLength(2);
+        const first = result.send[0] as Buffer;
+        // IS framing: "IS" magic + 2-byte type (big-endian). 0x2200 = stream-config.
+        expect(first[0]).toBe(0x49); // 'I'
+        expect(first[1]).toBe(0x53); // 'S'
+        expect(first.readUInt16BE(2)).toBe(0x2200);
+        const second = result.send[1] as Buffer;
+        // Page-eject is wrapped in an IS-0x2000 passthru envelope.
+        expect(second.readUInt16BE(2)).toBe(0x2000);
+      }
     }
   });
 
