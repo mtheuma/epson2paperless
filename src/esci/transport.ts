@@ -50,7 +50,11 @@ export function withRawSocketCleanClose(inner: SessionTransport): SessionTranspo
     },
     end: (data?: Buffer) => {
       if (politelyClosed) return;
-      politelyClosed = true;
+      // Forward to inner FIRST. If it throws, we propagate the throw and
+      // leave politelyClosed=false so the engine's mandatory follow-up
+      // destroy() (or any caller's catch-and-destroy) still cleans up
+      // the socket. Setting the flag before this would no-op those
+      // destroys and leak the handle.
       inner.end(data);
       fallbackTimer = setTimeout(() => {
         if (!closed) inner.destroy();
@@ -58,6 +62,7 @@ export function withRawSocketCleanClose(inner: SessionTransport): SessionTranspo
       // .unref() so a pending fallback doesn't keep the daemon's event
       // loop alive past a graceful shutdown.
       fallbackTimer.unref();
+      politelyClosed = true;
     },
     destroy(err?: Error) {
       if (politelyClosed && !closed) {

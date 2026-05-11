@@ -129,6 +129,36 @@ describe("withRawSocketCleanClose wrapper", () => {
     expect(seen).toEqual([false, true]);
   });
 
+  it("inner.end() throws — politelyClosed stays false, subsequent destroy() forwards (PR #78 review)", () => {
+    // Reviewer's catch on PR #78: if inner.end() throws, we must NOT
+    // have entered the polite-close state — otherwise the engine's
+    // follow-up destroy() in settle() no-ops and the socket leaks.
+    const calls = { end: 0, destroy: 0 };
+    const stub: SessionTransport = {
+      write() {
+        return true;
+      },
+      end() {
+        calls.end += 1;
+        throw new Error("inner.end blew up");
+      },
+      destroy() {
+        calls.destroy += 1;
+      },
+      on() {
+        return stub;
+      },
+    };
+    const wrapped = withRawSocketCleanClose(stub);
+    expect(() => wrapped.end()).toThrow(/inner\.end blew up/);
+    expect(calls.end).toBe(1);
+    // Now the engine's mandatory post-DONE destroy() must reach inner —
+    // if politelyClosed had been flipped before inner.end() ran, this
+    // call would be a no-op and the socket handle would leak.
+    wrapped.destroy();
+    expect(calls.destroy).toBe(1);
+  });
+
   it("destroy() forwards an error arg in the true-error path", () => {
     const calls: Array<Error | undefined> = [];
     const stub: SessionTransport = {
