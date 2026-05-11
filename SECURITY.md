@@ -21,6 +21,6 @@ Within that trust boundary, be aware of two deliberate design choices:
 If you believe you've found a security issue in this code, please **do not open a public issue**. Instead:
 
 - Open a [GitHub security advisory](https://github.com/mtheuma/epson2paperless/security/advisories/new) (preferred — private by default), **or**
-- Email the author at `matt.theuma@gmail.com` with `epson2paperless security` in the subject.
+- Email the author at `epson2paperless.vineyard182@passmail.com` with `epson2paperless security` in the subject.
 
 This is a personal project (see `CONTRIBUTING.md`), so response times are best-effort. I'll acknowledge within a reasonable window and credit reporters who'd like to be named once a fix is public.
