@@ -5,8 +5,12 @@ const log = createLogger("lifecycle");
 export interface InflightTracker {
   /**
    * Register an in-flight promise. The returned promise resolves when the
-   * input settles, with rejections swallowed — tracking is about presence,
-   * not success. Errors should already be logged at the source.
+   * input settles — tracking is about presence, not success. Rejections
+   * are logged at WARN at the catch boundary so the outermost scan-promise
+   * failure is never silent (issue #66 — Docker EACCES at temp-dir setup
+   * fired before any per-state log and went unobserved). The log may
+   * duplicate an inner error already logged at the source; that's
+   * acceptable noise to ensure the un-logged path is visible.
    */
   track(p: Promise<void>): Promise<void>;
   /**
@@ -25,8 +29,8 @@ export function createInflightTracker(): InflightTracker {
 
   const track = (p: Promise<void>): Promise<void> => {
     const wrapper = p
-      .catch(() => {
-        /* swallow — see JSDoc */
+      .catch((err: unknown) => {
+        log.warn("Tracked scan promise rejected", err);
       })
       .finally(() => {
         set.delete(wrapper);
