@@ -49,19 +49,15 @@ export function withRawSocketCleanClose(inner: SessionTransport): SessionTranspo
       return inner.write(buf);
     },
     end: (data?: Buffer) => {
-      if (politelyClosed) {
-        // Idempotent — engine should only call end() once, but guard
-        // anyway so a double-call doesn't restart the fallback timer.
-        return;
-      }
+      if (politelyClosed) return;
       politelyClosed = true;
       inner.end(data);
       fallbackTimer = setTimeout(() => {
         if (!closed) inner.destroy();
       }, CLEAN_CLOSE_FALLBACK_MS);
-      // .unref() so the fallback doesn't keep the daemon's event loop
-      // alive past a clean shutdown.
-      fallbackTimer.unref?.();
+      // .unref() so a pending fallback doesn't keep the daemon's event
+      // loop alive past a graceful shutdown.
+      fallbackTimer.unref();
     },
     destroy(err?: Error) {
       if (politelyClosed && !closed) {

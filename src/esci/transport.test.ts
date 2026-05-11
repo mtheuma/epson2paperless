@@ -79,14 +79,23 @@ describe("withRawSocketCleanClose wrapper", () => {
   });
 
   it("end() is idempotent — second call does not restart the fallback timer", () => {
-    const { transport, calls } = makeStubTransport();
+    const { transport, calls, fireClose } = makeStubTransport();
     const wrapped = withRawSocketCleanClose(transport);
+    wrapped.on("close", () => {});
     wrapped.end();
+    // Advance past half the fallback window, then call end() again.
+    // If the second end() restarted the timer, close would have to wait
+    // another full window before destroy fires.
+    vi.advanceTimersByTime(3000);
     wrapped.end();
     expect(calls.end).toBe(1);
+    // Close naturally — clears the (original) timer.
+    fireClose(false);
+    vi.advanceTimersByTime(10_000);
+    expect(calls.destroy).toBe(0);
   });
 
-  it("fallback timer fires inner.destroy() when close never lands", () => {
+  it("fallback timer fires inner.destroy() after the window when close never lands", () => {
     // Engine's promise has already settled by this point — the fallback
     // is purely socket-hygiene cleanup so a misbehaving peer can't leak
     // a socket per scan.
@@ -94,8 +103,10 @@ describe("withRawSocketCleanClose wrapper", () => {
     const wrapped = withRawSocketCleanClose(transport);
     wrapped.end();
     expect(calls.destroy).toBe(0);
-    vi.advanceTimersByTime(5000);
-    expect(calls.destroy).toBe(1);
+    vi.advanceTimersByTime(4999);
+    expect(calls.destroy).toBe(0); // not before the window
+    vi.advanceTimersByTime(1);
+    expect(calls.destroy).toBe(1); // fires exactly at the window
   });
 
   it("fallback timer is cleared when close fires naturally", () => {
