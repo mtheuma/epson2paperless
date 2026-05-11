@@ -301,6 +301,71 @@ describe("esciGraph reset / gamma / window / start cycles", () => {
     }
   });
 
+  it("START drains deferred chunks into the new page buffer (issue #71 P1)", () => {
+    // Reviewer's catch on PR #79: if a slow encode let the printer stash
+    // the entire next page during PAGE_ENCODING_DRAIN, no later wire
+    // chunk arrives to trigger IMG_RECEIVING's drain — the scan sits
+    // until timeout. START is the proactive drain point: after the new
+    // page's buffer is allocated, drain the queue before IMG_RECEIVING
+    // is entered.
+    const state = esciGraph.states.START;
+    if (state.kind === "decision") {
+      const deferred = Buffer.concat([Buffer.from([0x01]), Buffer.alloc(50, 0xa0)]);
+      const ctx = makeCtx({
+        source: "adf-duplex",
+        format: "jpg",
+        deferredImageChunks: [deferred],
+      });
+      const payload = Buffer.alloc(14);
+      payload.writeUInt32LE(0x1000, 2);
+      payload.writeUInt32LE(0x06d6, 6);
+      payload.writeUInt32LE(7002, 10);
+      const result = state.decide(ctx, { type: ESCI_REPLY, payload });
+      expect("next" in result && result.next).toBe("IMG_RECEIVING");
+      // 50 pixel bytes from the deferred chunk landed in the new buffer.
+      expect(ctx.imageBufferOffset).toBe(50);
+      expect(ctx.imageBuffer.subarray(0, 50).every((b) => b === 0xa0)).toBe(true);
+      // Queue is drained.
+      expect(ctx.deferredImageChunks).toHaveLength(0);
+    }
+  });
+
+  it("START emits flush transition when deferred chunks alone fill the next page (issue #71 P1)", () => {
+    // The bug scenario the reviewer flagged: encoder is slower than the
+    // printer for a duplex back-page; the entire back-page is stashed
+    // during PAGE_ENCODING_DRAIN. Without START's drain, IMG_RECEIVING
+    // would sit idle until timeout. With it, the page is recognised
+    // complete here and a flush transition fires immediately.
+    //
+    // Geometry is fixed by geometry() — PDF format gives ~26MB
+    // (2478 × 3501 × 3); allocUnsafe makes the deferred chunk effectively
+    // free (pool-allocated, no zero-fill).
+    const state = esciGraph.states.START;
+    if (state.kind === "decision") {
+      const pdfBufferSize = 2478 * 3501 * 3;
+      const overflowing = Buffer.allocUnsafe(pdfBufferSize + 1);
+      overflowing[0] = 0x01; // leading status byte that appendImageChunk strips
+      const ctx = makeCtx({
+        source: "adf-duplex",
+        format: "pdf",
+        pageCount: 1, // about to flush page 2 (back)
+        deferredImageChunks: [overflowing],
+      });
+      const payload = Buffer.alloc(14);
+      payload.writeUInt32LE(0x1000, 2);
+      payload.writeUInt32LE(0x06d6, 6);
+      payload.writeUInt32LE(7002, 10);
+      const result = state.decide(ctx, { type: ESCI_REPLY, payload });
+      if ("error" in result) throw new Error("unexpected error result");
+      // Flush transition fired without any wire chunk needed.
+      expect(result.next).toBe("PAGE_ENCODING_DRAIN");
+      expect(result.flushPage?.side).toBe("back");
+      // pageCount advanced; ctx.imageBuffer reset.
+      expect(ctx.pageCount).toBe(2);
+      expect(ctx.imageBufferOffset).toBe(0);
+    }
+  });
+
   it("START_POLL advances to START_POLL_READY on byte 0 = 0x01", () => {
     const state = esciGraph.states.START_POLL;
     if (state.kind === "decision") {

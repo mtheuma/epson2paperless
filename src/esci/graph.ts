@@ -500,6 +500,14 @@ g.state(
     ctx.geom = geom;
     ctx.imageBuffer = Buffer.alloc(geom.widthPx * geom.heightPx * 3);
     ctx.imageBufferOffset = 0;
+    // Drain proactively here, BEFORE entering IMG_RECEIVING, in case a
+    // slow encode let the printer stash the entire next page during
+    // PAGE_ENCODING_DRAIN. Without this, IMG_RECEIVING would sit on its
+    // deferred queue until the engine timeout (#71). The IMG_RECEIVING
+    // drain prelude stays as a backstop for fragmented arrivals.
+    if (drainDeferredIntoBuffer(ctx, null) === "overflowed") {
+      return makeFlushTransition(ctx);
+    }
     return {
       next: "IMG_RECEIVING",
       send: buildIsPacket(0x2200, buildStreamConfigPayload(reply, ctx.format)),
@@ -566,10 +574,13 @@ function makeFlushTransition(ctx: EsciCtx): TransitionResult<EsciCtx> {
 /**
  * Drain ctx.deferredImageChunks into the current page buffer (#71).
  * Returns "overflowed" when the deferred chunks alone fill the page —
- * remaining deferred entries plus `incoming` get re-stashed for the
- * next page, and the caller should emit a flush transition.
+ * remaining deferred entries (plus `incoming`, when non-null) get
+ * re-stashed for the next page, and the caller should emit a flush
+ * transition. Called from START (no incoming chunk in hand yet — pass
+ * null) so a slow encode that pre-buffered the entire next page
+ * doesn't sit in IMG_RECEIVING until timeout.
  */
-function drainDeferredIntoBuffer(ctx: EsciCtx, incoming: Buffer): "drained" | "overflowed" {
+function drainDeferredIntoBuffer(ctx: EsciCtx, incoming: Buffer | null): "drained" | "overflowed" {
   if (ctx.deferredImageChunks.length === 0) return "drained";
   const chunks = ctx.deferredImageChunks;
   ctx.deferredImageChunks = [];
@@ -579,7 +590,7 @@ function drainDeferredIntoBuffer(ctx: EsciCtx, incoming: Buffer): "drained" | "o
       for (let j = i + 1; j < chunks.length; j++) {
         ctx.deferredImageChunks.push(chunks[j]);
       }
-      ctx.deferredImageChunks.push(incoming);
+      if (incoming !== null) ctx.deferredImageChunks.push(incoming);
       return "overflowed";
     }
   }
