@@ -11,6 +11,7 @@ import { resolveSessionTimestamp } from "../output.js";
 import { esciGraph, type EsciCtx } from "./graph.js";
 import type { Source, Format } from "./commands.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
+import { withRawSocketCleanClose } from "./transport.js";
 
 export { appendImageChunk } from "./graph.js";
 
@@ -50,16 +51,13 @@ function makeTcpTransportFactory(
 ): SessionTransportFactory {
   return () =>
     new Promise<SessionTransport>((resolve, reject) => {
-      // Plain TCP needs no app-level wrapper (no TLS pin, no
-      // unlock-on-destroy semantics peculiar to ESC/I-2). The
-      // socketAsTransport bridge is just an explicit-cast shim so the
-      // engine's SessionTransport.end(data?) signature is honoured —
-      // net.Socket.end has its own overload set that doesn't directly
-      // satisfy the interface as a structural subtype. If a future
-      // ESC/I quirk needs a wrapper, introduce a sibling
-      // src/esci/transport.ts.
+      // socketAsTransport bridges net.Socket → SessionTransport (its
+      // end() overload set isn't a structural subtype). withRawSocketCleanClose
+      // adds the polite-close gate so the engine's mandatory post-DONE
+      // destroy() doesn't RST the printer mid-FIN handshake (issue #72,
+      // symmetric to the TLS path's withEsci2UnlockOnDestroy gate).
       const socket = socketFactory(session.printerIp, session.port, () => {
-        resolve(socketAsTransport(socket));
+        resolve(withRawSocketCleanClose(socketAsTransport(socket)));
       });
       socket.once("error", reject);
     });
