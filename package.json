@@ -1,6 +1,6 @@
 {
   "name": "epson2paperless",
-  "version": "0.3.1",
+  "version": "0.4.0",
   "description": "Epson Scan to Computer protocol emulator — delivers scans to Paperless-ngx",
   "main": "dist/index.js",
   "scripts": {

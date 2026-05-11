@@ -18,12 +18,13 @@ What you get:
 
 ## Compatible printers
 
-| Model                 | Status      | Notes                                                 |
-| --------------------- | ----------- | ----------------------------------------------------- |
-| **ET-3950**           | ✅ Verified |                                                       |
-| **ET-4950 / ET-4956** | ✅ Verified |                                                       |
-| **WF-3620**           | ✅ Verified | Plain TCP scanner, no TLS pinning                     |
-| **ET-2750**           | ✅ Verified | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS |
+| Model                 | Status      | Notes                                                                                                                            |
+| --------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| **ET-3950**           | ✅ Verified |                                                                                                                                  |
+| **ET-4950 / ET-4956** | ✅ Verified |                                                                                                                                  |
+| **WF-3620**           | ✅ Verified | Plain TCP scanner, no TLS pinning                                                                                                |
+| **ET-2750**           | ✅ Verified | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS                                                                            |
+| **XP-7100**           | 🟡 Partial  | Flatbed works; ADF support pending ([#65](https://github.com/mtheuma/epson2paperless/issues/65)). ESC/I-2 over plain TCP, no TLS |
 
 Compatibility reports are welcome whether your model works or doesn't. [Open an issue](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) using the compatibility template.
 
@@ -173,7 +174,7 @@ Equally valuable: reporting your printer's compatibility so the [Compatible prin
 
 MIT. See [`LICENSE`](LICENSE) for the full text.
 
-**Not affiliated with Seiko Epson Corporation.** This project is an independent, clean-room re-implementation of the network behavior of an Epson "Scan to Computer" workflow, developed by analyzing the wire protocol of a device the author owns. No Epson source code, firmware, or binaries are included or distributed. "EPSON", "EcoTank", and "WorkForce" are trademarks of Seiko Epson Corporation, used here descriptively to identify the hardware this software interoperates with.
+**Not affiliated with Seiko Epson Corporation.** This project is an independent, clean-room re-implementation of the network behavior of an Epson "Scan to Computer" workflow, developed by analyzing the wire protocol of a device the author owns. No Epson source code, firmware, or binaries are included or distributed. "EPSON", "EcoTank", "Expression", and "WorkForce" are trademarks of Seiko Epson Corporation, used here descriptively to identify the hardware this software interoperates with.
 
 ---
 
