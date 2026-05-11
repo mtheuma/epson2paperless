@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   createInflightTracker,
   shutdown,
@@ -22,9 +22,33 @@ describe("InflightTracker", () => {
 
   it("settles the tracker slot even when the tracked promise rejects", async () => {
     const tracker = createInflightTracker();
-    const p = tracker.track(Promise.reject(new Error("boom")));
-    await expect(p).resolves.toBeUndefined();
-    expect(tracker.count).toBe(0);
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const p = tracker.track(Promise.reject(new Error("boom")));
+      await expect(p).resolves.toBeUndefined();
+      expect(tracker.count).toBe(0);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("logs at WARN when the tracked promise rejects (issue #66)", async () => {
+    const tracker = createInflightTracker();
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const err = new Error("EACCES: permission denied");
+      await tracker.track(Promise.reject(err));
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      const callArgs = warnSpy.mock.calls[0];
+      const joined = callArgs.map((a) => (a instanceof Error ? a.message : String(a))).join(" ");
+      expect(joined).toContain("[WARN]");
+      expect(joined).toContain("[lifecycle]");
+      expect(joined).toContain("Tracked scan promise rejected");
+      expect(joined).toContain("EACCES: permission denied");
+      expect(callArgs).toContain(err);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("count reflects concurrent in-flight work", async () => {
