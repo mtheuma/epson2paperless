@@ -6,6 +6,7 @@ import {
   type Graph,
   type GraphBuilder,
   type SendSpec,
+  type TransitionResult,
 } from "../scan-session.js";
 import {
   buildLockPacket,
@@ -54,6 +55,10 @@ export interface Esci2Ctx {
    * the singleton `esci2Graph` don't overwrite each other's value.
    */
   tprDeclaredLength: number;
+  /** INFO reply body captured from INIT1, used for dialect resolution + diagnostics. Buffer.alloc(0) until INIT1_INFO_DATA fires. */
+  infoBody: Buffer;
+  /** CAPA#1 reply body captured from INIT1. Buffer.alloc(0) until INIT1_CAPA_DATA fires. */
+  capaBody: Buffer;
 }
 
 export const ESCI2_TIMEOUT_MS = 30_000;
@@ -227,6 +232,10 @@ function twoPhaseRead(
   expectedCmd: string,
   nextSend: SendSpec<Esci2Ctx> | SendSpec<Esci2Ctx>[],
   next: string,
+  /** Optional side-effect + early-return hook fired in `${prefix}_DATA`
+   *  after the length check. Return undefined for the normal transition,
+   *  or a `{ error }` TransitionResult to abort the session. */
+  onData?: (ctx: Esci2Ctx, body: Buffer) => TransitionResult<Esci2Ctx> | void,
 ): void {
   g.state(
     `${prefix}_META`,
@@ -263,6 +272,10 @@ function twoPhaseRead(
           ),
         };
       }
+      if (onData) {
+        const result = onData(ctx, packet.payload);
+        if (result !== undefined) return result;
+      }
       return { next, send: nextSend };
     }),
   );
@@ -275,6 +288,10 @@ twoPhaseRead(
   "INFO",
   buildPassthruPacket(buildEsci2Command("CAPA"), ESCI2_REPLY_SIZE),
   "INIT1_CAPA_META",
+  (ctx, body) => {
+    ctx.infoBody = body;
+    // return undefined → normal transition fires
+  },
 );
 twoPhaseRead(
   g,
@@ -282,6 +299,10 @@ twoPhaseRead(
   "CAPA",
   buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
   "INIT1_FIN",
+  (ctx, body) => {
+    ctx.capaBody = body;
+    // Task 8 plugs the dialect-resolution logic in here. For now: just capture.
+  },
 );
 
 // INIT2 two-phase reads: INFO → CAPA → RESA → FIN

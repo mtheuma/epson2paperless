@@ -73,6 +73,8 @@ function buildInitialCtx(session: ScanSession, profile: "esci2-tls" | "esci2-pla
     zeroImgRetries: 0,
     imageChunks: [],
     tprDeclaredLength: 0,
+    infoBody: Buffer.alloc(0),
+    capaBody: Buffer.alloc(0),
   };
 }
 
