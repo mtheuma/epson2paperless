@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { esci2Graph, ESCI2_TIMEOUT_MS } from "./graph.js";
 import { IS_HEADER_SIZE } from "../protocol.js";
 import { et4950FamilyDialect } from "./dialects/et-4950-family.js";
+import { et2750Dialect } from "./dialects/et-2750.js";
 
 describe("esci2Graph (smoke)", () => {
   it("builds with the expected initial state and timeout", () => {
@@ -547,16 +548,16 @@ describe("esci2Graph INIT_POLL_STAT source detection", () => {
     expect("next" in result && result.next).toBe("INIT_POLL_STAT_DRAIN");
   });
 
-  it("skips source-detect override on esci2-plain (preserves pre-set source)", () => {
+  it("skips source-detect override when dialect.sourceDetection is fixed-flatbed (preserves pre-set source)", () => {
     const state = esci2Graph.states.INIT_POLL_STAT;
     expect(state.kind).toBe("decision");
     if (state.kind !== "decision") return;
     // ET-2750 STAT replies declare length=0 even though the IS frame packs
-    // a 52-byte filler inline. Applying the ET-4950 length-based heuristic
-    // would misclassify ET-2750 as ADF — the plain profile must skip the
-    // override and trust the `source: "flatbed"` pre-set by the scanner shell.
+    // a 52-byte filler inline. Applying the stat-length heuristic would
+    // misclassify ET-2750 as ADF — the fixed-flatbed dialect must skip
+    // detection and trust the pre-set source.
     const ctx = makeCtx({
-      profile: "esci2-plain",
+      dialect: et2750Dialect,
       source: "flatbed",
       initPollIteration: 0,
     });

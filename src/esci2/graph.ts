@@ -536,18 +536,19 @@ g.state(
     if (header === null) {
       return { error: new Error("INIT_POLL_STAT: unparseable reply header") };
     }
-    // Source detection — only on the FIRST iteration of `esci2-tls`.
+    // Source detection — only on the FIRST iteration, and only when the
+    // dialect declares `sourceDetection: "stat-length"`.
     // ET-4950 fixtures: length 0 → ADF (printer queued no status);
     // length 12 → flatbed (queued `#---#---#---` filler). Other lengths
     // default to ADF.
     //
-    // ET-2750 (`esci2-plain`) is flatbed-only hardware AND its STAT
-    // replies declare length=0 even though the IS frame packs an inline
-    // 52-byte filler — applying the ET-4950 heuristic would misclassify
-    // it as ADF, so skip the override entirely on this profile and trust
-    // the `source: "flatbed"` value the scanner shell pre-set in
-    // `initialCtx`.
-    if (ctx.initPollIteration === 0 && ctx.profile === "esci2-tls") {
+    // ET-2750 uses `sourceDetection: "fixed-flatbed"` because it is
+    // flatbed-only hardware AND its STAT replies declare length=0 even
+    // though the IS frame packs an inline 52-byte filler — applying the
+    // stat-length heuristic would misclassify it as ADF, so skip the
+    // override entirely and trust the `source: "flatbed"` value the
+    // scanner shell pre-set in `initialCtx`.
+    if (ctx.initPollIteration === 0 && ctx.dialect!.sourceDetection === "stat-length") {
       if (header.length === 0) {
         ctx.source = "adf";
       } else if (header.length === 12) {
