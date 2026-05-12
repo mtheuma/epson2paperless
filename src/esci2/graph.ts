@@ -24,6 +24,10 @@ import {
   type Esci2Profile,
 } from "./commands.js";
 import { ackByte, expectIsType } from "../graph-helpers.js";
+import type { Dialect } from "./dialect.js";
+import { computeCapaFingerprint } from "./capa-fingerprint.js";
+import { lookupDialect, buildDiagnostic } from "./dialect-registry.js";
+import { UnsupportedDialectError } from "./dialect.js";
 
 /**
  * Per-session mutable state threaded through every transition. The engine
@@ -59,6 +63,8 @@ export interface Esci2Ctx {
   infoBody: Buffer;
   /** CAPA#1 reply body captured from INIT1. Buffer.alloc(0) until INIT1_CAPA_DATA fires. */
   capaBody: Buffer;
+  /** Resolved dialect post-INIT1, drives PARA build + init-poll count + source detection. Undefined until INIT1 completes. */
+  dialect: Dialect | undefined;
 }
 
 export const ESCI2_TIMEOUT_MS = 30_000;
@@ -301,7 +307,22 @@ twoPhaseRead(
   "INIT1_FIN",
   (ctx, body) => {
     ctx.capaBody = body;
-    // Task 8 plugs the dialect-resolution logic in here. For now: just capture.
+    const fingerprint = computeCapaFingerprint(body);
+    const dialect = lookupDialect(fingerprint);
+    if (dialect === null) {
+      const diagnostic = buildDiagnostic({
+        capaBody: body,
+        infoBody: ctx.infoBody,
+        // ctx.profile is still the field name at this stage of the migration;
+        // Task 12 renames it to ctx.transport and replaces the conditional
+        // with a direct field read.
+        transport: ctx.profile === "esci2-tls" ? "tls" : "plain",
+        fingerprint,
+      });
+      return { error: new UnsupportedDialectError(fingerprint, diagnostic) };
+    }
+    ctx.dialect = dialect;
+    // return undefined → normal `{ next: "INIT1_FIN", send: <FIN> }` transition fires
   },
 );
 

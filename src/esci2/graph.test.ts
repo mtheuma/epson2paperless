@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { esci2Graph, ESCI2_TIMEOUT_MS } from "./graph.js";
 import { IS_HEADER_SIZE } from "../protocol.js";
+import { et4950FamilyDialect } from "./dialects/et-4950-family.js";
 
 describe("esci2Graph (smoke)", () => {
   it("builds with the expected initial state and timeout", () => {
@@ -475,6 +476,7 @@ function makeCtx(
     tprDeclaredLength: 0,
     infoBody: Buffer.alloc(0),
     capaBody: Buffer.alloc(0),
+    dialect: et4950FamilyDialect,
     ...overrides,
   };
 }

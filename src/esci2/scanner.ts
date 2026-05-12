@@ -75,6 +75,7 @@ function buildInitialCtx(session: ScanSession, profile: "esci2-tls" | "esci2-pla
     tprDeclaredLength: 0,
     infoBody: Buffer.alloc(0),
     capaBody: Buffer.alloc(0),
+    dialect: undefined,
   };
 }
 

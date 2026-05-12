@@ -15,11 +15,65 @@ function waitImmediate(): Promise<void> {
 }
 
 // Fixed capability-body packets used by driveScannerToPara for both init cycles.
-// Scanner discards the body content (it just needs N bytes matching the declared
-// length); filler = 0x2d ('-'). Hoisted so each test run shares one allocation.
+// INFO_BODY_PACKET and RESA_BODY_PACKET stay synthetic — the scanner only
+// checks the declared length. CAPA_BODY_PACKET must use the real ET-4950 body
+// because after Task 8 the INIT1_CAPA onData callback computes a sha256
+// fingerprint and looks it up in DIALECTS; a synthetic filler body would
+// fingerprint to an unknown value and abort every helper-driven test.
 const INFO_BODY_PACKET = buildIsPacket(0xa000, Buffer.alloc(244, 0x2d));
-const CAPA_BODY_PACKET = buildIsPacket(0xa000, Buffer.alloc(336, 0x2d));
 const RESA_BODY_PACKET = buildIsPacket(0xa000, Buffer.alloc(164, 0x2d));
+
+// Real ET-4950 CAPA#1 body, extracted from the committed Frida fixture.
+// Synthetic filler (Buffer.alloc(336, 0x2d)) would fingerprint to a value not
+// in DIALECTS and abort every helper-driven test at INIT1 CAPA. Loading the
+// real body keeps these tests resolving to et4950FamilyDialect.
+function loadEt4950CapaBody(): Buffer {
+  const fixturePath = path.join(
+    "tools",
+    "frida-capture",
+    "captures",
+    "2026-04-24T09-05-08-flatbed-1p-jpg.jsonl",
+  );
+  const lines = readFileSync(fixturePath, "utf8").split("\n").filter(Boolean);
+  const events = lines.map(
+    (l) => JSON.parse(l) as { hook?: string; type_hex?: string; payload_hex?: string },
+  );
+  // CAPA preamble is a recv event whose payload starts with "CAPA" (ASCII 43 41 50 41).
+  const idx = events.findIndex(
+    (e) => e.hook === "recv" && !!e.payload_hex && e.payload_hex.startsWith("43415041"),
+  );
+  if (idx < 0) throw new Error("ET-4950 CAPA preamble not found in fixture");
+  const lenStr = Buffer.from(events[idx].payload_hex!.slice(10, 24), "hex").toString("ascii");
+  const declared = parseInt(lenStr, 16);
+
+  // Body follows as recv events. Frida emits IS headers and IS payloads in
+  // separate events: header events have `type_hex` set to the IS type
+  // (`"0xa000"` for body wrappers), payload events have `type_hex: "0x0000"`.
+  // We want only the payloads — header events would corrupt the body.
+  let body = Buffer.alloc(0);
+  for (let j = idx + 1; j < events.length && body.length < declared; j++) {
+    const e = events[j];
+    if (e.hook !== "recv" || !e.payload_hex) continue;
+    if (e.type_hex !== "0x0000") continue;
+    body = Buffer.concat([body, Buffer.from(e.payload_hex, "hex")]);
+  }
+  const out = body.subarray(0, declared);
+
+  // Defensive sanity checks: the body should be exactly 336 bytes and start
+  // with `#` (0x23). If either fails, the extractor walked the events wrong.
+  if (out.length !== 336) {
+    throw new Error(`loadEt4950CapaBody: expected 336 bytes, got ${out.length}`);
+  }
+  if (out[0] !== 0x23) {
+    throw new Error(
+      `loadEt4950CapaBody: body should start with '#' (0x23), got 0x${out[0].toString(16)} — extractor likely included an IS header`,
+    );
+  }
+  return out;
+}
+
+const ET4950_CAPA_BODY = loadEt4950CapaBody();
+const CAPA_BODY_PACKET = buildIsPacket(0xa000, ET4950_CAPA_BODY);
 
 /**
  * Drive a fresh scanner session from CONNECTING through to just after
