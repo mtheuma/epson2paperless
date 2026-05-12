@@ -70,18 +70,6 @@ export interface Esci2Ctx {
 export const ESCI2_TIMEOUT_MS = 30_000;
 export const ESCI2_REPLY_SIZE = 64;
 const LEGACY_REPLY_SIZE = 1;
-/**
- * INIT_POLL cycle counts per transport profile:
- * - `esci2-tls` (ET-4950): 3 iterations of FS Y → STAT → FIN before FS X
- *   switches to extended mode. Established by the Frida captures.
- * - `esci2-plain` (ET-2750): 2 iterations only. The ET-2750 fixture
- *   (`tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl`)
- *   shows the host driver issuing only two FS Y / STAT / FIN cycles
- *   before sending FS X. Sending a third FS Y after the printer has
- *   moved on returns a non-ACK that fails MODE_SWITCH validation.
- */
-const INIT_POLL_ITERATIONS_TLS = 3;
-const INIT_POLL_ITERATIONS_PLAIN = 2;
 // 2000 zero-length retries gives ~40s of headroom for slow scan starts.
 const MAX_ZERO_IMG_RETRIES = 2000;
 
@@ -590,8 +578,7 @@ g.state(
     const typeGuard = expectIsType(packet, 0xa000, "INIT_POLL_FIN");
     if (typeGuard) return typeGuard;
     ctx.initPollIteration += 1;
-    const target =
-      ctx.profile === "esci2-plain" ? INIT_POLL_ITERATIONS_PLAIN : INIT_POLL_ITERATIONS_TLS;
+    const target = ctx.dialect!.initPollIterations;
     if (ctx.initPollIteration < target) {
       return {
         next: "INIT_POLL_FS_Y",
