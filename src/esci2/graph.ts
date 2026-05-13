@@ -6,6 +6,7 @@ import {
   type Graph,
   type GraphBuilder,
   type SendSpec,
+  type TransitionResult,
 } from "../scan-session.js";
 import {
   buildLockPacket,
@@ -17,12 +18,14 @@ import { buildFsY, buildFsX, buildFsZ } from "../commands-fs.js";
 import {
   buildEsci2Command,
   buildParaHeader,
-  buildParaPayload,
   parseEsci2ReplyHeader,
   parseTokens,
-  type Esci2Profile,
 } from "./commands.js";
 import { ackByte, expectIsType } from "../graph-helpers.js";
+import type { Dialect } from "./dialect.js";
+import { computeCapaFingerprint } from "./capa-fingerprint.js";
+import { lookupDialect, buildDiagnostic } from "./dialect-registry.js";
+import { UnsupportedDialectError } from "./dialect.js";
 
 /**
  * Per-session mutable state threaded through every transition. The engine
@@ -32,14 +35,8 @@ import { ackByte, expectIsType } from "../graph-helpers.js";
 export interface Esci2Ctx {
   duplex: boolean;
   source: "adf" | "flatbed"; // detected at INIT_POLL iteration 0
-  /**
-   * Transport variant for this session — `esci2-tls` (ET-4950 family,
-   * default) or `esci2-plain` (ET-2750, plain TCP). Threaded through
-   * ctx so the PARA builder closure picks the right flatbed blob; the
-   * graph itself is profile-blind. Always `esci2-tls` on graph
-   * construction, overwritten by the scanner shell's `initialCtx`.
-   */
-  profile: Esci2Profile;
+  /** Transport layer in use this session. Probe-driven, not dialect-driven. */
+  transport: "tls" | "plain";
   initPollIteration: number;
   imgChunkSize: number;
   pageEndKind: "none" | "more" | "last";
@@ -54,25 +51,23 @@ export interface Esci2Ctx {
    * the singleton `esci2Graph` don't overwrite each other's value.
    */
   tprDeclaredLength: number;
+  /** INFO reply body captured from INIT1, used for dialect resolution + diagnostics. Buffer.alloc(0) until INIT1_INFO_DATA fires. */
+  infoBody: Buffer;
+  /** CAPA#1 reply body captured from INIT1. Buffer.alloc(0) until INIT1_CAPA_DATA fires. */
+  capaBody: Buffer;
+  /** Resolved dialect post-INIT1, drives PARA build + init-poll count + source detection. Undefined until INIT1 completes. */
+  dialect: Dialect | undefined;
+  /** Panel-selected output format; drives action-aware dialects' PARA splice. */
+  action: "jpg" | "pdf";
 }
 
 export const ESCI2_TIMEOUT_MS = 30_000;
 export const ESCI2_REPLY_SIZE = 64;
 const LEGACY_REPLY_SIZE = 1;
-/**
- * INIT_POLL cycle counts per transport profile:
- * - `esci2-tls` (ET-4950): 3 iterations of FS Y → STAT → FIN before FS X
- *   switches to extended mode. Established by the Frida captures.
- * - `esci2-plain` (ET-2750): 2 iterations only. The ET-2750 fixture
- *   (`tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl`)
- *   shows the host driver issuing only two FS Y / STAT / FIN cycles
- *   before sending FS X. Sending a third FS Y after the printer has
- *   moved on returns a non-ACK that fails MODE_SWITCH validation.
- */
-const INIT_POLL_ITERATIONS_TLS = 3;
-const INIT_POLL_ITERATIONS_PLAIN = 2;
-// 2000 zero-length retries gives ~40s of headroom for slow scan starts.
-const MAX_ZERO_IMG_RETRIES = 2000;
+// 5000 zero-length retries gives ~100s of headroom for slow scan starts.
+// XP-7100 flatbed captures show up to 2612 zero-length IMG responses before
+// the printer starts delivering data, so the limit must exceed that.
+const MAX_ZERO_IMG_RETRIES = 5000;
 
 /**
  * Async-event dispatch bytes (type 0x9000 body[0]).
@@ -227,6 +222,10 @@ function twoPhaseRead(
   expectedCmd: string,
   nextSend: SendSpec<Esci2Ctx> | SendSpec<Esci2Ctx>[],
   next: string,
+  /** Optional side-effect + early-return hook fired in `${prefix}_DATA`
+   *  after the length check. Return undefined for the normal transition,
+   *  or a `{ error }` TransitionResult to abort the session. */
+  onData?: (ctx: Esci2Ctx, body: Buffer) => TransitionResult<Esci2Ctx> | void,
 ): void {
   g.state(
     `${prefix}_META`,
@@ -263,6 +262,10 @@ function twoPhaseRead(
           ),
         };
       }
+      if (onData) {
+        const result = onData(ctx, packet.payload);
+        if (result !== undefined) return result;
+      }
       return { next, send: nextSend };
     }),
   );
@@ -275,6 +278,9 @@ twoPhaseRead(
   "INFO",
   buildPassthruPacket(buildEsci2Command("CAPA"), ESCI2_REPLY_SIZE),
   "INIT1_CAPA_META",
+  (ctx, body) => {
+    ctx.infoBody = body;
+  },
 );
 twoPhaseRead(
   g,
@@ -282,6 +288,21 @@ twoPhaseRead(
   "CAPA",
   buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
   "INIT1_FIN",
+  (ctx, body) => {
+    ctx.capaBody = body;
+    const fingerprint = computeCapaFingerprint(body);
+    const dialect = lookupDialect(fingerprint);
+    if (dialect === null) {
+      const diagnostic = buildDiagnostic({
+        capaBody: ctx.capaBody,
+        infoBody: ctx.infoBody,
+        transport: ctx.transport,
+        fingerprint,
+      });
+      return { error: new UnsupportedDialectError(fingerprint, diagnostic) };
+    }
+    ctx.dialect = dialect;
+  },
 );
 
 // INIT2 two-phase reads: INFO → CAPA → RESA → FIN
@@ -494,18 +515,19 @@ g.state(
     if (header === null) {
       return { error: new Error("INIT_POLL_STAT: unparseable reply header") };
     }
-    // Source detection — only on the FIRST iteration of `esci2-tls`.
+    // Source detection — only on the FIRST iteration, and only when the
+    // dialect declares `sourceDetection: "stat-length"`.
     // ET-4950 fixtures: length 0 → ADF (printer queued no status);
     // length 12 → flatbed (queued `#---#---#---` filler). Other lengths
     // default to ADF.
     //
-    // ET-2750 (`esci2-plain`) is flatbed-only hardware AND its STAT
-    // replies declare length=0 even though the IS frame packs an inline
-    // 52-byte filler — applying the ET-4950 heuristic would misclassify
-    // it as ADF, so skip the override entirely on this profile and trust
-    // the `source: "flatbed"` value the scanner shell pre-set in
-    // `initialCtx`.
-    if (ctx.initPollIteration === 0 && ctx.profile === "esci2-tls") {
+    // ET-2750 uses `sourceDetection: "fixed-flatbed"` because it is
+    // flatbed-only hardware AND its STAT replies declare length=0 even
+    // though the IS frame packs an inline 52-byte filler — applying the
+    // stat-length heuristic would misclassify it as ADF, so skip the
+    // override entirely and trust the `source: "flatbed"` value the
+    // scanner shell pre-set in `initialCtx`.
+    if (ctx.initPollIteration === 0 && ctx.dialect!.sourceDetection === "stat-length") {
       if (header.length === 0) {
         ctx.source = "adf";
       } else if (header.length === 12) {
@@ -538,7 +560,7 @@ g.state("INIT_POLL_STAT_DRAIN", {
 });
 
 // INIT_POLL_FIN: decision on FIN reply — loop or advance to MODE_SWITCH.
-// INIT_POLL_FIN increments initPollIteration; if below the profile's
+// INIT_POLL_FIN increments initPollIteration; if below the dialect's
 // target iteration count sends FS Y and loops; else sends FS X and
 // moves to MODE_SWITCH.
 g.state(
@@ -547,8 +569,7 @@ g.state(
     const typeGuard = expectIsType(packet, 0xa000, "INIT_POLL_FIN");
     if (typeGuard) return typeGuard;
     ctx.initPollIteration += 1;
-    const target =
-      ctx.profile === "esci2-plain" ? INIT_POLL_ITERATIONS_PLAIN : INIT_POLL_ITERATIONS_TLS;
+    const target = ctx.dialect!.initPollIterations;
     if (ctx.initPollIteration < target) {
       return {
         next: "INIT_POLL_FS_Y",
@@ -567,18 +588,14 @@ g.state(
 // MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_META states
 // =============================================================================
 
-// Builds the PARA header + body send pair, resolving source + duplex +
-// profile from ctx. Called once per dispatch in POST_MODE_STAT and
-// POST_MODE_STAT_DRAIN — each site is a decision, so the result is
-// computed once and embedded as a concrete Buffer[] in the returned
-// TransitionResult.send. ctx.profile selects between the ET-4950 and
-// ET-2750 flatbed blobs; ADF combos remain TLS-only (ET-2750 is
-// flatbed-only hardware, enforced at config time).
+// Builds the PARA header + body send pair. Called once per dispatch in
+// POST_MODE_STAT and POST_MODE_STAT_DRAIN; ctx.dialect.buildPara selects
+// the correct blob for the detected hardware.
 function buildParaSend(ctx: Esci2Ctx): Buffer[] {
-  const paraPayload = buildParaPayload({
+  const paraPayload = ctx.dialect!.buildPara({
     source: ctx.source,
     duplex: ctx.duplex,
-    profile: ctx.profile,
+    action: ctx.action,
   });
   return [
     buildPassthruPacket(buildParaHeader(paraPayload.length), 0),
@@ -783,6 +800,27 @@ g.state(
     const typeGuard = expectIsType(packet, 0xa000, "IMG_DATA");
     if (typeGuard) return typeGuard;
     if (packet.payload.length !== ctx.imgChunkSize) {
+      // Some printers (e.g. XP-7100) re-echo the IMG metadata reply in
+      // response to the PUREREAD command before sending the actual pixel
+      // data. This is a double-handshake: the engine sends PUREREAD(N),
+      // the printer replies with another "IMG xNNNNNNN" (same N), then
+      // sends the pixel data. Detect this by checking that the 64-byte
+      // payload is a well-formed IMG header whose declared size matches
+      // the one the engine already stored in ctx.imgChunkSize, and if so
+      // re-issue the PUREREAD to pull the real pixel chunk.
+      if (packet.payload.length === ESCI2_REPLY_SIZE) {
+        const echoHeader = parseEsci2ReplyHeader(packet.payload);
+        if (
+          echoHeader !== null &&
+          echoHeader.cmd === "IMG" &&
+          echoHeader.length === ctx.imgChunkSize
+        ) {
+          return {
+            next: "IMG_DATA",
+            send: buildPurereadPacket(ctx.imgChunkSize),
+          };
+        }
+      }
       return {
         error: new Error(
           `IMG_DATA: expected ${ctx.imgChunkSize} bytes, got ${packet.payload.length}`,

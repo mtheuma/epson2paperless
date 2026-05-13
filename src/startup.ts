@@ -119,11 +119,11 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     });
   }
   if (variant === "esci2-plain") {
-    // Same ScanSession shape as the TLS path; the shell threads
-    // `profile = "esci2-plain"` through `initialCtx` itself, so the
-    // dispatcher only chooses which entry point to call. Cert
-    // fingerprint is ignored on this path (no TLS layer); config-time
-    // Zod validation rejects the combo at startup.
+    // Same ScanSession shape as the TLS path; the shell sets
+    // `transport = "plain"` on `initialCtx` itself, so the dispatcher
+    // only chooses which entry point to call. Cert fingerprint is
+    // ignored on this path (no TLS layer); config-time Zod validation
+    // rejects the combo at startup.
     return runEsci2ScanOverPlain({
       printerIp: args.config.printerIp,
       port: 1865,

@@ -9,17 +9,124 @@ import { parseEsci2ReplyHeader } from "./commands.js";
 import { FakeTlsSocket } from "./test-support/fake-tls-socket.js";
 import { FakePlainSocket } from "./test-support/fake-plain-socket.js";
 import { loadFixture, driveFixture } from "./test-support/replay.js";
+import type { FixtureEvent } from "./test-support/replay.js";
+import { xp7100Dialect } from "./dialects/xp-7100.js";
 
 function waitImmediate(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
+// Recover the captured PARA body bytes from a fixture's host→printer events.
+// The driver emits PARA as two consecutive h>p IS frames:
+//   frame 1: 12-byte IS header + 8-byte preamble + 12-byte "PARAx0000NNN"
+//   frame 2: 12-byte IS header + 8-byte preamble + <NNN bytes of PARA body>
+function extractCapturedParaBody(fixture: FixtureEvent[]): Buffer {
+  const PARA_HDR_HEX = Buffer.from("PARAx", "ascii").toString("hex");
+  let hdrIdx = -1;
+  for (let i = 0; i < fixture.length; i++) {
+    const e = fixture[i];
+    if (e.dir !== "h>p" || !("hex" in e)) continue;
+    if (e.hex.includes(PARA_HDR_HEX)) {
+      hdrIdx = i;
+      break;
+    }
+  }
+  if (hdrIdx < 0) throw new Error("extractCapturedParaBody: PARA header not found in fixture");
+  const hdrHex = (fixture[hdrIdx] as { hex: string }).hex;
+  const m = hdrHex.match(/5041524178([0-9a-fA-F]{14})/);
+  if (!m) throw new Error("extractCapturedParaBody: PARA header malformed");
+  const declared = parseInt(Buffer.from(m[1], "hex").toString("ascii"), 16);
+  // Body wrapper is the very next h>p event. Skip its 12-byte IS header +
+  // 8-byte cmd_size/reply_size preamble = 20 bytes (40 hex chars).
+  let bodyHex = "";
+  let isFirst = true;
+  for (let j = hdrIdx + 1; j < fixture.length && bodyHex.length / 2 < declared; j++) {
+    const e = fixture[j];
+    if (e.dir !== "h>p" || !("hex" in e)) continue;
+    bodyHex += isFirst ? e.hex.slice(40) : e.hex;
+    isFirst = false;
+  }
+  return Buffer.from(bodyHex.slice(0, declared * 2), "hex");
+}
+
+// Recover the PARA body bytes the scanner emitted, by searching the fake
+// socket's accumulated writes for the same "PARAx0000NNN" header and
+// peeling off the body wrapper.
+function extractScannerParaWrite(fake: FakePlainSocket): Buffer {
+  const PARA_HDR = Buffer.from("PARAx", "ascii");
+  for (let i = 0; i < fake.writes.length; i++) {
+    const w = fake.writes[i];
+    const idx = w.indexOf(PARA_HDR);
+    if (idx < 0) continue;
+    // PARA header is "PARAx" + 7 ASCII hex chars; the size is encoded there.
+    const lenAscii = w.subarray(idx + 5, idx + 12).toString("ascii");
+    const declared = parseInt(lenAscii, 16);
+    // Body wrapper is the next write. Skip 12-byte IS header + 8-byte preamble.
+    const bodyWrite = fake.writes[i + 1];
+    if (!bodyWrite) throw new Error("extractScannerParaWrite: body write missing");
+    return bodyWrite.subarray(20, 20 + declared);
+  }
+  throw new Error("extractScannerParaWrite: PARA header write not found");
+}
+
 // Fixed capability-body packets used by driveScannerToPara for both init cycles.
-// Scanner discards the body content (it just needs N bytes matching the declared
-// length); filler = 0x2d ('-'). Hoisted so each test run shares one allocation.
+// INFO_BODY_PACKET and RESA_BODY_PACKET stay synthetic — the scanner only
+// checks the declared length. CAPA_BODY_PACKET must use the real ET-4950 body
+// because INIT1_CAPA fingerprints it and resolves the matching dialect.
 const INFO_BODY_PACKET = buildIsPacket(0xa000, Buffer.alloc(244, 0x2d));
-const CAPA_BODY_PACKET = buildIsPacket(0xa000, Buffer.alloc(336, 0x2d));
 const RESA_BODY_PACKET = buildIsPacket(0xa000, Buffer.alloc(164, 0x2d));
+
+// Real ET-4950 CAPA#1 body, extracted from the committed Frida fixture.
+// Synthetic filler (Buffer.alloc(336, 0x2d)) would fingerprint to a value not
+// in DIALECTS and abort every helper-driven test at INIT1 CAPA. Loading the
+// real body keeps these tests resolving to et4950FamilyDialect.
+function loadEt4950CapaBody(): Buffer {
+  const fixturePath = path.join(
+    "tools",
+    "frida-capture",
+    "captures",
+    "2026-04-24T09-05-08-flatbed-1p-jpg.jsonl",
+  );
+  const lines = readFileSync(fixturePath, "utf8").split("\n").filter(Boolean);
+  const events = lines.map(
+    (l) => JSON.parse(l) as { hook?: string; type_hex?: string; payload_hex?: string },
+  );
+  // CAPA preamble is a recv event whose payload starts with "CAPA" (ASCII 43 41 50 41).
+  const idx = events.findIndex(
+    (e) => e.hook === "recv" && !!e.payload_hex && e.payload_hex.startsWith("43415041"),
+  );
+  if (idx < 0) throw new Error("ET-4950 CAPA preamble not found in fixture");
+  const lenStr = Buffer.from(events[idx].payload_hex!.slice(10, 24), "hex").toString("ascii");
+  const declared = parseInt(lenStr, 16);
+
+  // Body follows as recv events. Frida emits IS headers and IS payloads in
+  // separate events: header events have `type_hex` set to the IS type
+  // (`"0xa000"` for body wrappers), payload events have `type_hex: "0x0000"`.
+  // We want only the payloads — header events would corrupt the body.
+  let body = Buffer.alloc(0);
+  for (let j = idx + 1; j < events.length && body.length < declared; j++) {
+    const e = events[j];
+    if (e.hook !== "recv" || !e.payload_hex) continue;
+    if (e.type_hex !== "0x0000") continue;
+    body = Buffer.concat([body, Buffer.from(e.payload_hex, "hex")]);
+  }
+  const out = body.subarray(0, declared);
+
+  // Defensive sanity checks: the body should be exactly 336 bytes and start
+  // with `#` (0x23). If either fails, the extractor walked the events wrong.
+  if (out.length !== 336) {
+    throw new Error(`loadEt4950CapaBody: expected 336 bytes, got ${out.length}`);
+  }
+  if (out[0] !== 0x23) {
+    throw new Error(
+      `loadEt4950CapaBody: body should start with '#' (0x23), got 0x${out[0].toString(16)} — extractor likely included an IS header`,
+    );
+  }
+  return out;
+}
+
+const ET4950_CAPA_BODY = loadEt4950CapaBody();
+const CAPA_BODY_PACKET = buildIsPacket(0xa000, ET4950_CAPA_BODY);
 
 /**
  * Drive a fresh scanner session from CONNECTING through to just after
@@ -1026,5 +1133,86 @@ describe("runEsci2ScanOverPlain — ET-2750 fixture replay", () => {
     expect(doc.getPageCount()).toBe(1);
     // Flatbed front side — no 180° rotation.
     expect(doc.getPage(0).getRotation().angle).toBe(0);
+  }, 60_000);
+});
+
+describe("runEsci2ScanOverPlain — XP-7100 fixture replay", () => {
+  let outputDir: string;
+  let tempDir: string;
+
+  beforeEach(() => {
+    outputDir = mkdtempSync(path.join(os.tmpdir(), "xp7100-out-"));
+    tempDir = mkdtempSync(path.join(os.tmpdir(), "xp7100-tmp-"));
+  });
+
+  afterEach(() => {
+    rmSync(outputDir, { recursive: true, force: true });
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const XP_7100_FIXTURES = path.join("tools", "pcap-extract", "captures", "xp-7100");
+
+  async function runOne(opts: { fixtureFile: string; source: "flatbed" | "adf"; duplex: boolean }) {
+    const fixturePath = path.join(XP_7100_FIXTURES, opts.fixtureFile);
+    const fixture = loadFixture(fixturePath);
+    const fake = new FakePlainSocket();
+    const sessionPromise = runEsci2ScanOverPlain(
+      {
+        printerIp: "10.0.0.143",
+        port: 1865,
+        destId: 0x02,
+        outputDir,
+        tempDir,
+        duplex: opts.duplex,
+        action: "jpg",
+      },
+      fake.asFactory(),
+    );
+    await driveFixture(fixture, fake, sessionPromise);
+
+    // Wire-fidelity check: scanner emitted same PARA bytes the driver did.
+    const capturedPara = extractCapturedParaBody(fixture);
+    const scannerPara = extractScannerParaWrite(fake);
+    expect(scannerPara.equals(capturedPara)).toBe(true);
+
+    // Cross-check the recipe: captured PARA equals what xp7100Dialect would build
+    // for these axes. (Recipe-level tests cover this against .bin fixtures; this
+    // adds one more anchor from the JSONL side, catching any drift between
+    // .bin and JSONL extractions.)
+    const recipePara = xp7100Dialect.buildPara({
+      source: opts.source,
+      duplex: opts.duplex,
+      action: "jpg",
+    });
+    expect(capturedPara.equals(recipePara)).toBe(true);
+
+    return readdirSync(outputDir).filter((f) => f.endsWith(".jpg"));
+  }
+
+  it("flatbed JPG single page", async () => {
+    const jpgs = await runOne({
+      fixtureFile: "jpg-flatbed.jsonl",
+      source: "flatbed",
+      duplex: false,
+    });
+    expect(jpgs).toHaveLength(1);
+  }, 60_000);
+
+  it("ADF simplex JPG single page", async () => {
+    const jpgs = await runOne({
+      fixtureFile: "jpg-adf-simplex.jsonl",
+      source: "adf",
+      duplex: false,
+    });
+    expect(jpgs).toHaveLength(1);
+  }, 60_000);
+
+  it("ADF duplex JPG", async () => {
+    const jpgs = await runOne({
+      fixtureFile: "jpg-adf-duplex.jsonl",
+      source: "adf",
+      duplex: true,
+    });
+    expect(jpgs).toHaveLength(2); // duplex → front + back
   }, 60_000);
 });

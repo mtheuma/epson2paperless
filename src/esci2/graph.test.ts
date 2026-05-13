@@ -1,6 +1,8 @@
 import { describe, it, expect } from "vitest";
 import { esci2Graph, ESCI2_TIMEOUT_MS } from "./graph.js";
 import { IS_HEADER_SIZE } from "../protocol.js";
+import { et4950FamilyDialect } from "./dialects/et-4950-family.js";
+import { et2750Dialect } from "./dialects/et-2750.js";
 
 describe("esci2Graph (smoke)", () => {
   it("builds with the expected initial state and timeout", () => {
@@ -161,16 +163,7 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
     expect(state.kind).toBe("decision");
     if (state.kind === "decision") {
       // Simulate first completion (iteration was 0, bumps to 1 — still < 3).
-      const ctx = {
-        duplex: false,
-        source: "adf" as const,
-        initPollIteration: 0,
-        imgChunkSize: 0,
-        pageEndKind: "none" as const,
-        pageSide: "front" as const,
-        zeroImgRetries: 0,
-        imageChunks: [] as Buffer[],
-      };
+      const ctx = makeCtx({ initPollIteration: 0 });
       const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
       expect("next" in result && result.next).toBe("INIT_POLL_FS_Y");
       expect(ctx.initPollIteration).toBe(1);
@@ -182,42 +175,33 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
     expect(state.kind).toBe("decision");
     if (state.kind === "decision") {
       // Simulate third completion (iteration was 2, bumps to 3 — equals INIT_POLL_ITERATIONS).
-      const ctx = {
-        duplex: false,
-        source: "adf" as const,
-        initPollIteration: 2,
-        imgChunkSize: 0,
-        pageEndKind: "none" as const,
-        pageSide: "front" as const,
-        zeroImgRetries: 0,
-        imageChunks: [] as Buffer[],
-      };
+      const ctx = makeCtx({ initPollIteration: 2 });
       const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
       expect("next" in result && result.next).toBe("MODE_SWITCH");
       expect(ctx.initPollIteration).toBe(3);
     }
   });
 
-  it("INIT_POLL_FIN loops on esci2-plain while initPollIteration < 2", () => {
+  it("INIT_POLL_FIN loops on et2750Dialect while initPollIteration < 2", () => {
     const state = esci2Graph.states.INIT_POLL_FIN;
     expect(state.kind).toBe("decision");
     if (state.kind !== "decision") return;
     // ET-2750 host driver only loops twice. After the first FIN reply,
-    // iteration goes 0 → 1 (still < INIT_POLL_ITERATIONS_PLAIN=2), so loop.
-    const ctx = makeCtx({ profile: "esci2-plain", initPollIteration: 0 });
+    // iteration goes 0 → 1 (still < dialect.initPollIterations=2), so loop.
+    const ctx = makeCtx({ dialect: et2750Dialect, initPollIteration: 0 });
     const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
     expect("next" in result && result.next).toBe("INIT_POLL_FS_Y");
     expect(ctx.initPollIteration).toBe(1);
   });
 
-  it("INIT_POLL_FIN advances to MODE_SWITCH on esci2-plain after 2 iterations", () => {
+  it("INIT_POLL_FIN advances to MODE_SWITCH on et2750Dialect after 2 iterations", () => {
     const state = esci2Graph.states.INIT_POLL_FIN;
     expect(state.kind).toBe("decision");
     if (state.kind !== "decision") return;
-    // Iteration was 1, bumps to 2 — equals INIT_POLL_ITERATIONS_PLAIN, advance.
+    // Iteration was 1, bumps to 2 — equals dialect.initPollIterations=2, advance.
     // Sending a third FS Y after the printer has moved on returns a non-ACK
     // that fails MODE_SWITCH validation, so this cap is load-bearing.
-    const ctx = makeCtx({ profile: "esci2-plain", initPollIteration: 1 });
+    const ctx = makeCtx({ dialect: et2750Dialect, initPollIteration: 1 });
     const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
     expect("next" in result && result.next).toBe("MODE_SWITCH");
     expect(ctx.initPollIteration).toBe(2);
@@ -239,16 +223,7 @@ describe("esci2Graph T24 — twoPhaseRead (INIT1 TPR)", () => {
     const state = esci2Graph.states.INIT1_INFO_META;
     expect(state.kind).toBe("decision");
     if (state.kind === "decision") {
-      const ctx = {
-        duplex: false,
-        source: "adf" as const,
-        initPollIteration: 0,
-        imgChunkSize: 0,
-        pageEndKind: "none" as const,
-        pageSide: "front" as const,
-        zeroImgRetries: 0,
-        imageChunks: [] as Buffer[],
-      };
+      const ctx = makeCtx();
       // Build a header with cmd=CAPA (wrong for INFO state)
       const badPayload = Buffer.from("CAPAx0000010" + " ".repeat(52), "ascii");
       const result = state.decide(ctx, { type: 0xa000, payload: badPayload });
@@ -260,16 +235,7 @@ describe("esci2Graph T24 — twoPhaseRead (INIT1 TPR)", () => {
     const state = esci2Graph.states.INIT1_INFO_META;
     expect(state.kind).toBe("decision");
     if (state.kind === "decision") {
-      const ctx = {
-        duplex: false,
-        source: "adf" as const,
-        initPollIteration: 0,
-        imgChunkSize: 0,
-        pageEndKind: "none" as const,
-        pageSide: "front" as const,
-        zeroImgRetries: 0,
-        imageChunks: [] as Buffer[],
-      };
+      const ctx = makeCtx();
       const payload = Buffer.from("INFOx0000020" + " ".repeat(52), "ascii");
       const result = state.decide(ctx, { type: 0xa000, payload });
       expect("next" in result && result.next).toBe("INIT1_INFO_DATA");
@@ -347,16 +313,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
     const state = esci2Graph.states.POST_MODE_STAT;
     expect(state.kind).toBe("decision");
     if (state.kind === "decision") {
-      const ctx = {
-        duplex: false,
-        source: "adf" as const,
-        initPollIteration: 0,
-        imgChunkSize: 0,
-        pageEndKind: "none" as const,
-        pageSide: "front" as const,
-        zeroImgRetries: 0,
-        imageChunks: [] as Buffer[],
-      };
+      const ctx = makeCtx();
       // Header declaring 12 bytes of data
       const payload = Buffer.from("STATx000000C" + " ".repeat(52), "ascii");
       const result = state.decide(ctx, { type: 0xa000, payload });
@@ -368,16 +325,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
     const state = esci2Graph.states.POST_MODE_STAT;
     expect(state.kind).toBe("decision");
     if (state.kind === "decision") {
-      const ctx = {
-        duplex: false,
-        source: "adf" as const,
-        initPollIteration: 0,
-        imgChunkSize: 0,
-        pageEndKind: "none" as const,
-        pageSide: "front" as const,
-        zeroImgRetries: 0,
-        imageChunks: [] as Buffer[],
-      };
+      const ctx = makeCtx();
       const payload = Buffer.from("STATx0000000" + " ".repeat(52), "ascii");
       const result = state.decide(ctx, { type: 0xa000, payload });
       expect("next" in result && result.next).toBe("PARA");
@@ -434,16 +382,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
     const state = esci2Graph.states.IMG_META;
     expect(state.kind).toBe("decision");
     if (state.kind === "decision") {
-      const ctx = {
-        duplex: false,
-        source: "adf" as const,
-        initPollIteration: 0,
-        imgChunkSize: 0,
-        pageEndKind: "none" as const,
-        pageSide: "front" as const,
-        zeroImgRetries: 0,
-        imageChunks: [] as Buffer[],
-      };
+      const ctx = makeCtx();
       const result = state.decide(ctx, { type: 0xa000, payload: Buffer.from("bad") });
       expect("error" in result).toBe(true);
     }
@@ -453,16 +392,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
     const state = esci2Graph.states.IMG_META;
     expect(state.kind).toBe("decision");
     if (state.kind === "decision") {
-      const ctx = {
-        duplex: false,
-        source: "adf" as const,
-        initPollIteration: 0,
-        imgChunkSize: 0,
-        pageEndKind: "none" as const,
-        pageSide: "front" as const,
-        zeroImgRetries: 0,
-        imageChunks: [] as Buffer[],
-      };
+      const ctx = makeCtx();
       // 12-byte header + #ERR token
       const payload = Buffer.from("IMG x0000020#ERRADF ", "ascii");
       const result = state.decide(ctx, { type: 0xa000, payload });
@@ -474,16 +404,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
     const state = esci2Graph.states.IMG_META;
     expect(state.kind).toBe("decision");
     if (state.kind === "decision") {
-      const ctx = {
-        duplex: false,
-        source: "adf" as const,
-        initPollIteration: 0,
-        imgChunkSize: 0,
-        pageEndKind: "none" as const,
-        pageSide: "front" as const,
-        zeroImgRetries: 0,
-        imageChunks: [] as Buffer[],
-      };
+      const ctx = makeCtx();
       // Header: length=0x20=32, tokens: #pst, typ=IMGF (front), no #pen
       const payload = Buffer.from("IMG x0000020#pst#typIMGF", "ascii");
       const result = state.decide(ctx, { type: 0xa000, payload });
@@ -498,16 +419,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
     const state = esci2Graph.states.IMG_META;
     expect(state.kind).toBe("decision");
     if (state.kind === "decision") {
-      const ctx = {
-        duplex: true,
-        source: "adf" as const,
-        initPollIteration: 0,
-        imgChunkSize: 0,
-        pageEndKind: "none" as const,
-        pageSide: "front" as const,
-        zeroImgRetries: 0,
-        imageChunks: [] as Buffer[],
-      };
+      const ctx = makeCtx({ duplex: true });
       const payload = Buffer.from("IMG x0000010#typIMGB", "ascii");
       state.decide(ctx, { type: 0xa000, payload });
       expect(ctx.pageSide).toBe("back");
@@ -518,16 +430,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
     const state = esci2Graph.states.IMG_META;
     expect(state.kind).toBe("decision");
     if (state.kind === "decision") {
-      const ctx = {
-        duplex: false,
-        source: "adf" as const,
-        initPollIteration: 0,
-        imgChunkSize: 0,
-        pageEndKind: "none" as const,
-        pageSide: "front" as const,
-        zeroImgRetries: 0,
-        imageChunks: [] as Buffer[],
-      };
+      const ctx = makeCtx();
       const payload = Buffer.from("IMG x0000010#pen#typIMGF", "ascii");
       state.decide(ctx, { type: 0xa000, payload });
       expect(ctx.pageEndKind).toBe("more");
@@ -538,16 +441,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
     const state = esci2Graph.states.IMG_META;
     expect(state.kind).toBe("decision");
     if (state.kind === "decision") {
-      const ctx = {
-        duplex: false,
-        source: "adf" as const,
-        initPollIteration: 0,
-        imgChunkSize: 0,
-        pageEndKind: "none" as const,
-        pageSide: "front" as const,
-        zeroImgRetries: 0,
-        imageChunks: [] as Buffer[],
-      };
+      const ctx = makeCtx();
       const payload = Buffer.from("IMG x0000010#pen#lftd000", "ascii");
       state.decide(ctx, { type: 0xa000, payload });
       expect(ctx.pageEndKind).toBe("last");
@@ -558,16 +452,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
     const state = esci2Graph.states.IMG_META;
     expect(state.kind).toBe("decision");
     if (state.kind === "decision") {
-      const ctx = {
-        duplex: false,
-        source: "flatbed" as const,
-        initPollIteration: 0,
-        imgChunkSize: 0,
-        pageEndKind: "none" as const,
-        pageSide: "front" as const,
-        zeroImgRetries: 0,
-        imageChunks: [] as Buffer[],
-      };
+      const ctx = makeCtx({ source: "flatbed" });
       // Flatbed emits #pen but never #lft; source=flatbed must resolve "last".
       const payload = Buffer.from("IMG x0000010#pen#typIMGF", "ascii");
       state.decide(ctx, { type: 0xa000, payload });
@@ -582,7 +467,8 @@ function makeCtx(
   return {
     duplex: false,
     source: "adf",
-    profile: "esci2-tls",
+    transport: "tls",
+    action: "jpg",
     initPollIteration: 0,
     imgChunkSize: 0,
     pageEndKind: "none",
@@ -590,6 +476,9 @@ function makeCtx(
     zeroImgRetries: 0,
     imageChunks: [],
     tprDeclaredLength: 0,
+    infoBody: Buffer.alloc(0),
+    capaBody: Buffer.alloc(0),
+    dialect: et4950FamilyDialect,
     ...overrides,
   };
 }
@@ -660,16 +549,16 @@ describe("esci2Graph INIT_POLL_STAT source detection", () => {
     expect("next" in result && result.next).toBe("INIT_POLL_STAT_DRAIN");
   });
 
-  it("skips source-detect override on esci2-plain (preserves pre-set source)", () => {
+  it("skips source-detect override when dialect.sourceDetection is fixed-flatbed (preserves pre-set source)", () => {
     const state = esci2Graph.states.INIT_POLL_STAT;
     expect(state.kind).toBe("decision");
     if (state.kind !== "decision") return;
     // ET-2750 STAT replies declare length=0 even though the IS frame packs
-    // a 52-byte filler inline. Applying the ET-4950 length-based heuristic
-    // would misclassify ET-2750 as ADF — the plain profile must skip the
-    // override and trust the `source: "flatbed"` pre-set by the scanner shell.
+    // a 52-byte filler inline. Applying the stat-length heuristic would
+    // misclassify ET-2750 as ADF — the fixed-flatbed dialect must skip
+    // detection and trust the pre-set source.
     const ctx = makeCtx({
-      profile: "esci2-plain",
+      dialect: et2750Dialect,
       source: "flatbed",
       initPollIteration: 0,
     });
@@ -844,7 +733,7 @@ describe("esci2Graph T25 — IMG_META zero-length chunk handling", () => {
   it("IMG_META zero-chunk + no pen + retries exceeded → errors", () => {
     const state = esci2Graph.states.IMG_META;
     if (state.kind !== "decision") return;
-    const ctx = makeCtx({ source: "adf", zeroImgRetries: 2000, imageChunks: [] });
+    const ctx = makeCtx({ source: "adf", zeroImgRetries: 5000, imageChunks: [] });
     const payload = Buffer.from("IMG x0000000#typIMGF    ", "ascii");
     const result = state.decide(ctx, { type: 0xa000, payload });
     expect("error" in result).toBe(true);

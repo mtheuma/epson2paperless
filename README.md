@@ -18,13 +18,13 @@ What you get:
 
 ## Compatible printers
 
-| Model                 | Status      | Notes                                                                                                                            |
-| --------------------- | ----------- | -------------------------------------------------------------------------------------------------------------------------------- |
-| **ET-3950**           | ✅ Verified |                                                                                                                                  |
-| **ET-4950 / ET-4956** | ✅ Verified |                                                                                                                                  |
-| **WF-3620**           | ✅ Verified | Plain TCP scanner, no TLS pinning                                                                                                |
-| **ET-2750**           | ✅ Verified | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS                                                                            |
-| **XP-7100**           | 🟡 Partial  | Flatbed works; ADF support pending ([#65](https://github.com/mtheuma/epson2paperless/issues/65)). ESC/I-2 over plain TCP, no TLS |
+| Model                 | Status      | Notes                                                                                                                       |
+| --------------------- | ----------- | --------------------------------------------------------------------------------------------------------------------------- |
+| **ET-3950**           | ✅ Verified |                                                                                                                             |
+| **ET-4950 / ET-4956** | ✅ Verified |                                                                                                                             |
+| **WF-3620**           | ✅ Verified | Plain TCP scanner, no TLS pinning                                                                                           |
+| **ET-2750**           | ✅ Verified | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS                                                                       |
+| **XP-7100**           | 🟡 Partial  | Replay-verified from [#65](https://github.com/mtheuma/epson2paperless/issues/65) captures; on-hardware confirmation pending |
 
 Compatibility reports are welcome whether your model works or doesn't. [Open an issue](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) using the compatibility template.
 

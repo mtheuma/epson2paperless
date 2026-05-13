@@ -1,30 +1,6 @@
-import { createLogger } from "../logger.js";
-
-const log = createLogger("esci");
-
 // Legacy ESC/I "FS *" commands shared with the WF-3620 path now live in
 // `src/commands-fs.ts`. They retain the same wire bytes; this comment is
 // the only thing that moved.
-
-// ─── ESC/I-2 transport profile ────────────────────────────────────────────
-
-/**
- * Which ESC/I-2 transport variant the session is running on:
- *
- * - `esci2-tls` — TLS over port 1865. ET-4950, ET-3950, ET-4956. The
- *   original Frida-captured profile.
- * - `esci2-plain` — same ESC/I-2 vocabulary, plain TCP on port 1865 (no
- *   TLS). ET-2750. Decoded from `flatbed-single-page-pdf.pcapng` —
- *   wire-level handshake is identical to the TLS profile (printer sends
- *   `0x8000` welcome → host LOCK → ack → FS Y init poll), so the graph
- *   is shared. The two variants diverge only on (a) socket type at
- *   connect time and (b) the flatbed PARA payload, which is
- *   8 bytes longer with different gamma / CMX / extents tokens.
- *
- * Threaded through `Esci2Ctx` so the PARA builder closure picks the
- * right blob; the engine and graph stay profile-blind.
- */
-export type Esci2Profile = "esci2-tls" | "esci2-plain";
 
 // ─── ESC/I-2 commands ─────────────────────────────────────────────────────
 
@@ -53,46 +29,12 @@ export function buildParaHeader(payloadLength: number): Buffer {
 }
 
 /**
- * PARA phase-2 raw parameter bytes. Source + Sides + transport profile
- * all vary the payload:
- *   - profile=esci2-tls source=adf     duplex=false → 936 bytes, `#ADF`      tokens (announce 0x3A8)
- *   - profile=esci2-tls source=adf     duplex=true  → 940 bytes, `#ADFDPLX`  tokens (announce 0x3AC)
- *   - profile=esci2-tls source=flatbed              → 928 bytes, `#FB `      tokens (announce 0x3A0)
- *   - profile=esci2-plain source=flatbed            → 936 bytes, `#FB `      tokens (announce 0x3A8)
- *
- * `duplex` is ignored when `source === "flatbed"` (glass cannot duplex).
- * `profile=esci2-plain` + ADF is rejected — ET-2750 is flatbed-only
- * hardware, and config-time validation should already prevent that combo
- * from reaching the builder. Caller sends as passthru with
- * `cmd_size=<returned.length>`, `reply_size=64`. See `docs/HOW-IT-WORKS.md`
- * for the protocol layering and per-source variant rationale.
+ * ADF PARA payload. 936 bytes simplex (`#ADF` tokens), 940 bytes duplex
+ * (`#ADFDPLX` tokens). Transcribed byte-for-byte from the ET-4950 Frida
+ * capture. Caller sends as passthru with `cmd_size=<returned.length>`,
+ * `reply_size=64`.
  */
-export function buildParaPayload(opts: {
-  source: "adf" | "flatbed";
-  duplex: boolean;
-  profile: Esci2Profile;
-}): Buffer {
-  if (opts.source === "flatbed") {
-    if (opts.duplex) {
-      // Physically impossible — glass is single-sided. Defensive log so we
-      // surface it if the call site ever produces this combo, but don't
-      // fail: treat the same as flatbed + simplex.
-      log.warn("buildParaPayload: source=flatbed with duplex=true is impossible; ignoring duplex");
-    }
-    return opts.profile === "esci2-plain" ? buildParaFlatbedPlain() : buildParaFlatbedTls();
-  }
-  if (opts.profile === "esci2-plain") {
-    // ET-2750 is flatbed-only hardware. Config-layer Zod validation
-    // should already prevent this combo, but guard at the builder
-    // boundary too so a future caller that mis-threads ctx fails loudly.
-    throw new Error(
-      "buildParaPayload: source=adf is not supported on profile=esci2-plain (ET-2750 has no ADF)",
-    );
-  }
-  return buildParaAdf(opts.duplex);
-}
-
-function buildParaAdf(duplex: boolean): Buffer {
+export function buildParaAdf(duplex: boolean): Buffer {
   const head = "23414446"; // "#ADF"
   const dplx = duplex ? "44504c58" : ""; // "DPLX" insertion for duplex
   const tail =
@@ -136,7 +78,13 @@ function buildParaAdf(duplex: boolean): Buffer {
 //   - #ACQi0000069 → #ACQi0000000 (y-start offset; same length)
 // Flatbed PDF's PARA body is byte-identical to flatbed JPG's — PDF is
 // host-composed, the wire is format-agnostic. One blob covers both.
-function buildParaFlatbedTls(): Buffer {
+/**
+ * ET-4950 / ET-3950 / ET-4956 flatbed PARA payload (928 bytes, `#FB ` token).
+ * Transcribed from the ET-4950 Frida capture. Covers both JPG and PDF actions
+ * (PDF is composed host-side; the wire is format-agnostic). Caller sends as
+ * passthru with `cmd_size=928`, `reply_size=64`.
+ */
+export function buildParaFlatbedTls(): Buffer {
   const bodyHex =
     "234642202352534d693030303033303023525353693030303033303023434f4c" +
     "4330323423464d544a504720234a50476430393023474d4d5547313023474d54" +
@@ -186,7 +134,14 @@ function buildParaFlatbedTls(): Buffer {
 // ET-4950, just with different extents. The decode also reversed the
 // direction of the 0x8000 welcome packet (printer-side, not host-side);
 // neither error reaches code because the fixture is the spec.
-function buildParaFlatbedPlain(): Buffer {
+/**
+ * ET-2750 flatbed PARA payload (936 bytes, `#FB ` token). Transcribed
+ * byte-for-byte from the ET-2750 pcap fixture. Differs from
+ * `buildParaFlatbedTls` by gamma constant, CMX block, scan-area extents, and
+ * missing QITOFF/CCTCOL tokens. Caller sends as passthru with `cmd_size=936`,
+ * `reply_size=64`.
+ */
+export function buildParaFlatbedPlain(): Buffer {
   const bodyHex =
     "234642202352534d693030303033303023525353693030303033303023434f4c" +
     "4330323423464d544a504720234a50476430393023474d4d5547313823474d54" +
