@@ -3,11 +3,11 @@
 Three JSONL fixtures driving `src/esci2/scanner.test.ts` replay cases for
 Epson XP-7100 (ESC/I-2 over plain TCP, PID 1147).
 
-| Fixture | Source | Captured pcap (gitignored) |
-|---|---|---|
-| `jpg-flatbed.jsonl` | flatbed JPG, single page | `jpg-flatbed_anon.pcapng` |
-| `jpg-adf-simplex.jsonl` | ADF JPG, single sheet | `jpg-single_anon.pcapng` |
-| `jpg-adf-duplex.jsonl` | ADF duplex JPG, single sheet | `jpg-duplex_anon.pcapng` |
+| Fixture                 | Source                       | Captured pcap (gitignored) |
+| ----------------------- | ---------------------------- | -------------------------- |
+| `jpg-flatbed.jsonl`     | flatbed JPG, single page     | `jpg-flatbed_anon.pcapng`  |
+| `jpg-adf-simplex.jsonl` | ADF JPG, single sheet        | `jpg-single_anon.pcapng`   |
+| `jpg-adf-duplex.jsonl`  | ADF duplex JPG, single sheet | `jpg-duplex_anon.pcapng`   |
 
 ## Provenance
 
