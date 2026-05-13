@@ -733,7 +733,7 @@ describe("esci2Graph T25 — IMG_META zero-length chunk handling", () => {
   it("IMG_META zero-chunk + no pen + retries exceeded → errors", () => {
     const state = esci2Graph.states.IMG_META;
     if (state.kind !== "decision") return;
-    const ctx = makeCtx({ source: "adf", zeroImgRetries: 2000, imageChunks: [] });
+    const ctx = makeCtx({ source: "adf", zeroImgRetries: 5000, imageChunks: [] });
     const payload = Buffer.from("IMG x0000000#typIMGF    ", "ascii");
     const result = state.decide(ctx, { type: 0xa000, payload });
     expect("error" in result).toBe(true);

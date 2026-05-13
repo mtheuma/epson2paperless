@@ -64,8 +64,10 @@ export interface Esci2Ctx {
 export const ESCI2_TIMEOUT_MS = 30_000;
 export const ESCI2_REPLY_SIZE = 64;
 const LEGACY_REPLY_SIZE = 1;
-// 2000 zero-length retries gives ~40s of headroom for slow scan starts.
-const MAX_ZERO_IMG_RETRIES = 2000;
+// 5000 zero-length retries gives ~100s of headroom for slow scan starts.
+// XP-7100 flatbed captures show up to 2612 zero-length IMG responses before
+// the printer starts delivering data, so the limit must exceed that.
+const MAX_ZERO_IMG_RETRIES = 5000;
 
 /**
  * Async-event dispatch bytes (type 0x9000 body[0]).
@@ -800,6 +802,27 @@ g.state(
     const typeGuard = expectIsType(packet, 0xa000, "IMG_DATA");
     if (typeGuard) return typeGuard;
     if (packet.payload.length !== ctx.imgChunkSize) {
+      // Some printers (e.g. XP-7100) re-echo the IMG metadata reply in
+      // response to the PUREREAD command before sending the actual pixel
+      // data. This is a double-handshake: the engine sends PUREREAD(N),
+      // the printer replies with another "IMG xNNNNNNN" (same N), then
+      // sends the pixel data. Detect this by checking that the 64-byte
+      // payload is a well-formed IMG header whose declared size matches
+      // the one the engine already stored in ctx.imgChunkSize, and if so
+      // re-issue the PUREREAD to pull the real pixel chunk.
+      if (packet.payload.length === ESCI2_REPLY_SIZE) {
+        const echoHeader = parseEsci2ReplyHeader(packet.payload);
+        if (
+          echoHeader !== null &&
+          echoHeader.cmd === "IMG" &&
+          echoHeader.length === ctx.imgChunkSize
+        ) {
+          return {
+            next: "IMG_DATA",
+            send: buildPurereadPacket(ctx.imgChunkSize),
+          };
+        }
+      }
       return {
         error: new Error(
           `IMG_DATA: expected ${ctx.imgChunkSize} bytes, got ${packet.payload.length}`,

@@ -9,9 +9,64 @@ import { parseEsci2ReplyHeader } from "./commands.js";
 import { FakeTlsSocket } from "./test-support/fake-tls-socket.js";
 import { FakePlainSocket } from "./test-support/fake-plain-socket.js";
 import { loadFixture, driveFixture } from "./test-support/replay.js";
+import type { FixtureEvent } from "./test-support/replay.js";
+import { xp7100Dialect } from "./dialects/xp-7100.js";
 
 function waitImmediate(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
+}
+
+// Recover the captured PARA body bytes from a fixture's host→printer events.
+// The driver emits PARA as two consecutive h>p IS frames:
+//   frame 1: 12-byte IS header + 8-byte preamble + 12-byte "PARAx0000NNN"
+//   frame 2: 12-byte IS header + 8-byte preamble + <NNN bytes of PARA body>
+function extractCapturedParaBody(fixture: FixtureEvent[]): Buffer {
+  const PARA_HDR_HEX = Buffer.from("PARAx", "ascii").toString("hex");
+  let hdrIdx = -1;
+  for (let i = 0; i < fixture.length; i++) {
+    const e = fixture[i];
+    if (e.dir !== "h>p" || !("hex" in e)) continue;
+    if (e.hex.includes(PARA_HDR_HEX)) {
+      hdrIdx = i;
+      break;
+    }
+  }
+  if (hdrIdx < 0) throw new Error("extractCapturedParaBody: PARA header not found in fixture");
+  const hdrHex = (fixture[hdrIdx] as { hex: string }).hex;
+  const m = hdrHex.match(/5041524178([0-9a-fA-F]{14})/);
+  if (!m) throw new Error("extractCapturedParaBody: PARA header malformed");
+  const declared = parseInt(Buffer.from(m[1], "hex").toString("ascii"), 16);
+  // Body wrapper is the very next h>p event. Skip its 12-byte IS header +
+  // 8-byte cmd_size/reply_size preamble = 20 bytes (40 hex chars).
+  let bodyHex = "";
+  let isFirst = true;
+  for (let j = hdrIdx + 1; j < fixture.length && bodyHex.length / 2 < declared; j++) {
+    const e = fixture[j];
+    if (e.dir !== "h>p" || !("hex" in e)) continue;
+    bodyHex += isFirst ? e.hex.slice(40) : e.hex;
+    isFirst = false;
+  }
+  return Buffer.from(bodyHex.slice(0, declared * 2), "hex");
+}
+
+// Recover the PARA body bytes the scanner emitted, by searching the fake
+// socket's accumulated writes for the same "PARAx0000NNN" header and
+// peeling off the body wrapper.
+function extractScannerParaWrite(fake: FakePlainSocket): Buffer {
+  const PARA_HDR = Buffer.from("PARAx", "ascii");
+  for (let i = 0; i < fake.writes.length; i++) {
+    const w = fake.writes[i];
+    const idx = w.indexOf(PARA_HDR);
+    if (idx < 0) continue;
+    // PARA header is "PARAx" + 7 ASCII hex chars; the size is encoded there.
+    const lenAscii = w.subarray(idx + 5, idx + 12).toString("ascii");
+    const declared = parseInt(lenAscii, 16);
+    // Body wrapper is the next write. Skip 12-byte IS header + 8-byte preamble.
+    const bodyWrite = fake.writes[i + 1];
+    if (!bodyWrite) throw new Error("extractScannerParaWrite: body write missing");
+    return bodyWrite.subarray(20, 20 + declared);
+  }
+  throw new Error("extractScannerParaWrite: PARA header write not found");
 }
 
 // Fixed capability-body packets used by driveScannerToPara for both init cycles.
@@ -1080,5 +1135,86 @@ describe("runEsci2ScanOverPlain — ET-2750 fixture replay", () => {
     expect(doc.getPageCount()).toBe(1);
     // Flatbed front side — no 180° rotation.
     expect(doc.getPage(0).getRotation().angle).toBe(0);
+  }, 60_000);
+});
+
+describe("runEsci2ScanOverPlain — XP-7100 fixture replay", () => {
+  let outputDir: string;
+  let tempDir: string;
+
+  beforeEach(() => {
+    outputDir = mkdtempSync(path.join(os.tmpdir(), "xp7100-out-"));
+    tempDir = mkdtempSync(path.join(os.tmpdir(), "xp7100-tmp-"));
+  });
+
+  afterEach(() => {
+    rmSync(outputDir, { recursive: true, force: true });
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const XP_7100_FIXTURES = path.join("tools", "pcap-extract", "captures", "xp-7100");
+
+  async function runOne(opts: { fixtureFile: string; source: "flatbed" | "adf"; duplex: boolean }) {
+    const fixturePath = path.join(XP_7100_FIXTURES, opts.fixtureFile);
+    const fixture = loadFixture(fixturePath);
+    const fake = new FakePlainSocket();
+    const sessionPromise = runEsci2ScanOverPlain(
+      {
+        printerIp: "10.0.0.143",
+        port: 1865,
+        destId: 0x02,
+        outputDir,
+        tempDir,
+        duplex: opts.duplex,
+        action: "jpg",
+      },
+      fake.asFactory(),
+    );
+    await driveFixture(fixture, fake, sessionPromise);
+
+    // Wire-fidelity check: scanner emitted same PARA bytes the driver did.
+    const capturedPara = extractCapturedParaBody(fixture);
+    const scannerPara = extractScannerParaWrite(fake);
+    expect(scannerPara.equals(capturedPara)).toBe(true);
+
+    // Cross-check the recipe: captured PARA equals what xp7100Dialect would build
+    // for these axes. (Recipe-level tests cover this against .bin fixtures; this
+    // adds one more anchor from the JSONL side, catching any drift between
+    // .bin and JSONL extractions.)
+    const recipePara = xp7100Dialect.buildPara({
+      source: opts.source,
+      duplex: opts.duplex,
+      action: "jpg",
+    });
+    expect(capturedPara.equals(recipePara)).toBe(true);
+
+    return readdirSync(outputDir).filter((f) => f.endsWith(".jpg"));
+  }
+
+  it("flatbed JPG single page", async () => {
+    const jpgs = await runOne({
+      fixtureFile: "jpg-flatbed.jsonl",
+      source: "flatbed",
+      duplex: false,
+    });
+    expect(jpgs).toHaveLength(1);
+  }, 60_000);
+
+  it("ADF simplex JPG single page", async () => {
+    const jpgs = await runOne({
+      fixtureFile: "jpg-adf-simplex.jsonl",
+      source: "adf",
+      duplex: false,
+    });
+    expect(jpgs).toHaveLength(1);
+  }, 60_000);
+
+  it("ADF duplex JPG", async () => {
+    const jpgs = await runOne({
+      fixtureFile: "jpg-adf-duplex.jsonl",
+      source: "adf",
+      duplex: true,
+    });
+    expect(jpgs).toHaveLength(2); // duplex → front + back
   }, 60_000);
 });
