@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { lookupDialect, DIALECTS, buildDiagnostic } from "./dialect-registry.js";
 import { et4950FamilyDialect } from "./dialects/et-4950-family.js";
 import { et2750Dialect } from "./dialects/et-2750.js";
+import { xp7100Dialect } from "./dialects/xp-7100.js";
 import { UnsupportedDialectError } from "./dialect.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
 
@@ -23,6 +24,11 @@ describe("dialect registry", () => {
   it("each registered dialect has a unique fingerprint", () => {
     const fingerprints = DIALECTS.map((d) => d.capaFingerprint);
     expect(new Set(fingerprints).size).toBe(fingerprints.length);
+  });
+
+  it("includes XP-7100 in the registry", () => {
+    expect(DIALECTS).toContain(xp7100Dialect);
+    expect(lookupDialect(xp7100Dialect.capaFingerprint)).toBe(xp7100Dialect);
   });
 });
 
