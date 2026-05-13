@@ -130,7 +130,7 @@ The command bytes are either:
 
 - **Legacy ESC/I** — 2-byte binary commands: `FS Y` (`0x1C 0x59`), `FS X` (`0x1C 0x58`), `FS Z` (`0x1C 0x5A`). These predate ESC/I-2 and handle session initialization.
 - **ESC/I-2** — 12-byte ASCII headers of the form `NAMEx0000000`, where `NAME` is a 4-character command name (right-padded with spaces if needed) and `0000000` is a 7-hex-digit parameter block length. Commands include `STAT`, `FIN `, `TRDT`, `IMG `, and `PARA`.
-- **Raw parameter bytes** — the `PARA` command's second phase sends the raw scan parameter blob (928–940 bytes depending on source and mode) as a separate passthru with no ESC/I-2 header wrapper.
+- **Raw parameter bytes** — the `PARA` command's second phase sends the raw scan parameter blob (928–956 bytes depending on dialect, source, action, and mode) as a separate passthru with no ESC/I-2 header wrapper.
 
 **PARA is sent in two passthru packets**, not one. The first packet carries the 12-byte `PARAx<hex-len>` header with `reply_size=0`. The second carries the raw parameter bytes with `reply_size=64`. The printer acks the first packet with an empty `0xa000` reply, then responds to the second with a 64-byte `PARAx0000000#parOK…` reply if the parameters were accepted (or `#parNG…` if not). This two-phase structure was discovered from the Frida capture: the Windows driver never batches the two sends into a single passthru.
 
@@ -160,7 +160,7 @@ The shells / graphs / transports map to the variants like so:
 | `esci2-plain` | `runEsci2ScanOverPlain` | `src/esci2/graph` | `withEsci2UnlockOnDestroy(socketAsTransport(net.connect(...)))` — same graph, dialect-driven per-state decisions                                     |
 | `esci`        | `runEsciScan`           | `src/esci/graph`  | `socketAsTransport(net.connect(...))` — no transport adapters; UNLOCK is sent from the graph's `UNLOCKING` state rather than via a destroy-time hook |
 
-Both ESC/I-2 entry points share the same graph; `ctx.transport: "tls" | "plain"` selects the small handshake-prefix differences, and `ctx.dialect` (resolved from the CAPA fingerprint at INIT1 — see "How printer-model differences are handled" below) drives the per-state decisions (source detection, init-poll count, PARA build). The deterministic single-IS-packet-per-transition contract holds for all three.
+Both ESC/I-2 entry points share the same graph with no transport-conditional branching — the graph starts at the same `WELCOME` state and processes the same IS framing for either path. The difference lives entirely in the scanner shell: it picks the socket factory (`tls.connect` vs `net.connect`) and the transport-adapter composition (TLS-error labels on the TLS path, plain socket otherwise). `ctx.transport: "tls" | "plain"` rides along on the context only so the unknown-fingerprint diagnostic block can report which transport was in use. `ctx.dialect` (resolved from the CAPA fingerprint at INIT1 — see "How printer-model differences are handled" below) drives the per-state decisions (source detection, init-poll count, PARA build). The deterministic single-IS-packet-per-transition contract holds for all three.
 
 ```
 CONNECTING
