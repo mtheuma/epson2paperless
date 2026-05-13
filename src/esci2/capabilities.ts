@@ -13,9 +13,10 @@ import { splitHashSegments } from "./segments.js";
  * prefixes; everything else is passed through unparsed (and consumers
  * who care can do their own slicing).
  *
- * The fingerprint module deliberately does NOT use this parser — it works
- * at the raw-segment level so that new tokens we don't yet recognise
- * still contribute to the fingerprint correctly.
+ * The fingerprint module deliberately does NOT use this typed parser — it
+ * imports only the raw segment splitter from `./segments.js` so that new
+ * tokens we don't yet recognise still contribute to the fingerprint
+ * correctly.
  */
 
 export interface InfoTokens {

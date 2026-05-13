@@ -224,6 +224,9 @@ export const xp7100Dialect: Dialect = {
   buildPara(axes: ParaAxes): Buffer {
     const { body, offsets } = pickBase(axes.source, axes.duplex);
     const out = Buffer.from(body); // copy — never mutate the inlined constants
+    // JPG action: the per-source JPG base already carries the right LUT + CMX
+    // bytes — flatbed/simplex/duplex captures share those regions byte-for-byte
+    // within an action, so no splice is needed.
     if (axes.action === "jpg") return out;
     const regions = PDF_REGIONS;
     regions.grn.copy(out, offsets.grnPayload);
