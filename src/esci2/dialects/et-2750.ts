@@ -1,4 +1,4 @@
-import { buildParaPayload } from "../commands.js";
+import { buildParaFlatbedPlain } from "../commands.js";
 import type { Dialect, ParaAxes } from "../dialect.js";
 
 /**
@@ -24,10 +24,6 @@ export const et2750Dialect: Dialect = {
         `et2750Dialect.buildPara: source=adf is not supported (ET-2750 has no ADF hardware)`,
       );
     }
-    return buildParaPayload({
-      source: "flatbed",
-      duplex: false,
-      profile: "esci2-plain",
-    });
+    return buildParaFlatbedPlain();
   },
 };

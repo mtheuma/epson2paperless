@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { et2750Dialect } from "./et-2750.js";
-import { buildParaPayload } from "../commands.js";
+import { buildParaFlatbedPlain } from "../commands.js";
 
 describe("et2750Dialect", () => {
   it("has flatbed-only hardware", () => {
@@ -15,18 +15,13 @@ describe("et2750Dialect", () => {
     expect(et2750Dialect.initPollIterations).toBe(2);
   });
 
-  it("flatbed JPG matches buildParaPayload(profile=esci2-plain)", () => {
+  it("flatbed JPG matches buildParaFlatbedPlain()", () => {
     const fromDialect = et2750Dialect.buildPara({
       source: "flatbed",
       duplex: false,
       action: "jpg",
     });
-    const fromLegacy = buildParaPayload({
-      source: "flatbed",
-      duplex: false,
-      profile: "esci2-plain",
-    });
-    expect(fromDialect.equals(fromLegacy)).toBe(true);
+    expect(fromDialect.equals(buildParaFlatbedPlain())).toBe(true);
   });
 
   it("flatbed PDF is byte-identical to flatbed JPG", () => {

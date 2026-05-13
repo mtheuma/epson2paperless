@@ -3,7 +3,9 @@ import { buildFsY, buildFsX, buildFsZ } from "../commands-fs.js";
 import {
   buildEsci2Command,
   buildParaHeader,
-  buildParaPayload,
+  buildParaAdf,
+  buildParaFlatbedTls,
+  buildParaFlatbedPlain,
   parseEsci2ReplyHeader,
   parseTokens,
 } from "./commands.js";
@@ -58,9 +60,9 @@ describe("buildParaHeader", () => {
   });
 });
 
-describe("buildParaPayload", () => {
+describe("buildParaAdf", () => {
   it("returns the 936-byte parameter block transcribed from the Frida capture", () => {
-    const payload = buildParaPayload({ source: "adf", duplex: false, profile: "esci2-tls" });
+    const payload = buildParaAdf(false);
     expect(payload.length).toBe(936);
     // Byte-exact expectation — matches Frida capture record 116 exactly.
     const expectedHex =
@@ -98,7 +100,7 @@ describe("buildParaPayload", () => {
   });
 
   it("starts with the expected ASCII parameter tokens", () => {
-    const payload = buildParaPayload({ source: "adf", duplex: false, profile: "esci2-tls" });
+    const payload = buildParaAdf(false);
     // First 64 bytes are all printable ASCII
     const prefix = payload.subarray(0, 64).toString("ascii");
     expect(prefix).toContain("#ADF");
@@ -109,14 +111,14 @@ describe("buildParaPayload", () => {
   });
 
   it("ends with ACQ + BSZ parameter tokens", () => {
-    const payload = buildParaPayload({ source: "adf", duplex: false, profile: "esci2-tls" });
+    const payload = buildParaAdf(false);
     const suffix = payload.subarray(-64).toString("ascii");
     expect(suffix).toContain("#ACQi0000069i0000000i0002481i0003506");
     expect(suffix).toContain("#BSZi1048576");
   });
 
   it("returns the 940-byte duplex parameter block when duplex=true", () => {
-    const payload = buildParaPayload({ source: "adf", duplex: true, profile: "esci2-tls" });
+    const payload = buildParaAdf(true);
     expect(payload.length).toBe(940);
     // #ADFDPLX at offset 0 (hex 23 41 44 46 44 50 4c 58)
     expect(payload.subarray(0, 8).toString("hex")).toBe("2341444644504c58");
@@ -126,8 +128,8 @@ describe("buildParaPayload", () => {
   });
 
   it("isolates the simplex→duplex difference to a 4-byte insertion at offset 4", () => {
-    const simplex = buildParaPayload({ source: "adf", duplex: false, profile: "esci2-tls" });
-    const duplex = buildParaPayload({ source: "adf", duplex: true, profile: "esci2-tls" });
+    const simplex = buildParaAdf(false);
+    const duplex = buildParaAdf(true);
     // Bytes 0..3 identical ("#ADF")
     expect(duplex.subarray(0, 4).equals(simplex.subarray(0, 4))).toBe(true);
     // Bytes 4..7 of duplex are "DPLX"; simplex byte 4 starts "#RSM"
@@ -136,9 +138,11 @@ describe("buildParaPayload", () => {
     //   simplex[4:] === duplex[8:]
     expect(duplex.subarray(8).equals(simplex.subarray(4))).toBe(true);
   });
+});
 
-  it("returns the 928-byte flatbed parameter block when source=flatbed", () => {
-    const payload = buildParaPayload({ source: "flatbed", duplex: false, profile: "esci2-tls" });
+describe("buildParaFlatbedTls", () => {
+  it("returns the 928-byte ET-4950 flatbed parameter block", () => {
+    const payload = buildParaFlatbedTls();
     expect(payload.length).toBe(928);
     // Byte-exact expectation — matches Frida capture
     // 2026-04-24T09-05-08-flatbed-1p-jpg.jsonl record 191 (the PARA body).
@@ -176,7 +180,7 @@ describe("buildParaPayload", () => {
   });
 
   it("starts with #FB (no DPLX) and omits #PAG", () => {
-    const payload = buildParaPayload({ source: "flatbed", duplex: false, profile: "esci2-tls" });
+    const payload = buildParaFlatbedTls();
     // Source token at offset 0 is "#FB " (trailing space); no "#ADF".
     expect(payload.subarray(0, 4).toString("ascii")).toBe("#FB ");
     expect(payload.toString("ascii")).not.toContain("#ADF");
@@ -185,24 +189,14 @@ describe("buildParaPayload", () => {
   });
 
   it("carries a zero ACQ y-start offset (vs ADF's 0x69 lead-in)", () => {
-    const payload = buildParaPayload({ source: "flatbed", duplex: false, profile: "esci2-tls" });
+    const payload = buildParaFlatbedTls();
     expect(payload.toString("ascii")).toContain("#ACQi0000000i0000000i0002481i0003506");
   });
+});
 
-  it("ignores duplex=true with a warn log (physically impossible combo)", () => {
-    // We don't have a logger-spy harness in this test file, so assert the
-    // return value only — the warn is a defensive log, not a test contract.
-    // Verify the combo still produces the 928-byte flatbed blob (same bytes
-    // as duplex=false).
-    const a = buildParaPayload({ source: "flatbed", duplex: false, profile: "esci2-tls" });
-    const b = buildParaPayload({ source: "flatbed", duplex: true, profile: "esci2-tls" });
-    expect(b.equals(a)).toBe(true);
-  });
-
-  // ─── profile=esci2-plain (ET-2750) ───────────────────────────────────────
-
-  it("returns the 936-byte ET-2750 flatbed blob when profile=esci2-plain", () => {
-    const payload = buildParaPayload({ source: "flatbed", duplex: false, profile: "esci2-plain" });
+describe("buildParaFlatbedPlain", () => {
+  it("returns the 936-byte ET-2750 flatbed blob", () => {
+    const payload = buildParaFlatbedPlain();
     expect(payload.length).toBe(936);
     // Byte-exact expectation — transcribed from
     // tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl
@@ -242,12 +236,8 @@ describe("buildParaPayload", () => {
   });
 
   it("ET-2750 flatbed differs from ET-4950 flatbed by the documented tokens", () => {
-    const tls = buildParaPayload({ source: "flatbed", duplex: false, profile: "esci2-tls" });
-    const plain = buildParaPayload({
-      source: "flatbed",
-      duplex: false,
-      profile: "esci2-plain",
-    });
+    const tls = buildParaFlatbedTls();
+    const plain = buildParaFlatbedPlain();
     // Different lengths: ET-4950=928, ET-2750=936 — net +8 bytes.
     expect(tls.length).toBe(928);
     expect(plain.length).toBe(936);
@@ -278,15 +268,6 @@ describe("buildParaPayload", () => {
     // Both end with the same 1 MB buffer-size token.
     expect(tlsAscii).toContain("#BSZi1048576");
     expect(plainAscii).toContain("#BSZi1048576");
-  });
-
-  it("rejects ADF source on profile=esci2-plain (ET-2750 is flatbed-only)", () => {
-    expect(() =>
-      buildParaPayload({ source: "adf", duplex: false, profile: "esci2-plain" }),
-    ).toThrow(/source=adf is not supported on profile=esci2-plain/);
-    expect(() => buildParaPayload({ source: "adf", duplex: true, profile: "esci2-plain" })).toThrow(
-      /source=adf is not supported on profile=esci2-plain/,
-    );
   });
 });
 

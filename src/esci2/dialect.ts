@@ -11,7 +11,7 @@ export interface ParaAxes {
 /**
  * What a printer model's wire dialect carries. Selected at runtime by
  * sha256 fingerprint of the printer's CAPA#1 reply. Every wire behaviour
- * that today's `Esci2Profile` discriminator implicitly carried lives here.
+ * that was previously implicit in the transport profile lives here.
  */
 export interface Dialect {
   /** sha256 hex of canonicalised CAPA#1 segments. The registry key. */

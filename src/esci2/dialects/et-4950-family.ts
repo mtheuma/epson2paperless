@@ -1,4 +1,4 @@
-import { buildParaPayload } from "../commands.js";
+import { buildParaFlatbedTls, buildParaAdf } from "../commands.js";
 import type { Dialect, ParaAxes } from "../dialect.js";
 
 /**
@@ -22,10 +22,7 @@ export const et4950FamilyDialect: Dialect = {
   initPollIterations: 3,
   buildPara(axes: ParaAxes): Buffer {
     // Action is ignored — this family's wire is format-agnostic.
-    return buildParaPayload({
-      source: axes.source,
-      duplex: axes.duplex,
-      profile: "esci2-tls",
-    });
+    if (axes.source === "flatbed") return buildParaFlatbedTls();
+    return buildParaAdf(axes.duplex);
   },
 };

@@ -560,7 +560,7 @@ g.state("INIT_POLL_STAT_DRAIN", {
 });
 
 // INIT_POLL_FIN: decision on FIN reply — loop or advance to MODE_SWITCH.
-// INIT_POLL_FIN increments initPollIteration; if below the profile's
+// INIT_POLL_FIN increments initPollIteration; if below the dialect's
 // target iteration count sends FS Y and loops; else sends FS X and
 // moves to MODE_SWITCH.
 g.state(
