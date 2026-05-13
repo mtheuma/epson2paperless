@@ -156,13 +156,7 @@ interface RegionOffsets {
 // Flatbed and ADF simplex share marker offsets — the 8-byte body-size delta
 // (944 vs 952) comes from #PAGd000 inserted AFTER the LUTs. ADF duplex
 // inserts DPLX into the source token at offset 0, shifting everything +4.
-const OFFSETS_FLATBED: RegionOffsets = {
-  grnPayload: 72,
-  redPayload: 340,
-  bluPayload: 608,
-  cmxPayload: 876,
-};
-const OFFSETS_ADF_SIMPLEX: RegionOffsets = {
+const OFFSETS_SIMPLEX: RegionOffsets = {
   grnPayload: 72,
   redPayload: 340,
   bluPayload: 608,
@@ -182,29 +176,30 @@ function pickBase(
   source: "flatbed" | "adf",
   duplex: boolean,
 ): { body: Buffer; offsets: RegionOffsets } {
-  if (source === "flatbed") return { body: JPG_FLATBED, offsets: OFFSETS_FLATBED };
+  if (source === "flatbed") return { body: JPG_FLATBED, offsets: OFFSETS_SIMPLEX };
   if (duplex) return { body: JPG_DUPLEX, offsets: OFFSETS_ADF_DUPLEX };
-  return { body: JPG_SINGLE, offsets: OFFSETS_ADF_SIMPLEX };
+  return { body: JPG_SINGLE, offsets: OFFSETS_SIMPLEX };
 }
 
-function extractActionRegions(action: "jpg" | "pdf"): {
+function extractRegions(
+  src: Buffer,
+  offsets: RegionOffsets,
+): {
   grn: Buffer;
   red: Buffer;
   blu: Buffer;
   cmx: Buffer;
 } {
-  // Source: ADF-simplex JPG / PDF captures. LUT and CMX regions are
-  // source/duplex-invariant within an action — verified across all
-  // captures during analysis.
-  const src = action === "jpg" ? JPG_SINGLE : PDF_SINGLE;
-  const o = OFFSETS_ADF_SIMPLEX;
   return {
-    grn: src.subarray(o.grnPayload, o.grnPayload + LUT_LEN),
-    red: src.subarray(o.redPayload, o.redPayload + LUT_LEN),
-    blu: src.subarray(o.bluPayload, o.bluPayload + LUT_LEN),
-    cmx: src.subarray(o.cmxPayload, o.cmxPayload + CMX_LEN),
+    grn: src.subarray(offsets.grnPayload, offsets.grnPayload + LUT_LEN),
+    red: src.subarray(offsets.redPayload, offsets.redPayload + LUT_LEN),
+    blu: src.subarray(offsets.bluPayload, offsets.bluPayload + LUT_LEN),
+    cmx: src.subarray(offsets.cmxPayload, offsets.cmxPayload + CMX_LEN),
   };
 }
+
+// PDF LUT/CMX regions are source-invariant across the captured axis set.
+const PDF_REGIONS = extractRegions(PDF_SINGLE, OFFSETS_SIMPLEX);
 
 /**
  * Epson XP-7100 (ESC/I-2 over plain TCP, PID 1147). Driver attempts TLS
@@ -228,8 +223,9 @@ export const xp7100Dialect: Dialect = {
   initPollIterations: 3,
   buildPara(axes: ParaAxes): Buffer {
     const { body, offsets } = pickBase(axes.source, axes.duplex);
-    const regions = extractActionRegions(axes.action);
     const out = Buffer.from(body); // copy — never mutate the inlined constants
+    if (axes.action === "jpg") return out;
+    const regions = PDF_REGIONS;
     regions.grn.copy(out, offsets.grnPayload);
     regions.red.copy(out, offsets.redPayload);
     regions.blu.copy(out, offsets.bluPayload);

@@ -11,7 +11,7 @@
     "printer-fingerprint": "tsx tools/printer-fingerprint.ts",
     "test-page:generate": "tsx tools/test-page/generate.ts",
     "kill-dev": "node scripts/kill-dev.mjs",
-    "test": "vitest run",
+    "test": "vitest run --exclude=.claude/** --exclude=.superpowers/**",
     "test:watch": "vitest",
     "pcap:extract": "tsx tools/pcap-extract/extract.ts",
     "pcap:render": "tsx tools/pcap-render/render.ts",

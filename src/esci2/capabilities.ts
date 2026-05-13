@@ -1,3 +1,5 @@
+import { splitHashSegments } from "./segments.js";
+
 /**
  * Token parsing for ESC/I-2 INFO and CAPA reply bodies.
  *
@@ -44,23 +46,6 @@ export interface CapaTokens {
   segments: string[];
 }
 
-function splitSegments(body: Buffer): string[] {
-  const text = body.toString("ascii");
-  const out: string[] = [];
-  let i = 0;
-  while (i < text.length) {
-    if (text[i] !== "#") {
-      i++;
-      continue;
-    }
-    let end = i + 1;
-    while (end < text.length && text[end] !== "#") end++;
-    out.push(text.slice(i, end));
-    i = end;
-  }
-  return out;
-}
-
 /**
  * Returns the raw text immediately after `prefix` from the first matching
  * segment, trimmed of trailing whitespace. Returns null when no segment
@@ -75,7 +60,7 @@ function textAfterPrefix(segments: string[], prefix: string): string | null {
 }
 
 export function parseInfoTokens(body: Buffer): InfoTokens {
-  const segments = splitSegments(body);
+  const segments = splitHashSegments(body);
   let prdPid: string | null = null;
   let firmware: string | null = null;
   for (const seg of segments) {
@@ -97,7 +82,7 @@ export function parseInfoTokens(body: Buffer): InfoTokens {
 }
 
 export function parseCapaTokens(body: Buffer): CapaTokens {
-  const segments = splitSegments(body);
+  const segments = splitHashSegments(body);
   return {
     gmmList: textAfterPrefix(segments, "#GMMLIST"),
     cmxList: textAfterPrefix(segments, "#CMXLIST"),

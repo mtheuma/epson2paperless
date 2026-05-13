@@ -72,9 +72,7 @@ function extractScannerParaWrite(fake: FakePlainSocket): Buffer {
 // Fixed capability-body packets used by driveScannerToPara for both init cycles.
 // INFO_BODY_PACKET and RESA_BODY_PACKET stay synthetic — the scanner only
 // checks the declared length. CAPA_BODY_PACKET must use the real ET-4950 body
-// because after Task 8 the INIT1_CAPA onData callback computes a sha256
-// fingerprint and looks it up in DIALECTS; a synthetic filler body would
-// fingerprint to an unknown value and abort every helper-driven test.
+// because INIT1_CAPA fingerprints it and resolves the matching dialect.
 const INFO_BODY_PACKET = buildIsPacket(0xa000, Buffer.alloc(244, 0x2d));
 const RESA_BODY_PACKET = buildIsPacket(0xa000, Buffer.alloc(164, 0x2d));
 

@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { splitHashSegments } from "./segments.js";
 
 /**
  * Prefixes of CAPA segments that mutate between sessions on the same printer.
@@ -19,27 +20,6 @@ function isVolatile(segment: string): boolean {
 }
 
 /**
- * Split a CAPA body into `#`-prefixed segments. Each segment runs from a `#`
- * to the byte before the next `#`, or to end-of-buffer.
- */
-function splitSegments(body: Buffer): string[] {
-  const text = body.toString("ascii");
-  const out: string[] = [];
-  let i = 0;
-  while (i < text.length) {
-    if (text[i] !== "#") {
-      i++;
-      continue;
-    }
-    let end = i + 1;
-    while (end < text.length && text[end] !== "#") end++;
-    out.push(text.slice(i, end));
-    i = end;
-  }
-  return out;
-}
-
-/**
  * Compute the dialect fingerprint for a CAPA#1 reply body. Returns a 64-char
  * lowercase hex sha256.
  *
@@ -51,7 +31,7 @@ function splitSegments(body: Buffer): string[] {
  *   5. Concatenate, UTF-8 encode, sha256, hex-encode.
  */
 export function computeCapaFingerprint(capaBody: Buffer): string {
-  const segments = splitSegments(capaBody)
+  const segments = splitHashSegments(capaBody)
     .filter((s) => !isVolatile(s))
     .map((s) => s.trimEnd())
     .sort();
