@@ -280,7 +280,6 @@ twoPhaseRead(
   "INIT1_CAPA_META",
   (ctx, body) => {
     ctx.infoBody = body;
-    // return undefined → normal transition fires
   },
 );
 twoPhaseRead(
@@ -295,7 +294,7 @@ twoPhaseRead(
     const dialect = lookupDialect(fingerprint);
     if (dialect === null) {
       const diagnostic = buildDiagnostic({
-        capaBody: body,
+        capaBody: ctx.capaBody,
         infoBody: ctx.infoBody,
         transport: ctx.transport,
         fingerprint,
@@ -303,7 +302,6 @@ twoPhaseRead(
       return { error: new UnsupportedDialectError(fingerprint, diagnostic) };
     }
     ctx.dialect = dialect;
-    // return undefined → normal `{ next: "INIT1_FIN", send: <FIN> }` transition fires
   },
 );
 

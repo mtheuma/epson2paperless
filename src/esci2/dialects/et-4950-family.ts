@@ -13,8 +13,8 @@ import type { Dialect, ParaAxes } from "../dialect.js";
  * JPG-format scan.
  */
 export const et4950FamilyDialect: Dialect = {
-  // Computed from the ET-4950 Frida-capture CAPA#1 body.
-  // Re-derive: see Task 4 step 1 of the plan.
+  // Re-derive: run computeCapaFingerprint() over the CAPA#1 body extracted
+  // from tools/frida-capture/captures/2026-04-24T09-05-08-flatbed-1p-jpg.jsonl.
   capaFingerprint: "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2",
   displayName: "ET-4950 family (ESC/I-2 over TLS)",
   hardware: { flatbed: true, adf: true, duplex: true },

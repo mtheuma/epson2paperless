@@ -19,8 +19,11 @@ export interface Dialect {
   /** Human-readable label for logs and diagnostics; never used for dispatch. */
   readonly displayName: string;
   /**
-   * What hardware the dialect supports. `buildPara` throws when called for
-   * an unsupported axis (e.g. source=adf on a flatbed-only dialect).
+   * Informational metadata describing what hardware the dialect supports.
+   * Not consulted by the runtime — each dialect's `buildPara` is responsible
+   * for guarding its own unsupported axes (e.g. ET-2750's flatbed-only check).
+   * Reserved for future capability-aware paths (panel-state validation,
+   * config-time hardware checks, diagnostic enrichment).
    */
   readonly hardware: { flatbed: boolean; adf: boolean; duplex: boolean };
   /**
