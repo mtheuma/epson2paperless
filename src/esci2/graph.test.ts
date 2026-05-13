@@ -468,6 +468,7 @@ function makeCtx(
     duplex: false,
     source: "adf",
     profile: "esci2-tls",
+    action: "jpg",
     initPollIteration: 0,
     imgChunkSize: 0,
     pageEndKind: "none",

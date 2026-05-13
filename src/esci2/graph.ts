@@ -18,7 +18,6 @@ import { buildFsY, buildFsX, buildFsZ } from "../commands-fs.js";
 import {
   buildEsci2Command,
   buildParaHeader,
-  buildParaPayload,
   parseEsci2ReplyHeader,
   parseTokens,
   type Esci2Profile,
@@ -65,6 +64,8 @@ export interface Esci2Ctx {
   capaBody: Buffer;
   /** Resolved dialect post-INIT1, drives PARA build + init-poll count + source detection. Undefined until INIT1 completes. */
   dialect: Dialect | undefined;
+  /** Panel-selected output format; drives action-aware dialects' PARA splice. */
+  action: "jpg" | "pdf";
 }
 
 export const ESCI2_TIMEOUT_MS = 30_000;
@@ -605,10 +606,10 @@ g.state(
 // ET-2750 flatbed blobs; ADF combos remain TLS-only (ET-2750 is
 // flatbed-only hardware, enforced at config time).
 function buildParaSend(ctx: Esci2Ctx): Buffer[] {
-  const paraPayload = buildParaPayload({
+  const paraPayload = ctx.dialect!.buildPara({
     source: ctx.source,
     duplex: ctx.duplex,
-    profile: ctx.profile,
+    action: ctx.action,
   });
   return [
     buildPassthruPacket(buildParaHeader(paraPayload.length), 0),

@@ -66,6 +66,7 @@ function buildInitialCtx(session: ScanSession, profile: "esci2-tls" | "esci2-pla
     // INIT_POLL_STAT decision overrides per fixture.
     source: profile === "esci2-plain" ? "flatbed" : "adf",
     profile,
+    action: session.action,
     initPollIteration: 0,
     imgChunkSize: 0,
     pageEndKind: "none",
