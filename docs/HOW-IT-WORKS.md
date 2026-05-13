@@ -328,6 +328,21 @@ Wire differences from the ET-4950, decoded from `flatbed-single-page-pdf.pcapng`
 
 The variant is selected by an `Esci2Profile = "esci2-tls" | "esci2-plain"` discriminator threaded through `Esci2Ctx`. The PARA builder dispatches on profile (`buildParaFlatbedTls` vs `buildParaFlatbedPlain`); the scanner shell selects which entry point (`runEsci2Scan` vs `runEsci2ScanOverPlain`) and pre-sets the profile in initial ctx. ET-2750 is flatbed-only hardware — config-time validation rejects `esci2-plain + ESCI_FORCE_SOURCE` and `esci2-plain + PRINTER_CERT_FINGERPRINT` combinations at startup.
 
+### How printer-model differences are handled
+
+Different Epson models speak slightly different PARA dialects despite sharing
+the same protocol generation — gamma constants, optional quirk tokens
+(`#QITOFF`, `#CCTCOL`, `#CMXUM08h009`), and per-action LUT/CMX regions vary.
+The scanner identifies the dialect at session start by hashing a canonicalised
+copy of the printer's first CAPA reply (a `sha256` over volatile-stripped,
+sorted segments). The hash maps to a `Dialect` object in
+`src/esci2/dialect-registry.ts` that carries the PARA builder,
+supported-hardware bitset, source-detection policy, and init-poll iteration
+count. Printers with an unrecognised CAPA fingerprint fail fast with a
+copy-pasteable diagnostic block — no synthesis attempt, no silent quality
+regression. Adding support for a new printer requires a Wireshark capture and
+one new file under `src/esci2/dialects/`.
+
 ## ESC/I variant (WF-3620)
 
 The WF-3620 (and other 2014-era Epson printers using the same firmware
