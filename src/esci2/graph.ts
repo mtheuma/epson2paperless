@@ -20,7 +20,6 @@ import {
   buildParaHeader,
   parseEsci2ReplyHeader,
   parseTokens,
-  type Esci2Profile,
 } from "./commands.js";
 import { ackByte, expectIsType } from "../graph-helpers.js";
 import type { Dialect } from "./dialect.js";
@@ -36,14 +35,8 @@ import { UnsupportedDialectError } from "./dialect.js";
 export interface Esci2Ctx {
   duplex: boolean;
   source: "adf" | "flatbed"; // detected at INIT_POLL iteration 0
-  /**
-   * Transport variant for this session — `esci2-tls` (ET-4950 family,
-   * default) or `esci2-plain` (ET-2750, plain TCP). Threaded through
-   * ctx so the PARA builder closure picks the right flatbed blob; the
-   * graph itself is profile-blind. Always `esci2-tls` on graph
-   * construction, overwritten by the scanner shell's `initialCtx`.
-   */
-  profile: Esci2Profile;
+  /** Transport layer in use this session. Probe-driven, not dialect-driven. */
+  transport: "tls" | "plain";
   initPollIteration: number;
   imgChunkSize: number;
   pageEndKind: "none" | "more" | "last";
@@ -302,10 +295,7 @@ twoPhaseRead(
       const diagnostic = buildDiagnostic({
         capaBody: body,
         infoBody: ctx.infoBody,
-        // ctx.profile is still the field name at this stage of the migration;
-        // Task 12 renames it to ctx.transport and replaces the conditional
-        // with a direct field read.
-        transport: ctx.profile === "esci2-tls" ? "tls" : "plain",
+        transport: ctx.transport,
         fingerprint,
       });
       return { error: new UnsupportedDialectError(fingerprint, diagnostic) };
@@ -598,13 +588,9 @@ g.state(
 // MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_META states
 // =============================================================================
 
-// Builds the PARA header + body send pair, resolving source + duplex +
-// profile from ctx. Called once per dispatch in POST_MODE_STAT and
-// POST_MODE_STAT_DRAIN — each site is a decision, so the result is
-// computed once and embedded as a concrete Buffer[] in the returned
-// TransitionResult.send. ctx.profile selects between the ET-4950 and
-// ET-2750 flatbed blobs; ADF combos remain TLS-only (ET-2750 is
-// flatbed-only hardware, enforced at config time).
+// Builds the PARA header + body send pair. Called once per dispatch in
+// POST_MODE_STAT and POST_MODE_STAT_DRAIN; ctx.dialect.buildPara selects
+// the correct blob for the detected hardware.
 function buildParaSend(ctx: Esci2Ctx): Buffer[] {
   const paraPayload = ctx.dialect!.buildPara({
     source: ctx.source,

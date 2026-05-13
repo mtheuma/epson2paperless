@@ -56,16 +56,16 @@ function validateTempBase(session: ScanSession): void {
   }
 }
 
-function buildInitialCtx(session: ScanSession, profile: "esci2-tls" | "esci2-plain"): Esci2Ctx {
+function buildInitialCtx(session: ScanSession, transport: "tls" | "plain"): Esci2Ctx {
   return {
     duplex: session.duplex,
     // ET-2750 hardware is flatbed-only; pre-set the source so INIT_POLL's
     // first iteration can still run its source-detect logic, but the
-    // graph's flatbed branch is the only valid outcome under
-    // `esci2-plain`. ET-4950 keeps the legacy "adf" default which the
-    // INIT_POLL_STAT decision overrides per fixture.
-    source: profile === "esci2-plain" ? "flatbed" : "adf",
-    profile,
+    // graph's flatbed branch is the only valid outcome under plain TCP.
+    // ET-4950 keeps the legacy "adf" default which the INIT_POLL_STAT
+    // decision overrides per fixture.
+    source: transport === "plain" ? "flatbed" : "adf",
+    transport,
     action: session.action,
     initPollIteration: 0,
     imgChunkSize: 0,
@@ -157,7 +157,7 @@ export async function runEsci2Scan(
 
   const result = await runScanSession<Esci2Ctx>({
     graph: esci2Graph,
-    initialCtx: buildInitialCtx(session, "esci2-tls"),
+    initialCtx: buildInitialCtx(session, "tls"),
     transportFactory: makeTlsTransportFactory(session, socketFactory),
     outputDir: session.outputDir,
     tempDir: session.tempDir,
@@ -171,9 +171,9 @@ export async function runEsci2Scan(
 /**
  * Run an ESC/I-2 scan over plain TCP (port 1865, ET-2750). Same
  * graph and command vocabulary as `runEsci2Scan`; the only differences
- * are at the socket layer (no TLS) and in the PARA payload (selected
- * by `ctx.profile = "esci2-plain"`). ET-2750 is flatbed-only hardware,
- * so the graph's ADF branches are unreachable under this entry point.
+ * are at the socket layer (no TLS) and in the PARA payload (dialect-
+ * driven). ET-2750 is flatbed-only hardware, so the graph's ADF
+ * branches are unreachable under this entry point.
  */
 export async function runEsci2ScanOverPlain(
   session: ScanSession,
@@ -183,7 +183,7 @@ export async function runEsci2ScanOverPlain(
 
   const result = await runScanSession<Esci2Ctx>({
     graph: esci2Graph,
-    initialCtx: buildInitialCtx(session, "esci2-plain"),
+    initialCtx: buildInitialCtx(session, "plain"),
     transportFactory: makePlainEsci2TransportFactory(session, socketFactory),
     outputDir: session.outputDir,
     tempDir: session.tempDir,
