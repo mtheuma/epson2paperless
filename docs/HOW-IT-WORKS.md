@@ -317,16 +317,16 @@ Only `esci2` (TLS) results are cached for the daemon's lifetime. The two non-TLS
 
 ## ESC/I-2 over plain TCP (ET-2750)
 
-A second ESC/I-2 hardware variant — the ET-2750 — uses the same protocol vocabulary as the ET-4950 family **without the TLS layer**. The wire is plain TCP on port 1865; the IS framing, command names, PARA structure, IMG pull loop, and async-event mechanics are otherwise identical. The scanner shell (`runEsci2ScanOverPlain` in `src/esci2/scanner.ts`) shares the protocol graph (`src/esci2/graph.ts`) with the TLS path — the only differences are at the socket factory (`net.connect` instead of `tls.connect`, no cert pinning, no TLS-error label adapter) and a small set of profile-conditional decisions inside the graph.
+A second ESC/I-2 hardware variant — the ET-2750 — uses the same protocol vocabulary as the ET-4950 family **without the TLS layer**. The wire is plain TCP on port 1865; the IS framing, command names, PARA structure, IMG pull loop, and async-event mechanics are otherwise identical. The scanner shell (`runEsci2ScanOverPlain` in `src/esci2/scanner.ts`) shares the protocol graph (`src/esci2/graph.ts`) with the TLS path — the only differences are at the socket factory (`net.connect` instead of `tls.connect`, no cert pinning, no TLS-error label adapter) and a small set of dialect-conditional decisions inside the graph.
 
 Wire differences from the ET-4950, decoded from `flatbed-single-page-pdf.pcapng`:
 
 - **No TLS handshake.** The printer sends the welcome IS packet (type `0x8000`) immediately after TCP connect.
-- **INIT_POLL runs 2 iterations** (not 3). Profile-conditional in `INIT_POLL_FIN`'s decision; sending a third FS Y after the printer has moved on returns a non-ACK that fails MODE_SWITCH validation.
-- **STAT replies pack a 52-byte filler inline** in a single 64-byte IS frame. The 12-byte ESC/I-2 reply header still declares `length=0`, so the ET-4950 length-based source-detection heuristic would misclassify ET-2750 as ADF. The graph skips the override on `esci2-plain` and trusts the `source: "flatbed"` value from `initialCtx`. ET-2750 hardware is flatbed-only, so this is correct.
+- **INIT_POLL runs 2 iterations** (not 3). Dialect-driven via `ctx.dialect.initPollIterations`; sending a third FS Y after the printer has moved on returns a non-ACK that fails MODE_SWITCH validation.
+- **STAT replies pack a 52-byte filler inline** in a single 64-byte IS frame. The 12-byte ESC/I-2 reply header still declares `length=0`, so the ET-4950 length-based source-detection heuristic would misclassify ET-2750 as ADF. The graph skips the override when `ctx.dialect.sourceDetection === "fixed-flatbed"` and trusts the `source: "flatbed"` value from `initialCtx`. ET-2750 hardware is flatbed-only, so this is correct.
 - **PARA flatbed payload is 936 bytes** (vs ET-4950 flatbed's 928): different gamma constant, no `#QITOFF`/`#CCTCOL` block, new inline `#CMXUM08` ICC-matrix block, slightly different `#ACQ` extents. See the [PARA table above](#source-adf-vs-flatbed) for the full row.
 
-The variant is selected by an `Esci2Profile = "esci2-tls" | "esci2-plain"` discriminator threaded through `Esci2Ctx`. The PARA builder dispatches on profile (`buildParaFlatbedTls` vs `buildParaFlatbedPlain`); the scanner shell selects which entry point (`runEsci2Scan` vs `runEsci2ScanOverPlain`) and pre-sets the profile in initial ctx. ET-2750 is flatbed-only hardware — config-time validation rejects `esci2-plain + ESCI_FORCE_SOURCE` and `esci2-plain + PRINTER_CERT_FINGERPRINT` combinations at startup.
+The variant is selected at session start by a CAPA-fingerprint lookup (see "How printer-model differences are handled" below) that resolves to a `Dialect` object. The dialect carries the PARA builder; the scanner shell picks the entry point (`runEsci2Scan` for TLS vs `runEsci2ScanOverPlain` for plain TCP) and pre-sets `ctx.transport` in the initial ctx. ET-2750 is flatbed-only hardware — config-time validation rejects `esci2-plain + ESCI_FORCE_SOURCE` and `esci2-plain + PRINTER_CERT_FINGERPRINT` combinations at startup.
 
 ### How printer-model differences are handled
 
