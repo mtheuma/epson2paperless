@@ -19,6 +19,12 @@ const FILL_BUFFER = Buffer.alloc(MAX_CHUNK_SIZE, 0xb0);
  * Drive a fixture replay: connect the fake socket, feed all printer→host events in
  * order (with a setImmediate yield before each to let the state machine process the
  * previous reply), then await the session promise.
+ *
+ * Synthesised image streams yield between every packet, not just between events.
+ * Without that, fake.feed() is synchronous (emit → handler → recvChunks.push), the
+ * engine pump's re-entrancy guard short-circuits subsequent void tryDispatch() calls
+ * while the first await is suspended, and the whole stream accumulates in recvChunks
+ * before the pump gets a chance to drain. Per-packet yields keep peak bounded.
  */
 export async function driveFixture(
   fixture: FixtureEvent[],
@@ -34,6 +40,7 @@ export async function driveFixture(
     } else {
       for (const p of synthesiseImageStream(event.totalBytes, event.chunkSize)) {
         fake.feed(p);
+        await new Promise((r) => setImmediate(r));
       }
     }
   }
@@ -49,16 +56,14 @@ export async function driveFixture(
  * that yields a recognisable JPEG when sharp encodes it (useful for
  * eyeballing test failures).
  */
-function synthesiseImageStream(totalBytes: number, chunkSize: number): Buffer[] {
+function* synthesiseImageStream(totalBytes: number, chunkSize: number): Generator<Buffer> {
   if (chunkSize > MAX_CHUNK_SIZE) {
     throw new Error(`synthesiseImageStream: chunkSize ${chunkSize} exceeds MAX_CHUNK_SIZE`);
   }
-  const out: Buffer[] = [];
   let remaining = totalBytes;
   while (remaining > 0) {
     const size = Math.min(chunkSize, remaining);
-    out.push(buildIsPacket(0xa200, FILL_BUFFER.subarray(0, size)));
+    yield buildIsPacket(0xa200, FILL_BUFFER.subarray(0, size));
     remaining -= size;
   }
-  return out;
 }
