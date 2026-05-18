@@ -26,6 +26,9 @@ import type { Dialect } from "./dialect.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
 import { lookupDialect, buildDiagnostic } from "./dialect-registry.js";
 import { UnsupportedDialectError } from "./dialect.js";
+import { createLogger } from "../logger.js";
+
+const log = createLogger("scanner-esci2");
 
 /**
  * Per-session mutable state threaded through every transition. The engine
@@ -302,6 +305,10 @@ twoPhaseRead(
       return { error: new UnsupportedDialectError(fingerprint, diagnostic) };
     }
     ctx.dialect = dialect;
+    // Surface the dialect that won the CAPA-fingerprint lookup so traces are
+    // self-documenting. Otherwise the only signal that resolution succeeded
+    // is the absence of an UnsupportedDialectError further downstream.
+    log.debug("Dialect resolved", { name: dialect.displayName, fingerprint });
   },
 );
 
