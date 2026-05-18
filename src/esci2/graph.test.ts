@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { esci2Graph, ESCI2_TIMEOUT_MS } from "./graph.js";
-import { IS_HEADER_SIZE } from "../protocol.js";
+import { IS_HEADER_SIZE, buildPurereadPacket } from "../protocol.js";
 import { et4950FamilyDialect } from "./dialects/et-4950-family.js";
 import { et2750Dialect } from "./dialects/et-2750.js";
 
@@ -673,10 +673,19 @@ describe("esci2Graph T25 — IMG_DATA XP-7100 re-echo branch", () => {
   // focused cases pin the branch so future IMG_DATA refactors fail fast
   // against a unit test instead of via a ~9,800-line fixture mismatch.
 
-  it("64-byte well-formed IMG echo with matching imgChunkSize → re-issues PUREREAD and stays in IMG_DATA", () => {
+  it("64-byte well-formed IMG echo with matching imgChunkSize → re-issues PUREREAD(imgChunkSize) and preserves accumulated chunks", () => {
     const state = esci2Graph.states.IMG_DATA;
     if (state.kind !== "decision") return;
-    const ctx = makeCtx({ imgChunkSize: 0x100000, pageEndKind: "none", imageChunks: [] });
+    // Seed two prior chunks to prove the re-echo branch is non-destructive —
+    // re-echos can fire mid-page after some pixel data has already been
+    // accumulated, so the existing imageChunks must survive untouched.
+    const priorA = Buffer.from([0x11, 0x22, 0x33]);
+    const priorB = Buffer.from([0x44, 0x55]);
+    const ctx = makeCtx({
+      imgChunkSize: 0x100000,
+      pageEndKind: "none",
+      imageChunks: [priorA, priorB],
+    });
     // 64-byte IMG header re-echo: cmd="IMG", length=0x100000 (matches ctx.imgChunkSize).
     // 12-byte header + 52 bytes filler = 64 bytes total (ESCI2_REPLY_SIZE).
     const echo = Buffer.from("IMG x0100000" + " ".repeat(52), "ascii");
@@ -684,9 +693,15 @@ describe("esci2Graph T25 — IMG_DATA XP-7100 re-echo branch", () => {
     const result = state.decide(ctx, { type: 0xa000, payload: echo });
     if ("error" in result) throw result.error;
     expect(result.next).toBe("IMG_DATA");
-    expect(result.send).toBeDefined();
-    // No chunk accumulated — this isn't pixel data, just the echo.
-    expect(ctx.imageChunks).toEqual([]);
+    // Exact bytes: the response must be PUREREAD(imgChunkSize), not just
+    // some non-empty send. Byte-equivalence pins the contract that the
+    // engine re-asks for the *same* chunk size the printer originally
+    // declared, rather than e.g. defaulting to the 64-byte reply size.
+    expect(result.send).toEqual(buildPurereadPacket(0x100000));
+    // Accumulated chunks survive verbatim — the re-echo is not pixel data.
+    expect(ctx.imageChunks).toEqual([priorA, priorB]);
+    expect(ctx.imageChunks[0]).toBe(priorA); // same reference, not a copy
+    expect(ctx.imageChunks[1]).toBe(priorB);
     // No page flush — pixel data hasn't arrived yet.
     expect(result.flushPage).toBeUndefined();
   });
