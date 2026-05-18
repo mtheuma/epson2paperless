@@ -27,11 +27,14 @@ interface RenderOptions {
 
 export async function render(opts: RenderOptions): Promise<{ pageCount: number }> {
   const tshark = process.env.TSHARK_PATH ?? "tshark";
+  // `!tcp.analysis.retransmission` keeps duplicated segments out of the
+  // hex stream — without it, retransmits get rendered as ghost pixel bytes
+  // and corrupt the page. Mirrors the same constraint in pcap-extract.
   const args = [
     "-r",
     opts.pcapPath,
     "-Y",
-    `tcp.port==${opts.scanPort} && tcp.len>0 && ` +
+    `tcp.port==${opts.scanPort} && tcp.len>0 && !tcp.analysis.retransmission && ` +
       `((ip.src==${opts.hostIp} && ip.dst==${opts.printerIp}) || ` +
       `(ip.src==${opts.printerIp} && ip.dst==${opts.hostIp}))`,
     "-T",

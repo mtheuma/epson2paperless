@@ -40,14 +40,25 @@ const IS_HEADER_HEX_PREFIX = "4953";
 const IS_TYPE_A200_PREFIX = "a200";
 export const IS_IMAGE_CHUNK_HEX = IS_HEADER_HEX_PREFIX + IS_TYPE_A200_PREFIX;
 
-export async function extract(opts: ExtractOptions): Promise<FixtureEvent[]> {
-  const tshark = opts.tsharkPath ?? process.env.TSHARK_PATH ?? TSHARK_DEFAULT;
+/**
+ * Build the tshark argv used by `extract`. Factored out for unit testing —
+ * the display filter is the only knob that needs regression coverage, and
+ * we'd rather pin its exact string than spawn tshark in a unit test.
+ *
+ * The `!tcp.analysis.retransmission` clause excludes TCP retransmits, which
+ * tshark detects when a segment carries the same sequence number as one
+ * already seen on the stream. Without this, retransmits get extracted as
+ * duplicate hex events and corrupt downstream replay — the XP-7100 capture
+ * needed manual one-line surgery in `xp-7100/jpg-adf-simplex.jsonl` to
+ * remove a duplicated segment before its replay test would pass.
+ */
+export function buildTsharkArgs(opts: ExtractOptions): string[] {
   const streamFilter = opts.tcpStream !== undefined ? ` && tcp.stream==${opts.tcpStream}` : "";
-  const args = [
+  return [
     "-r",
     opts.pcapPath,
     "-Y",
-    `tcp.port==${opts.scanPort} && tcp.len>0 && ` +
+    `tcp.port==${opts.scanPort} && tcp.len>0 && !tcp.analysis.retransmission && ` +
       `((ip.src==${opts.hostIp} && ip.dst==${opts.printerIp}) || ` +
       `(ip.src==${opts.printerIp} && ip.dst==${opts.hostIp}))${streamFilter}`,
     "-T",
@@ -61,6 +72,11 @@ export async function extract(opts: ExtractOptions): Promise<FixtureEvent[]> {
     "-e",
     "tcp.payload",
   ];
+}
+
+export async function extract(opts: ExtractOptions): Promise<FixtureEvent[]> {
+  const tshark = opts.tsharkPath ?? process.env.TSHARK_PATH ?? TSHARK_DEFAULT;
+  const args = buildTsharkArgs(opts);
   const folder = createImageChunkFolder();
   await runTshark(tshark, args, (line) => {
     const trimmed = line.trim();
