@@ -71,15 +71,15 @@ The ESC/I-2 `PARA` payload is built per-dialect: at INIT1 the graph hashes the p
 
 ## Development workflow
 
-- `main` = deployable. `dev` = integration.
-- Work on `dev` or short-lived branches off `dev`; PR to `main` via `gh pr create --base main --head dev`.
-- CI (`.github/workflows/test.yml`) runs `npm install` and then the same lint + format:check + test trio that the local pre-push hook enforces, on every push to `dev`/`main` and every PR targeting `main`. Uses `npm install` (not `npm ci`) because the lockfile is generated on Windows and lacks Linux-only optional native deps — don't swap to `npm ci` without regenerating the lockfile on Linux.
+- `main` is deployable and protected. There is no long-lived integration branch.
+- Branch off `main`, push, open a PR with `gh pr create --base main --head <branch>`. Merge once CI is green.
+- CI (`.github/workflows/test.yml`) runs `npm install` and then lint + format:check + test, on every push to `main` and every PR targeting `main`. Uses `npm install` (not `npm ci`) because the lockfile is generated on Windows and lacks Linux-only optional native deps — don't swap to `npm ci` without regenerating the lockfile on Linux.
 - A separate `.github/workflows/docker.yml` builds and publishes a multi-arch image to GHCR on pushes to `main` and on `v*` tags. `Dockerfile` + `compose.yaml` at the repo root are the deploy artifacts.
 - Server-side branch protection on `main`: PR required, CI status check required, linear history required.
 
 ### Local pre-push hook
 
-`.githooks/pre-push` blocks `git push origin main` unless `npm run lint`, `npm run format:check`, and `npm test` all pass — mirrors CI's three-step gate so a push that passes here will also pass CI. **Activate once per clone:**
+`.githooks/pre-push` runs `npm run lint` and `npm run format:check` before every push, aborting on failure. Tests are intentionally skipped locally (too slow for every push) — CI runs the full `npm test` on every push and PR. **Activate once per clone:**
 
 ```
 git config core.hooksPath .githooks
