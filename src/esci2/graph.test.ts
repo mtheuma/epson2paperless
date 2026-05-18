@@ -660,6 +660,84 @@ describe("esci2Graph T25 — IMG_DATA decision", () => {
   });
 });
 
+describe("esci2Graph T25 — IMG_DATA XP-7100 re-echo branch", () => {
+  // XP-7100 (and possibly other dialects) re-echo the IMG metadata reply in
+  // response to PUREREAD before delivering pixel data. The IMG_DATA state
+  // detects this by checking that the unexpected-length payload is a
+  // well-formed 64-byte IMG header whose declared size matches the chunk
+  // size the engine already stored, and if so re-issues PUREREAD to pull
+  // the real pixel chunk.
+  //
+  // Covered end-to-end by the XP-7100 ADF simplex replay
+  // (tools/pcap-extract/captures/xp-7100/jpg-adf-simplex.jsonl); these
+  // focused cases pin the branch so future IMG_DATA refactors fail fast
+  // against a unit test instead of via a ~9,800-line fixture mismatch.
+
+  it("64-byte well-formed IMG echo with matching imgChunkSize → re-issues PUREREAD and stays in IMG_DATA", () => {
+    const state = esci2Graph.states.IMG_DATA;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ imgChunkSize: 0x100000, pageEndKind: "none", imageChunks: [] });
+    // 64-byte IMG header re-echo: cmd="IMG", length=0x100000 (matches ctx.imgChunkSize).
+    // 12-byte header + 52 bytes filler = 64 bytes total (ESCI2_REPLY_SIZE).
+    const echo = Buffer.from("IMG x0100000" + " ".repeat(52), "ascii");
+    expect(echo.length).toBe(64);
+    const result = state.decide(ctx, { type: 0xa000, payload: echo });
+    if ("error" in result) throw result.error;
+    expect(result.next).toBe("IMG_DATA");
+    expect(result.send).toBeDefined();
+    // No chunk accumulated — this isn't pixel data, just the echo.
+    expect(ctx.imageChunks).toEqual([]);
+    // No page flush — pixel data hasn't arrived yet.
+    expect(result.flushPage).toBeUndefined();
+  });
+
+  it("64-byte well-formed IMG echo with non-matching imgChunkSize → errors", () => {
+    const state = esci2Graph.states.IMG_DATA;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ imgChunkSize: 0x100000, pageEndKind: "none", imageChunks: [] });
+    // Well-formed 64-byte IMG header but length=0x0099999 ≠ ctx.imgChunkSize.
+    // Without the size match we can't be sure this is a benign re-echo;
+    // could equally be a desync, so the safe call is to error out.
+    const echo = Buffer.from("IMG x0099999" + " ".repeat(52), "ascii");
+    expect(echo.length).toBe(64);
+    const result = state.decide(ctx, { type: 0xa000, payload: echo });
+    expect("error" in result).toBe(true);
+  });
+
+  it("64-byte payload that does not parse as an ESC/I-2 reply header → errors", () => {
+    const state = esci2Graph.states.IMG_DATA;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ imgChunkSize: 0x100000, pageEndKind: "none", imageChunks: [] });
+    // 64 zero bytes — byte 4 isn't 'x' → parseEsci2ReplyHeader returns null.
+    const garbage = Buffer.alloc(64, 0x00);
+    const result = state.decide(ctx, { type: 0xa000, payload: garbage });
+    expect("error" in result).toBe(true);
+  });
+
+  it("64-byte well-formed reply with non-IMG cmd → errors", () => {
+    const state = esci2Graph.states.IMG_DATA;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ imgChunkSize: 0x100000, pageEndKind: "none", imageChunks: [] });
+    // Well-formed 64-byte reply header with matching length but cmd="STAT".
+    // The re-echo branch is gated on cmd==="IMG"; any other command falls
+    // through to the error path.
+    const echo = Buffer.from("STATx0100000" + " ".repeat(52), "ascii");
+    expect(echo.length).toBe(64);
+    const result = state.decide(ctx, { type: 0xa000, payload: echo });
+    expect("error" in result).toBe(true);
+  });
+
+  it("non-64-byte short payload that doesn't match imgChunkSize → errors", () => {
+    const state = esci2Graph.states.IMG_DATA;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ imgChunkSize: 100, pageEndKind: "none", imageChunks: [] });
+    // 50 bytes — neither the expected chunk size (100) nor the 64-byte echo
+    // size, so the re-echo branch is skipped and we go straight to error.
+    const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(50) });
+    expect("error" in result).toBe(true);
+  });
+});
+
 describe("esci2Graph T25 — IMG_META zero-length chunk handling", () => {
   it("IMG_META zero-chunk + pageEndKind=last + accumulated → emits flushPage and goes to FIN_AFTER_IMG", async () => {
     const state = esci2Graph.states.IMG_META;
