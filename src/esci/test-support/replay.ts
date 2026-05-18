@@ -49,16 +49,14 @@ export async function driveFixture(
  * that yields a recognisable JPEG when sharp encodes it (useful for
  * eyeballing test failures).
  */
-function synthesiseImageStream(totalBytes: number, chunkSize: number): Buffer[] {
+function* synthesiseImageStream(totalBytes: number, chunkSize: number): Generator<Buffer> {
   if (chunkSize > MAX_CHUNK_SIZE) {
     throw new Error(`synthesiseImageStream: chunkSize ${chunkSize} exceeds MAX_CHUNK_SIZE`);
   }
-  const out: Buffer[] = [];
   let remaining = totalBytes;
   while (remaining > 0) {
     const size = Math.min(chunkSize, remaining);
-    out.push(buildIsPacket(0xa200, FILL_BUFFER.subarray(0, size)));
+    yield buildIsPacket(0xa200, FILL_BUFFER.subarray(0, size));
     remaining -= size;
   }
-  return out;
 }
