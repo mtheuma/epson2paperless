@@ -18,6 +18,8 @@ The first two channels are shared across supported models. The scan-session chan
 | `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750 (flatbed-only)      |
 | `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family              |
 
+`esci2-tls` is internal shorthand for the TLS ESC/I-2 path. In configuration, this is selected with `PRINTER_PROTOCOL=esci2`.
+
 This document is the front door: it explains how the pieces fit together. The byte-level protocol reference lives in [PROTOCOL-REFERENCE.md](PROTOCOL-REFERENCE.md), and the capture / reverse-engineering workflow lives in [REVERSE-ENGINEERING.md](REVERSE-ENGINEERING.md).
 
 ---

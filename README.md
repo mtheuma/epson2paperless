@@ -14,7 +14,7 @@ What you get:
 
 - A compatible **Epson** printer on your LAN. See [Compatible printers](#compatible-printers) below.
 - **Node.js 24.15.0 LTS** or newer (or Docker).
-- The PC running `epson2paperless` on the **same local network** as the printer (same Wi-Fi or Ethernet, not across a router). See [HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md#discovery-and-keepalive) for why multicast matters.
+- The PC running `epson2paperless` on the **same local network** as the printer (same Wi-Fi or Ethernet, not across a router). See [PROTOCOL-REFERENCE.md](docs/PROTOCOL-REFERENCE.md#discovery-and-keepalive-udp-multicast) for why multicast matters.
 
 ## Compatible printers
 
@@ -40,7 +40,7 @@ Image: **`ghcr.io/mtheuma/epson2paperless`**. Multi-arch (`linux/amd64`, `linux/
 
 Notes:
 
-- Uses host networking. The printer's multicast beacon can't reach a bridged container. [Why](docs/HOW-IT-WORKS.md#discovery-and-keepalive).
+- Uses host networking. The printer's multicast beacon can't reach a bridged container. [Why](docs/PROTOCOL-REFERENCE.md#discovery-and-keepalive-udp-multicast).
 - Container runs as UID 1000 (`node`). If your mount has a different owner, `chown` it to match.
 - Docker Desktop on macOS / Windows has caveats around host networking; the primary deployment target is a Linux server.
 
