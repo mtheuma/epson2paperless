@@ -39,7 +39,11 @@ describe("buildTsharkArgs display filter", () => {
     return args[idx + 1];
   }
 
-  it("excludes TCP retransmits so duplicate segments don't leak into the JSONL", () => {
+  it("excludes regular, fast, and spurious TCP retransmits so duplicate segments don't leak into the JSONL", () => {
+    // Wireshark exposes the three retransmit labels as separate boolean
+    // fields — a fast or spurious retransmit isn't guaranteed to also be
+    // tagged with the generic `tcp.analysis.retransmission` flag, so all
+    // three need explicit clauses for the filter to actually drop them.
     const filter = filterFor({
       pcapPath: "x.pcap",
       hostIp: "192.168.1.1",
@@ -47,6 +51,8 @@ describe("buildTsharkArgs display filter", () => {
       scanPort: 1865,
     });
     expect(filter).toContain("!tcp.analysis.retransmission");
+    expect(filter).toContain("!tcp.analysis.fast_retransmission");
+    expect(filter).toContain("!tcp.analysis.spurious_retransmission");
   });
 
   it("emits the full canonical filter without a tcp.stream constraint when tcpStream is omitted", () => {
@@ -57,7 +63,10 @@ describe("buildTsharkArgs display filter", () => {
       scanPort: 1865,
     });
     expect(filter).toBe(
-      "tcp.port==1865 && tcp.len>0 && !tcp.analysis.retransmission && " +
+      "tcp.port==1865 && tcp.len>0 && " +
+        "!tcp.analysis.retransmission && " +
+        "!tcp.analysis.fast_retransmission && " +
+        "!tcp.analysis.spurious_retransmission && " +
         "((ip.src==192.168.1.1 && ip.dst==192.168.1.2) || " +
         "(ip.src==192.168.1.2 && ip.dst==192.168.1.1))",
     );
@@ -73,5 +82,7 @@ describe("buildTsharkArgs display filter", () => {
     });
     expect(filter.endsWith("&& tcp.stream==3")).toBe(true);
     expect(filter).toContain("!tcp.analysis.retransmission");
+    expect(filter).toContain("!tcp.analysis.fast_retransmission");
+    expect(filter).toContain("!tcp.analysis.spurious_retransmission");
   });
 });
