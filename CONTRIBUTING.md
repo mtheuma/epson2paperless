@@ -29,10 +29,10 @@ cd epson2paperless
 npm install
 PRINTER_IP=192.0.2.58 npm run dev    # long-running daemon
 PRINTER_IP=192.0.2.58 npm run scan   # one-shot mode
-npm test                             # 216 tests, ~1s
+npm test                             # full test suite
 ```
 
-`docs/HOW-IT-WORKS.md` is the deep-dive on the protocol, the scanner state machine, and the reverse-engineering methodology — start there if you're touching anything below the file-output layer.
+`docs/HOW-IT-WORKS.md` is the architecture overview. If you're touching anything below the file-output layer, start with `docs/PROTOCOL-REFERENCE.md` for the protocol and scanner state machines, and `docs/REVERSE-ENGINEERING.md` for capture and fixture methodology.
 
 ## Pull requests
 
