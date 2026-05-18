@@ -27,11 +27,20 @@ interface RenderOptions {
 
 export async function render(opts: RenderOptions): Promise<{ pageCount: number }> {
   const tshark = process.env.TSHARK_PATH ?? "tshark";
+  // The three `!tcp.analysis.*_retransmission` clauses keep duplicated
+  // segments out of the hex stream — without them, retransmits get rendered
+  // as ghost pixel bytes and corrupt the page. Wireshark exposes regular,
+  // fast, and spurious retransmissions as separate boolean fields, so all
+  // three need explicit clauses. Mirrors the same constraint in pcap-extract.
+  // See https://www.wireshark.org/docs/dfref/t/tcp.html.
   const args = [
     "-r",
     opts.pcapPath,
     "-Y",
     `tcp.port==${opts.scanPort} && tcp.len>0 && ` +
+      `!tcp.analysis.retransmission && ` +
+      `!tcp.analysis.fast_retransmission && ` +
+      `!tcp.analysis.spurious_retransmission && ` +
       `((ip.src==${opts.hostIp} && ip.dst==${opts.printerIp}) || ` +
       `(ip.src==${opts.printerIp} && ip.dst==${opts.hostIp}))`,
     "-T",

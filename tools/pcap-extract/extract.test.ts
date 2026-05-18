@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { extract } from "./extract.js";
+import { extract, buildTsharkArgs } from "./extract.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -28,5 +28,61 @@ describe("pcap-extract", () => {
     });
     expect(events.length).toBeGreaterThan(0);
     expect(events.some((e) => e.dir === "h>p")).toBe(true);
+  });
+});
+
+describe("buildTsharkArgs display filter", () => {
+  function filterFor(opts: Parameters<typeof buildTsharkArgs>[0]): string {
+    const args = buildTsharkArgs(opts);
+    const idx = args.indexOf("-Y");
+    expect(idx).toBeGreaterThanOrEqual(0);
+    return args[idx + 1];
+  }
+
+  it("excludes regular, fast, and spurious TCP retransmits so duplicate segments don't leak into the JSONL", () => {
+    // Wireshark exposes the three retransmit labels as separate boolean
+    // fields — a fast or spurious retransmit isn't guaranteed to also be
+    // tagged with the generic `tcp.analysis.retransmission` flag, so all
+    // three need explicit clauses for the filter to actually drop them.
+    const filter = filterFor({
+      pcapPath: "x.pcap",
+      hostIp: "192.168.1.1",
+      printerIp: "192.168.1.2",
+      scanPort: 1865,
+    });
+    expect(filter).toContain("!tcp.analysis.retransmission");
+    expect(filter).toContain("!tcp.analysis.fast_retransmission");
+    expect(filter).toContain("!tcp.analysis.spurious_retransmission");
+  });
+
+  it("emits the full canonical filter without a tcp.stream constraint when tcpStream is omitted", () => {
+    const filter = filterFor({
+      pcapPath: "x.pcap",
+      hostIp: "192.168.1.1",
+      printerIp: "192.168.1.2",
+      scanPort: 1865,
+    });
+    expect(filter).toBe(
+      "tcp.port==1865 && tcp.len>0 && " +
+        "!tcp.analysis.retransmission && " +
+        "!tcp.analysis.fast_retransmission && " +
+        "!tcp.analysis.spurious_retransmission && " +
+        "((ip.src==192.168.1.1 && ip.dst==192.168.1.2) || " +
+        "(ip.src==192.168.1.2 && ip.dst==192.168.1.1))",
+    );
+  });
+
+  it("appends `&& tcp.stream==N` when tcpStream is provided", () => {
+    const filter = filterFor({
+      pcapPath: "x.pcap",
+      hostIp: "192.168.1.1",
+      printerIp: "192.168.1.2",
+      scanPort: 1865,
+      tcpStream: 3,
+    });
+    expect(filter.endsWith("&& tcp.stream==3")).toBe(true);
+    expect(filter).toContain("!tcp.analysis.retransmission");
+    expect(filter).toContain("!tcp.analysis.fast_retransmission");
+    expect(filter).toContain("!tcp.analysis.spurious_retransmission");
   });
 });
