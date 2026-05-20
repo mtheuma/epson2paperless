@@ -2,8 +2,9 @@
 """
 Frida host for ES2Command.dll IS-packet capture.
 
-Polls for the target process, attaches when it appears, loads agent.js,
-and streams messages to a timestamped JSONL file.
+Polls for the target process (or follows the spawn chain via child gating),
+attaches when it appears, loads agent.js, and streams messages to a
+timestamped JSONL file.
 """
 from __future__ import annotations
 
@@ -21,6 +22,10 @@ DEFAULT_TARGET = "es2projectrunner.exe"
 DEFAULT_OUTPUT_DIR = Path(__file__).parent / "captures"
 POLL_INTERVAL_S = 0.05  # 50 ms — see spec for rationale
 AGENT_PATH = Path(__file__).parent / "agent.js"
+# Grace period after the most recent target attach before we declare the
+# capture done. Handles the race where a launcher target exits before the
+# worker target spawns.
+ATTACH_GRACE_S = 2.0
 
 
 def parse_args() -> argparse.Namespace:
@@ -36,11 +41,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Attach to the parent process (default: EEventManager.exe), enable "
-            "child gating, and follow the spawn chain until we catch the target "
-            "before its first instruction. Useful for catching WELCOME / LOCK "
-            "packets that an attach-after-running miss. Requires the parent "
-            "process to already be running and this host.py to have permission "
-            "to attach to it."
+            "child gating, and follow the spawn chain. Every child matching "
+            "--target gets the agent attached (Epson's current driver spawns "
+            "multiple es2projectrunner.exe — a launcher plus one or more "
+            "workers; only the worker loads ES2Command.dll, but the agent's "
+            "module observer handles both gracefully). Required to catch "
+            "WELCOME / LOCK packets that an attach-after-running flow misses."
         ),
     )
     parser.add_argument(
@@ -97,18 +103,22 @@ def _child_basename(child) -> str:
     return ""
 
 
-def wait_for_target_via_child_gate(device, target: str, parent_name: str):
-    """Attach to `parent_name`, enable child gating, and follow the spawn chain
-    until `target` appears as a (recursively) gated child. Returns a tuple of
-    (target_pid, list_of_helper_sessions_to_detach_later).
+def setup_child_gate(device, target: str, parent_name: str, attach_target):
+    """Attach to `parent_name`, enable child gating, and follow the spawn chain.
+    For every child whose basename matches `target`, call attach_target(pid)
+    — that callback is expected to attach the agent and resume the child.
+    For intermediate processes, attach + gate + resume them so their own
+    children stay visible.
+
+    Returns the list of helper sessions (parent + intermediates) for teardown.
+    Blocks until at least one target match has been handed off to
+    attach_target; subsequent target spawns continue to be handled via the
+    persistent on_child_added registration.
 
     Frida on Windows supports session.enable_child_gating() but NOT
-    device.enable_spawn_gating(). Child gating follows children spawned by
-    an already-attached process — so we attach to the long-lived parent
-    (EEventManager.exe by default), then recursively attach + gate each
-    intermediate child as the spawn chain plays out, until we reach target.
+    device.enable_spawn_gating(), which is why we follow the chain from a
+    long-lived parent rather than gating spawns globally.
     """
-    # Find the parent process
     parent_pid = None
     for proc in device.enumerate_processes():
         if proc.name.lower() == parent_name.lower():
@@ -124,8 +134,8 @@ def wait_for_target_via_child_gate(device, target: str, parent_name: str):
     parent_session.enable_child_gating()
 
     helper_sessions: list = [parent_session]
-    matched: dict = {"pid": None}
     target_lower = target.lower()
+    first_target_seen = [False]
 
     def on_child_added(child):
         base = _child_basename(child)
@@ -136,8 +146,8 @@ def wait_for_target_via_child_gate(device, target: str, parent_name: str):
         )
 
         if base == target_lower:
-            # Found it — leave suspended so main() attaches, loads the agent, then resumes.
-            matched["pid"] = child.pid
+            attach_target(child.pid)
+            first_target_seen[0] = True
             return
 
         # Intermediate process — attach + gate + resume so its own children are visible.
@@ -155,7 +165,7 @@ def wait_for_target_via_child_gate(device, target: str, parent_name: str):
                 pass
 
     # The `child-added` signal is device-level; session.enable_child_gating()
-    # is what routes the session's children through that signal.
+    # is what routes a session's children through that signal.
     device.on("child-added", on_child_added)
 
     print(
@@ -163,10 +173,10 @@ def wait_for_target_via_child_gate(device, target: str, parent_name: str):
         f"now to spawn {target}…",
         file=sys.stderr,
     )
-    while matched["pid"] is None:
+    while not first_target_seen[0]:
         time.sleep(POLL_INTERVAL_S)
 
-    return matched["pid"], helper_sessions
+    return helper_sessions
 
 
 def main() -> int:
@@ -178,17 +188,13 @@ def main() -> int:
         return 1
 
     agent_source = AGENT_PATH.read_text(encoding="utf-8")
-
     device = frida.get_local_device()
-    helper_sessions: list = []
-    if args.child_gate:
-        pid, helper_sessions = wait_for_target_via_child_gate(
-            device, args.target, args.parent
-        )
-    else:
-        pid = wait_for_target(device, args.target)
-    print(f"[host] attaching to PID {pid}", file=sys.stderr)
-    session = device.attach(pid)
+
+    # Each entry: (session, script, pid). Tracked for teardown.
+    target_sessions: list = []
+    attached_pids: set = set()
+    detached_pids: set = set()
+    last_attach = [time.time()]  # mutable cell so closures can update
 
     def on_message(message, _data):
         if message["type"] == "send":
@@ -208,34 +214,85 @@ def main() -> int:
         elif message["type"] == "error":
             print(f"[host] frida error: {message.get('description')}", file=sys.stderr)
 
-    script = session.create_script(agent_source)
-    script.on("message", on_message)
-    script.load()
-    print("[host] capturing — press Ctrl+C to stop", file=sys.stderr)
-    if args.child_gate:
+    def attach_target(pid: int) -> None:
+        """Attach the agent to a target process and resume it.
+
+        Epson's current driver spawns multiple es2projectrunner.exe per scan
+        (a launcher plus one or more workers); only the worker loads
+        ES2Command.dll. We attach to all of them — the agent's module observer
+        sits idle in the launcher and hooks normally in the worker.
+        """
+        if pid in attached_pids:
+            return
+        attached_pids.add(pid)
         try:
+            sess = device.attach(pid)
+        except Exception as e:
+            print(f"[host] failed to attach to target {pid}: {e}", file=sys.stderr)
+            detached_pids.add(pid)
+            try:
+                device.resume(pid)
+            except Exception:
+                pass
+            return
+
+        def on_detached(reason, crash):
+            print(f"[host] target session detached: pid={pid}, reason={reason}", file=sys.stderr)
+            detached_pids.add(pid)
+        sess.on("detached", on_detached)
+
+        try:
+            script = sess.create_script(agent_source)
+            script.on("message", on_message)
+            script.load()
+            target_sessions.append((sess, script, pid))
+            last_attach[0] = time.time()
+            print(f"[host] agent loaded into target PID {pid}", file=sys.stderr)
             device.resume(pid)
             print(f"[host] resumed target PID {pid}", file=sys.stderr)
         except Exception as e:
-            print(f"[host] resume failed: {e}", file=sys.stderr)
+            print(f"[host] error setting up target {pid}: {e}", file=sys.stderr)
+            detached_pids.add(pid)
+            try:
+                device.resume(pid)
+            except Exception:
+                pass
 
+    helper_sessions: list = []
+    if args.child_gate:
+        helper_sessions = setup_child_gate(device, args.target, args.parent, attach_target)
+    else:
+        pid = wait_for_target(device, args.target)
+        attach_target(pid)
+
+    print("[host] capturing — press Ctrl+C to stop", file=sys.stderr)
+
+    # Exit when: at least one target was attached, all attached targets have
+    # detached, AND no new attach has happened in the last ATTACH_GRACE_S
+    # seconds. The grace handles the race where a launcher target exits
+    # before the worker target spawns.
     try:
-        # Stay alive until the target process exits or the user interrupts.
         while True:
             time.sleep(0.5)
+            if (
+                attached_pids
+                and attached_pids.issubset(detached_pids)
+                and time.time() - last_attach[0] > ATTACH_GRACE_S
+            ):
+                print("[host] all target sessions detached; closing capture", file=sys.stderr)
+                break
     except KeyboardInterrupt:
         print("[host] interrupted; closing capture", file=sys.stderr)
-    except frida.ProcessNotFoundError:
-        print("[host] target process exited; closing capture", file=sys.stderr)
     finally:
-        try:
-            script.unload()
-        except Exception:
-            pass
-        try:
-            session.detach()
-        except Exception:
-            pass
+        for sess, script, _pid in target_sessions:
+            try:
+                script.unload()
+            except Exception:
+                pass
+            try:
+                sess.detach()
+            except Exception:
+                pass
         for helper in helper_sessions:
             try:
                 helper.detach()
