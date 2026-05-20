@@ -17,9 +17,12 @@ scrubbed) on an issue and we can work out what's different.
 
 ## Prerequisites
 
-- Windows host with Epson Scan 2 installed (driver DLL typically at
-  `C:\Program Files (x86)\epson\Epson Scan 2\Core\ES2Command.dll`).
-- Python 3.8+ with Frida: `pip install frida`.
+- Windows host with **Epson ScanSmart** installed. ScanSmart bundles
+  `EEventManager.exe` (the long-lived service `--child-gate` attaches to)
+  alongside the Epson Scan 2 driver layer — installing Epson Scan 2 alone
+  is not sufficient because it omits `EEventManager.exe`. The driver DLL
+  ends up at `C:\Program Files (x86)\epson\Epson Scan 2\Core\ES2Command.dll`.
+- Python 3.8+ with Frida: `pip install frida==17.9.10`.
 - Node.js + `tsx` (already covered by this repo's dev dependencies).
 
 ## Usage
@@ -77,6 +80,6 @@ signatures and the surrounding call sites.
 
 ### `pip install frida` fails
 
-Try pinning to a known-good version: `pip install frida==16.5.9`. On
+Try pinning to a known-good version: `pip install frida==17.9.10`. On
 corporate-proxy networks, download the wheel from
 https://github.com/frida/frida/releases and install it locally.
