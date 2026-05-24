@@ -48,6 +48,11 @@ export function buildDiagnostic(args: {
   const hasAdf = info.segments.some((s) => s.startsWith("#ADF"));
   const hasDuplex = capa.adfDuplex;
   const yn = (v: boolean) => (v ? "Y" : "N");
+  // Treat empty string as absent: a bare `#XXXLIST` (segment present, value
+  // empty) parses to "" rather than null, but for at-a-glance reading the
+  // diagnostic should still mark it as (absent). Matters most for CCT, where
+  // present-vs-absent drives PARA-variant selection.
+  const orAbsent = (s: string | null) => (s && s.length > 0 ? s : "(absent)");
   return [
     `CAPA fingerprint:  ${args.fingerprint}`,
     `PRD:               PID ${info.prdPid ?? "(absent)"}`,
@@ -56,11 +61,11 @@ export function buildDiagnostic(args: {
     `Source caps:       flatbed: ${yn(hasFlatbed)}  ADF: ${yn(hasAdf)}  duplex: ${yn(hasDuplex)}`,
     `Scan area (FB):    ${info.fbArea ?? "(absent)"}`,
     `Scan area (ADF):   ${info.adfArea ?? "(absent)"}`,
-    `GMM list:          ${capa.gmmList ?? "(absent)"}`,
-    `CMX list:          ${capa.cmxList ?? "(absent)"}`,
-    `QIT list:          ${capa.qitList ?? "(absent)"}`,
-    `FMT list:          ${capa.fmtList ?? "(absent)"}`,
-    `CCT list:          ${capa.cctList ?? "(absent)"}`,
+    `GMM list:          ${orAbsent(capa.gmmList)}`,
+    `CMX list:          ${orAbsent(capa.cmxList)}`,
+    `QIT list:          ${orAbsent(capa.qitList)}`,
+    `FMT list:          ${orAbsent(capa.fmtList)}`,
+    `CCT list:          ${orAbsent(capa.cctList)}`,
     `INFO segments:     ${info.segments.length}`,
     `CAPA segments:     ${capa.segments.length}`,
   ].join("\n");
