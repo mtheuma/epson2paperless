@@ -17,7 +17,7 @@ import type { Dialect, ParaAxes } from "../dialect.js";
  * were called. With ET-2950's CAPA matching ET-4950's, the host driver
  * should produce byte-identical PARA.
  *
- * Two acknowledged residual uncertainties (any can fail with a generic
+ * Three acknowledged residual uncertainties (any can fail with a generic
  * `Validation failed in state PARA` rather than a specific `#parFAIL`):
  *
  *   1. CCT advertisement. The findings doc enumerates a 928-byte form
@@ -28,7 +28,7 @@ import type { Dialect, ParaAxes } from "../dialect.js";
  *   2. `initPollIterations: 3`. The ET-4950 family uses 3, ET-2750 uses
  *      2 (rejects a 3rd poll). ET-2950 firmware is unknown; we pick the
  *      TLS-family value.
- *   3. `#FB AREA d850i0001170` undecoded (the reporter's diagnostic
+ *   3. `#FB AREAd850i0001170` undecoded (the reporter's diagnostic
  *      shape differs from ET-4950's 3-integer form). We inherit
  *      ET-4950's full-A4-at-300-DPI `#ACQ` extents; if the printer's
  *      actual max area is smaller, PARA validation will fail.

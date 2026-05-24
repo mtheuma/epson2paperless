@@ -3,6 +3,7 @@ import { esci2Graph, ESCI2_TIMEOUT_MS, applyDialectSourceOverride } from "./grap
 import { IS_HEADER_SIZE, buildPurereadPacket } from "../protocol.js";
 import { et4950FamilyDialect } from "./dialects/et-4950-family.js";
 import { et2750Dialect } from "./dialects/et-2750.js";
+import { et2950Dialect } from "./dialects/et-2950.js";
 
 describe("esci2Graph (smoke)", () => {
   it("builds with the expected initial state and timeout", () => {
@@ -576,9 +577,11 @@ describe("applyDialectSourceOverride", () => {
   // throws on flatbed-only hardware. applyDialectSourceOverride pins the
   // source at the dialect-resolution moment to keep every downstream
   // stage agreeing on flatbed.
-  it("pins source to flatbed when dialect is fixed-flatbed and ctx pre-set is adf (TLS+flatbed-only)", () => {
-    const ctx = makeCtx({ source: "adf", transport: "tls", dialect: et2750Dialect });
-    applyDialectSourceOverride(ctx, et2750Dialect);
+  it("pins source to flatbed when dialect is fixed-flatbed and ctx pre-set is adf (TLS+flatbed-only, ET-2950)", () => {
+    // Exact production scenario for ET-2950: TLS shell pre-sets ctx.source = "adf"
+    // (scanner.ts), dialect resolves to et2950Dialect, override flips source.
+    const ctx = makeCtx({ source: "adf", transport: "tls", dialect: et2950Dialect });
+    applyDialectSourceOverride(ctx, et2950Dialect);
     expect(ctx.source).toBe("flatbed");
   });
 
