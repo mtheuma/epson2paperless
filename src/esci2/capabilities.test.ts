@@ -24,7 +24,7 @@ describe("parseCapaTokens", () => {
     // we expose them as raw strings after the prefix and let callers do
     // their own slicing for specific values.
     const capa = Buffer.from(
-      "#GMMLISTUG10UG18#CMXLISTUNITUM08#QITLISTPREFON  OFF #FMTLISTRAW JPG ",
+      "#GMMLISTUG10UG18#CMXLISTUNITUM08#QITLISTPREFON  OFF #FMTLISTRAW JPG #CCTLISTCOL MONOPREF",
       "ascii",
     );
     const parsed = parseCapaTokens(capa);
@@ -32,6 +32,7 @@ describe("parseCapaTokens", () => {
     expect(parsed.cmxList).toBe("UNITUM08");
     expect(parsed.qitList).toBe("PREFON  OFF");
     expect(parsed.fmtList).toBe("RAW JPG");
+    expect(parsed.cctList).toBe("COL MONOPREF");
   });
 
   it("detects ADF duplex by presence of #ADFDPLX segment", () => {
@@ -46,6 +47,7 @@ describe("parseCapaTokens", () => {
     const parsed = parseCapaTokens(capa);
     expect(parsed.cmxList).toBeNull();
     expect(parsed.qitList).toBeNull();
+    expect(parsed.cctList).toBeNull();
   });
 });
 

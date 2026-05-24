@@ -41,6 +41,13 @@ export interface CapaTokens {
   qitList: string | null;
   /** Raw text after `#FMTLIST` prefix, e.g. "RAW JPG". Null if absent. */
   fmtList: string | null;
+  /**
+   * Raw text after `#CCTLIST` prefix, e.g. "COL MONOPREF". Null if absent.
+   * Presence/absence drives whether the host driver emits `#CCTCOL ` in
+   * PARA, which changes PARA length by 8 bytes; surface it in diagnostics
+   * so a new printer's report tells us which PARA variant to send.
+   */
+  cctList: string | null;
   /** True if the CAPA body contains a `#ADFDPLX` segment. */
   adfDuplex: boolean;
   /** Raw segments, in encounter order. Includes unrecognised prefixes. */
@@ -89,6 +96,7 @@ export function parseCapaTokens(body: Buffer): CapaTokens {
     cmxList: textAfterPrefix(segments, "#CMXLIST"),
     qitList: textAfterPrefix(segments, "#QITLIST"),
     fmtList: textAfterPrefix(segments, "#FMTLIST"),
+    cctList: textAfterPrefix(segments, "#CCTLIST"),
     adfDuplex: segments.some((s) => s.startsWith("#ADFDPLX")),
     segments,
   };

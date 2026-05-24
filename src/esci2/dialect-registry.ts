@@ -1,6 +1,7 @@
 import { parseCapaTokens, parseInfoTokens } from "./capabilities.js";
 import { et4950FamilyDialect } from "./dialects/et-4950-family.js";
 import { et2750Dialect } from "./dialects/et-2750.js";
+import { et2950Dialect } from "./dialects/et-2950.js";
 import { xp7100Dialect } from "./dialects/xp-7100.js";
 import type { Dialect } from "./dialect.js";
 
@@ -10,7 +11,12 @@ import type { Dialect } from "./dialect.js";
  * the only required code change to support a new model — provided its
  * wire bytes fit one of the existing dialects' shapes.
  */
-export const DIALECTS: readonly Dialect[] = [et4950FamilyDialect, et2750Dialect, xp7100Dialect];
+export const DIALECTS: readonly Dialect[] = [
+  et4950FamilyDialect,
+  et2750Dialect,
+  et2950Dialect,
+  xp7100Dialect,
+];
 
 const BY_FINGERPRINT: ReadonlyMap<string, Dialect> = new Map(
   DIALECTS.map((d) => [d.capaFingerprint, d]),
@@ -54,6 +60,7 @@ export function buildDiagnostic(args: {
     `CMX list:          ${capa.cmxList ?? "(absent)"}`,
     `QIT list:          ${capa.qitList ?? "(absent)"}`,
     `FMT list:          ${capa.fmtList ?? "(absent)"}`,
+    `CCT list:          ${capa.cctList ?? "(absent)"}`,
     `INFO segments:     ${info.segments.length}`,
     `CAPA segments:     ${capa.segments.length}`,
   ].join("\n");
