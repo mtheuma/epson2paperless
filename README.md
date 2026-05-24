@@ -18,13 +18,14 @@ What you get:
 
 ## Compatible printers
 
-| Model                 | Status      | Notes                                                 |
-| --------------------- | ----------- | ----------------------------------------------------- |
-| **ET-3950**           | ✅ Verified |                                                       |
-| **ET-4950 / ET-4956** | ✅ Verified |                                                       |
-| **WF-3620**           | ✅ Verified | Plain TCP scanner, no TLS pinning                     |
-| **ET-2750**           | ✅ Verified | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS |
-| **XP-7100**           | ✅ Verified |                                                       |
+| Model                 | Status          | Notes                                                 |
+| --------------------- | --------------- | ----------------------------------------------------- |
+| **ET-3950**           | ✅ Verified     |                                                       |
+| **ET-4950 / ET-4956** | ✅ Verified     |                                                       |
+| **WF-3620**           | ✅ Verified     | Plain TCP scanner, no TLS pinning                     |
+| **ET-2750**           | ✅ Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS |
+| **ET-2950**           | 🟡 Experimental | Flatbed-only hardware                                 |
+| **XP-7100**           | ✅ Verified     |                                                       |
 
 Compatibility reports are welcome whether your model works or doesn't. [Open an issue](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) using the compatibility template.
 
