@@ -66,6 +66,25 @@ export interface Esci2Ctx {
 
 export const ESCI2_TIMEOUT_MS = 30_000;
 export const ESCI2_REPLY_SIZE = 64;
+
+/**
+ * Applies any source-axis overrides implied by a freshly resolved dialect.
+ *
+ * The TLS scanner shell pre-sets ctx.source to "adf" because the dominant
+ * TLS path is ADF + flatbed with `sourceDetection: "stat-length"`, where
+ * INIT_POLL_STAT then flips the source to flatbed if the printer queued
+ * its filler bytes. Dialects with `sourceDetection: "fixed-flatbed"`
+ * deliberately skip that override (see INIT_POLL_STAT), so without
+ * pinning the source here the pre-set "adf" carries all the way through
+ * to buildPara and trips a flatbed-only dialect's ADF guard. ET-2750
+ * doesn't hit this because the plain-TCP shell pre-sets "flatbed" — but
+ * any TLS + flatbed-only dialect (e.g. ET-2950) would.
+ */
+export function applyDialectSourceOverride(ctx: Esci2Ctx, dialect: Dialect): void {
+  if (dialect.sourceDetection === "fixed-flatbed") {
+    ctx.source = "flatbed";
+  }
+}
 const LEGACY_REPLY_SIZE = 1;
 // 5000 zero-length retries gives ~100s of headroom for slow scan starts.
 // XP-7100 flatbed captures show up to 2612 zero-length IMG responses before
@@ -309,6 +328,7 @@ twoPhaseRead(
     // self-documenting. Otherwise the only signal that resolution succeeded
     // is the absence of an UnsupportedDialectError further downstream.
     log.debug("Dialect resolved", { name: dialect.displayName, fingerprint });
+    applyDialectSourceOverride(ctx, dialect);
   },
 );
 

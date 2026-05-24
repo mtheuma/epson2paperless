@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { lookupDialect, DIALECTS, buildDiagnostic } from "./dialect-registry.js";
 import { et4950FamilyDialect } from "./dialects/et-4950-family.js";
 import { et2750Dialect } from "./dialects/et-2750.js";
+import { et2950Dialect } from "./dialects/et-2950.js";
 import { xp7100Dialect } from "./dialects/xp-7100.js";
 import { UnsupportedDialectError } from "./dialect.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
@@ -30,6 +31,11 @@ describe("dialect registry", () => {
     expect(DIALECTS).toContain(xp7100Dialect);
     expect(lookupDialect(xp7100Dialect.capaFingerprint)).toBe(xp7100Dialect);
   });
+
+  it("includes ET-2950 in the registry", () => {
+    expect(DIALECTS).toContain(et2950Dialect);
+    expect(lookupDialect(et2950Dialect.capaFingerprint)).toBe(et2950Dialect);
+  });
 });
 
 describe("buildDiagnostic", () => {
@@ -39,7 +45,7 @@ describe("buildDiagnostic", () => {
       "ascii",
     );
     const capa = Buffer.from(
-      "#GMMLISTUG10UG18#CMXLISTUNITUM08#QITLISTPREFON  OFF #ADFDPLX",
+      "#GMMLISTUG10UG18#CMXLISTUNITUM08#QITLISTPREFON  OFF #CCTLISTCOL MONOPREF#ADFDPLX",
       "ascii",
     );
     const diagnostic = buildDiagnostic({
@@ -57,12 +63,13 @@ describe("buildDiagnostic", () => {
     expect(diagnostic).toContain("d850i0001400"); // ADF scan area
     expect(diagnostic).toContain("UG10UG18");
     expect(diagnostic).toContain("UNITUM08");
+    expect(diagnostic).toContain("COL MONOPREF"); // CCT list surfaced
     expect(diagnostic).toContain("abc123");
   });
 
   it("marks ADF/duplex as N for a flatbed-only printer", () => {
     const info = Buffer.from("#FB AREAd850i0001170#PRDh010PID 112A", "ascii");
-    const capa = Buffer.from("#GMMLISTUG10UG18", "ascii"); // no #ADFDPLX
+    const capa = Buffer.from("#GMMLISTUG10UG18", "ascii"); // no #ADFDPLX, no #CCTLIST
     const diagnostic = buildDiagnostic({
       capaBody: capa,
       infoBody: info,
@@ -71,6 +78,7 @@ describe("buildDiagnostic", () => {
     });
     expect(diagnostic).toMatch(/Source caps:.*flatbed: Y.*ADF: N.*duplex: N/);
     expect(diagnostic).toContain("(absent)"); // for the ADF scan-area row
+    expect(diagnostic).toMatch(/CCT list:\s+\(absent\)/); // CCT absence is meaningful, not just blank
   });
 
   it("throws an UnsupportedDialectError when explicitly raised", () => {

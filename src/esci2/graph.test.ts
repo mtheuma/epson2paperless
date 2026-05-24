@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { esci2Graph, ESCI2_TIMEOUT_MS } from "./graph.js";
+import { esci2Graph, ESCI2_TIMEOUT_MS, applyDialectSourceOverride } from "./graph.js";
 import { IS_HEADER_SIZE, buildPurereadPacket } from "../protocol.js";
 import { et4950FamilyDialect } from "./dialects/et-4950-family.js";
 import { et2750Dialect } from "./dialects/et-2750.js";
@@ -565,6 +565,33 @@ describe("esci2Graph INIT_POLL_STAT source detection", () => {
     const payload = Buffer.from("STATx0000000" + " ".repeat(52), "ascii");
     state.decide(ctx, { type: 0xa000, payload });
     expect(ctx.source).toBe("flatbed");
+  });
+});
+
+describe("applyDialectSourceOverride", () => {
+  // The TLS scanner shell pre-sets ctx.source = "adf" (scanner.ts) because
+  // the dominant TLS path is ADF + flatbed with stat-length detection.
+  // A TLS dialect that uses sourceDetection: "fixed-flatbed" (e.g. the
+  // ET-2950) would otherwise carry "adf" all the way to buildPara, which
+  // throws on flatbed-only hardware. applyDialectSourceOverride pins the
+  // source at the dialect-resolution moment to keep every downstream
+  // stage agreeing on flatbed.
+  it("pins source to flatbed when dialect is fixed-flatbed and ctx pre-set is adf (TLS+flatbed-only)", () => {
+    const ctx = makeCtx({ source: "adf", transport: "tls", dialect: et2750Dialect });
+    applyDialectSourceOverride(ctx, et2750Dialect);
+    expect(ctx.source).toBe("flatbed");
+  });
+
+  it("is a no-op when ctx pre-set already matches (plain-TCP+flatbed-only)", () => {
+    const ctx = makeCtx({ source: "flatbed", transport: "plain", dialect: et2750Dialect });
+    applyDialectSourceOverride(ctx, et2750Dialect);
+    expect(ctx.source).toBe("flatbed");
+  });
+
+  it("leaves source untouched for stat-length dialects so INIT_POLL_STAT can decide per-fixture", () => {
+    const ctx = makeCtx({ source: "adf", transport: "tls", dialect: et4950FamilyDialect });
+    applyDialectSourceOverride(ctx, et4950FamilyDialect);
+    expect(ctx.source).toBe("adf");
   });
 });
 
