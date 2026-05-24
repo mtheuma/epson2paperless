@@ -177,7 +177,7 @@ Equally valuable: reporting your printer's compatibility so the [Compatible prin
 
 MIT. See [`LICENSE`](LICENSE) for the full text.
 
-**Not affiliated with Seiko Epson Corporation.** This project is an independent, clean-room re-implementation of the network behavior of an Epson "Scan to Computer" workflow, developed by analyzing the wire protocol of a device the author owns. No Epson source code, firmware, or binaries are included or distributed. "EPSON", "EcoTank", "Expression", and "WorkForce" are trademarks of Seiko Epson Corporation, used here descriptively to identify the hardware this software interoperates with.
+**Not affiliated with Seiko Epson Corporation.** This project is an independent interoperability re-implementation of an Epson "Scan to Computer" workflow, based on observed protocol behavior of a device the author owns and limited functional analysis of related software. No Epson source code, firmware, binaries, or source-derived implementation code is included or distributed. "EPSON", "EcoTank", "Expression", and "WorkForce" are trademarks of Seiko Epson Corporation, used here descriptively to identify the hardware this software interoperates with.
 
 ---
 

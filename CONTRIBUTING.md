@@ -42,6 +42,15 @@ npm test                             # full test suite
 - If your PR addresses an open issue, link it in the description.
 - Protocol changes that affect wire bytes need matching updates to the Frida-capture fixtures in `tools/frida-capture/captures/` — the byte-for-byte replay test in `src/scanner.test.ts` will fail otherwise. See `tools/frida-capture/README.md` for the re-capture workflow.
 
+## Provenance
+
+This project re-implements network behavior for interoperability with user-owned hardware. To keep that footing clear, contributions must observe the following:
+
+- **No Epson source, firmware, binaries, or proprietary documentation** in commits, issues, PRs, code comments, or any tracked file. Functional observations described in your own words are fine; verbatim source, identifier names, or comments from vendor code are not.
+- **No NDA-covered material** of any kind.
+- **No tables, blobs, or constants derived from vendor source** unless the same bytes are independently captured from the wire (Frida JSONL, Wireshark pcap) and the capture is the artifact of record.
+- **Provenance notes, where useful, belong in the PR description or commit message**, not in user-facing copy. Internal notes about how a finding was obtained can live under `.reference/` (gitignored) — keep them off the tracked tree.
+
 ## Code of conduct
 
 Be civil. I'm a one-person reviewer doing this in spare time, and clear, kind communication is what makes that sustainable.

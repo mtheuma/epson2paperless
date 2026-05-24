@@ -5,17 +5,19 @@ import type { Dialect, ParaAxes } from "../dialect.js";
  * Epson ET-2950 (ESC/I-2 over TLS). Flatbed-only hardware — no ADF, no
  * duplex.
  *
- * **Inferred clean-room support — no captured ET-2950 fixture exists.**
+ * **Inferred support — no captured ET-2950 wire fixture exists.**
  * The PARA bytes are reused from `buildParaFlatbedTls()` (the ET-4950
- * family flatbed body) because the ET-2950's diagnostic CAPA tokens match
- * the ET-4950's on every axis that drives PARA: `GMM=UG10UG18`,
- * `CMX=UNITUM08`, `QIT=PREFON  OFF`, `FMT=RAW JPG`. The Epson Scan 2
- * Linux source (see `.reference/research/epson-scan-2-source-findings.md`,
- * read clean-room by a sibling agent) shows that the PARA serialiser is
- * a single token-walking switch — per-printer variation comes purely
- * from which CAPA tokens are advertised and which host-driver setters
- * were called. With ET-2950's CAPA matching ET-4950's, the host driver
- * should produce byte-identical PARA.
+ * family flatbed body) because the ET-2950's diagnostic CAPA tokens
+ * match the ET-4950's on every axis that drives PARA: `GMM=UG10UG18`,
+ * `CMX=UNITUM08`, `QIT=PREFON  OFF`, `FMT=RAW JPG`. A separate
+ * interoperability review of the Epson Scan 2 Linux source/package
+ * (notes under `.reference/`, gitignored) observed that the PARA
+ * serialiser is a single token-walking switch — per-printer variation
+ * comes purely from which CAPA tokens are advertised and which
+ * host-driver setters were called. No Epson code is included here;
+ * this dialect reuses existing captured ET-4950 wire bytes and adds a
+ * fingerprint mapping. With ET-2950's CAPA matching ET-4950's, the host
+ * driver should produce byte-identical PARA.
  *
  * Three acknowledged residual uncertainties (any can fail with a generic
  * `Validation failed in state PARA` rather than a specific `#parFAIL`):
