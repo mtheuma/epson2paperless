@@ -81,6 +81,38 @@ describe("buildDiagnostic", () => {
     expect(diagnostic).toMatch(/CCT list:\s+\(absent\)/); // CCT absence is meaningful, not just blank
   });
 
+  it("renders a bare #CCTLIST (segment present, value empty) as (absent), not blank", () => {
+    // A bare LIST segment followed immediately by another # or end-of-body
+    // parses to an empty string, not null. The diagnostic must still mark
+    // it as (absent) so a maintainer can tell at a glance — the
+    // present-vs-absent distinction drives PARA-variant selection.
+    const info = Buffer.from("#FB AREAd850i0001170#PRDh010PID 9999", "ascii");
+    const capa = Buffer.from("#GMMLISTUG10UG18#CCTLIST#ADFDPLX", "ascii");
+    const diagnostic = buildDiagnostic({
+      capaBody: capa,
+      infoBody: info,
+      transport: "plain",
+      fingerprint: "empty1",
+    });
+    expect(diagnostic).toMatch(/CCT list:\s+\(absent\)/);
+  });
+
+  it("renders a bare #GMMLIST (segment present, value empty) as (absent), not blank", () => {
+    // Same disambiguation must apply consistently across all LIST rows,
+    // not just CCT — the whole point of the diagnostic block is at-a-glance reading.
+    const info = Buffer.from("#FB AREAd850i0001170#PRDh010PID 9999", "ascii");
+    const capa = Buffer.from("#GMMLIST#CMXLISTUNITUM08", "ascii");
+    const diagnostic = buildDiagnostic({
+      capaBody: capa,
+      infoBody: info,
+      transport: "plain",
+      fingerprint: "empty2",
+    });
+    expect(diagnostic).toMatch(/GMM list:\s+\(absent\)/);
+    // Sanity-check: the non-empty CMX value still renders normally.
+    expect(diagnostic).toContain("UNITUM08");
+  });
+
   it("throws an UnsupportedDialectError when explicitly raised", () => {
     expect(() => {
       throw new UnsupportedDialectError("xyz", "diagnostic body");
