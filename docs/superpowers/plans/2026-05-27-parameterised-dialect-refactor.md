@@ -55,25 +55,41 @@ After each task's commit, run `npx vitest run src/esci2/` and confirm green befo
 
 ### Task 1: Relocate `buildDiagnostic` + `UnsupportedDialectError` into `diagnostic.ts`
 
+**Background**: `UnsupportedDialectError` currently lives in `src/esci2/dialect.ts:50` (NOT in `dialect-registry.ts`). `buildDiagnostic` lives in `src/esci2/dialect-registry.ts:34`. `graph.ts:324` and `dialect-registry.test.ts:7` both import the error from `dialect.ts`. The relocation must move the error from `dialect.ts` and the function from `dialect-registry.ts` to the new `diagnostic.ts`, with the original homes re-exporting so no caller breaks during this task.
+
 **Files:**
 - Create: `src/esci2/diagnostic.ts`
-- Modify: `src/esci2/dialect-registry.ts` (re-export from new location to preserve callers)
+- Create: `src/esci2/diagnostic.test.ts` (move the buildDiagnostic tests here)
+- Modify: `src/esci2/dialect.ts` (delete `UnsupportedDialectError` class body, re-export from diagnostic.ts)
+- Modify: `src/esci2/dialect-registry.ts` (delete `buildDiagnostic` body, re-export from diagnostic.ts)
+- Modify: `src/esci2/dialect-registry.test.ts` (delete the `describe("buildDiagnostic", …)` block + the `UnsupportedDialectError` standalone test — they move to diagnostic.test.ts; keep the lookup/registry tests for now)
 
 **Steps:**
 
-- [ ] **Step 1: Create the new module**
+- [ ] **Step 1: Create the new module — copy `buildDiagnostic` VERBATIM from `dialect-registry.ts`**
+
+The current `buildDiagnostic` (`src/esci2/dialect-registry.ts:34-72`) includes a `CCT list:` row and an `orAbsent` helper that distinguishes null tokens from empty-string tokens (a bare `#CCTLIST` parses to `""`, not `null`, and must still render as `(absent)` per the pinned tests in `dialect-registry.test.ts:84-114`). Copy the body verbatim:
 
 ```ts
 // src/esci2/diagnostic.ts
 import { parseCapaTokens, parseInfoTokens } from "./capabilities.js";
 
+/**
+ * Thrown when a session lands on a printer whose CAPA fingerprint isn't
+ * in the registry. Carries enough context for the user to file an issue
+ * that the maintainer can act on.
+ *
+ * Relocated from dialect.ts to live next to the diagnostic-block renderer.
+ * dialect.ts re-exports for backward compatibility.
+ */
 export class UnsupportedDialectError extends Error {
   constructor(
     public readonly capaFingerprint: string,
     public readonly diagnostic: string,
   ) {
     super(
-      `Unsupported printer CAPA fingerprint ${capaFingerprint}. Please file an issue with the diagnostic block below:\n\n${diagnostic}`,
+      `Unsupported printer CAPA fingerprint ${capaFingerprint}. ` +
+        `Please file an issue with the diagnostic block below:\n\n${diagnostic}`,
     );
     this.name = "UnsupportedDialectError";
   }
@@ -84,9 +100,9 @@ export class UnsupportedDialectError extends Error {
  * raised when CAPA fingerprint doesn't resolve. Includes everything a
  * maintainer needs to add a new dialect or reproduce locally.
  *
- * Relocated from dialect-registry.ts. The body of this function is moved
- * verbatim — do not change the rendering or test fixtures pinned to the
- * exact output will break.
+ * Body relocated verbatim from dialect-registry.ts. Pinned tests in
+ * diagnostic.test.ts (moved from dialect-registry.test.ts) assert the
+ * exact rendering, including the `(absent)` treatment of bare LIST tokens.
  */
 export function buildDiagnostic(args: {
   capaBody: Buffer;
@@ -97,10 +113,19 @@ export function buildDiagnostic(args: {
   const info = parseInfoTokens(args.infoBody);
   const capa = parseCapaTokens(args.capaBody);
   const transportLabel = args.transport === "tls" ? "esci2-tls" : "esci2-plain";
+  // Source caps derived from segment presence:
+  //   flatbed: any #FB ALGNxx or #FB AREA segment seen in INFO
+  //   ADF:     any #ADFxxxx segment seen in INFO (#ADFAREA, #ADFTYPE, etc.)
+  //   duplex:  CAPA contains #ADFDPLX
   const hasFlatbed = info.segments.some((s) => s.startsWith("#FB "));
   const hasAdf = info.segments.some((s) => s.startsWith("#ADF"));
   const hasDuplex = capa.adfDuplex;
   const yn = (v: boolean) => (v ? "Y" : "N");
+  // Treat empty string as absent: a bare `#XXXLIST` (segment present, value
+  // empty) parses to "" rather than null, but for at-a-glance reading the
+  // diagnostic should still mark it as (absent). Matters most for CCT, where
+  // present-vs-absent drives PARA-variant selection.
+  const orAbsent = (s: string | null) => (s && s.length > 0 ? s : "(absent)");
   return [
     `CAPA fingerprint:  ${args.fingerprint}`,
     `PRD:               PID ${info.prdPid ?? "(absent)"}`,
@@ -109,44 +134,66 @@ export function buildDiagnostic(args: {
     `Source caps:       flatbed: ${yn(hasFlatbed)}  ADF: ${yn(hasAdf)}  duplex: ${yn(hasDuplex)}`,
     `Scan area (FB):    ${info.fbArea ?? "(absent)"}`,
     `Scan area (ADF):   ${info.adfArea ?? "(absent)"}`,
-    `GMM list:          ${capa.gmmList ?? "(absent)"}`,
-    `CMX list:          ${capa.cmxList ?? "(absent)"}`,
-    `QIT list:          ${capa.qitList ?? "(absent)"}`,
-    `FMT list:          ${capa.fmtList ?? "(absent)"}`,
+    `GMM list:          ${orAbsent(capa.gmmList)}`,
+    `CMX list:          ${orAbsent(capa.cmxList)}`,
+    `QIT list:          ${orAbsent(capa.qitList)}`,
+    `FMT list:          ${orAbsent(capa.fmtList)}`,
+    `CCT list:          ${orAbsent(capa.cctList)}`,
     `INFO segments:     ${info.segments.length}`,
     `CAPA segments:     ${capa.segments.length}`,
   ].join("\n");
 }
 ```
 
-- [ ] **Step 2: Update `dialect-registry.ts` to re-export**
+- [ ] **Step 2: Move the diagnostic-related tests to a new file**
 
-Open `src/esci2/dialect-registry.ts`. Remove the `buildDiagnostic` function body and the now-unused `parseCapaTokens` / `parseInfoTokens` imports. Add:
+Create `src/esci2/diagnostic.test.ts` with the exact contents of the `describe("buildDiagnostic", …)` block plus the standalone `UnsupportedDialectError` test from `dialect-registry.test.ts:41-121`. Update the imports at the top of the new file:
 
 ```ts
-export { buildDiagnostic, UnsupportedDialectError } from "./diagnostic.js";
+import { describe, it, expect } from "vitest";
+import { buildDiagnostic, UnsupportedDialectError } from "./diagnostic.js";
 ```
 
-If `dialect-registry.ts` currently defines `UnsupportedDialectError` inline (which it likely does given today's strict-gate behaviour), delete the inline definition — `diagnostic.ts` now owns it.
+Delete those same blocks (the `describe("buildDiagnostic", …)` and the `UnsupportedDialectError`-throw test) from `dialect-registry.test.ts`, plus the now-unused `buildDiagnostic` / `UnsupportedDialectError` imports there. Keep the lookup/registry describe blocks — they get deleted in Task 9.
 
-- [ ] **Step 3: Run the test suite**
+- [ ] **Step 3: Make `dialect.ts` re-export from the new location**
+
+Open `src/esci2/dialect.ts`. Delete the `export class UnsupportedDialectError` declaration (lines 50-61). Replace with:
+
+```ts
+export { UnsupportedDialectError } from "./diagnostic.js";
+```
+
+Leave the `Dialect` interface and `ParaAxes` interface in place — they're deleted in Task 9.
+
+- [ ] **Step 4: Make `dialect-registry.ts` re-export `buildDiagnostic`**
+
+Open `src/esci2/dialect-registry.ts`. Delete the `buildDiagnostic` function (lines 34-72) and the now-unused `parseCapaTokens` / `parseInfoTokens` imports at the top. Add:
+
+```ts
+export { buildDiagnostic } from "./diagnostic.js";
+```
+
+Leave `lookupDialect` and `DIALECTS` in place — they're deleted in Task 9.
+
+- [ ] **Step 5: Run the test suite**
 
 ```
 npx vitest run src/esci2/ --reporter=verbose
 ```
 
-Expected: all 252 tests pass. The diagnostic block format hasn't changed, just its physical location. Any test asserting against the error's `diagnostic` property continues to work.
+Expected: all 252 tests pass. The diagnostic block format is unchanged byte-for-byte, just its physical location moves. `UnsupportedDialectError` is exactly one class (now exported from diagnostic.ts, re-exported from dialect.ts) so `instanceof` checks in graph.ts and dialect-registry.test.ts still work.
 
-- [ ] **Step 4: Lint + format**
+- [ ] **Step 6: Lint + format**
 
 ```
 npm run lint && npm run format:check
 ```
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 7: Commit**
 
 ```
-git add src/esci2/diagnostic.ts src/esci2/dialect-registry.ts
+git add src/esci2/diagnostic.ts src/esci2/diagnostic.test.ts src/esci2/dialect.ts src/esci2/dialect-registry.ts src/esci2/dialect-registry.test.ts
 git commit -m "refactor(esci2): extract buildDiagnostic + UnsupportedDialectError into diagnostic.ts"
 ```
 
@@ -256,15 +303,37 @@ export const GAMMA_CLASSES: Readonly<Record<GammaClassName, Buffer>> = {
 
 **Filling in the three hex literals**:
 
-1. Open `src/esci2/commands.ts` and locate `buildParaFlatbedTls()` (around line 87). The `bodyHex` string is the 928-byte ET-4950 flatbed PARA. Offsets 60..864 (in bytes) cover the three `#GMT` segments. In hex-character terms that is character positions 120..1728 of `bodyHex` (each byte is 2 chars).
+The XP-7100 fixtures already exist as committed `.bin` files at `src/esci2/dialects/xp-7100-fixtures/`. The ET-4950 bytes live as a hex literal in `src/esci2/commands.ts`'s `buildParaFlatbedTls()`. Use a small one-shot Node script to extract the gamma-segment bytes from each into base64 or hex you can paste — this is more reliable than hand-counting hex characters.
 
-2. Concatenate the line-broken hex segments between those bounds, drop the `"` and `+` boundaries, and paste as `ET4950_STOCK_HEX`. Verify the resulting buffer is exactly 804 bytes (1608 hex chars).
+Script (run from the repo root):
 
-3. For `XP7100_JPG_HEX`, open `src/esci2/dialects/xp-7100.ts`, find `JPG_FLATBED_BASE` (or the equivalent flatbed-JPG body), extract offsets 60..864 the same way.
+```bash
+node -e '
+const fs = require("node:fs");
 
-4. For `XP7100_PDF_HEX`, find the corresponding flatbed-PDF body or the PDF_SINGLE constant and extract offsets 60..864.
+// ET-4950 stock — extract from buildParaFlatbedTls hex literal in commands.ts.
+// Easiest: import commands.ts in a small TS shim, or just read the existing
+// buildParaFlatbedTls output by requiring the compiled dist. Simplest path:
+// build the project once, then:
+const { buildParaFlatbedTls } = require("./dist/esci2/commands.js");
+const et4950 = buildParaFlatbedTls();
+console.log("et4950-stock (804 bytes):", et4950.subarray(60, 864).toString("hex"));
 
-5. Run the test (next step). If sizes are wrong, you got the offsets wrong.
+// XP-7100 from the .bin fixtures.
+const xpJpgBin = fs.readFileSync("src/esci2/dialects/xp-7100-fixtures/jpg-flatbed.bin");
+const xpPdfBin = fs.readFileSync("src/esci2/dialects/xp-7100-fixtures/pdf-single.bin");
+console.log("xp7100-jpg (804 bytes):", xpJpgBin.subarray(60, 864).toString("hex"));
+// pdf-single.bin is the ADF-simplex PDF capture. Its GMT segments are at
+// offsets 60..864 — same offsets as flatbed because #PAG is inserted AFTER
+// the LUTs, between #CMX and #ACQ. See xp-7100.test.ts:18-27 for the
+// pinned offset map.
+console.log("xp7100-pdf (804 bytes):", xpPdfBin.subarray(60, 864).toString("hex"));
+'
+```
+
+Paste each output into the corresponding `_HEX` constant. Each must be exactly 1608 hex chars (804 bytes); the tests in step 1 will fail loudly if not.
+
+If `dist/` isn't built (e.g. fresh clone), either run `npm run build` first, or copy the `bodyHex` literal out of `commands.ts:87-117` and feed it to `Buffer.from(hex, "hex").subarray(60, 864)` in a one-off node REPL.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -353,10 +422,14 @@ export type CmxClassName = "et2750-um08" | "xp7100-jpg" | "xp7100-pdf";
 // ET-2750 #CMX bytes — from buildParaFlatbedPlain in commands.ts, offsets 864..888.
 const ET2750_UM08_HEX = "23434d58554d303868303039200000002000000020000000";
 
-// XP-7100 #CMX bytes — extract from xp-7100.ts JPG_FLATBED_BASE and PDF_SINGLE,
-// offsets 864..888 of each body. Each is 48 hex chars (24 bytes).
-const XP7100_JPG_HEX = "<PASTE 48 hex chars from xp-7100.ts JPG body offsets 864..888>";
-const XP7100_PDF_HEX = "<PASTE 48 hex chars from xp-7100.ts PDF body offsets 864..888>";
+// XP-7100 #CMX bytes — extract from the .bin fixtures, offsets 864..888 of
+// each body. Each is 48 hex chars (24 bytes). Use the same extraction script
+// pattern as Task 2:
+//   node -e 'console.log(require("fs").readFileSync(
+//     "src/esci2/dialects/xp-7100-fixtures/jpg-flatbed.bin"
+//   ).subarray(864, 888).toString("hex"))'
+const XP7100_JPG_HEX = "<PASTE 48 hex chars: jpg-flatbed.bin bytes 864..888>";
+const XP7100_PDF_HEX = "<PASTE 48 hex chars: pdf-single.bin bytes 864..888>";
 
 export const CMX_CLASSES: Readonly<Record<CmxClassName, Buffer>> = {
   "et2750-um08": Buffer.from(ET2750_UM08_HEX, "hex"),
@@ -365,9 +438,7 @@ export const CMX_CLASSES: Readonly<Record<CmxClassName, Buffer>> = {
 };
 ```
 
-Extract the XP-7100 hex from `src/esci2/dialects/xp-7100.ts`. The dialect inlines `JPG_FLATBED_BASE` and `PDF_SINGLE` constants (or similar — exact identifier per current file). Offset 864 in bytes = character position 1728 in the hex string. Take 48 hex chars (24 bytes) from there.
-
-Run the tests after pasting each. Sizes mismatched = wrong offsets.
+Run the extraction script (per the comment block above the constants) and paste each 48-char hex sequence. Run the tests after pasting; size mismatch = wrong offset.
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -696,33 +767,15 @@ describe("composePara — validation", () => {
 });
 ```
 
-- [ ] **Step 3: Run tests to verify they all fail**
+- [ ] **Step 3: Run tests to verify they all fail (TDD red phase — DO NOT COMMIT YET)**
 
 ```
 npx vitest run src/esci2/para-composer.test.ts
 ```
 
-Expected: all tests FAIL (composePara throws "not implemented").
+Expected: all tests FAIL (composePara throws "not implemented"). This proves the tests exercise the code. **No commit at this point** — the next step implements the function so the suite is green before committing.
 
-- [ ] **Step 4: Commit the failing-test scaffolding**
-
-```
-git add src/esci2/para-composer.ts src/esci2/para-composer.test.ts
-git commit -m "test(esci2): add full para-composer unit-test suite (skeleton implementation)"
-```
-
----
-
-### Task 5: Implement `composePara` body — all segments and validation
-
-**Files:**
-- Modify: `src/esci2/para-composer.ts`
-
-This is the meat of the refactor. Implement `composePara` such that all tests from Task 4 pass.
-
-**Steps:**
-
-- [ ] **Step 1: Replace the stub `composePara` with the full implementation**
+- [ ] **Step 4: Replace the stub `composePara` with the full implementation**
 
 Open `src/esci2/para-composer.ts` and replace `export function composePara` with:
 
@@ -817,7 +870,7 @@ export function composePara(spec: ParaSpec): Buffer {
 }
 ```
 
-- [ ] **Step 2: Run the composer tests**
+- [ ] **Step 5: Run the composer tests**
 
 ```
 npx vitest run src/esci2/para-composer.test.ts --reporter=verbose
@@ -825,24 +878,24 @@ npx vitest run src/esci2/para-composer.test.ts --reporter=verbose
 
 Expected: all tests PASS. If any fail, fix the specific issue (likely a segment-order or token-spelling bug).
 
-- [ ] **Step 3: Run the full esci2 suite to confirm no other regressions**
+- [ ] **Step 6: Run the full esci2 suite to confirm no other regressions**
 
 ```
 npx vitest run src/esci2/
 ```
 
-Expected: all 252 tests pass (existing 252 + new para-composer tests). The composer is not yet wired into the graph, so other tests continue to use the legacy builders unchanged.
+Expected: all existing 252 tests + new para-composer tests pass. The composer is not yet wired into the graph, so other tests continue to use the legacy builders unchanged.
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 7: Commit (composer module + tests together)**
 
 ```
-git add src/esci2/para-composer.ts
-git commit -m "feat(esci2): implement composePara"
+git add src/esci2/para-composer.ts src/esci2/para-composer.test.ts
+git commit -m "feat(esci2): add composePara with full unit-test coverage"
 ```
 
 ---
 
-### Task 6: Add `dialects/registry.ts` with all four printer entries
+### Task 5: Add `dialects/registry.ts` with all four printer entries
 
 **Files:**
 - Create: `src/esci2/dialects/registry.ts`
@@ -1020,7 +1073,7 @@ git commit -m "feat(esci2): add typed registry with four known printer entries"
 
 ---
 
-### Task 7: Add `dialects/dispatch.ts` (lookup + override + makeParaSpec)
+### Task 6: Add `dialects/dispatch.ts` (lookup + override + makeParaSpec)
 
 **Files:**
 - Create: `src/esci2/dialects/dispatch.ts`
@@ -1219,18 +1272,18 @@ git commit -m "feat(esci2): add dispatch helpers (lookup + override + makeParaSp
 
 ---
 
-### Task 8: Rename `ctx.dialect` → `ctx.entry` and rewire INIT1_CAPA in `graph.ts`
+### Task 7: Rewire `graph.ts` — INIT1_CAPA dispatch + PARA-build call site (single commit)
 
 **Files:**
 - Modify: `src/esci2/graph.ts`
 
-This task swaps the graph's lookup from the legacy `lookupDialect` to the new `lookupRegistryEntry` + `applyEntrySourceOverride`. After this task the replay tests should all still pass because the new pipeline is functionally identical for known printers.
+This is the surgery: replace `lookupDialect` + `applyDialectSourceOverride` + `ctx.dialect!.buildPara(...)` with the new pipeline in one cohesive commit. We do not commit between sub-steps because intermediate states would leave the suite red.
 
 **Steps:**
 
 - [ ] **Step 1: Update the `Esci2Ctx` interface**
 
-Open `src/esci2/graph.ts`. Find `interface Esci2Ctx` (around line 38). Replace:
+Open `src/esci2/graph.ts`. Find `interface Esci2Ctx` (around line 38). Replace the `dialect` field:
 
 ```ts
   dialect: Dialect | undefined;
@@ -1242,36 +1295,30 @@ with:
   entry: RegistryEntry | undefined;
 ```
 
-Update the `import` at the top of the file: remove `Dialect` import, add `RegistryEntry` import from `./dialects/registry.js`.
+Update imports at the top of the file: remove `Dialect` and `applyDialectSourceOverride` (if exported from this file) — add `RegistryEntry` from `./dialects/registry.js`, `lookupRegistryEntry` + `applyEntrySourceOverride` + `makeParaSpec` from `./dialects/dispatch.js`, and `composePara` + `type ParaSpec` from `./para-composer.js`.
 
-- [ ] **Step 2: Update the legacy override helper to call the new one**
+- [ ] **Step 2: Delete the legacy `applyDialectSourceOverride` helper**
 
-Find `applyDialectSourceOverride` (around line 83). Replace its body:
+Around `graph.ts:83-87` the file defines `applyDialectSourceOverride`. Delete the entire function — it's replaced by `applyEntrySourceOverride` imported from dispatch.ts. The doc comment above it can stay (the *why* it exists is still relevant) but the function body is gone.
 
-```ts
-export function applyEntrySourceOverride(ctx: Esci2Ctx, entry: RegistryEntry): void {
-  if (entry.sourceDetection === "fixed-flatbed") {
-    ctx.source = "flatbed";
-  }
-}
-```
+- [ ] **Step 3: Update the INIT1_CAPA handler**
 
-(Effectively rename the function and parameter, no behaviour change.) Also remove its old name from any export aggregator if applicable.
-
-Better: delete the inline definition in graph.ts entirely and import the canonical implementation from `./dialects/dispatch.js`. Replace `applyDialectSourceOverride(ctx, dialect)` call sites later with `applyEntrySourceOverride(ctx, ctx.entry!)`.
-
-- [ ] **Step 3: Update the INIT1_CAPA handler to call `lookupRegistryEntry`**
-
-Find the INIT1_CAPA_DATA handler (likely around graph.ts:318, where `lookupDialect` is currently called). It currently does roughly:
+Find the INIT1_CAPA_DATA handler (around `graph.ts:318` — the block that calls `lookupDialect` and sets `ctx.dialect`). The current code is:
 
 ```ts
 const fingerprint = computeCapaFingerprint(packet.payload);
 const dialect = lookupDialect(fingerprint);
 if (dialect === null) {
-  const diagnostic = buildDiagnostic({ ... });
+  const diagnostic = buildDiagnostic({
+    capaBody: packet.payload,
+    infoBody: ctx.infoBody,
+    transport: ctx.transport,
+    fingerprint,
+  });
   return { error: new UnsupportedDialectError(fingerprint, diagnostic) };
 }
 ctx.dialect = dialect;
+log.debug("Dialect resolved", { name: dialect.displayName, fingerprint });
 applyDialectSourceOverride(ctx, dialect);
 ```
 
@@ -1280,56 +1327,26 @@ Replace with:
 ```ts
 const fingerprint = computeCapaFingerprint(packet.payload);
 try {
-  ctx.entry = lookupRegistryEntry(fingerprint, ctx.capaBody, ctx.infoBody, ctx.transport);
+  ctx.entry = lookupRegistryEntry(fingerprint, packet.payload, ctx.infoBody, ctx.transport);
 } catch (err) {
   return { error: err as Error };
 }
+log.debug("Dialect resolved", { name: ctx.entry.displayName, fingerprint });
 applyEntrySourceOverride(ctx, ctx.entry);
 ```
 
-Import `lookupRegistryEntry` and `applyEntrySourceOverride` from `./dialects/dispatch.js`. Remove the old `lookupDialect`, `applyDialectSourceOverride`, `buildDiagnostic`, `UnsupportedDialectError` imports if no longer used in this file.
+Note: the `log.debug("Dialect resolved", …)` line is preserved — traces stay self-documenting. Also remove the now-unused `lookupDialect`, `buildDiagnostic`, `UnsupportedDialectError` imports from the top of `graph.ts` if they're no longer used by other handlers.
 
-- [ ] **Step 4: Update all `ctx.dialect!.xxx` references**
+- [ ] **Step 4: Update init-poll handler references**
 
-Find every `ctx.dialect!.sourceDetection`, `ctx.dialect!.initPollIterations`, and `ctx.dialect!.buildPara` in graph.ts (rough locations: lines 557, 599, 622).
+Find every `ctx.dialect!.sourceDetection` and `ctx.dialect!.initPollIterations` reference. Approximate locations: `graph.ts:557` (`INIT_POLL_STAT_DRAIN` decision) and `graph.ts:599` (`INIT_POLL_FIN`).
 
-- Replace `ctx.dialect!.sourceDetection` with `ctx.entry!.sourceDetection`.
-- Replace `ctx.dialect!.initPollIterations` with `ctx.entry!.initPollIterations`.
-- Leave the PARA-build call site for Task 9 (next).
+- `ctx.dialect!.sourceDetection` → `ctx.entry!.sourceDetection`
+- `ctx.dialect!.initPollIterations` → `ctx.entry!.initPollIterations`
 
-- [ ] **Step 5: Compile-check via the test suite**
+- [ ] **Step 5: Update the PARA-build call site**
 
-```
-npx vitest run src/esci2/
-```
-
-Expected: tests may fail at PARA-build (still using `ctx.dialect!.buildPara`) — this is the next task. The INIT1 + init-poll changes should not break compilation.
-
-If TypeScript compilation fails (likely because the PARA-build line still references `ctx.dialect`), temporarily leave the PARA-build site as `ctx.dialect!.buildPara(...)` and adjust Esci2Ctx to keep BOTH `dialect` and `entry` populated through this transition step. Then Task 9 cleans up.
-
-Alternative cleaner approach (recommended): do steps 4 and the PARA-build swap (Task 9) in one commit so the build is never broken. Combine Tasks 8 and 9 into a single commit if so. The skill's guidance ("frequent commits") leaves this judgement open — pick whichever keeps `npx vitest run src/esci2/` green between commits.
-
-- [ ] **Step 6: Commit (after Task 9 if combined)**
-
-If splitting: commit after running the suite green.
-
-```
-git add src/esci2/graph.ts
-git commit -m "refactor(esci2): rename ctx.dialect → ctx.entry and rewire INIT1_CAPA dispatch"
-```
-
----
-
-### Task 9: Rewire the PARA-build call site
-
-**Files:**
-- Modify: `src/esci2/graph.ts`
-
-**Steps:**
-
-- [ ] **Step 1: Replace the PARA-build call site**
-
-Find `buildParaSend(ctx)` (around graph.ts:621). It currently calls:
+Find `buildParaSend(ctx)` (around `graph.ts:621`). Replace:
 
 ```ts
 const paraPayload = ctx.dialect!.buildPara({
@@ -1339,7 +1356,7 @@ const paraPayload = ctx.dialect!.buildPara({
 });
 ```
 
-Replace with:
+with:
 
 ```ts
 const paraSource: ParaSpec["source"] =
@@ -1348,41 +1365,33 @@ const paraSource: ParaSpec["source"] =
     : ctx.duplex
       ? "adf-duplex"
       : "adf-simplex";
-const spec = makeParaSpec(ctx.entry!, paraSource, ctx.action);
-const paraPayload = composePara(spec);
+const paraPayload = composePara(makeParaSpec(ctx.entry!, paraSource, ctx.action));
 ```
 
-Add imports at the top of graph.ts:
-
-```ts
-import { composePara, type ParaSpec } from "./para-composer.js";
-import { makeParaSpec } from "./dialects/dispatch.js";
-```
-
-- [ ] **Step 2: Run the full esci2 suite — the moment of truth**
+- [ ] **Step 6: Run the full esci2 suite — the moment of truth**
 
 ```
 npx vitest run src/esci2/ --reporter=verbose
 ```
 
-Expected: **all 252 + new tests pass**, including every replay test (`scanner.test.ts`, all four `dialects/*.test.ts`). If any replay test fails, the composer + registry are not byte-equivalent to the legacy builders for that fixture — investigate the diff and fix in the data files or composer logic. Do NOT modify the fixture.
+Expected: **all existing tests + new composer/dispatch tests pass**, including every replay test (`scanner.test.ts`, all four `dialects/*.test.ts`). If any replay test fails, the composer + registry are not byte-equivalent to the legacy builders for that fixture — investigate the diff and fix in the data files or composer logic. Do NOT modify the fixture.
 
 Common causes of replay test failures at this point:
-- Wrong byte offset when extracting gamma/CMX class hex from current builder.
+- Wrong byte offset when extracting gamma/CMX class hex from current builder or .bin file.
 - Off-by-one in segment order.
 - Token spelling (e.g. accidentally typed `#QIT OFF ` with a space).
 - Extents mismatch in a registry entry.
 
-- [ ] **Step 3: Commit**
+- [ ] **Step 7: Commit**
 
 ```
 git add src/esci2/graph.ts
-git commit -m "refactor(esci2): rewire PARA build to use composePara + makeParaSpec"
+git commit -m "refactor(esci2): rewire graph dispatch to use composePara + registry"
 ```
 
 ---
 
-### Task 10: Update per-dialect test files to assert against the new pipeline
+### Task 8: Update per-dialect test files to assert against the new pipeline
 
 **Files:**
 - Modify: `src/esci2/dialects/et-4950-family.test.ts`
@@ -1392,7 +1401,7 @@ git commit -m "refactor(esci2): rewire PARA build to use composePara + makeParaS
 
 These tests currently assert against the `Dialect` object's properties and call `buildPara` directly. After the refactor, they need to assert against the registry entry + use the composer.
 
-The Tier 1 byte-equivalence guarantee is already covered by `scanner.test.ts` (the full replay suite) — these per-dialect tests are unit-level assertions of "the right shape per printer". Keep that contract; just change the API.
+**Critical: preserve byte-equality assertions against the committed `.bin` fixtures.** `xp-7100.test.ts` currently has five `out.equals(loadFixture("...bin"))` assertions, including for the PDF actions (`pdf-single.bin`, `pdf-duplex.bin`). `scanner.test.ts:1167` only exercises XP-7100 with `action: "jpg"`, so the per-dialect file is the *only* test that pins XP-7100's PDF wire bytes against the captured fixture. The replacement below preserves all five assertions — don't simplify them to length/difference checks.
 
 **Steps:**
 
@@ -1476,16 +1485,23 @@ describe("ET-4950 composed PARA size", () => {
 });
 ```
 
-- [ ] **Step 3: Rewrite `xp-7100.test.ts`**
+- [ ] **Step 3: Rewrite `xp-7100.test.ts` — preserve all five `.bin` equality assertions**
 
 ```ts
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { REGISTRY } from "./registry.js";
 import { composePara } from "../para-composer.js";
 import { makeParaSpec } from "./dispatch.js";
 
 const XP7100_FP = "56d26c61896ca417807ac68d37775036fa1e702ee44c0beaa27d8a6ea9fa457e";
 const entry = REGISTRY.get(XP7100_FP)!;
+
+const FIXTURE_DIR = path.resolve("src/esci2/dialects/xp-7100-fixtures");
+function loadFixture(name: string): Buffer {
+  return readFileSync(path.join(FIXTURE_DIR, name));
+}
 
 describe("XP-7100 registry entry", () => {
   it("supports flatbed + ADF + duplex (has adfExtents)", () => {
@@ -1503,23 +1519,53 @@ describe("XP-7100 registry entry", () => {
   });
 });
 
-describe("XP-7100 composed PARA size", () => {
-  it("flatbed JPG is 944 bytes", () => {
-    expect(composePara(makeParaSpec(entry, "flatbed", "jpg")).length).toBe(944);
+describe("XP-7100 captured-axis byte equality (the only coverage of PDF wire bytes)", () => {
+  it("flatbed JPG matches jpg-flatbed.bin", () => {
+    const out = composePara(makeParaSpec(entry, "flatbed", "jpg"));
+    expect(out.equals(loadFixture("jpg-flatbed.bin"))).toBe(true);
   });
-  it("adf-simplex JPG is 952 bytes", () => {
-    expect(composePara(makeParaSpec(entry, "adf-simplex", "jpg")).length).toBe(952);
+  it("ADF simplex JPG matches jpg-single.bin", () => {
+    const out = composePara(makeParaSpec(entry, "adf-simplex", "jpg"));
+    expect(out.equals(loadFixture("jpg-single.bin"))).toBe(true);
   });
-  it("adf-duplex JPG is 956 bytes", () => {
-    expect(composePara(makeParaSpec(entry, "adf-duplex", "jpg")).length).toBe(956);
+  it("ADF simplex PDF matches pdf-single.bin", () => {
+    const out = composePara(makeParaSpec(entry, "adf-simplex", "pdf"));
+    expect(out.equals(loadFixture("pdf-single.bin"))).toBe(true);
+  });
+  it("ADF duplex JPG matches jpg-duplex.bin", () => {
+    const out = composePara(makeParaSpec(entry, "adf-duplex", "jpg"));
+    expect(out.equals(loadFixture("jpg-duplex.bin"))).toBe(true);
+  });
+  it("ADF duplex PDF matches pdf-duplex.bin", () => {
+    const out = composePara(makeParaSpec(entry, "adf-duplex", "pdf"));
+    expect(out.equals(loadFixture("pdf-duplex.bin"))).toBe(true);
   });
 });
 
-describe("XP-7100 action axis", () => {
-  it("flatbed JPG and PDF produce DIFFERENT bytes (action-aware)", () => {
-    const jpg = composePara(makeParaSpec(entry, "flatbed", "jpg"));
-    const pdf = composePara(makeParaSpec(entry, "flatbed", "pdf"));
-    expect(jpg.equals(pdf)).toBe(false);
+describe("XP-7100 flatbed PDF (no captured fixture — synthesised by composer)", () => {
+  // Today's xp-7100.test.ts:65-84 synthesises the expected bytes by splicing
+  // PDF LUTs from pdf-single.bin into a copy of jpg-flatbed.bin. The composer
+  // achieves the same result via gammaClass.pdf="xp7100-pdf" + cmxClass.pdf=
+  // "xp7100-pdf" applied to the flatbed source. Replicate the synthesis as
+  // the expected-bytes oracle and assert byte equality.
+  const LUT_OFFSETS = {
+    flatbed: { grn: 60, red: 328, blu: 596, cmx: 864 },
+    adfSimplex: { grn: 60, red: 328, blu: 596, cmx: 864 },
+  };
+
+  it("composed flatbed-PDF equals the JPG-flatbed body with PDF LUT triplet + CMX spliced in", () => {
+    const flatbedJpg = loadFixture("jpg-flatbed.bin");
+    const pdfSrc = loadFixture("pdf-single.bin");
+    const fb = LUT_OFFSETS.flatbed;
+    const adf = LUT_OFFSETS.adfSimplex;
+    const expected = Buffer.from(flatbedJpg);
+    pdfSrc.subarray(adf.grn + 12, adf.grn + 12 + 256).copy(expected, fb.grn + 12);
+    pdfSrc.subarray(adf.red + 12, adf.red + 12 + 256).copy(expected, fb.red + 12);
+    pdfSrc.subarray(adf.blu + 12, adf.blu + 12 + 256).copy(expected, fb.blu + 12);
+    pdfSrc.subarray(adf.cmx + 12, adf.cmx + 12 + 12).copy(expected, fb.cmx + 12);
+
+    const out = composePara(makeParaSpec(entry, "flatbed", "pdf"));
+    expect(out.equals(expected)).toBe(true);
   });
 });
 ```
@@ -1570,7 +1616,7 @@ git commit -m "test(esci2): retarget per-dialect tests at the registry-driven pi
 
 ---
 
-### Task 11: Delete the old dialect files and legacy `buildPara*` helpers
+### Task 9: Delete the old dialect files and legacy `buildPara*` helpers
 
 **Files:**
 - Delete: `src/esci2/dialects/et-4950-family.ts`
@@ -1578,12 +1624,13 @@ git commit -m "test(esci2): retarget per-dialect tests at the registry-driven pi
 - Delete: `src/esci2/dialects/xp-7100.ts`
 - Delete: `src/esci2/dialects/et-2950.ts`
 - Delete: `src/esci2/dialect-registry.ts`
+- Delete: `src/esci2/dialect-registry.test.ts` (its diagnostic tests moved to `diagnostic.test.ts` in Task 1; its lookup/registry tests are superseded by `registry.test.ts` from Task 5; nothing of value remains)
 - Modify: `src/esci2/commands.ts` (remove `buildParaAdf`, `buildParaFlatbedTls`, `buildParaFlatbedPlain`)
-- Modify: `src/esci2/dialect.ts` (trim/remove the old `Dialect` interface if still present)
+- Modify: `src/esci2/dialect.ts` (trim/remove the old `Dialect` interface and `ParaAxes`; keep the `UnsupportedDialectError` re-export from Task 1 unless nothing imports it from this path)
 
 **Steps:**
 
-- [ ] **Step 1: Delete the four dialect files and the legacy registry**
+- [ ] **Step 1: Delete the four dialect files, the legacy registry, and its test**
 
 ```
 git rm src/esci2/dialects/et-4950-family.ts
@@ -1591,6 +1638,7 @@ git rm src/esci2/dialects/et-2750.ts
 git rm src/esci2/dialects/xp-7100.ts
 git rm src/esci2/dialects/et-2950.ts
 git rm src/esci2/dialect-registry.ts
+git rm src/esci2/dialect-registry.test.ts
 ```
 
 - [ ] **Step 2: Remove the legacy builders from `commands.ts`**
@@ -1620,7 +1668,13 @@ Open `src/esci2/dialect.ts`. If the file still exports `Dialect` or `ParaAxes` t
 npx vitest run src/esci2/
 ```
 
-Expected: all tests pass. If any import error: there's a stale reference to the deleted files somewhere; find with `grep -rn "buildParaFlatbedTls\|buildParaAdf\|buildParaFlatbedPlain\|et4950FamilyDialect\|et2750Dialect\|xp7100Dialect\|et2950Dialect\|lookupDialect" src/` and remove.
+Expected: all tests pass. If any import error: there's a stale reference to the deleted files somewhere. Find with ripgrep:
+
+```
+rg "buildParaFlatbedTls|buildParaAdf|buildParaFlatbedPlain|et4950FamilyDialect|et2750Dialect|xp7100Dialect|et2950Dialect|lookupDialect" src/
+```
+
+(Use `rg` rather than POSIX `grep -rn` — `rg` is the project standard on Windows + Git Bash, faster on large trees, and respects `.gitignore`.)
 
 - [ ] **Step 5: Lint + format check**
 
@@ -1637,7 +1691,7 @@ git commit -m "refactor(esci2): delete legacy per-family dialect files and build
 
 ---
 
-### Task 12: Update `docs/PROTOCOL-REFERENCE.md`
+### Task 10: Update `docs/PROTOCOL-REFERENCE.md`
 
 **Files:**
 - Modify: `docs/PROTOCOL-REFERENCE.md`
@@ -1647,7 +1701,7 @@ git commit -m "refactor(esci2): delete legacy per-family dialect files and build
 - [ ] **Step 1: Find the "How printer-model differences are handled" section**
 
 ```
-grep -n "printer-model differences" docs/PROTOCOL-REFERENCE.md
+rg -n "printer-model differences" docs/PROTOCOL-REFERENCE.md
 ```
 
 - [ ] **Step 2: Rewrite the section**
@@ -1705,7 +1759,7 @@ git commit -m "docs: update PROTOCOL-REFERENCE for composer + registry architect
 
 ---
 
-### Task 13: Final-pass verification
+### Task 11: Final-pass verification
 
 **Steps:**
 
@@ -1728,7 +1782,7 @@ Expected: no warnings, no errors.
 - [ ] **Step 3: Confirm no stale references in the source tree**
 
 ```
-grep -rn "lookupDialect\|et4950FamilyDialect\|et2750Dialect\|xp7100Dialect\|et2950Dialect\|buildParaAdf\|buildParaFlatbedTls\|buildParaFlatbedPlain" src/ docs/
+rg "lookupDialect|et4950FamilyDialect|et2750Dialect|xp7100Dialect|et2950Dialect|buildParaAdf|buildParaFlatbedTls|buildParaFlatbedPlain" src/ docs/
 ```
 
 Expected: no results (or only comments that explicitly reference the refactor history, e.g. release notes).
@@ -1759,15 +1813,13 @@ gh pr create --base main --head research/para-variation-analysis \
 - Known printers stay byte-identical on the wire (replay tests pinned to existing fixtures).
 - Foundation for Spec 2 (unknown-fingerprint auto-dispatch); does not change user-visible behaviour.
 
-Spec: `docs/superpowers/specs/2026-05-27-broader-compatibility-design.md`
+Spec: \`docs/superpowers/specs/2026-05-27-broader-compatibility-design.md\`
 
 ## Test plan
 
-- [ ] `npm test` green locally
-- [ ] `npm run lint` + `npm run format:check` green
+- [ ] \`npm test\` green locally
+- [ ] \`npm run lint\` + \`npm run format:check\` green
 - [ ] CI green
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
 EOF
 )"
 ```
@@ -1778,22 +1830,22 @@ EOF
 
 Walking through each spec section to confirm a task implements it:
 
-- **Section 1 (Architecture)** — `composePara` + `ParaSpec` types: Tasks 4–5. `makeParaSpec` + `lookupRegistryEntry` + `applyEntrySourceOverride`: Task 7.
-- **Section 2 (Registry shape)** — Task 6.
-- **Section 3 (Composer body assembly + validation)** — Task 5.
-- **Section 4 (Dispatch flow)** — Tasks 8 + 9 cover the INIT1_CAPA swap and PARA-build call site.
-- **Section 5 (Test strategy)** — Tier 1 covered by existing replay tests preserved through Tasks 8–9. Tier 2 composer/dispatch tests in Tasks 4, 6, 7. Per-dialect test retargeting in Task 10.
-- **Section 6 (Error handling)** — `UnsupportedDialectError` preserved (Task 1 relocates; Task 7 throw site). Composer input validation (Task 5).
-- **Section 7 (Files + Migration)** — Deletions in Task 11. Docs in Task 12.
+- **Section 1 (Architecture)** — `composePara` + `ParaSpec` types: Task 4. `makeParaSpec` + `lookupRegistryEntry` + `applyEntrySourceOverride`: Task 6.
+- **Section 2 (Registry shape)** — Task 5.
+- **Section 3 (Composer body assembly + validation)** — Task 4.
+- **Section 4 (Dispatch flow)** — Task 7 covers both the INIT1_CAPA swap and the PARA-build call site (committed together to avoid intermediate red).
+- **Section 5 (Test strategy)** — Tier 1 covered by existing replay tests preserved through Task 7. Tier 2 composer/dispatch tests in Tasks 4, 5, 6. Per-dialect test retargeting (including XP-7100 PDF `.bin` equality) in Task 8.
+- **Section 6 (Error handling)** — `UnsupportedDialectError` preserved (Task 1 relocates; Task 6 owns the throw site via `lookupRegistryEntry`). Composer input validation (Task 4).
+- **Section 7 (Files + Migration)** — Deletions (including the now-orphaned `dialect-registry.test.ts`) in Task 9. Docs in Task 10.
 - **Future work** — Out of scope for this plan, no tasks needed.
 
 No spec gaps identified.
 
 ## Implementation notes for whichever engineer/agent picks this up
 
-- **TDD throughout.** Each new module (Tasks 1–7) writes tests before implementation. Each refactor task (Tasks 8–11) leans on the existing replay tests as its definition of done.
-- **Replay tests are the regression net.** If `scanner.test.ts` fails after Task 9, the composer is not byte-equivalent to the legacy builder — debug the data files and composer logic, not the fixture.
-- **The `et4950-stock` LUT is not a strict `[0..255]` identity.** GRN is sequential but RED skips `0x14` / duplicates `0xc6`, BLU duplicates `0x24` / skips `0xa6`. Verify against `src/esci2/commands.ts:91-115` of the pre-refactor code (or `git show HEAD~10:src/esci2/commands.ts` after the deletion in Task 11). Tests in Task 2 pin these anomalies.
+- **TDD throughout.** Each new module (Tasks 1–6) writes tests before implementation. Task 4 specifically has a "see tests fail, then implement" sequence within a single task to avoid a red-commit boundary. The refactor tasks (7 + 8) lean on the existing replay tests as their definition of done.
+- **Replay tests are the regression net.** If `scanner.test.ts` fails after Task 7, the composer is not byte-equivalent to the legacy builder — debug the data files and composer logic, not the fixture.
+- **The `et4950-stock` LUT is not a strict `[0..255]` identity.** GRN is sequential but RED skips `0x14` / duplicates `0xc6`, BLU duplicates `0x24` / skips `0xa6`. Verify against `src/esci2/commands.ts:91-115` of the pre-refactor code (or `git show HEAD~N:src/esci2/commands.ts` after the deletion in Task 9). Tests in Task 2 pin these anomalies.
 - **Token spellings have no spaces between key and value.** `#QITOFF ` (the trailing space is part of `OFF `), `#CCTCOL `, `#PAGd000`, `#GMMUG10`, `#BSZi1048576`. Test in Task 4 pins this.
 - **Segment order**: `#CMX` before `#QIT` before `#CCT`. The composer test in Task 4 pins this.
-- **Frequent commits** — every task ends with one commit. Don't batch multiple tasks into one commit.
+- **No red commits.** Every task ends with a green test suite. Tasks 4 and 7 internally have multi-step sequences where intermediate states would be red — the commit is held until the final step makes the suite green.
