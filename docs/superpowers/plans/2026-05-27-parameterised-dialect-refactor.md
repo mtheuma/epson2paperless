@@ -1290,15 +1290,43 @@ git commit -m "feat(esci2): add dispatch helpers (lookup + override + makeParaSp
 
 ---
 
-### Task 7: Rewire `graph.ts` + `graph.test.ts` — INIT1_CAPA dispatch + PARA-build call site (single commit)
+### Task 7: Rewire `graph.ts` + `graph.test.ts` — INIT1_CAPA dispatch + PARA-build call site + ET-2750 byte-equivalence shield (single commit)
 
 **Files:**
+- Modify: `src/esci2/scanner.test.ts` (extend the ET-2750 replay with a byte-equivalence assertion — see Step 0 below)
 - Modify: `src/esci2/graph.ts`
 - Modify: `src/esci2/graph.test.ts` (renames + helper-rebind)
 
 This is the surgery: replace `lookupDialect` + `applyDialectSourceOverride` + `ctx.dialect!.buildPara(...)` with the new pipeline AND update the graph unit tests in the same commit. We do not commit between sub-steps because `ctx.dialect`/`ctx.entry` rename + `applyDialectSourceOverride` deletion would leave the suite red mid-task otherwise.
 
+The first step *strengthens* the regression net for ET-2750 before any rewiring happens. Today's ET-2750 replay (`scanner.test.ts:1082-1136`) only asserts behavioural outputs (PDF produced, correct page count). Unlike the XP-7100 replay at line 1173+, it does NOT compare the scanner's emitted PARA bytes to the captured-from-driver PARA bytes. After Task 9 deletes `buildParaFlatbedPlain` and Task 8's replacement test drops the legacy byte check, ET-2750 would have NO byte-level regression net — `driveFixture` replays printer responses regardless of what PARA the scanner sent, so silent regressions wouldn't fail any test. Adding the byte assertion *before* the rewire means the moment the composer ships wrong bytes for ET-2750, this test fails loudly.
+
 **Steps:**
+
+- [ ] **Step 0: Add an ET-2750 byte-equivalence assertion to the existing replay**
+
+Open `src/esci2/scanner.test.ts`. Find the existing ET-2750 replay test (`it("flatbed-single-page-pdf: drives the captured wire and produces one PDF", …)` around line 1082). After `await driveFixture(...)` (around line 1111) and before the for-loop that waits for the PDF, insert:
+
+```ts
+// Byte-equivalence shield: assert the scanner's PARA wire bytes match
+// what the captured Wireshark session sent. Without this, driveFixture
+// replays the printer's responses regardless of what PARA the scanner
+// emitted, so a composer regression on ET-2750 would not fail this test.
+// Mirrors the XP-7100 replay pattern at line ~1173 of this file.
+const capturedPara = extractCapturedParaBody(fixture);
+const scannerPara = extractScannerParaWrite(fake);
+expect(scannerPara.equals(capturedPara)).toBe(true);
+```
+
+`extractCapturedParaBody` and `extractScannerParaWrite` are already defined in scanner.test.ts (used by the XP-7100 replay). No new imports required.
+
+Run the suite to confirm the shield passes against the current pre-refactor code:
+
+```
+npx vitest run src/esci2/scanner.test.ts
+```
+
+Expected: all tests pass. The legacy `et2750Dialect.buildPara` already produces the right bytes, so this assertion is a pure tightening — no behaviour change yet.
 
 - [ ] **Step 1: Update the `Esci2Ctx` interface**
 
@@ -1441,8 +1469,8 @@ Common causes of replay test failures at this point:
 - [ ] **Step 8: Commit**
 
 ```
-git add src/esci2/graph.ts src/esci2/graph.test.ts
-git commit -m "refactor(esci2): rewire graph dispatch to use composePara + registry"
+git add src/esci2/scanner.test.ts src/esci2/graph.ts src/esci2/graph.test.ts
+git commit -m "refactor(esci2): rewire graph dispatch to use composePara + registry + ET-2750 byte shield"
 ```
 
 ---
@@ -1957,7 +1985,7 @@ Walking through each spec section to confirm a task implements it:
 - **Section 2 (Registry shape)** — Task 5.
 - **Section 3 (Composer body assembly + validation)** — Task 4.
 - **Section 4 (Dispatch flow)** — Task 7 covers both the INIT1_CAPA swap and the PARA-build call site (committed together to avoid intermediate red).
-- **Section 5 (Test strategy)** — Tier 1 covered by existing replay tests preserved through Task 7. Tier 2 composer/dispatch tests in Tasks 4, 5, 6. Per-dialect test retargeting (including XP-7100 PDF `.bin` equality) in Task 8.
+- **Section 5 (Test strategy)** — Tier 1 covered by existing replay tests preserved through Task 7, plus Task 7 Step 0 tightens the ET-2750 replay with a byte-equivalence assertion (parity with the XP-7100 replay). Tier 2 composer/dispatch tests in Tasks 4, 5, 6. Per-dialect test retargeting (including XP-7100 PDF `.bin` equality) in Task 8.
 - **Section 6 (Error handling)** — `UnsupportedDialectError` preserved (Task 1 relocates; Task 6 owns the throw site via `lookupRegistryEntry`). Composer input validation (Task 4).
 - **Section 7 (Files + Migration)** — Deletions (including the now-orphaned `dialect-registry.test.ts`) in Task 9. Docs in Task 10.
 - **Future work** — Out of scope for this plan, no tasks needed.
