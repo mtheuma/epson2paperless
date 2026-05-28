@@ -202,6 +202,7 @@ git commit -m "refactor(esci2): extract buildDiagnostic + UnsupportedDialectErro
 ### Task 2: Add `gamma-classes.ts` data module
 
 **Files:**
+- Create: `src/esci2/data/` (directory, doesn't exist yet)
 - Create: `src/esci2/data/gamma-classes.ts`
 - Create: `src/esci2/data/gamma-classes.test.ts`
 
@@ -212,6 +213,17 @@ The classes are 804-byte verbatim copies of the three concatenated `#GMT{GRN,RED
 - `xp7100-pdf`: same offsets from XP-7100's PDF base body (also inlined in `xp-7100.ts`).
 
 **Steps:**
+
+- [ ] **Step 0: Create the `src/esci2/data/` directory**
+
+Doesn't exist in the current tree. Create it before writing any file under it (the test file in Step 1 lives there, so this step must run first):
+
+```bash
+# Git Bash / cross-platform
+mkdir -p src/esci2/data
+```
+
+PowerShell equivalent: `New-Item -ItemType Directory -Force src/esci2/data | Out-Null`.
 
 - [ ] **Step 1: Write the failing tests first**
 
@@ -1396,7 +1408,7 @@ const paraPayload = composePara(makeParaSpec(ctx.entry!, paraSource, ctx.action)
    import { REGISTRY } from "./dialects/registry.js";
    ```
 
-2. The legacy per-dialect imports (`et4950FamilyDialect`, `et2750Dialect`, `et2950Dialect`) stay in place for now — those files still exist until Task 9. Every `dialect: <obj>` field in a `makeCtx()` call needs to become `entry: REGISTRY.get(<obj>.capaFingerprint)!`. **There are seven occurrences** — sanity-check by running `grep -n "dialect:" src/esci2/graph.test.ts` and confirming you see seven matches. Replace each:
+2. The legacy per-dialect imports (`et4950FamilyDialect`, `et2750Dialect`, `et2950Dialect`) stay in place for now — those files still exist until Task 9. Every `dialect: <obj>` field in a `makeCtx()` call needs to become `entry: REGISTRY.get(<obj>.capaFingerprint)!`. **There are seven occurrences** — sanity-check by running `rg -n "dialect:" src/esci2/graph.test.ts` and confirming you see seven matches. Replace each:
 
    - Line ~192 (`INIT_POLL_FIN loops` test): `makeCtx({ dialect: et2750Dialect, initPollIteration: 0 })` → `makeCtx({ entry: REGISTRY.get(et2750Dialect.capaFingerprint)!, initPollIteration: 0 })`
    - Line ~205 (`INIT_POLL_FIN advances` test): same shape with `initPollIteration: 1`
