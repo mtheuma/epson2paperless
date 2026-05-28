@@ -1903,10 +1903,12 @@ Expected: no warnings, no errors.
 - [ ] **Step 3: Confirm no stale references in the source tree**
 
 ```
-rg "lookupDialect|et4950FamilyDialect|et2750Dialect|xp7100Dialect|et2950Dialect|buildParaAdf|buildParaFlatbedTls|buildParaFlatbedPlain" src/ docs/
+rg "lookupDialect|et4950FamilyDialect|et2750Dialect|xp7100Dialect|et2950Dialect|buildParaAdf|buildParaFlatbedTls|buildParaFlatbedPlain" src/ docs/PROTOCOL-REFERENCE.md
 ```
 
 Expected: no results (or only comments that explicitly reference the refactor history, e.g. release notes).
+
+The search deliberately excludes `docs/superpowers/**` — this plan and the design spec under `docs/superpowers/specs/` legitimately reference the deleted identifiers as part of describing the refactor.
 
 - [ ] **Step 4: Confirm the production behaviour smoke test**
 
