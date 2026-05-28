@@ -272,12 +272,14 @@ Expected: FAIL — module does not exist.
 
 - [ ] **Step 3: Generate the data module via a one-shot extraction script**
 
-The hex bytes are long (804 bytes × 3 classes = ~5KB) and copy-paste-prone to transcription errors. Instead, run a deterministic Node script that reads from the existing code + .bin fixtures and writes `gamma-classes.ts` directly. Run from the repo root:
+The hex bytes are long (804 bytes × 3 classes = ~5KB) and copy-paste-prone to transcription errors. Instead, run a deterministic Node script that reads from the existing code + .bin fixtures and writes `gamma-classes.ts` directly. The `src/esci2/data/` directory does not exist yet — the script creates it. Run from the repo root:
 
 ```bash
 npx tsx --eval '
-import { writeFileSync, readFileSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdirSync } from "node:fs";
 import { buildParaFlatbedTls } from "./src/esci2/commands.ts";
+
+mkdirSync("src/esci2/data", { recursive: true });
 
 // ET-4950 stock — from the existing builder (which is what we are
 // preserving byte-for-byte). 928-byte body, gamma is offsets 60..864.
@@ -400,15 +402,17 @@ Expected: FAIL — module not found.
 
 - [ ] **Step 3: Generate the data module via a one-shot extraction script**
 
-Same pattern as Task 2. Run from the repo root:
+Same pattern as Task 2. The `src/esci2/data/` directory was created in Task 2 — the `mkdirSync` call here is idempotent (recursive: true). Run from the repo root:
 
 ```bash
 npx tsx --eval '
-import { writeFileSync, readFileSync } from "node:fs";
+import { writeFileSync, readFileSync, mkdirSync } from "node:fs";
 
 // ET-2750 #CMX is a fixed 24-byte literal — extract from buildParaFlatbedPlain
 // to keep the script self-verifying.
 import { buildParaFlatbedPlain } from "./src/esci2/commands.ts";
+
+mkdirSync("src/esci2/data", { recursive: true });
 const et2750 = buildParaFlatbedPlain().subarray(864, 888).toString("hex");
 
 const xpJpg = readFileSync("src/esci2/dialects/xp-7100-fixtures/jpg-flatbed.bin")
@@ -1392,15 +1396,19 @@ const paraPayload = composePara(makeParaSpec(ctx.entry!, paraSource, ctx.action)
    import { REGISTRY } from "./dialects/registry.js";
    ```
 
-2. The legacy per-dialect imports (`et4950FamilyDialect`, `et2750Dialect`, `et2950Dialect`) stay in place for now — those files still exist until Task 9. But every `dialect: <obj>` field in a `makeCtx()` call needs to become `entry: <obj-from-registry>`. Replace the four usages:
-   - `makeCtx({ dialect: et2750Dialect, initPollIteration: 0 })` → `makeCtx({ entry: REGISTRY.get(et2750Dialect.capaFingerprint)!, initPollIteration: 0 })`
-   - `makeCtx({ dialect: et2750Dialect, initPollIteration: 1 })` → same shape
-   - `dialect: et4950FamilyDialect` (around line 482) → `entry: REGISTRY.get(et4950FamilyDialect.capaFingerprint)!`
-   - `dialect: et2750Dialect` (around line 562) → same shape
+2. The legacy per-dialect imports (`et4950FamilyDialect`, `et2750Dialect`, `et2950Dialect`) stay in place for now — those files still exist until Task 9. Every `dialect: <obj>` field in a `makeCtx()` call needs to become `entry: REGISTRY.get(<obj>.capaFingerprint)!`. **There are seven occurrences** — sanity-check by running `grep -n "dialect:" src/esci2/graph.test.ts` and confirming you see seven matches. Replace each:
 
-   Also update `makeCtx()` itself: change the field name `dialect` → `entry` in its default and `Partial<Esci2Ctx>` typing.
+   - Line ~192 (`INIT_POLL_FIN loops` test): `makeCtx({ dialect: et2750Dialect, initPollIteration: 0 })` → `makeCtx({ entry: REGISTRY.get(et2750Dialect.capaFingerprint)!, initPollIteration: 0 })`
+   - Line ~205 (`INIT_POLL_FIN advances` test): same shape with `initPollIteration: 1`
+   - Line ~482 (fixture-replay describe): `dialect: et4950FamilyDialect,` → `entry: REGISTRY.get(et4950FamilyDialect.capaFingerprint)!,`
+   - Line ~562 (`skips source-detect override` test): `dialect: et2750Dialect,` → same shape
+   - Line ~583 (`applyDialectSourceOverride` describe, ET-2950 test): `makeCtx({ source: "adf", transport: "tls", dialect: et2950Dialect })` → `makeCtx({ source: "adf", transport: "tls", entry: REGISTRY.get(et2950Dialect.capaFingerprint)! })`
+   - Line ~589 (same describe, ET-2750 test): `dialect: et2750Dialect` → `entry: REGISTRY.get(et2750Dialect.capaFingerprint)!`
+   - Line ~595 (same describe, ET-4950 test): `dialect: et4950FamilyDialect` → `entry: REGISTRY.get(et4950FamilyDialect.capaFingerprint)!`
 
-3. Rewrite the `describe("applyDialectSourceOverride", …)` block (around line 572) as `describe("applyEntrySourceOverride", …)`, replacing every `applyDialectSourceOverride(ctx, <obj>)` with `applyEntrySourceOverride(ctx, REGISTRY.get(<obj>.capaFingerprint)!)`. The dialect-object references stay (still imports) — they're just used as fingerprint lookups now.
+   Also update `makeCtx()` itself: change the field name `dialect` → `entry` in its default initializer and any `Partial<Esci2Ctx>` typing.
+
+3. Rewrite the `describe("applyDialectSourceOverride", …)` block (around line 572) as `describe("applyEntrySourceOverride", …)`, replacing every `applyDialectSourceOverride(ctx, <obj>)` call with `applyEntrySourceOverride(ctx, REGISTRY.get(<obj>.capaFingerprint)!)`. The `makeCtx` calls inside this block are already covered by step 2 above (lines ~583, ~589, ~595). The dialect-object imports stay in place — they're just used as fingerprint lookups now, and get deleted in Task 9.
 
 After Task 9 deletes the dialect objects, those `.capaFingerprint` lookups stop working. Task 9 includes a follow-up step to replace them with inlined fingerprint constants. Don't pre-empt that here; the test file should compile and pass at the end of this task with the imports still in place.
 
