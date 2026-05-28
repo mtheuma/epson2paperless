@@ -270,70 +270,61 @@ npx vitest run src/esci2/data/gamma-classes.test.ts
 
 Expected: FAIL — module does not exist.
 
-- [ ] **Step 3: Implement the data module**
+- [ ] **Step 3: Generate the data module via a one-shot extraction script**
 
-```ts
-// src/esci2/data/gamma-classes.ts
-
-/**
- * Named gamma-LUT class definitions.
- *
- * Each class is the verbatim 804-byte sequence of three `#GMT{GRN,RED,BLU} h100`
- * segments (4-byte `#GMT` key + 8-byte channel/version + 256-byte LUT, ×3).
- * Bytes are captured from real-hardware fixtures — never algorithmically
- * generated.
- *
- * Important: the `et4950-stock` LUT is NOT a strict mathematical [0..255]
- * identity. GRN happens to be sequential, but RED skips 0x14 and duplicates
- * 0xc6; BLU duplicates 0x24 and skips 0xa6. These anomalies are present in
- * the captured Frida fixture and replay tests pin them. Do not "fix" them.
- */
-export type GammaClassName = "et4950-stock" | "xp7100-jpg" | "xp7100-pdf";
-
-const ET4950_STOCK_HEX = "<PASTE 1608 hex chars here — see step 3 instructions below>";
-const XP7100_JPG_HEX   = "<PASTE 1608 hex chars here — see step 3 instructions below>";
-const XP7100_PDF_HEX   = "<PASTE 1608 hex chars here — see step 3 instructions below>";
-
-export const GAMMA_CLASSES: Readonly<Record<GammaClassName, Buffer>> = {
-  "et4950-stock": Buffer.from(ET4950_STOCK_HEX, "hex"),
-  "xp7100-jpg":   Buffer.from(XP7100_JPG_HEX, "hex"),
-  "xp7100-pdf":   Buffer.from(XP7100_PDF_HEX, "hex"),
-};
-```
-
-**Filling in the three hex literals**:
-
-The XP-7100 fixtures already exist as committed `.bin` files at `src/esci2/dialects/xp-7100-fixtures/`. The ET-4950 bytes live as a hex literal in `src/esci2/commands.ts`'s `buildParaFlatbedTls()`. Use a small one-shot Node script to extract the gamma-segment bytes from each into base64 or hex you can paste — this is more reliable than hand-counting hex characters.
-
-Script (run from the repo root):
+The hex bytes are long (804 bytes × 3 classes = ~5KB) and copy-paste-prone to transcription errors. Instead, run a deterministic Node script that reads from the existing code + .bin fixtures and writes `gamma-classes.ts` directly. Run from the repo root:
 
 ```bash
-node -e '
-const fs = require("node:fs");
+npx tsx --eval '
+import { writeFileSync, readFileSync } from "node:fs";
+import { buildParaFlatbedTls } from "./src/esci2/commands.ts";
 
-// ET-4950 stock — extract from buildParaFlatbedTls hex literal in commands.ts.
-// Easiest: import commands.ts in a small TS shim, or just read the existing
-// buildParaFlatbedTls output by requiring the compiled dist. Simplest path:
-// build the project once, then:
-const { buildParaFlatbedTls } = require("./dist/esci2/commands.js");
-const et4950 = buildParaFlatbedTls();
-console.log("et4950-stock (804 bytes):", et4950.subarray(60, 864).toString("hex"));
+// ET-4950 stock — from the existing builder (which is what we are
+// preserving byte-for-byte). 928-byte body, gamma is offsets 60..864.
+const et4950 = buildParaFlatbedTls().subarray(60, 864).toString("hex");
 
-// XP-7100 from the .bin fixtures.
-const xpJpgBin = fs.readFileSync("src/esci2/dialects/xp-7100-fixtures/jpg-flatbed.bin");
-const xpPdfBin = fs.readFileSync("src/esci2/dialects/xp-7100-fixtures/pdf-single.bin");
-console.log("xp7100-jpg (804 bytes):", xpJpgBin.subarray(60, 864).toString("hex"));
-// pdf-single.bin is the ADF-simplex PDF capture. Its GMT segments are at
-// offsets 60..864 — same offsets as flatbed because #PAG is inserted AFTER
-// the LUTs, between #CMX and #ACQ. See xp-7100.test.ts:18-27 for the
-// pinned offset map.
-console.log("xp7100-pdf (804 bytes):", xpPdfBin.subarray(60, 864).toString("hex"));
+// XP-7100 — from committed binary fixtures.
+const xpJpg = readFileSync("src/esci2/dialects/xp-7100-fixtures/jpg-flatbed.bin")
+  .subarray(60, 864).toString("hex");
+const xpPdf = readFileSync("src/esci2/dialects/xp-7100-fixtures/pdf-single.bin")
+  .subarray(60, 864).toString("hex");
+
+// Sanity checks before writing.
+for (const [name, hex] of [["et4950-stock", et4950], ["xp7100-jpg", xpJpg], ["xp7100-pdf", xpPdf]]) {
+  if (hex.length !== 1608) throw new Error(`${name} extracted ${hex.length / 2} bytes, expected 804`);
+}
+
+const out = `// src/esci2/data/gamma-classes.ts
+//
+// AUTO-GENERATED-LITERAL data module. Hex bytes captured verbatim from:
+//   - et4950-stock: buildParaFlatbedTls() in commands.ts, offsets 60..864.
+//   - xp7100-jpg:   xp-7100-fixtures/jpg-flatbed.bin, offsets 60..864.
+//   - xp7100-pdf:   xp-7100-fixtures/pdf-single.bin, offsets 60..864.
+//
+// Each class is the 804-byte sequence of three #GMT{GRN,RED,BLU} h100 segments.
+//
+// Important: the et4950-stock LUT is NOT a strict mathematical [0..255]
+// identity — RED skips 0x14 and duplicates 0xc6; BLU duplicates 0x24 and
+// skips 0xa6. These anomalies are present in the captured Frida fixture
+// and replay tests pin them. Do not "fix" them.
+
+export type GammaClassName = "et4950-stock" | "xp7100-jpg" | "xp7100-pdf";
+
+export const GAMMA_CLASSES: Readonly<Record<GammaClassName, Buffer>> = {
+  "et4950-stock": Buffer.from("${et4950}", "hex"),
+  "xp7100-jpg":   Buffer.from("${xpJpg}", "hex"),
+  "xp7100-pdf":   Buffer.from("${xpPdf}", "hex"),
+};
+`;
+
+writeFileSync("src/esci2/data/gamma-classes.ts", out);
+console.log("Wrote src/esci2/data/gamma-classes.ts");
 '
 ```
 
-Paste each output into the corresponding `_HEX` constant. Each must be exactly 1608 hex chars (804 bytes); the tests in step 1 will fail loudly if not.
+The script runs through `tsx` so it imports directly from the TypeScript source — no need for a built `dist/`. It validates each hex length before writing and throws if anything is off. The resulting file has three Buffer.from() calls with the full 1608-character literals on a single line each.
 
-If `dist/` isn't built (e.g. fresh clone), either run `npm run build` first, or copy the `bodyHex` literal out of `commands.ts:87-117` and feed it to `Buffer.from(hex, "hex").subarray(60, 864)` in a one-off node REPL.
+Then run `npm run format` once so prettier line-wraps the long literals if desired (optional — `Buffer.from` doesn't care).
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -407,38 +398,49 @@ npx vitest run src/esci2/data/cmx-classes.test.ts
 
 Expected: FAIL — module not found.
 
-- [ ] **Step 3: Implement the module**
+- [ ] **Step 3: Generate the data module via a one-shot extraction script**
 
-```ts
-// src/esci2/data/cmx-classes.ts
+Same pattern as Task 2. Run from the repo root:
 
-/**
- * Named CMX-segment class definitions. Each class is the verbatim 24-byte
- * `#CMX…` segment from a captured fixture. Bytes are inlined as hex
- * literals — never algorithmically generated.
- */
+```bash
+npx tsx --eval '
+import { writeFileSync, readFileSync } from "node:fs";
+
+// ET-2750 #CMX is a fixed 24-byte literal — extract from buildParaFlatbedPlain
+// to keep the script self-verifying.
+import { buildParaFlatbedPlain } from "./src/esci2/commands.ts";
+const et2750 = buildParaFlatbedPlain().subarray(864, 888).toString("hex");
+
+const xpJpg = readFileSync("src/esci2/dialects/xp-7100-fixtures/jpg-flatbed.bin")
+  .subarray(864, 888).toString("hex");
+const xpPdf = readFileSync("src/esci2/dialects/xp-7100-fixtures/pdf-single.bin")
+  .subarray(864, 888).toString("hex");
+
+for (const [name, hex] of [["et2750-um08", et2750], ["xp7100-jpg", xpJpg], ["xp7100-pdf", xpPdf]]) {
+  if (hex.length !== 48) throw new Error(`${name} extracted ${hex.length / 2} bytes, expected 24`);
+}
+
+const out = `// src/esci2/data/cmx-classes.ts
+//
+// AUTO-GENERATED-LITERAL data module. Each class is the 24-byte #CMX...
+// segment captured verbatim from:
+//   - et2750-um08: buildParaFlatbedPlain() in commands.ts, offsets 864..888.
+//   - xp7100-jpg:  xp-7100-fixtures/jpg-flatbed.bin, offsets 864..888.
+//   - xp7100-pdf:  xp-7100-fixtures/pdf-single.bin, offsets 864..888.
+
 export type CmxClassName = "et2750-um08" | "xp7100-jpg" | "xp7100-pdf";
 
-// ET-2750 #CMX bytes — from buildParaFlatbedPlain in commands.ts, offsets 864..888.
-const ET2750_UM08_HEX = "23434d58554d303868303039200000002000000020000000";
-
-// XP-7100 #CMX bytes — extract from the .bin fixtures, offsets 864..888 of
-// each body. Each is 48 hex chars (24 bytes). Use the same extraction script
-// pattern as Task 2:
-//   node -e 'console.log(require("fs").readFileSync(
-//     "src/esci2/dialects/xp-7100-fixtures/jpg-flatbed.bin"
-//   ).subarray(864, 888).toString("hex"))'
-const XP7100_JPG_HEX = "<PASTE 48 hex chars: jpg-flatbed.bin bytes 864..888>";
-const XP7100_PDF_HEX = "<PASTE 48 hex chars: pdf-single.bin bytes 864..888>";
-
 export const CMX_CLASSES: Readonly<Record<CmxClassName, Buffer>> = {
-  "et2750-um08": Buffer.from(ET2750_UM08_HEX, "hex"),
-  "xp7100-jpg": Buffer.from(XP7100_JPG_HEX, "hex"),
-  "xp7100-pdf": Buffer.from(XP7100_PDF_HEX, "hex"),
+  "et2750-um08": Buffer.from("${et2750}", "hex"),
+  "xp7100-jpg":  Buffer.from("${xpJpg}", "hex"),
+  "xp7100-pdf":  Buffer.from("${xpPdf}", "hex"),
 };
-```
+`;
 
-Run the extraction script (per the comment block above the constants) and paste each 48-char hex sequence. Run the tests after pasting; size mismatch = wrong offset.
+writeFileSync("src/esci2/data/cmx-classes.ts", out);
+console.log("Wrote src/esci2/data/cmx-classes.ts");
+'
+```
 
 - [ ] **Step 4: Run tests to verify they pass**
 
@@ -1272,12 +1274,13 @@ git commit -m "feat(esci2): add dispatch helpers (lookup + override + makeParaSp
 
 ---
 
-### Task 7: Rewire `graph.ts` — INIT1_CAPA dispatch + PARA-build call site (single commit)
+### Task 7: Rewire `graph.ts` + `graph.test.ts` — INIT1_CAPA dispatch + PARA-build call site (single commit)
 
 **Files:**
 - Modify: `src/esci2/graph.ts`
+- Modify: `src/esci2/graph.test.ts` (renames + helper-rebind)
 
-This is the surgery: replace `lookupDialect` + `applyDialectSourceOverride` + `ctx.dialect!.buildPara(...)` with the new pipeline in one cohesive commit. We do not commit between sub-steps because intermediate states would leave the suite red.
+This is the surgery: replace `lookupDialect` + `applyDialectSourceOverride` + `ctx.dialect!.buildPara(...)` with the new pipeline AND update the graph unit tests in the same commit. We do not commit between sub-steps because `ctx.dialect`/`ctx.entry` rename + `applyDialectSourceOverride` deletion would leave the suite red mid-task otherwise.
 
 **Steps:**
 
@@ -1303,39 +1306,45 @@ Around `graph.ts:83-87` the file defines `applyDialectSourceOverride`. Delete th
 
 - [ ] **Step 3: Update the INIT1_CAPA handler**
 
-Find the INIT1_CAPA_DATA handler (around `graph.ts:318` — the block that calls `lookupDialect` and sets `ctx.dialect`). The current code is:
+Find the INIT1_CAPA two-phase-read callback (around `graph.ts:307-333` — the `(ctx, body) => { … }` block passed to `twoPhaseRead`). **The callback parameter is named `body`, not `packet.payload`** — there is no `packet` in scope at this layer. The current code is:
 
 ```ts
-const fingerprint = computeCapaFingerprint(packet.payload);
-const dialect = lookupDialect(fingerprint);
-if (dialect === null) {
-  const diagnostic = buildDiagnostic({
-    capaBody: packet.payload,
-    infoBody: ctx.infoBody,
-    transport: ctx.transport,
-    fingerprint,
-  });
-  return { error: new UnsupportedDialectError(fingerprint, diagnostic) };
+(ctx, body) => {
+  ctx.capaBody = body;
+  const fingerprint = computeCapaFingerprint(body);
+  const dialect = lookupDialect(fingerprint);
+  if (dialect === null) {
+    const diagnostic = buildDiagnostic({
+      capaBody: ctx.capaBody,
+      infoBody: ctx.infoBody,
+      transport: ctx.transport,
+      fingerprint,
+    });
+    return { error: new UnsupportedDialectError(fingerprint, diagnostic) };
+  }
+  ctx.dialect = dialect;
+  log.debug("Dialect resolved", { name: dialect.displayName, fingerprint });
+  applyDialectSourceOverride(ctx, dialect);
 }
-ctx.dialect = dialect;
-log.debug("Dialect resolved", { name: dialect.displayName, fingerprint });
-applyDialectSourceOverride(ctx, dialect);
 ```
 
 Replace with:
 
 ```ts
-const fingerprint = computeCapaFingerprint(packet.payload);
-try {
-  ctx.entry = lookupRegistryEntry(fingerprint, packet.payload, ctx.infoBody, ctx.transport);
-} catch (err) {
-  return { error: err as Error };
+(ctx, body) => {
+  ctx.capaBody = body;
+  const fingerprint = computeCapaFingerprint(body);
+  try {
+    ctx.entry = lookupRegistryEntry(fingerprint, ctx.capaBody, ctx.infoBody, ctx.transport);
+  } catch (err) {
+    return { error: err as Error };
+  }
+  log.debug("Dialect resolved", { name: ctx.entry.displayName, fingerprint });
+  applyEntrySourceOverride(ctx, ctx.entry);
 }
-log.debug("Dialect resolved", { name: ctx.entry.displayName, fingerprint });
-applyEntrySourceOverride(ctx, ctx.entry);
 ```
 
-Note: the `log.debug("Dialect resolved", …)` line is preserved — traces stay self-documenting. Also remove the now-unused `lookupDialect`, `buildDiagnostic`, `UnsupportedDialectError` imports from the top of `graph.ts` if they're no longer used by other handlers.
+The `log.debug("Dialect resolved", …)` line is preserved — traces stay self-documenting. Also remove the now-unused `lookupDialect`, `buildDiagnostic`, `UnsupportedDialectError` imports from the top of `graph.ts` if no other handler uses them.
 
 - [ ] **Step 4: Update init-poll handler references**
 
@@ -1368,7 +1377,34 @@ const paraSource: ParaSpec["source"] =
 const paraPayload = composePara(makeParaSpec(ctx.entry!, paraSource, ctx.action));
 ```
 
-- [ ] **Step 6: Run the full esci2 suite — the moment of truth**
+- [ ] **Step 6: Update `graph.test.ts` to track the rename and helper deletion**
+
+`graph.test.ts` imports `applyDialectSourceOverride` from `graph.js` and threads `dialect:` overrides through its `makeCtx()` helper. After steps 2-4 above the suite would go red until this file is updated. Make these changes:
+
+1. Replace the top-level import line:
+   ```ts
+   import { esci2Graph, ESCI2_TIMEOUT_MS, applyDialectSourceOverride } from "./graph.js";
+   ```
+   with:
+   ```ts
+   import { esci2Graph, ESCI2_TIMEOUT_MS } from "./graph.js";
+   import { applyEntrySourceOverride } from "./dialects/dispatch.js";
+   import { REGISTRY } from "./dialects/registry.js";
+   ```
+
+2. The legacy per-dialect imports (`et4950FamilyDialect`, `et2750Dialect`, `et2950Dialect`) stay in place for now — those files still exist until Task 9. But every `dialect: <obj>` field in a `makeCtx()` call needs to become `entry: <obj-from-registry>`. Replace the four usages:
+   - `makeCtx({ dialect: et2750Dialect, initPollIteration: 0 })` → `makeCtx({ entry: REGISTRY.get(et2750Dialect.capaFingerprint)!, initPollIteration: 0 })`
+   - `makeCtx({ dialect: et2750Dialect, initPollIteration: 1 })` → same shape
+   - `dialect: et4950FamilyDialect` (around line 482) → `entry: REGISTRY.get(et4950FamilyDialect.capaFingerprint)!`
+   - `dialect: et2750Dialect` (around line 562) → same shape
+
+   Also update `makeCtx()` itself: change the field name `dialect` → `entry` in its default and `Partial<Esci2Ctx>` typing.
+
+3. Rewrite the `describe("applyDialectSourceOverride", …)` block (around line 572) as `describe("applyEntrySourceOverride", …)`, replacing every `applyDialectSourceOverride(ctx, <obj>)` with `applyEntrySourceOverride(ctx, REGISTRY.get(<obj>.capaFingerprint)!)`. The dialect-object references stay (still imports) — they're just used as fingerprint lookups now.
+
+After Task 9 deletes the dialect objects, those `.capaFingerprint` lookups stop working. Task 9 includes a follow-up step to replace them with inlined fingerprint constants. Don't pre-empt that here; the test file should compile and pass at the end of this task with the imports still in place.
+
+- [ ] **Step 7: Run the full esci2 suite — the moment of truth**
 
 ```
 npx vitest run src/esci2/ --reporter=verbose
@@ -1382,10 +1418,10 @@ Common causes of replay test failures at this point:
 - Token spelling (e.g. accidentally typed `#QIT OFF ` with a space).
 - Extents mismatch in a registry entry.
 
-- [ ] **Step 7: Commit**
+- [ ] **Step 8: Commit**
 
 ```
-git add src/esci2/graph.ts
+git add src/esci2/graph.ts src/esci2/graph.test.ts
 git commit -m "refactor(esci2): rewire graph dispatch to use composePara + registry"
 ```
 
@@ -1616,7 +1652,7 @@ git commit -m "test(esci2): retarget per-dialect tests at the registry-driven pi
 
 ---
 
-### Task 9: Delete the old dialect files and legacy `buildPara*` helpers
+### Task 9: Delete the old dialect files, legacy `buildPara*` helpers, and stale test fixtures
 
 **Files:**
 - Delete: `src/esci2/dialects/et-4950-family.ts`
@@ -1626,6 +1662,9 @@ git commit -m "test(esci2): retarget per-dialect tests at the registry-driven pi
 - Delete: `src/esci2/dialect-registry.ts`
 - Delete: `src/esci2/dialect-registry.test.ts` (its diagnostic tests moved to `diagnostic.test.ts` in Task 1; its lookup/registry tests are superseded by `registry.test.ts` from Task 5; nothing of value remains)
 - Modify: `src/esci2/commands.ts` (remove `buildParaAdf`, `buildParaFlatbedTls`, `buildParaFlatbedPlain`)
+- Modify: `src/esci2/commands.test.ts` (remove the `describe("buildParaAdf", …)`, `describe("buildParaFlatbedTls", …)`, and `describe("buildParaFlatbedPlain", …)` blocks; keep the buildFsY/X/Z, buildEsci2Command, buildParaHeader, parseEsci2ReplyHeader, parseTokens blocks)
+- Modify: `src/esci2/scanner.test.ts` (replace the `xp7100Dialect.buildPara(...)` recipe cross-check at line ~1182 with `composePara(makeParaSpec(...))`; update the import at line 13)
+- Modify: `src/esci2/graph.test.ts` (replace `<dialect-obj>.capaFingerprint` references introduced in Task 7 with inlined fingerprint string constants; drop the now-unused `et4950FamilyDialect`, `et2750Dialect`, `et2950Dialect` imports)
 - Modify: `src/esci2/dialect.ts` (trim/remove the old `Dialect` interface and `ParaAxes`; keep the `UnsupportedDialectError` re-export from Task 1 unless nothing imports it from this path)
 
 **Steps:**
@@ -1641,7 +1680,7 @@ git rm src/esci2/dialect-registry.ts
 git rm src/esci2/dialect-registry.test.ts
 ```
 
-- [ ] **Step 2: Remove the legacy builders from `commands.ts`**
+- [ ] **Step 2: Remove the legacy builders from `commands.ts` and their tests from `commands.test.ts`**
 
 Open `src/esci2/commands.ts`. Find and delete:
 
@@ -1652,6 +1691,68 @@ Open `src/esci2/commands.ts`. Find and delete:
 Plus their leading doc comments and any `// Blob transcribed from ...` headers.
 
 Keep `buildEsci2Command`, `buildParaHeader`, `parseEsci2ReplyHeader`, and any other helpers — they're still used.
+
+Then open `src/esci2/commands.test.ts` and delete:
+
+- The `describe("buildParaAdf", …)` block (~lines 63-141).
+- The `describe("buildParaFlatbedTls", …)` block (~lines 143-195).
+- The `describe("buildParaFlatbedPlain", …)` block (~lines 197-272).
+- The `buildParaAdf`, `buildParaFlatbedTls`, `buildParaFlatbedPlain` names from the top-level import (lines 3-12).
+
+Keep all other describe blocks (buildFsY/X/Z, buildEsci2Command, buildParaHeader, parseEsci2ReplyHeader, parseTokens) — they test surviving functions.
+
+- [ ] **Step 2b: Update `scanner.test.ts` cross-check**
+
+`scanner.test.ts:1178-1187` cross-checks captured XP-7100 PARA against `xp7100Dialect.buildPara(...)`. Replace the recipe call with the new pipeline.
+
+At line 13, replace:
+```ts
+import { xp7100Dialect } from "./dialects/xp-7100.js";
+```
+with:
+```ts
+import { REGISTRY } from "./dialects/registry.js";
+import { makeParaSpec } from "./dialects/dispatch.js";
+import { composePara, type ParaSpec } from "./para-composer.js";
+
+const XP7100_FP = "56d26c61896ca417807ac68d37775036fa1e702ee44c0beaa27d8a6ea9fa457e";
+```
+
+At line 1182, replace:
+```ts
+const recipePara = xp7100Dialect.buildPara({
+  source: opts.source,
+  duplex: opts.duplex,
+  action: "jpg",
+});
+```
+with:
+```ts
+const paraSource: ParaSpec["source"] =
+  opts.source === "flatbed"
+    ? "flatbed"
+    : opts.duplex
+      ? "adf-duplex"
+      : "adf-simplex";
+const recipePara = composePara(
+  makeParaSpec(REGISTRY.get(XP7100_FP)!, paraSource, "jpg"),
+);
+```
+
+- [ ] **Step 2c: Update `graph.test.ts` to drop the deleted-dialect-object imports**
+
+Task 7 left `graph.test.ts` using `<dialect-obj>.capaFingerprint` for registry lookup. Now that the dialect objects are deleted, replace those lookups with the literal fingerprint strings:
+
+- Replace `REGISTRY.get(et4950FamilyDialect.capaFingerprint)!` with `REGISTRY.get("2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2")!`
+- Replace `REGISTRY.get(et2750Dialect.capaFingerprint)!` with `REGISTRY.get("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7")!`
+- Replace `REGISTRY.get(et2950Dialect.capaFingerprint)!` with `REGISTRY.get("b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb")!`
+
+Then drop the now-unused imports:
+```ts
+import { et4950FamilyDialect } from "./dialects/et-4950-family.js";
+import { et2750Dialect } from "./dialects/et-2750.js";
+import { et2950Dialect } from "./dialects/et-2950.js";
+```
 
 - [ ] **Step 3: Trim `dialect.ts`**
 
