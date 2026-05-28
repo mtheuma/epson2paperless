@@ -663,7 +663,7 @@ describe("composePara — extents (#ACQ rendering)", () => {
     });
     const off = findSegmentOffset(body, "#ACQ");
     expect(off).toBeGreaterThan(0);
-    expect(body.subarray(off, off + 40).toString("ascii")).toBe(
+    expect(body.subarray(off, off + 36).toString("ascii")).toBe(
       "#ACQi0000000i0000000i0002481i0003506",
     );
   });
@@ -675,7 +675,7 @@ describe("composePara — extents (#ACQ rendering)", () => {
       adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
     });
     const off = findSegmentOffset(body, "#ACQ");
-    expect(body.subarray(off, off + 40).toString("ascii")).toBe(
+    expect(body.subarray(off, off + 36).toString("ascii")).toBe(
       "#ACQi0000069i0000000i0002481i0003506",
     );
   });
@@ -686,7 +686,7 @@ describe("composePara — extents (#ACQ rendering)", () => {
       fbExtents: { x0: 12345, y0: 6789, w: 100, h: 9999999 },
     });
     const off = findSegmentOffset(body, "#ACQ");
-    expect(body.subarray(off, off + 40).toString("ascii")).toBe(
+    expect(body.subarray(off, off + 36).toString("ascii")).toBe(
       "#ACQi0012345i0006789i0000100i9999999",
     );
   });
