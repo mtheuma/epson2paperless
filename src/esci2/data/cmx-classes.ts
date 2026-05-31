@@ -2,7 +2,7 @@
 //
 // AUTO-GENERATED-LITERAL data module. Each class is the 24-byte #CMX...
 // segment captured verbatim from:
-//   - et2750-um08: buildParaFlatbedPlain() in commands.ts, offsets 864..888.
+//   - et2750-um08: tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl, PARA body offsets 864..888.
 //   - xp7100-jpg:  xp-7100-fixtures/jpg-flatbed.bin, offsets 864..888.
 //   - xp7100-pdf:  xp-7100-fixtures/pdf-single.bin, offsets 864..888.
 

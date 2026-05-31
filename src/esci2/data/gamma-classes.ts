@@ -1,7 +1,7 @@
 // src/esci2/data/gamma-classes.ts
 //
 // AUTO-GENERATED-LITERAL data module. Hex bytes captured verbatim from:
-//   - et4950-stock: buildParaFlatbedTls() in commands.ts, offsets 60..864.
+//   - et4950-stock: tools/frida-capture/captures/2026-04-24T09-05-08-flatbed-1p-jpg.jsonl, PARA body offsets 60..864.
 //   - xp7100-jpg:   xp-7100-fixtures/jpg-flatbed.bin, offsets 60..864.
 //   - xp7100-pdf:   xp-7100-fixtures/pdf-single.bin, offsets 60..864.
 //

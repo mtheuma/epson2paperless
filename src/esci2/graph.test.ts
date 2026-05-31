@@ -3,9 +3,6 @@ import { esci2Graph, ESCI2_TIMEOUT_MS } from "./graph.js";
 import { applyEntrySourceOverride } from "./dialects/dispatch.js";
 import { REGISTRY } from "./dialects/registry.js";
 import { IS_HEADER_SIZE, buildPurereadPacket } from "../protocol.js";
-import { et4950FamilyDialect } from "./dialects/et-4950-family.js";
-import { et2750Dialect } from "./dialects/et-2750.js";
-import { et2950Dialect } from "./dialects/et-2950.js";
 
 describe("esci2Graph (smoke)", () => {
   it("builds with the expected initial state and timeout", () => {
@@ -192,7 +189,7 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
     // ET-2750 host driver only loops twice. After the first FIN reply,
     // iteration goes 0 → 1 (still < dialect.initPollIterations=2), so loop.
     const ctx = makeCtx({
-      entry: REGISTRY.get(et2750Dialect.capaFingerprint)!,
+      entry: REGISTRY.get("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7")!,
       initPollIteration: 0,
     });
     const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
@@ -208,7 +205,7 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
     // Sending a third FS Y after the printer has moved on returns a non-ACK
     // that fails MODE_SWITCH validation, so this cap is load-bearing.
     const ctx = makeCtx({
-      entry: REGISTRY.get(et2750Dialect.capaFingerprint)!,
+      entry: REGISTRY.get("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7")!,
       initPollIteration: 1,
     });
     const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
@@ -487,7 +484,7 @@ function makeCtx(
     tprDeclaredLength: 0,
     infoBody: Buffer.alloc(0),
     capaBody: Buffer.alloc(0),
-    entry: REGISTRY.get(et4950FamilyDialect.capaFingerprint)!,
+    entry: REGISTRY.get("2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2")!,
     ...overrides,
   };
 }
@@ -567,7 +564,7 @@ describe("esci2Graph INIT_POLL_STAT source detection", () => {
     // misclassify ET-2750 as ADF — the fixed-flatbed dialect must skip
     // detection and trust the pre-set source.
     const ctx = makeCtx({
-      entry: REGISTRY.get(et2750Dialect.capaFingerprint)!,
+      entry: REGISTRY.get("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7")!,
       source: "flatbed",
       initPollIteration: 0,
     });
@@ -591,9 +588,12 @@ describe("applyEntrySourceOverride", () => {
     const ctx = makeCtx({
       source: "adf",
       transport: "tls",
-      entry: REGISTRY.get(et2950Dialect.capaFingerprint)!,
+      entry: REGISTRY.get("b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb")!,
     });
-    applyEntrySourceOverride(ctx, REGISTRY.get(et2950Dialect.capaFingerprint)!);
+    applyEntrySourceOverride(
+      ctx,
+      REGISTRY.get("b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb")!,
+    );
     expect(ctx.source).toBe("flatbed");
   });
 
@@ -601,9 +601,12 @@ describe("applyEntrySourceOverride", () => {
     const ctx = makeCtx({
       source: "flatbed",
       transport: "plain",
-      entry: REGISTRY.get(et2750Dialect.capaFingerprint)!,
+      entry: REGISTRY.get("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7")!,
     });
-    applyEntrySourceOverride(ctx, REGISTRY.get(et2750Dialect.capaFingerprint)!);
+    applyEntrySourceOverride(
+      ctx,
+      REGISTRY.get("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7")!,
+    );
     expect(ctx.source).toBe("flatbed");
   });
 
@@ -611,9 +614,12 @@ describe("applyEntrySourceOverride", () => {
     const ctx = makeCtx({
       source: "adf",
       transport: "tls",
-      entry: REGISTRY.get(et4950FamilyDialect.capaFingerprint)!,
+      entry: REGISTRY.get("2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2")!,
     });
-    applyEntrySourceOverride(ctx, REGISTRY.get(et4950FamilyDialect.capaFingerprint)!);
+    applyEntrySourceOverride(
+      ctx,
+      REGISTRY.get("2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2")!,
+    );
     expect(ctx.source).toBe("adf");
   });
 });
