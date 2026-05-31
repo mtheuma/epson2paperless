@@ -1110,6 +1110,15 @@ describe("runEsci2ScanOverPlain — ET-2750 fixture replay", () => {
     );
     await driveFixture(fixture, fake, sessionPromise);
 
+    // Byte-equivalence shield: assert the scanner's PARA wire bytes match
+    // what the captured Wireshark session sent. Without this, driveFixture
+    // replays the printer's responses regardless of what PARA the scanner
+    // emitted, so a composer regression on ET-2750 would not fail this test.
+    // Mirrors the XP-7100 replay pattern at line ~1173 of this file.
+    const capturedPara = extractCapturedParaBody(fixture);
+    const scannerPara = extractScannerParaWrite(fake);
+    expect(scannerPara.equals(capturedPara)).toBe(true);
+
     // Wait briefly for the async PDF compose chain (setImmediate hop in
     // doFinalize → composePdfFromJpegs).
     for (
