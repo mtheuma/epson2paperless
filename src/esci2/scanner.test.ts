@@ -1227,3 +1227,98 @@ describe("runEsci2ScanOverPlain — XP-7100 fixture replay", () => {
     expect(jpgs).toHaveLength(2); // duplex → front + back
   }, 60_000);
 });
+
+const ET4800_FP = "7870a725ab969136d5eb04387bf01d3cc3168aabb3d11cfaca7d59a4169971c2";
+
+describe("runEsci2ScanOverPlain — ET-4800 fixture replay", () => {
+  let outputDir: string;
+  let tempDir: string;
+
+  beforeEach(() => {
+    outputDir = mkdtempSync(path.join(os.tmpdir(), "et4800-out-"));
+    tempDir = mkdtempSync(path.join(os.tmpdir(), "et4800-tmp-"));
+  });
+
+  afterEach(() => {
+    rmSync(outputDir, { recursive: true, force: true });
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const FIX_DIR = path.join("tools", "pcap-extract", "captures", "et-4800");
+
+  async function runOne(opts: {
+    fixtureFile: string;
+    source: "flatbed" | "adf";
+    action: "jpg" | "pdf";
+  }) {
+    const fixture = loadFixture(path.join(FIX_DIR, opts.fixtureFile));
+    const fake = new FakePlainSocket();
+    const sessionPromise = runEsci2ScanOverPlain(
+      {
+        printerIp: "192.168.27.230",
+        port: 1865,
+        destId: 0x02,
+        outputDir,
+        tempDir,
+        duplex: false,
+        action: opts.action,
+      },
+      fake.asFactory(),
+    );
+    await driveFixture(fixture, fake, sessionPromise);
+
+    // Byte-equivalence shield: the scanner's PARA wire bytes must match the
+    // captured Wireshark session. Without this, driveFixture replays the
+    // printer's responses regardless of what PARA the scanner emitted, so a
+    // composer/registry/class-data regression would not fail this test.
+    // Mirrors the ET-2750 and XP-7100 replays.
+    const capturedPara = extractCapturedParaBody(fixture);
+    const scannerPara = extractScannerParaWrite(fake);
+    expect(scannerPara.equals(capturedPara)).toBe(true);
+
+    // Cross-check that the scanner auto-detected the correct source via the
+    // stat-length heuristic: the captured PARA equals what the composer builds
+    // for that source axis (ET-4800 PARA is action-invariant, so action only
+    // selects identical gamma/cmx classes here).
+    const paraSource: ParaSpec["source"] = opts.source === "flatbed" ? "flatbed" : "adf-simplex";
+    const recipePara = composePara(makeParaSpec(REGISTRY.get(ET4800_FP)!, paraSource, opts.action));
+    expect(capturedPara.equals(recipePara)).toBe(true);
+
+    return readdirSync(outputDir);
+  }
+
+  it("flatbed JPG", async () => {
+    const files = await runOne({ fixtureFile: "flatbed-jpg.jsonl", source: "flatbed", action: "jpg" });
+    expect(files.filter((f) => f.endsWith(".jpg")).length).toBe(1);
+  }, 60_000);
+
+  it("flatbed PDF", async () => {
+    await runOne({ fixtureFile: "flatbed-pdf.jsonl", source: "flatbed", action: "pdf" });
+    // PDF compose chain is async (setImmediate hop) — poll briefly.
+    for (
+      let i = 0;
+      i < 50 && readdirSync(outputDir).filter((f) => f.endsWith(".pdf")).length === 0;
+      i++
+    ) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(readdirSync(outputDir).filter((f) => f.endsWith(".pdf")).length).toBe(1);
+  }, 60_000);
+
+  it("ADF JPG", async () => {
+    const files = await runOne({ fixtureFile: "adf-jpg.jsonl", source: "adf", action: "jpg" });
+    expect(files.filter((f) => f.endsWith(".jpg")).length).toBe(1);
+  }, 60_000);
+
+  it("ADF PDF", async () => {
+    await runOne({ fixtureFile: "adf-pdf.jsonl", source: "adf", action: "pdf" });
+    for (
+      let i = 0;
+      i < 50 && readdirSync(outputDir).filter((f) => f.endsWith(".pdf")).length === 0;
+      i++
+    ) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(readdirSync(outputDir).filter((f) => f.endsWith(".pdf")).length).toBe(1);
+  }, 60_000);
+});
