@@ -70,4 +70,18 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       optionalSegments: { qit: true, cct: true },
     },
   ],
+  [
+    "7870a725ab969136d5eb04387bf01d3cc3168aabb3d11cfaca7d59a4169971c2",
+    {
+      displayName: "ET-4800 (ESC/I-2 over plain TCP)",
+      sourceDetection: "stat-length",
+      initPollIterations: 3, // same as ET-4950 family; fixtures trimmed to 3 cycles
+      fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
+      adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
+      gmm: "UG18",
+      gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
+      cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
+      optionalSegments: { qit: false, cct: false },
+    },
+  ],
 ]);
