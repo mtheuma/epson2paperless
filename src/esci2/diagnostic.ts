@@ -5,8 +5,8 @@ import { parseCapaTokens, parseInfoTokens } from "./capabilities.js";
  * in the registry. Carries enough context for the user to file an issue
  * that the maintainer can act on.
  *
- * Relocated from dialect.ts to live next to the diagnostic-block renderer.
- * dialect.ts re-exports for backward compatibility.
+ * Lives next to the diagnostic-block renderer it's thrown with. (Originally
+ * declared in the now-deleted dialect.ts.)
  */
 export class UnsupportedDialectError extends Error {
   constructor(

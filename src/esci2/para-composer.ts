@@ -52,8 +52,15 @@ function validate(spec: ParaSpec): void {
   const checkExtents = (name: string, e: Extents | null): void => {
     if (e === null) return;
     for (const k of ["x0", "y0", "w", "h"] as const) {
-      if (!Number.isInteger(e[k]) || e[k] < 0) {
-        throw new Error(`composePara: ${name}.${k}=${e[k]} must be a non-negative integer`);
+      // #ACQ renders each value as a fixed-width 7-digit field (i%07d), so the
+      // valid range is 0..9999999. Values >= 1e7 would silently widen the field
+      // and desync every byte offset after #ACQ — reject them here, where the
+      // error path already exists, rather than letting renderAcq emit a
+      // malformed segment.
+      if (!Number.isInteger(e[k]) || e[k] < 0 || e[k] > 9_999_999) {
+        throw new Error(
+          `composePara: ${name}.${k}=${e[k]} must be a non-negative integer in 0..9999999`,
+        );
       }
     }
   };

@@ -250,6 +250,28 @@ describe("composePara — validation", () => {
     ).toThrow(/extent/i);
   });
 
+  it("throws when an extent value exceeds the 7-digit #ACQ field width", () => {
+    // 10_000_000 is the first value that no longer fits i%07d; rendering it
+    // would widen #ACQ by a byte and desync all following segment offsets.
+    expect(() =>
+      composePara({
+        ...baselineSpec(),
+        fbExtents: { x0: 0, y0: 0, w: 100, h: 10_000_000 },
+      }),
+    ).toThrow(/extent/i);
+  });
+
+  it("accepts the maximum 7-digit extent value (9999999)", () => {
+    const body = composePara({
+      ...baselineSpec(),
+      fbExtents: { x0: 0, y0: 0, w: 100, h: 9_999_999 },
+    });
+    const off = body.indexOf(Buffer.from("#ACQ", "ascii"));
+    expect(body.subarray(off, off + 36).toString("ascii")).toBe(
+      "#ACQi0000000i0000000i0000100i9999999",
+    );
+  });
+
   it("throws when gammaClass name is missing from GAMMA_CLASSES", () => {
     expect(() =>
       composePara({
