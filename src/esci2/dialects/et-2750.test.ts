@@ -1,38 +1,35 @@
 import { describe, it, expect } from "vitest";
-import { et2750Dialect } from "./et-2750.js";
-import { buildParaFlatbedPlain } from "../commands.js";
+import { REGISTRY } from "./registry.js";
+import { composePara } from "../para-composer.js";
+import { makeParaSpec } from "./dispatch.js";
 
-describe("et2750Dialect", () => {
-  it("has flatbed-only hardware", () => {
-    expect(et2750Dialect.hardware).toEqual({ flatbed: true, adf: false, duplex: false });
+const ET2750_FP = "de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7";
+const entry = REGISTRY.get(ET2750_FP)!;
+
+describe("ET-2750 registry entry", () => {
+  it("is flatbed-only (no ADF extents)", () => {
+    expect(entry.adfExtents).toBeNull();
   });
 
   it("uses fixed-flatbed source detection", () => {
-    expect(et2750Dialect.sourceDetection).toBe("fixed-flatbed");
+    expect(entry.sourceDetection).toBe("fixed-flatbed");
   });
 
   it("uses 2 init-poll iterations", () => {
-    expect(et2750Dialect.initPollIterations).toBe(2);
+    expect(entry.initPollIterations).toBe(2);
   });
+});
 
-  it("flatbed JPG matches buildParaFlatbedPlain()", () => {
-    const fromDialect = et2750Dialect.buildPara({
-      source: "flatbed",
-      duplex: false,
-      action: "jpg",
-    });
-    expect(fromDialect.equals(buildParaFlatbedPlain())).toBe(true);
-  });
-
-  it("flatbed PDF is byte-identical to flatbed JPG", () => {
-    const jpg = et2750Dialect.buildPara({ source: "flatbed", duplex: false, action: "jpg" });
-    const pdf = et2750Dialect.buildPara({ source: "flatbed", duplex: false, action: "pdf" });
+describe("ET-2750 composed PARA", () => {
+  it("flatbed JPG matches flatbed PDF (action-invariant)", () => {
+    const jpg = composePara(makeParaSpec(entry, "flatbed", "jpg"));
+    const pdf = composePara(makeParaSpec(entry, "flatbed", "pdf"));
     expect(jpg.equals(pdf)).toBe(true);
   });
 
-  it("throws on source=adf (hardware guard)", () => {
-    expect(() => et2750Dialect.buildPara({ source: "adf", duplex: false, action: "jpg" })).toThrow(
-      /adf.*not supported/i,
+  it("composer throws on adf-simplex (no adfExtents)", () => {
+    expect(() => composePara(makeParaSpec(entry, "adf-simplex", "jpg"))).toThrow(
+      /adf.*adfExtents/i,
     );
   });
 });

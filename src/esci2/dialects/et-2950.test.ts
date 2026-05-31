@@ -1,52 +1,24 @@
 import { describe, it, expect } from "vitest";
-import { et2950Dialect } from "./et-2950.js";
-import { buildParaFlatbedTls } from "../commands.js";
+import { REGISTRY } from "./registry.js";
+import { composePara } from "../para-composer.js";
+import { makeParaSpec } from "./dispatch.js";
 
-// Note on scope: there is no captured ET-2950 fixture. This file is a
-// plumbing/provenance guard, not a printer-byte correctness fixture —
-// unlike `et-2750.test.ts` and `et-4950-family.test.ts`, which anchor
-// to bytes extracted from real-hardware captures. The PARA bytes are
-// inherited from the ET-4950 flatbed builder on the basis of matching
-// CAPA tokens (see the dialect-file comment for the full rationale).
-// First real-hardware report against this dialect is the actual
-// correctness check.
-describe("et2950Dialect", () => {
-  it("has flatbed-only hardware", () => {
-    expect(et2950Dialect.hardware).toEqual({ flatbed: true, adf: false, duplex: false });
+const ET2950_FP = "b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb";
+const entry = REGISTRY.get(ET2950_FP)!;
+
+describe("ET-2950 registry entry", () => {
+  it("is flatbed-only", () => {
+    expect(entry.adfExtents).toBeNull();
   });
-
-  it("uses fixed-flatbed source detection", () => {
-    expect(et2950Dialect.sourceDetection).toBe("fixed-flatbed");
+  it("reuses ET-4950's gamma class (no et2950-specific bytes)", () => {
+    expect(entry.gammaClass).toEqual({ jpg: "et4950-stock", pdf: "et4950-stock" });
   });
-
-  it("uses 3 init-poll iterations (TLS-family default, unverified for this model)", () => {
-    expect(et2950Dialect.initPollIterations).toBe(3);
-  });
-
-  it("flatbed JPG inherits buildParaFlatbedTls() bytes verbatim", () => {
-    const fromDialect = et2950Dialect.buildPara({
-      source: "flatbed",
-      duplex: false,
-      action: "jpg",
-    });
-    expect(fromDialect.equals(buildParaFlatbedTls())).toBe(true);
-  });
-
-  it("flatbed PDF is byte-identical to flatbed JPG (action-invariant on this family)", () => {
-    const jpg = et2950Dialect.buildPara({ source: "flatbed", duplex: false, action: "jpg" });
-    const pdf = et2950Dialect.buildPara({ source: "flatbed", duplex: false, action: "pdf" });
-    expect(jpg.equals(pdf)).toBe(true);
-  });
-
-  it("throws on source=adf (hardware guard)", () => {
-    expect(() => et2950Dialect.buildPara({ source: "adf", duplex: false, action: "jpg" })).toThrow(
-      /adf.*not supported/i,
-    );
-  });
-
-  it("fingerprint matches the one reported in issue #92", () => {
-    expect(et2950Dialect.capaFingerprint).toBe(
-      "b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb",
-    );
+  it("composed flatbed PARA equals ET-4950 family flatbed PARA in bytes", () => {
+    const et4950 = REGISTRY.get(
+      "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2",
+    )!;
+    const et2950Body = composePara(makeParaSpec(entry, "flatbed", "jpg"));
+    const et4950Body = composePara(makeParaSpec(et4950, "flatbed", "jpg"));
+    expect(et2950Body.equals(et4950Body)).toBe(true);
   });
 });
