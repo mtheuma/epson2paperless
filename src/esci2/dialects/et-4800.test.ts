@@ -6,33 +6,9 @@ import { makeParaSpec } from "./dispatch.js";
 const ET4800_FP = "7870a725ab969136d5eb04387bf01d3cc3168aabb3d11cfaca7d59a4169971c2";
 const entry = REGISTRY.get(ET4800_FP)!;
 
-describe("ET-4800 registry entry", () => {
-  it("supports flatbed + ADF simplex (non-null ADF extents, no duplex hardware)", () => {
-    expect(entry.adfExtents).not.toBeNull();
-    expect(entry.adfExtents).toEqual({ x0: 69, y0: 0, w: 2481, h: 3506 });
-  });
-
-  it("uses stat-length source detection (paper-presence based)", () => {
-    expect(entry.sourceDetection).toBe("stat-length");
-  });
-
-  it("uses 3 init-poll iterations (ET-4950 recipe)", () => {
-    expect(entry.initPollIterations).toBe(3);
-  });
-
-  it("uses the UG18 gamma constant", () => {
-    expect(entry.gmm).toBe("UG18");
-  });
-
-  it("uses the et4800-specific gamma + cmx classes", () => {
-    expect(entry.gammaClass).toEqual({ jpg: "et4800-stock", pdf: "et4800-stock" });
-    expect(entry.cmxClass).toEqual({ jpg: "et4800-um08", pdf: "et4800-um08" });
-  });
-
-  it("omits the QIT/CCT optional segments", () => {
-    expect(entry.optionalSegments).toEqual({ qit: false, cct: false });
-  });
-});
+// The registry entry's static fields (source detection, gmm, classes, extents,
+// optional segments) are asserted in registry.test.ts alongside the other
+// dialects. This file covers only what's specific to ET-4800's composed PARA.
 
 describe("ET-4800 composed PARA size", () => {
   it("flatbed is 936 bytes", () => {

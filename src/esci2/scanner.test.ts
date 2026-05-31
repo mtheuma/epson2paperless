@@ -73,6 +73,20 @@ function extractScannerParaWrite(fake: FakePlainSocket): Buffer {
   throw new Error("extractScannerParaWrite: PARA header write not found");
 }
 
+// Poll briefly for the async PDF compose chain to drop a .pdf into outputDir.
+// composePdfFromJpegs runs inside a setImmediate hop in doFinalize, so the file
+// appears a few event-loop ticks after the session promise settles. Bounded at
+// 50×10ms; callers assert the .pdf count afterwards, so a miss fails loudly.
+async function waitForPdf(outputDir: string): Promise<void> {
+  for (
+    let i = 0;
+    i < 50 && readdirSync(outputDir).filter((f) => f.endsWith(".pdf")).length === 0;
+    i++
+  ) {
+    await new Promise((r) => setTimeout(r, 10));
+  }
+}
+
 // Fixed capability-body packets used by driveScannerToPara for both init cycles.
 // INFO_BODY_PACKET and RESA_BODY_PACKET stay synthetic — the scanner only
 // checks the declared length. CAPA_BODY_PACKET must use the real ET-4950 body
@@ -553,17 +567,7 @@ describe("scanner replay — full Windows-driver session", () => {
       expect(result.scannerWrites.length).toBe(result.totalDriverSends);
       await expect(result.sessionPromise).resolves.toBeUndefined();
 
-      // Poll for PDF file to appear — composePdfFromJpegs is async inside
-      // a setImmediate callback, so we need to yield to the event loop and
-      // allow Promise microtasks to settle. Use short setTimeout ticks so
-      // the async composition chain can complete.
-      for (
-        let i = 0;
-        i < 50 && readdirSync(outputDir).filter((f) => f.endsWith(".pdf")).length === 0;
-        i++
-      ) {
-        await new Promise((r) => setTimeout(r, 10));
-      }
+      await waitForPdf(outputDir);
 
       const files = readdirSync(outputDir);
       const pdfs = files.filter((f) => f.endsWith(".pdf"));
@@ -1123,15 +1127,7 @@ describe("runEsci2ScanOverPlain — ET-2750 fixture replay", () => {
     const scannerPara = extractScannerParaWrite(fake);
     expect(scannerPara.equals(capturedPara)).toBe(true);
 
-    // Wait briefly for the async PDF compose chain (setImmediate hop in
-    // doFinalize → composePdfFromJpegs).
-    for (
-      let i = 0;
-      i < 50 && readdirSync(outputDir).filter((f) => f.endsWith(".pdf")).length === 0;
-      i++
-    ) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
+    await waitForPdf(outputDir);
 
     const files = readdirSync(outputDir);
     const pdfs = files.filter((f) => f.endsWith(".pdf"));
@@ -1298,15 +1294,10 @@ describe("runEsci2ScanOverPlain — ET-4800 fixture replay", () => {
 
   it("flatbed PDF", async () => {
     await runOne({ fixtureFile: "flatbed-pdf.jsonl", source: "flatbed", action: "pdf" });
-    // PDF compose chain is async (setImmediate hop) — poll briefly.
-    for (
-      let i = 0;
-      i < 50 && readdirSync(outputDir).filter((f) => f.endsWith(".pdf")).length === 0;
-      i++
-    ) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
-    expect(readdirSync(outputDir).filter((f) => f.endsWith(".pdf")).length).toBe(1);
+    await waitForPdf(outputDir);
+    const files = readdirSync(outputDir);
+    expect(files.filter((f) => f.endsWith(".jpg"))).toEqual([]); // temp dir cleaned, no stragglers
+    expect(files.filter((f) => f.endsWith(".pdf")).length).toBe(1);
   }, 60_000);
 
   it("ADF JPG", async () => {
@@ -1316,13 +1307,9 @@ describe("runEsci2ScanOverPlain — ET-4800 fixture replay", () => {
 
   it("ADF PDF", async () => {
     await runOne({ fixtureFile: "adf-pdf.jsonl", source: "adf", action: "pdf" });
-    for (
-      let i = 0;
-      i < 50 && readdirSync(outputDir).filter((f) => f.endsWith(".pdf")).length === 0;
-      i++
-    ) {
-      await new Promise((r) => setTimeout(r, 10));
-    }
-    expect(readdirSync(outputDir).filter((f) => f.endsWith(".pdf")).length).toBe(1);
+    await waitForPdf(outputDir);
+    const files = readdirSync(outputDir);
+    expect(files.filter((f) => f.endsWith(".jpg"))).toEqual([]); // temp dir cleaned, no stragglers
+    expect(files.filter((f) => f.endsWith(".pdf")).length).toBe(1);
   }, 60_000);
 });
