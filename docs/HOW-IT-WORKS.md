@@ -12,11 +12,11 @@ Service              ->  Printer (TCP port 1865)          Scan session
 
 The first two channels are shared across supported models. The scan-session channel differs by protocol generation.
 
-| Variant       | Transport    | Command set          | Hardware                    |
-| ------------- | ------------ | -------------------- | --------------------------- |
-| `esci2-tls`   | TLS over TCP | ESC/I-2 over IS      | ET-4950 / ET-3950 / ET-4956 |
-| `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750 (flatbed-only)      |
-| `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family              |
+| Variant       | Transport    | Command set          | Hardware                              |
+| ------------- | ------------ | -------------------- | ------------------------------------- |
+| `esci2-tls`   | TLS over TCP | ESC/I-2 over IS      | ET-4950 / ET-3950 / ET-4956 / ET-2950 |
+| `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750 / XP-7100 / ET-4800           |
+| `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family                        |
 
 `esci2-tls` is internal shorthand for the TLS ESC/I-2 path. In configuration, this is selected with `PRINTER_PROTOCOL=esci2`.
 
