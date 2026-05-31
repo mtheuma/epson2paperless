@@ -11,7 +11,7 @@ Replace the four per-family `Dialect` objects (`et-4950-family.ts`, `et-2750.ts`
 
 ## Why this exists, and why it's split
 
-The original spec on this branch attempted both the refactor *and* unknown-fingerprint auto-dispatch in one design. Code review identified four load-bearing problems with the unknown-dispatch portion:
+The original spec on this branch attempted both the refactor _and_ unknown-fingerprint auto-dispatch in one design. Code review identified four load-bearing problems with the unknown-dispatch portion:
 
 - The ParaSpec dropped the action axis, but XP-7100's PARA is action-aware (different gamma LUT + CMX bytes for JPG vs PDF — see `src/esci2/dialects/xp-7100.ts:209-230`). The composer must accept `action`.
 - `#ACQ` extents are not derivable from INFO `#FB AREA`: all three known ESC/I-2 printers report `#FB AREAd850i0001170` in INFO yet emit different `#ACQ` values (ET-4950 2481×3506, ET-2750 2477×3500, XP-7100 2550×3300). Known entries need explicit extents; the encoding is not decoded.
@@ -50,20 +50,25 @@ export interface ParaSpec {
   action: "jpg" | "pdf";
 
   // Scan area extents — always explicit, never derived
-  fbExtents:  Extents;
-  adfExtents: Extents | null;        // null if printer has no ADF
+  fbExtents: Extents;
+  adfExtents: Extents | null; // null if printer has no ADF
 
-  gmm: string;                       // 4-char ASCII, e.g. "UG10"
+  gmm: string; // 4-char ASCII, e.g. "UG10"
 
   // Per-action class IDs; the composer looks up the actual bytes from the
   // class tables in src/esci2/data/.
   gammaClass: { jpg: GammaClassName; pdf: GammaClassName };
-  cmxClass:   { jpg: CmxClassName | null; pdf: CmxClassName | null };
+  cmxClass: { jpg: CmxClassName | null; pdf: CmxClassName | null };
 
   optionalSegments: { qit: boolean; cct: boolean };
 }
 
-export interface Extents { x0: number; y0: number; w: number; h: number; }
+export interface Extents {
+  x0: number;
+  y0: number;
+  w: number;
+  h: number;
+}
 
 export function composePara(spec: ParaSpec): Buffer;
 ```
@@ -121,55 +126,68 @@ export interface RegistryEntry {
   adfExtents: Extents | null;
   gmm: string;
   gammaClass: { jpg: GammaClassName; pdf: GammaClassName };
-  cmxClass:   { jpg: CmxClassName | null; pdf: CmxClassName | null };
+  cmxClass: { jpg: CmxClassName | null; pdf: CmxClassName | null };
   optionalSegments: { qit: boolean; cct: boolean };
 }
 
 export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
-  ["2fb08fc1bde6d172…", {
-    displayName: "ET-4950 / ET-3950 / ET-4956 (ESC/I-2 over TLS)",
-    sourceDetection: "stat-length",
-    initPollIterations: 3,
-    fbExtents:  { x0: 0,  y0: 0, w: 2481, h: 3506 },
-    adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
-    gmm: "UG10",
-    gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
-    cmxClass:   { jpg: null,         pdf: null         },
-    optionalSegments: { qit: true, cct: true },
-  }],
-  ["de76c9302793fa8f…", {
-    displayName: "ET-2750 (ESC/I-2 over plain TCP)",
-    sourceDetection: "fixed-flatbed",
-    initPollIterations: 2,
-    fbExtents:  { x0: 0, y0: 0, w: 2477, h: 3500 },
-    adfExtents: null,
-    gmm: "UG18",
-    gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
-    cmxClass:   { jpg: "et2750-um08", pdf: "et2750-um08" },
-    optionalSegments: { qit: false, cct: false },
-  }],
-  ["56d26c61896ca417…", {
-    displayName: "XP-7100 (ESC/I-2 over plain TCP)",
-    sourceDetection: "stat-length",
-    initPollIterations: 3,
-    fbExtents:  { x0: 0, y0: 0, w: 2550, h: 3300 },
-    adfExtents: { x0: 0, y0: 0, w: 2550, h: 3300 },
-    gmm: "UG18",
-    gammaClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
-    cmxClass:   { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
-    optionalSegments: { qit: true, cct: false },
-  }],
-  ["b1bf50879666d04c…", {       // ET-2950 — see src/esci2/dialects/et-2950.ts
-    displayName: "ET-2950 (ESC/I-2 over TLS)",
-    sourceDetection: "fixed-flatbed",
-    initPollIterations: 3,
-    fbExtents:  { x0: 0, y0: 0, w: 2481, h: 3506 },
-    adfExtents: null,
-    gmm: "UG10",
-    gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
-    cmxClass:   { jpg: null,       pdf: null       },
-    optionalSegments: { qit: true, cct: true },
-  }],
+  [
+    "2fb08fc1bde6d172…",
+    {
+      displayName: "ET-4950 / ET-3950 / ET-4956 (ESC/I-2 over TLS)",
+      sourceDetection: "stat-length",
+      initPollIterations: 3,
+      fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
+      adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
+      gmm: "UG10",
+      gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
+      cmxClass: { jpg: null, pdf: null },
+      optionalSegments: { qit: true, cct: true },
+    },
+  ],
+  [
+    "de76c9302793fa8f…",
+    {
+      displayName: "ET-2750 (ESC/I-2 over plain TCP)",
+      sourceDetection: "fixed-flatbed",
+      initPollIterations: 2,
+      fbExtents: { x0: 0, y0: 0, w: 2477, h: 3500 },
+      adfExtents: null,
+      gmm: "UG18",
+      gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
+      cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
+      optionalSegments: { qit: false, cct: false },
+    },
+  ],
+  [
+    "56d26c61896ca417…",
+    {
+      displayName: "XP-7100 (ESC/I-2 over plain TCP)",
+      sourceDetection: "stat-length",
+      initPollIterations: 3,
+      fbExtents: { x0: 0, y0: 0, w: 2550, h: 3300 },
+      adfExtents: { x0: 0, y0: 0, w: 2550, h: 3300 },
+      gmm: "UG18",
+      gammaClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
+      cmxClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
+      optionalSegments: { qit: true, cct: false },
+    },
+  ],
+  [
+    "b1bf50879666d04c…",
+    {
+      // ET-2950 — see src/esci2/dialects/et-2950.ts
+      displayName: "ET-2950 (ESC/I-2 over TLS)",
+      sourceDetection: "fixed-flatbed",
+      initPollIterations: 3,
+      fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
+      adfExtents: null,
+      gmm: "UG10",
+      gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
+      cmxClass: { jpg: null, pdf: null },
+      optionalSegments: { qit: true, cct: true },
+    },
+  ],
 ]);
 ```
 
@@ -187,7 +205,7 @@ Initial named classes (extracted from current dialect files / fixtures):
 
 Naming convention: a class is identified by `<printer-family-of-origin>-<axis>` where `axis` distinguishes action variants. The data file inlines each class as a hex literal — bytes are captured verbatim from a real-hardware fixture, never algorithmically generated.
 
-A trap to call out for the implementer: the `et4950-stock` LUT is *not* a mathematical `[0..255]` identity LUT. The GRN channel happens to be sequential, but RED skips `0x14` and duplicates `0xc6`, and BLU duplicates `0x24` and skips `0xa6` — verified against `src/esci2/commands.ts:91-115` (current `buildParaFlatbedTls`). Hand-generating `Array.from({length: 256}, (_, i) => i)` for all three channels will produce wrong bytes and replay tests will fail. The class must be a verbatim hex literal transcribed from the existing builder.
+A trap to call out for the implementer: the `et4950-stock` LUT is _not_ a mathematical `[0..255]` identity LUT. The GRN channel happens to be sequential, but RED skips `0x14` and duplicates `0xc6`, and BLU duplicates `0x24` and skips `0xa6` — verified against `src/esci2/commands.ts:91-115` (current `buildParaFlatbedTls`). Hand-generating `Array.from({length: 256}, (_, i) => i)` for all three channels will produce wrong bytes and replay tests will fail. The class must be a verbatim hex literal transcribed from the existing builder.
 
 There is no `et2950-*` class because ET-2950 has no captured wire fixture and just reuses ET-4950's bytes (matching `et-2950.ts:55`'s current `buildParaFlatbedTls()` reuse).
 
@@ -213,6 +231,7 @@ Note on token spellings: every `#XXX` segment concatenates the 3-char key and it
 Total body length depends on which optional segments are present; the caller's `buildParaHeader(body.length)` declares the size to the printer.
 
 The composer validates its inputs:
+
 - `gammaClass[action]` and `cmxClass[action]` names must exist in their data tables (throw at first scan if not).
 - All extent values must be non-negative integers.
 - If `spec.source` is `"adf-simplex"` or `"adf-duplex"` and `spec.adfExtents` is `null`, throw a clear error (e.g. `composePara: source=${spec.source} requires non-null adfExtents`). Preserves the flatbed-only guard that current `et-2750.ts:21` and `et-2950.ts:50` provide.
@@ -233,9 +252,7 @@ Two distinct touch points in the graph state machine, matching today's:
 
 ```ts
 const paraSource: ParaSpec["source"] =
-  ctx.source === "flatbed" ? "flatbed"
-  : ctx.duplex ? "adf-duplex"
-  : "adf-simplex";
+  ctx.source === "flatbed" ? "flatbed" : ctx.duplex ? "adf-duplex" : "adf-simplex";
 const spec = makeParaSpec(ctx.entry, paraSource, ctx.action);
 return composePara(spec);
 ```
@@ -252,13 +269,14 @@ No log lines change. No new env vars. No new error paths. From the user's perspe
 
 **Tier 1 — Replay regression (the safety net)**.
 
-`src/esci2/scanner.test.ts` and the four per-dialect test files (`et-4950-family.test.ts`, `et-2750.test.ts`, `xp-7100.test.ts`, `et-2950.test.ts`) keep replaying every committed fixture against the scanner. The PARA-body assertion (`extractScannerParaWrite` vs `extractCapturedParaBody`) keeps comparing byte-for-byte. The composer must reproduce each captured PARA exactly given the printer's registry entry + source + action. This is *the* proof the refactor doesn't regress.
+`src/esci2/scanner.test.ts` and the four per-dialect test files (`et-4950-family.test.ts`, `et-2750.test.ts`, `xp-7100.test.ts`, `et-2950.test.ts`) keep replaying every committed fixture against the scanner. The PARA-body assertion (`extractScannerParaWrite` vs `extractCapturedParaBody`) keeps comparing byte-for-byte. The composer must reproduce each captured PARA exactly given the printer's registry entry + source + action. This is _the_ proof the refactor doesn't regress.
 
 The per-dialect test files survive the refactor essentially unchanged in shape; only the imports change (they now import `composePara` and the registry rather than per-family `Dialect` objects).
 
 **Tier 2 — Composer + dispatch unit tests** (`src/esci2/para-composer.test.ts` and `src/esci2/dialects/dispatch.test.ts`, both new).
 
 `composePara` (pure):
+
 - **Source axis**: identical other params, source swap (FB ↔ ADF simplex ↔ ADF duplex) produces correct segment shape changes.
 - **Action axis**: a spec with `xp7100-jpg` vs `xp7100-pdf` gamma classes produces the corresponding LUT bytes. Round-trip via the XP-7100 fixtures (asserted in Tier 1 but unit-covered here).
 - **Optional segments**: explicit `qit: true/false`, `cct: true/false`, and `cmxClass[action]: null` vs non-null produce the expected presence/absence in the right order (`#CMX` → `#QIT` → `#CCT`).
@@ -269,18 +287,22 @@ The per-dialect test files survive the refactor essentially unchanged in shape; 
 - **Body length and `#BSZi1048576`**: the trailing constant is at the correct offset for every combination of optional segments.
 
 `makeParaSpec` (pure projection):
+
 - Given a fully-specified `RegistryEntry` + axes, returns a `ParaSpec` whose fields all derive from the entry. No defaults applied.
 - Source axis picks `fbExtents` or `adfExtents` correctly (including `null` adfExtents → adf source = error in composer; pre-condition validated by composer, not by makeParaSpec).
 
 `lookupRegistryEntry`:
+
 - Hit → returns the entry from the table.
 - Miss → throws `UnsupportedDialectError` with the existing diagnostic block. Same fields, same message format as today.
 
 `applyEntrySourceOverride`:
+
 - Entry with `sourceDetection: "fixed-flatbed"` and `ctx.source` starting as `"adf"` (TLS shell pre-set) → ctx.source becomes `"flatbed"`. Regression test for ET-2950's TLS-flatbed-only path.
 - Entry with `sourceDetection: "stat-length"` → ctx.source unchanged. Regression test for the ET-4950 family path.
 
 PARA-build call-site logic (`(ctx.source, ctx.duplex) → paraSource`):
+
 - Covered by Tier 1 fixture replays (all three known printer × source combinations exercise the derivation).
 - Add a small explicit test that confirms the mapping in isolation: `(adf, true) → "adf-duplex"`, `(adf, false) → "adf-simplex"`, `(flatbed, *) → "flatbed"`.
 
