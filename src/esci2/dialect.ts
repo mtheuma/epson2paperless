@@ -42,20 +42,4 @@ export interface Dialect {
   buildPara(axes: ParaAxes): Buffer;
 }
 
-/**
- * Thrown when a session lands on a printer whose CAPA fingerprint isn't
- * in the registry. Carries enough context for the user to file an issue
- * that the maintainer can act on.
- */
-export class UnsupportedDialectError extends Error {
-  constructor(
-    public readonly capaFingerprint: string,
-    public readonly diagnostic: string,
-  ) {
-    super(
-      `Unsupported printer CAPA fingerprint ${capaFingerprint}. ` +
-        `Please file an issue with the diagnostic block below:\n\n${diagnostic}`,
-    );
-    this.name = "UnsupportedDialectError";
-  }
-}
+export { UnsupportedDialectError } from "./diagnostic.js";
