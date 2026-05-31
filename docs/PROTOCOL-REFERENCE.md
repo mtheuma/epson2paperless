@@ -119,7 +119,7 @@ The command bytes are either:
 
 **PARA is sent in two passthru packets**, not one. The first packet carries the 12-byte `PARAx<hex-len>` header with `reply_size=0`. The second carries the raw parameter bytes with `reply_size=64`. The printer acks the first packet with an empty `0xa000` reply, then responds to the second with a 64-byte `PARAx0000000#parOK…` reply if the parameters were accepted (or `#parNG…` if not). This two-phase structure was discovered from the Frida capture: the Windows driver never batches the two sends into a single passthru.
 
-ESC/I-2 command builders are in `src/esci2/commands.ts`. The legacy 2-byte initialization commands (`buildFsY`, `buildFsX`, `buildFsZ`) live in `src/commands-fs.ts` and are shared with the WF-3620 ESC/I path (which uses `buildFsY` for the `DIAGNOSE_PROTOCOL` probe). `buildEsci2Command` builds the generic 12-byte ESC/I-2 header. `buildParaHeader` builds the PARA passthru header; the PARA body itself comes from the resolved dialect's `buildPara(axes)` (see [How printer-model differences are handled](#how-printer-model-differences-are-handled)), which calls one of `buildParaFlatbedTls` / `buildParaFlatbedPlain` / `buildParaAdf` (plus a per-action splice on the XP-7100). Reply parsing is done by `parseEsci2ReplyHeader` (extracts the 12-byte reply header's `cmd` and `length` fields) and `parseTokens` (splits the `#KEY value` token stream from reply bodies).
+ESC/I-2 command builders are in `src/esci2/commands.ts`. The legacy 2-byte initialization commands (`buildFsY`, `buildFsX`, `buildFsZ`) live in `src/commands-fs.ts` and are shared with the WF-3620 ESC/I path (which uses `buildFsY` for the `DIAGNOSE_PROTOCOL` probe). `buildEsci2Command` builds the generic 12-byte ESC/I-2 header. `buildParaHeader` builds the PARA passthru header; the PARA body is assembled by `composePara` driven by the registry entry and runtime axes (see [How printer-model differences are handled](#how-printer-model-differences-are-handled)). Reply parsing is done by `parseEsci2ReplyHeader` (extracts the 12-byte reply header's `cmd` and `length` fields) and `parseTokens` (splits the `#KEY value` token stream from reply bodies).
 
 The SANE `epsonds` backend provides a useful cross-reference: its passthru framing — IS header layout, `0x000C` data offset, 8-byte data header with `cmd_size` / `reply_size` — is byte-identical to what the ET-4950 expects. However, `epsonds` targets older scanners that do not require the legacy ESC/I initialization loop before ESC/I-2 commands. The ET-4950's firmware requires a legacy preamble (`FS Y` / `FS Z`, then repeated `FS Y → STAT → FIN` polling, then `FS X`) before the scan-parameter and image-transfer half of the session will be accepted.
 
@@ -315,18 +315,33 @@ The ET-2750 dialect is resolved by the same CAPA-fingerprint lookup used by the 
 
 ## How printer-model differences are handled
 
-Different Epson models speak slightly different PARA dialects despite sharing
-the same protocol generation — gamma constants, optional quirk tokens
-(`#QITOFF`, `#CCTCOL`, `#CMXUM08h009`), and per-action LUT/CMX regions vary.
-The scanner identifies the dialect at session start by hashing a canonicalised
-copy of the printer's first CAPA reply (a `sha256` over volatile-stripped,
-sorted segments). The hash maps to a `Dialect` object in
-`src/esci2/dialect-registry.ts` that carries the PARA builder,
-supported-hardware bitset, source-detection policy, and init-poll iteration
-count. Printers with an unrecognised CAPA fingerprint fail fast with a
-copy-pasteable diagnostic block — no synthesis attempt, no silent quality
-regression. Adding support for a new printer requires a Wireshark capture and
-one new file under `src/esci2/dialects/`.
+Each supported printer family has an entry in `src/esci2/dialects/registry.ts`,
+keyed by a sha256 fingerprint over its CAPA reply (`src/esci2/capa-fingerprint.ts`).
+Entries are pure data:
+
+- Dispatch metadata (`sourceDetection`, `initPollIterations`).
+- Scan extents (`fbExtents`, `adfExtents`) — manually pinned per family.
+- A `gmm` constant plus named `gammaClass` and `cmxClass` lookups resolved from
+  `src/esci2/data/gamma-classes.ts` and `cmx-classes.ts`. Class definitions are
+  inlined verbatim from captured fixtures; never algorithmically generated.
+- Optional-segment presence flags (`#QIT`, `#CCT`).
+
+At INIT1_CAPA the graph computes the fingerprint, looks up the entry via
+`lookupRegistryEntry`, and stores it on the session context. At PARA build time
+the entry plus the runtime source/action axes feed into `makeParaSpec`, and
+`composePara` assembles the PARA body.
+
+Printers with an unrecognised CAPA fingerprint fail fast with a copy-pasteable
+diagnostic block — no synthesis attempt, no silent quality regression. Adding
+support for a new printer is a data-only change in the normal case: capture its
+wire bytes, extract any novel gamma/CMX class into the data files, and add a
+registry entry. Replay tests (`src/esci2/scanner.test.ts` and per-dialect files
+under `src/esci2/dialects/*.test.ts`) pin the composed output byte-for-byte
+against the captured fixture.
+
+Legacy ESC/I (WF-3620 family) uses a separate code path under `src/esci/` with
+a 64-byte `FS W` parameter block instead of the `PARA` command; none of the
+above applies to it.
 
 ## ESC/I variant (WF-3620)
 
