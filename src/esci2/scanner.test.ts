@@ -1288,7 +1288,11 @@ describe("runEsci2ScanOverPlain — ET-4800 fixture replay", () => {
   }
 
   it("flatbed JPG", async () => {
-    const files = await runOne({ fixtureFile: "flatbed-jpg.jsonl", source: "flatbed", action: "jpg" });
+    const files = await runOne({
+      fixtureFile: "flatbed-jpg.jsonl",
+      source: "flatbed",
+      action: "jpg",
+    });
     expect(files.filter((f) => f.endsWith(".jpg")).length).toBe(1);
   }, 60_000);
 
