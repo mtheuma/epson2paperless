@@ -36,8 +36,32 @@ describe("gamma-classes", () => {
     expect(GAMMA_CLASSES["xp7100-jpg"].equals(GAMMA_CLASSES["xp7100-pdf"])).toBe(false);
   });
 
+  it("exposes et4800-stock with the expected size", () => {
+    expect(GAMMA_CLASSES["et4800-stock"].length).toBe(804); // 3 × 268
+  });
+
+  it("et4800-stock carries the GRN/RED/BLU h100 segment headers", () => {
+    const g = GAMMA_CLASSES["et4800-stock"];
+    expect(g.subarray(0, 12).toString("ascii")).toBe("#GMTGRN h100");
+    expect(g.subarray(268, 280).toString("ascii")).toBe("#GMTRED h100");
+    expect(g.subarray(536, 548).toString("ascii")).toBe("#GMTBLU h100");
+  });
+
+  it("et4800-stock has a non-identity LUT (zero floor at low end)", () => {
+    // The ET-4800 driver ships a contrast-boosting curve with a ~38-byte zero
+    // floor at the start of each channel LUT (input 0..~0x26 → output 0). Pin
+    // this anomaly so a future regenerated identity LUT doesn't silently
+    // mismatch the captured wire bytes.
+    const grnLut = GAMMA_CLASSES["et4800-stock"].subarray(12, 268);
+    for (let i = 0; i < 30; i++) {
+      expect(grnLut[i]).toBe(0);
+    }
+    // Saturates to 0xff at the top — distinct from ET-2750's identity curve.
+    expect(grnLut[grnLut.length - 1]).toBe(0xff);
+  });
+
   it("class names enumerate as a type", () => {
-    const _names: GammaClassName[] = ["et4950-stock", "xp7100-jpg", "xp7100-pdf"];
-    expect(_names).toHaveLength(3);
+    const _names: GammaClassName[] = ["et4950-stock", "xp7100-jpg", "xp7100-pdf", "et4800-stock"];
+    expect(_names).toHaveLength(4);
   });
 });
