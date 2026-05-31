@@ -250,13 +250,14 @@ describe("gamma-classes", () => {
   });
 
   it("et4950-stock RED channel is NOT a strict [0..255] identity (skips 0x14)", () => {
-    // RED LUT bytes start at offset 268 + 12 = 280. Sequential identity would
-    // place 0x14 at offset 280+20 = 300, but the captured bytes skip it. This
-    // test pins the documented anomaly so a future regenerated identity LUT
-    // doesn't silently break replay parity.
+    // RED LUT bytes start at offset 268 + 12 = 280. In a strict identity LUT
+    // red[i] === i, so red[19] would be 0x13 and red[20] would be 0x14. The
+    // captured fixture instead has red[19] = 0x13, red[20] = 0x15 — 0x14 is
+    // skipped. This test pins the documented anomaly so a future regenerated
+    // identity LUT doesn't silently break replay parity.
     const red = GAMMA_CLASSES["et4950-stock"].subarray(280, 280 + 256);
-    expect(red[20]).toBe(0x13);
-    expect(red[21]).toBe(0x15); // the 0x14 skip
+    expect(red[19]).toBe(0x13);
+    expect(red[20]).toBe(0x15); // the 0x14 skip
   });
 
   it("xp7100-jpg has the same size as et4950-stock", () => {
