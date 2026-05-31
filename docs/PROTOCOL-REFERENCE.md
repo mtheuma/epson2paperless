@@ -219,7 +219,7 @@ The IMG loop's termination condition differs by source:
 
 **Source detection.** The push-scan SOAP body does not indicate whether the printer will scan from the ADF or the flatbed glass — the panel does not expose a source selector. Instead, the printer detects its own source (via the ADF paper sensor) and signals the result in the first `@STAT` reply during INIT_POLL cycle 1. Dialects with `sourceDetection: "stat-length"` (ET-4950 family + XP-7100 + ET-4800) apply this heuristic: an ADF-mode printer returns a zero-length `STATx0000000` reply and a flatbed-mode printer returns a 12-byte `STATx000000C` reply with filler content. The scanner reads this length field and sets `ctx.source`, which governs the PARA blob selection, the IMG loop terminator, and the POSTSCAN branching.
 
-The ET-2750 dialect uses `sourceDetection: "fixed-flatbed"` and skips this heuristic: its STAT reply declares `length=0` in the 12-byte ESC/I-2 header but packs a 52-byte filler (`#---#---#---…`) inline in the same 64-byte IS frame, so applying the stat-length rule would misclassify it as ADF. ET-2750 hardware is flatbed-only — there's no ADF to detect — so the graph trusts the `source: "flatbed"` value the scanner shell pre-sets in `initialCtx`. The `INIT_POLL_STAT` decision is conditioned on `ctx.entry.sourceDetection === "stat-length"` for the override path.
+The ET-2750 dialect uses `sourceDetection: "fixed-flatbed"` and skips this heuristic: its STAT reply declares `length=0` in the 12-byte ESC/I-2 header but packs a 52-byte filler (`#---#---#---…`) inline in the same 64-byte IS frame, so applying the stat-length rule would misclassify it as ADF. ET-2750 hardware is flatbed-only — there's no ADF to detect — so the graph trusts the `source: "flatbed"` value the scanner shell pre-sets in `initialCtx`. The `INIT_POLL_STAT` decision is conditioned on `ctx.entry.sourceDetection === "stat-length"` for the override path. ET-2950 is the other `fixed-flatbed` dialect (flatbed-only hardware) and takes the same skip-the-heuristic path.
 
 ### Transport adapters
 
@@ -293,7 +293,7 @@ The temp directory is removed in a `finally` block regardless of outcome.
 
 Three protocol variants ride on port 1865, decided per scan session by `src/protocol-probe.ts`:
 
-1. **TLS handshake** against `1865`. Success → `esci2` (ET-4950 family). The probe socket is destroyed before the real scan begins.
+1. **TLS handshake** against `1865`. Success → `esci2` (ET-4950 family + ET-2950). The probe socket is destroyed before the real scan begins.
 2. **Plain TCP connect**, await an unsolicited IS-`0x8000` welcome packet within the timeout, then disambiguate by the welcome's payload byte 1 (frame offset 13): WF-3620 emits `0x02` here on every committed WF-3620 fixture and is rejected; the `esci2-plain` printers (ET-2750, XP-7100, ET-4800) emit `0x04` and are accepted. Real fixture payloads are `01 02 00 00 00` (WF-3620) and `01 04 00 00 00` (esci2-plain). The ESC/I-2-over-TLS printers (ET-4950 family, ET-2950) also send a welcome immediately, but only inside the TLS tunnel — connecting to one of them over plain TCP yields no `0x8000` and the arm times out. Success → `esci2-plain`.
 3. **Plain TCP connect**, send `ESC @` (`1b 40`), await a 1-byte `0x06` ACK. Success → `esci` (WF-3620).
 
@@ -309,7 +309,7 @@ Several printers speak the ET-4950's ESC/I-2 vocabulary **without the TLS layer*
 
 Wire differences from the ET-4950 (decoded from the pcap captures under `tools/pcap-extract/captures/`):
 
-- **No TLS handshake.** The printer sends the welcome IS packet (type `0x8000`) immediately after TCP connect. (The official driver opens a brief TLS probe on 1865 first; the printer rejects it and the driver reopens plain TCP, so a capture must isolate that real plain-TCP stream — see [REVERSE-ENGINEERING.md](REVERSE-ENGINEERING.md).)
+- **No TLS handshake.** The printer sends the welcome IS packet (type `0x8000`) immediately after TCP connect. (Before the real session the driver opens a throwaway connection on 1865 — a rejected TLS probe on XP-7100 / ET-4800, an aborted SYN/RST on ET-2750 — so each capture holds two `tcp.port==1865` conversations; isolate the real plain-TCP one — see [REVERSE-ENGINEERING.md](REVERSE-ENGINEERING.md).)
 - **INIT_POLL count is per-dialect:** 2 for ET-2750, 3 for XP-7100 and ET-4800 (`ctx.entry.initPollIterations`). For ET-2750, sending a third FS Y after the printer has moved on returns a non-ACK that fails MODE_SWITCH validation.
 - **Source detection / STAT.** XP-7100 and ET-4800 use `sourceDetection: "stat-length"` like the ET-4950 family (length 0 → ADF, 12 → flatbed). ET-2750 uses `"fixed-flatbed"`: its STAT reply packs a 52-byte filler inline in a single 64-byte IS frame while the 12-byte header still declares `length=0`, so the stat-length rule would misclassify it as ADF — the graph skips the override and trusts the `source: "flatbed"` value from `initialCtx`. ET-2750 hardware is flatbed-only, so this is correct.
 - **PARA bodies are dialect-specific** and larger than the ET-4950 family's: 936 B (ET-2750 flatbed); 944 / 952 / 956 B (XP-7100 flatbed / ADF simplex / ADF duplex); 936 / 944 B (ET-4800 flatbed / ADF simplex). They carry `#GMMUG18`, per-entry optional-segment flags, and a model-specific inline `#CMXUM08` ICC-matrix block. See the [PARA table above](#source-adf-vs-flatbed).

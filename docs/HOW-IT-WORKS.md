@@ -97,7 +97,7 @@ The protocol graphs intentionally stay separate. They share the engine and outpu
 The push-scan SOAP request tells the service the panel's Sides and Action choices, but it does not explicitly say whether the physical source is ADF or flatbed. Source is inferred from protocol responses:
 
 - ESC/I-2 ADF-capable printers use an INIT_POLL `STAT` length heuristic.
-- ET-2750 is fixed flatbed.
+- ET-2750 and ET-2950 are fixed flatbed.
 - WF-3620-class ESC/I printers probe with `ESC e` and inspect the following `FS F` status byte.
 
 For duplex ADF scans, back sides arrive physically rotated 180 degrees because of the feeder path. The scanner records back-page indices as pages complete. JPEG output receives a minimal EXIF Orientation=3 segment; PDF output sets `/Rotate = 180` on the affected pages. Neither path re-encodes pixels just to rotate them.
