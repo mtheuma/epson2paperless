@@ -1,9 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { esci2Graph, ESCI2_TIMEOUT_MS, applyDialectSourceOverride } from "./graph.js";
+import { esci2Graph, ESCI2_TIMEOUT_MS } from "./graph.js";
+import { applyEntrySourceOverride } from "./dialects/dispatch.js";
+import { REGISTRY } from "./dialects/registry.js";
 import { IS_HEADER_SIZE, buildPurereadPacket } from "../protocol.js";
-import { et4950FamilyDialect } from "./dialects/et-4950-family.js";
-import { et2750Dialect } from "./dialects/et-2750.js";
-import { et2950Dialect } from "./dialects/et-2950.js";
 
 describe("esci2Graph (smoke)", () => {
   it("builds with the expected initial state and timeout", () => {
@@ -183,26 +182,32 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
     }
   });
 
-  it("INIT_POLL_FIN loops on et2750Dialect while initPollIteration < 2", () => {
+  it("INIT_POLL_FIN loops on the ET-2750 registry entry while initPollIteration < 2", () => {
     const state = esci2Graph.states.INIT_POLL_FIN;
     expect(state.kind).toBe("decision");
     if (state.kind !== "decision") return;
     // ET-2750 host driver only loops twice. After the first FIN reply,
     // iteration goes 0 → 1 (still < dialect.initPollIterations=2), so loop.
-    const ctx = makeCtx({ dialect: et2750Dialect, initPollIteration: 0 });
+    const ctx = makeCtx({
+      entry: REGISTRY.get("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7")!,
+      initPollIteration: 0,
+    });
     const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
     expect("next" in result && result.next).toBe("INIT_POLL_FS_Y");
     expect(ctx.initPollIteration).toBe(1);
   });
 
-  it("INIT_POLL_FIN advances to MODE_SWITCH on et2750Dialect after 2 iterations", () => {
+  it("INIT_POLL_FIN advances to MODE_SWITCH on the ET-2750 registry entry after 2 iterations", () => {
     const state = esci2Graph.states.INIT_POLL_FIN;
     expect(state.kind).toBe("decision");
     if (state.kind !== "decision") return;
     // Iteration was 1, bumps to 2 — equals dialect.initPollIterations=2, advance.
     // Sending a third FS Y after the printer has moved on returns a non-ACK
     // that fails MODE_SWITCH validation, so this cap is load-bearing.
-    const ctx = makeCtx({ dialect: et2750Dialect, initPollIteration: 1 });
+    const ctx = makeCtx({
+      entry: REGISTRY.get("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7")!,
+      initPollIteration: 1,
+    });
     const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
     expect("next" in result && result.next).toBe("MODE_SWITCH");
     expect(ctx.initPollIteration).toBe(2);
@@ -479,7 +484,7 @@ function makeCtx(
     tprDeclaredLength: 0,
     infoBody: Buffer.alloc(0),
     capaBody: Buffer.alloc(0),
-    dialect: et4950FamilyDialect,
+    entry: REGISTRY.get("2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2")!,
     ...overrides,
   };
 }
@@ -559,7 +564,7 @@ describe("esci2Graph INIT_POLL_STAT source detection", () => {
     // misclassify ET-2750 as ADF — the fixed-flatbed dialect must skip
     // detection and trust the pre-set source.
     const ctx = makeCtx({
-      dialect: et2750Dialect,
+      entry: REGISTRY.get("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7")!,
       source: "flatbed",
       initPollIteration: 0,
     });
@@ -569,31 +574,52 @@ describe("esci2Graph INIT_POLL_STAT source detection", () => {
   });
 });
 
-describe("applyDialectSourceOverride", () => {
+describe("applyEntrySourceOverride", () => {
   // The TLS scanner shell pre-sets ctx.source = "adf" (scanner.ts) because
   // the dominant TLS path is ADF + flatbed with stat-length detection.
-  // A TLS dialect that uses sourceDetection: "fixed-flatbed" (e.g. the
-  // ET-2950) would otherwise carry "adf" all the way to buildPara, which
-  // throws on flatbed-only hardware. applyDialectSourceOverride pins the
-  // source at the dialect-resolution moment to keep every downstream
+  // A TLS entry that uses sourceDetection: "fixed-flatbed" (e.g. the
+  // ET-2950) would otherwise carry "adf" all the way to composePara, which
+  // throws on flatbed-only hardware. applyEntrySourceOverride pins the
+  // source at the entry-resolution moment to keep every downstream
   // stage agreeing on flatbed.
-  it("pins source to flatbed when dialect is fixed-flatbed and ctx pre-set is adf (TLS+flatbed-only, ET-2950)", () => {
+  it("pins source to flatbed when entry is fixed-flatbed and ctx pre-set is adf (TLS+flatbed-only, ET-2950)", () => {
     // Exact production scenario for ET-2950: TLS shell pre-sets ctx.source = "adf"
-    // (scanner.ts), dialect resolves to et2950Dialect, override flips source.
-    const ctx = makeCtx({ source: "adf", transport: "tls", dialect: et2950Dialect });
-    applyDialectSourceOverride(ctx, et2950Dialect);
+    // (scanner.ts), entry resolves to ET-2950, override flips source.
+    const ctx = makeCtx({
+      source: "adf",
+      transport: "tls",
+      entry: REGISTRY.get("b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb")!,
+    });
+    applyEntrySourceOverride(
+      ctx,
+      REGISTRY.get("b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb")!,
+    );
     expect(ctx.source).toBe("flatbed");
   });
 
   it("is a no-op when ctx pre-set already matches (plain-TCP+flatbed-only)", () => {
-    const ctx = makeCtx({ source: "flatbed", transport: "plain", dialect: et2750Dialect });
-    applyDialectSourceOverride(ctx, et2750Dialect);
+    const ctx = makeCtx({
+      source: "flatbed",
+      transport: "plain",
+      entry: REGISTRY.get("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7")!,
+    });
+    applyEntrySourceOverride(
+      ctx,
+      REGISTRY.get("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7")!,
+    );
     expect(ctx.source).toBe("flatbed");
   });
 
-  it("leaves source untouched for stat-length dialects so INIT_POLL_STAT can decide per-fixture", () => {
-    const ctx = makeCtx({ source: "adf", transport: "tls", dialect: et4950FamilyDialect });
-    applyDialectSourceOverride(ctx, et4950FamilyDialect);
+  it("leaves source untouched for stat-length entries so INIT_POLL_STAT can decide per-fixture", () => {
+    const ctx = makeCtx({
+      source: "adf",
+      transport: "tls",
+      entry: REGISTRY.get("2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2")!,
+    });
+    applyEntrySourceOverride(
+      ctx,
+      REGISTRY.get("2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2")!,
+    );
     expect(ctx.source).toBe("adf");
   });
 });

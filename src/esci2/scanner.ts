@@ -76,7 +76,7 @@ function buildInitialCtx(session: ScanSession, transport: "tls" | "plain"): Esci
     tprDeclaredLength: 0,
     infoBody: Buffer.alloc(0),
     capaBody: Buffer.alloc(0),
-    dialect: undefined,
+    entry: undefined,
   };
 }
 

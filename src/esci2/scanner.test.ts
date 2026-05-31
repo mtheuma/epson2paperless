@@ -10,7 +10,11 @@ import { FakeTlsSocket } from "./test-support/fake-tls-socket.js";
 import { FakePlainSocket } from "./test-support/fake-plain-socket.js";
 import { loadFixture, driveFixture } from "./test-support/replay.js";
 import type { FixtureEvent } from "./test-support/replay.js";
-import { xp7100Dialect } from "./dialects/xp-7100.js";
+import { REGISTRY } from "./dialects/registry.js";
+import { makeParaSpec } from "./dialects/dispatch.js";
+import { composePara, type ParaSpec } from "./para-composer.js";
+
+const XP7100_FP = "56d26c61896ca417807ac68d37775036fa1e702ee44c0beaa27d8a6ea9fa457e";
 
 function waitImmediate(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
@@ -79,7 +83,7 @@ const RESA_BODY_PACKET = buildIsPacket(0xa000, Buffer.alloc(164, 0x2d));
 // Real ET-4950 CAPA#1 body, extracted from the committed Frida fixture.
 // Synthetic filler (Buffer.alloc(336, 0x2d)) would fingerprint to a value not
 // in DIALECTS and abort every helper-driven test at INIT1 CAPA. Loading the
-// real body keeps these tests resolving to et4950FamilyDialect.
+// real body keeps these tests resolving to the ET-4950 family registry entry.
 function loadEt4950CapaBody(): Buffer {
   const fixturePath = path.join(
     "tools",
@@ -1110,6 +1114,15 @@ describe("runEsci2ScanOverPlain — ET-2750 fixture replay", () => {
     );
     await driveFixture(fixture, fake, sessionPromise);
 
+    // Byte-equivalence shield: assert the scanner's PARA wire bytes match
+    // what the captured Wireshark session sent. Without this, driveFixture
+    // replays the printer's responses regardless of what PARA the scanner
+    // emitted, so a composer regression on ET-2750 would not fail this test.
+    // Mirrors the XP-7100 replay pattern at line ~1173 of this file.
+    const capturedPara = extractCapturedParaBody(fixture);
+    const scannerPara = extractScannerParaWrite(fake);
+    expect(scannerPara.equals(capturedPara)).toBe(true);
+
     // Wait briefly for the async PDF compose chain (setImmediate hop in
     // doFinalize → composePdfFromJpegs).
     for (
@@ -1175,15 +1188,13 @@ describe("runEsci2ScanOverPlain — XP-7100 fixture replay", () => {
     const scannerPara = extractScannerParaWrite(fake);
     expect(scannerPara.equals(capturedPara)).toBe(true);
 
-    // Cross-check the recipe: captured PARA equals what xp7100Dialect would build
+    // Cross-check the recipe: captured PARA equals what the composer would build
     // for these axes. (Recipe-level tests cover this against .bin fixtures; this
     // adds one more anchor from the JSONL side, catching any drift between
     // .bin and JSONL extractions.)
-    const recipePara = xp7100Dialect.buildPara({
-      source: opts.source,
-      duplex: opts.duplex,
-      action: "jpg",
-    });
+    const paraSource: ParaSpec["source"] =
+      opts.source === "flatbed" ? "flatbed" : opts.duplex ? "adf-duplex" : "adf-simplex";
+    const recipePara = composePara(makeParaSpec(REGISTRY.get(XP7100_FP)!, paraSource, "jpg"));
     expect(capturedPara.equals(recipePara)).toBe(true);
 
     return readdirSync(outputDir).filter((f) => f.endsWith(".jpg"));

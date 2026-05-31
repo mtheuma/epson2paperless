@@ -119,7 +119,7 @@ The command bytes are either:
 
 **PARA is sent in two passthru packets**, not one. The first packet carries the 12-byte `PARAx<hex-len>` header with `reply_size=0`. The second carries the raw parameter bytes with `reply_size=64`. The printer acks the first packet with an empty `0xa000` reply, then responds to the second with a 64-byte `PARAx0000000#parOK…` reply if the parameters were accepted (or `#parNG…` if not). This two-phase structure was discovered from the Frida capture: the Windows driver never batches the two sends into a single passthru.
 
-ESC/I-2 command builders are in `src/esci2/commands.ts`. The legacy 2-byte initialization commands (`buildFsY`, `buildFsX`, `buildFsZ`) live in `src/commands-fs.ts` and are shared with the WF-3620 ESC/I path (which uses `buildFsY` for the `DIAGNOSE_PROTOCOL` probe). `buildEsci2Command` builds the generic 12-byte ESC/I-2 header. `buildParaHeader` builds the PARA passthru header; the PARA body itself comes from the resolved dialect's `buildPara(axes)` (see [How printer-model differences are handled](#how-printer-model-differences-are-handled)), which calls one of `buildParaFlatbedTls` / `buildParaFlatbedPlain` / `buildParaAdf` (plus a per-action splice on the XP-7100). Reply parsing is done by `parseEsci2ReplyHeader` (extracts the 12-byte reply header's `cmd` and `length` fields) and `parseTokens` (splits the `#KEY value` token stream from reply bodies).
+ESC/I-2 command builders are in `src/esci2/commands.ts`. The legacy 2-byte initialization commands (`buildFsY`, `buildFsX`, `buildFsZ`) live in `src/commands-fs.ts` and are shared with the WF-3620 ESC/I path (which uses `buildFsY` for the `DIAGNOSE_PROTOCOL` probe). `buildEsci2Command` builds the generic 12-byte ESC/I-2 header. `buildParaHeader` builds the PARA passthru header; the PARA body is assembled by `composePara` driven by the registry entry and runtime axes (see [How printer-model differences are handled](#how-printer-model-differences-are-handled)). Reply parsing is done by `parseEsci2ReplyHeader` (extracts the 12-byte reply header's `cmd` and `length` fields) and `parseTokens` (splits the `#KEY value` token stream from reply bodies).
 
 The SANE `epsonds` backend provides a useful cross-reference: its passthru framing — IS header layout, `0x000C` data offset, 8-byte data header with `cmd_size` / `reply_size` — is byte-identical to what the ET-4950 expects. However, `epsonds` targets older scanners that do not require the legacy ESC/I initialization loop before ESC/I-2 commands. The ET-4950's firmware requires a legacy preamble (`FS Y` / `FS Z`, then repeated `FS Y → STAT → FIN` polling, then `FS X`) before the scan-parameter and image-transfer half of the session will be accepted.
 
@@ -145,7 +145,7 @@ The shells / graphs / transports map to the variants like so:
 | `esci2-plain` | `runEsci2ScanOverPlain` | `src/esci2/graph` | `withEsci2UnlockOnDestroy(socketAsTransport(net.connect(...)))` — same graph, dialect-driven per-state decisions                                     |
 | `esci`        | `runEsciScan`           | `src/esci/graph`  | `socketAsTransport(net.connect(...))` — no transport adapters; UNLOCK is sent from the graph's `UNLOCKING` state rather than via a destroy-time hook |
 
-Both ESC/I-2 entry points share the same graph with no transport-conditional branching — the graph starts at the same `WELCOME` state and processes the same IS framing for either path. The difference lives entirely in the scanner shell: it picks the socket factory (`tls.connect` vs `net.connect`) and the transport-adapter composition (TLS-error labels on the TLS path, plain socket otherwise). `ctx.transport: "tls" | "plain"` rides along on the context only so the unknown-fingerprint diagnostic block can report which transport was in use. `ctx.dialect` (resolved from the CAPA fingerprint at INIT1 — see [How printer-model differences are handled](#how-printer-model-differences-are-handled)) drives the per-state decisions (source detection, init-poll count, PARA build). The deterministic single-IS-packet-per-transition contract holds for all three.
+Both ESC/I-2 entry points share the same graph with no transport-conditional branching — the graph starts at the same `WELCOME` state and processes the same IS framing for either path. The difference lives entirely in the scanner shell: it picks the socket factory (`tls.connect` vs `net.connect`) and the transport-adapter composition (TLS-error labels on the TLS path, plain socket otherwise). `ctx.transport: "tls" | "plain"` rides along on the context only so the unknown-fingerprint diagnostic block can report which transport was in use. `ctx.entry` (resolved from the CAPA fingerprint at INIT1 — see [How printer-model differences are handled](#how-printer-model-differences-are-handled)) drives the per-state decisions (source detection, init-poll count, PARA build). The deterministic single-IS-packet-per-transition contract holds for all three.
 
 ```
 CONNECTING
@@ -219,7 +219,7 @@ The IMG loop's termination condition differs by source:
 
 **Source detection.** The push-scan SOAP body does not indicate whether the printer will scan from the ADF or the flatbed glass — the panel does not expose a source selector. Instead, the printer detects its own source (via the ADF paper sensor) and signals the result in the first `@STAT` reply during INIT_POLL cycle 1. Dialects with `sourceDetection: "stat-length"` (ET-4950 family + XP-7100) apply this heuristic: an ADF-mode printer returns a zero-length `STATx0000000` reply and a flatbed-mode printer returns a 12-byte `STATx000000C` reply with filler content. The scanner reads this length field and sets `ctx.source`, which governs the PARA blob selection, the IMG loop terminator, and the POSTSCAN branching.
 
-The ET-2750 dialect uses `sourceDetection: "fixed-flatbed"` and skips this heuristic: its STAT reply declares `length=0` in the 12-byte ESC/I-2 header but packs a 52-byte filler (`#---#---#---…`) inline in the same 64-byte IS frame, so applying the stat-length rule would misclassify it as ADF. ET-2750 hardware is flatbed-only — there's no ADF to detect — so the graph trusts the `source: "flatbed"` value the scanner shell pre-sets in `initialCtx`. The `INIT_POLL_STAT` decision is conditioned on `ctx.dialect.sourceDetection === "stat-length"` for the override path.
+The ET-2750 dialect uses `sourceDetection: "fixed-flatbed"` and skips this heuristic: its STAT reply declares `length=0` in the 12-byte ESC/I-2 header but packs a 52-byte filler (`#---#---#---…`) inline in the same 64-byte IS frame, so applying the stat-length rule would misclassify it as ADF. ET-2750 hardware is flatbed-only — there's no ADF to detect — so the graph trusts the `source: "flatbed"` value the scanner shell pre-sets in `initialCtx`. The `INIT_POLL_STAT` decision is conditioned on `ctx.entry.sourceDetection === "stat-length"` for the override path.
 
 ### Transport adapters
 
@@ -240,7 +240,7 @@ The WF-3620 ESC/I path uses no transport-shape adapters. It still emits LOCK and
 
 For dialects with **`sourceDetection: "stat-length"`** (ET-4950 family + XP-7100), the scanner detects the physical source from the first `@STAT` reply in INIT_POLL cycle 1: declared length `0` → ADF; declared length `12` → flatbed; any other non-zero length falls back to ADF (no other lengths have been observed in practice — the fallback exists for diagnostic resilience). When the declared length is non-zero, those bytes are drained with a pure-read before the next command is sent — the printer queues them as pending output, and failing to drain them desynchronises the IS framing for all subsequent packets.
 
-For dialects with **`sourceDetection: "fixed-flatbed"`** (ET-2750), the heuristic is skipped entirely. ET-2750 hardware is flatbed-only, but its STAT reply declares length `0` (with a 52-byte filler packed inline in the same 64-byte IS frame), so applying the stat-length rule would misclassify it as ADF. The scanner shell pre-sets `source: "flatbed"` in `initialCtx`, and the `INIT_POLL_STAT` decision is gated on `ctx.dialect.sourceDetection === "stat-length"` — the override path doesn't run on the ET-2750 dialect and the pre-set value survives.
+For dialects with **`sourceDetection: "fixed-flatbed"`** (ET-2750), the heuristic is skipped entirely. ET-2750 hardware is flatbed-only, but its STAT reply declares length `0` (with a 52-byte filler packed inline in the same 64-byte IS frame), so applying the stat-length rule would misclassify it as ADF. The scanner shell pre-sets `source: "flatbed"` in `initialCtx`, and the `INIT_POLL_STAT` decision is gated on `ctx.entry.sourceDetection === "stat-length"` — the override path doesn't run on the ET-2750 dialect and the pre-set value survives.
 
 ADF precedence (dialects with ADF hardware: ET-4950 family + XP-7100): when the ADF feeder has paper loaded, the printer picks ADF regardless of whether a document is also present on the glass. The INIT_POLL STAT reply returns length 0 in this case. Users who want flatbed must clear the ADF first.
 
@@ -307,26 +307,41 @@ A second ESC/I-2 hardware variant — the ET-2750 — uses the same protocol voc
 Wire differences from the ET-4950, decoded from `flatbed-single-page-pdf.pcapng`:
 
 - **No TLS handshake.** The printer sends the welcome IS packet (type `0x8000`) immediately after TCP connect.
-- **INIT_POLL runs 2 iterations** (not 3). Dialect-driven via `ctx.dialect.initPollIterations`; sending a third FS Y after the printer has moved on returns a non-ACK that fails MODE_SWITCH validation.
-- **STAT replies pack a 52-byte filler inline** in a single 64-byte IS frame. The 12-byte ESC/I-2 reply header still declares `length=0`, so the ET-4950 length-based source-detection heuristic would misclassify ET-2750 as ADF. The graph skips the override when `ctx.dialect.sourceDetection === "fixed-flatbed"` and trusts the `source: "flatbed"` value from `initialCtx`. ET-2750 hardware is flatbed-only, so this is correct.
+- **INIT_POLL runs 2 iterations** (not 3). Registry-entry-driven via `ctx.entry.initPollIterations`; sending a third FS Y after the printer has moved on returns a non-ACK that fails MODE_SWITCH validation.
+- **STAT replies pack a 52-byte filler inline** in a single 64-byte IS frame. The 12-byte ESC/I-2 reply header still declares `length=0`, so the ET-4950 length-based source-detection heuristic would misclassify ET-2750 as ADF. The graph skips the override when `ctx.entry.sourceDetection === "fixed-flatbed"` and trusts the `source: "flatbed"` value from `initialCtx`. ET-2750 hardware is flatbed-only, so this is correct.
 - **PARA flatbed payload is 936 bytes** (vs ET-4950 flatbed's 928): different gamma constant, no `#QITOFF`/`#CCTCOL` block, new inline `#CMXUM08` ICC-matrix block, slightly different `#ACQ` extents. See the [PARA table above](#source-adf-vs-flatbed) for the full row.
 
 The ET-2750 dialect is resolved by the same CAPA-fingerprint lookup used by the rest of the ESC/I-2 family. The scanner shell picks the entry point (`runEsci2Scan` for TLS vs `runEsci2ScanOverPlain` for plain TCP) and pre-sets `ctx.transport` in the initial ctx. ET-2750 is flatbed-only hardware — config-time validation rejects `esci2-plain + ESCI_FORCE_SOURCE` and `esci2-plain + PRINTER_CERT_FINGERPRINT` combinations at startup.
 
 ## How printer-model differences are handled
 
-Different Epson models speak slightly different PARA dialects despite sharing
-the same protocol generation — gamma constants, optional quirk tokens
-(`#QITOFF`, `#CCTCOL`, `#CMXUM08h009`), and per-action LUT/CMX regions vary.
-The scanner identifies the dialect at session start by hashing a canonicalised
-copy of the printer's first CAPA reply (a `sha256` over volatile-stripped,
-sorted segments). The hash maps to a `Dialect` object in
-`src/esci2/dialect-registry.ts` that carries the PARA builder,
-supported-hardware bitset, source-detection policy, and init-poll iteration
-count. Printers with an unrecognised CAPA fingerprint fail fast with a
-copy-pasteable diagnostic block — no synthesis attempt, no silent quality
-regression. Adding support for a new printer requires a Wireshark capture and
-one new file under `src/esci2/dialects/`.
+Each supported printer family has an entry in `src/esci2/dialects/registry.ts`,
+keyed by a sha256 fingerprint over its CAPA reply (`src/esci2/capa-fingerprint.ts`).
+Entries are pure data:
+
+- Dispatch metadata (`sourceDetection`, `initPollIterations`).
+- Scan extents (`fbExtents`, `adfExtents`) — manually pinned per family.
+- A `gmm` constant plus named `gammaClass` and `cmxClass` lookups resolved from
+  `src/esci2/data/gamma-classes.ts` and `cmx-classes.ts`. Class definitions are
+  inlined verbatim from captured fixtures; never algorithmically generated.
+- Optional-segment presence flags (`#QIT`, `#CCT`).
+
+At INIT1_CAPA the graph computes the fingerprint, looks up the entry via
+`lookupRegistryEntry`, and stores it on the session context. At PARA build time
+the entry plus the runtime source/action axes feed into `makeParaSpec`, and
+`composePara` assembles the PARA body.
+
+Printers with an unrecognised CAPA fingerprint fail fast with a copy-pasteable
+diagnostic block — no synthesis attempt, no silent quality regression. Adding
+support for a new printer is a data-only change in the normal case: capture its
+wire bytes, extract any novel gamma/CMX class into the data files, and add a
+registry entry. Replay tests (`src/esci2/scanner.test.ts` and per-dialect files
+under `src/esci2/dialects/*.test.ts`) pin the composed output byte-for-byte
+against the captured fixture.
+
+Legacy ESC/I (WF-3620 family) uses a separate code path under `src/esci/` with
+a 64-byte `FS W` parameter block instead of the `PARA` command; none of the
+above applies to it.
 
 ## ESC/I variant (WF-3620)
 

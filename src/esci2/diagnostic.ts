@@ -1,35 +1,34 @@
 import { parseCapaTokens, parseInfoTokens } from "./capabilities.js";
-import { et4950FamilyDialect } from "./dialects/et-4950-family.js";
-import { et2750Dialect } from "./dialects/et-2750.js";
-import { et2950Dialect } from "./dialects/et-2950.js";
-import { xp7100Dialect } from "./dialects/xp-7100.js";
-import type { Dialect } from "./dialect.js";
 
 /**
- * All registered ESC/I-2 dialects, keyed by CAPA#1 sha256 fingerprint.
- * Adding a new printer to this list (after capturing its CAPA reply) is
- * the only required code change to support a new model — provided its
- * wire bytes fit one of the existing dialects' shapes.
+ * Thrown when a session lands on a printer whose CAPA fingerprint isn't
+ * in the registry. Carries enough context for the user to file an issue
+ * that the maintainer can act on.
+ *
+ * Lives next to the diagnostic-block renderer it's thrown with. (Originally
+ * declared in the now-deleted dialect.ts.)
  */
-export const DIALECTS: readonly Dialect[] = [
-  et4950FamilyDialect,
-  et2750Dialect,
-  et2950Dialect,
-  xp7100Dialect,
-];
-
-const BY_FINGERPRINT: ReadonlyMap<string, Dialect> = new Map(
-  DIALECTS.map((d) => [d.capaFingerprint, d]),
-);
-
-export function lookupDialect(fingerprint: string): Dialect | null {
-  return BY_FINGERPRINT.get(fingerprint) ?? null;
+export class UnsupportedDialectError extends Error {
+  constructor(
+    public readonly capaFingerprint: string,
+    public readonly diagnostic: string,
+  ) {
+    super(
+      `Unsupported printer CAPA fingerprint ${capaFingerprint}. ` +
+        `Please file an issue with the diagnostic block below:\n\n${diagnostic}`,
+    );
+    this.name = "UnsupportedDialectError";
+  }
 }
 
 /**
  * Renders a copy-pasteable diagnostic block for the UnsupportedDialectError
  * raised when CAPA fingerprint doesn't resolve. Includes everything a
  * maintainer needs to add a new dialect or reproduce locally.
+ *
+ * Body relocated verbatim from dialect-registry.ts. Pinned tests in
+ * diagnostic.test.ts (moved from dialect-registry.test.ts) assert the
+ * exact rendering, including the `(absent)` treatment of bare LIST tokens.
  */
 export function buildDiagnostic(args: {
   capaBody: Buffer;

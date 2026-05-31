@@ -22,10 +22,14 @@ import {
   parseTokens,
 } from "./commands.js";
 import { ackByte, expectIsType } from "../graph-helpers.js";
-import type { Dialect } from "./dialect.js";
+import type { RegistryEntry } from "./dialects/registry.js";
+import {
+  lookupRegistryEntry,
+  applyEntrySourceOverride,
+  makeParaSpec,
+} from "./dialects/dispatch.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
-import { lookupDialect, buildDiagnostic } from "./dialect-registry.js";
-import { UnsupportedDialectError } from "./dialect.js";
+import { composePara, type ParaSpec } from "./para-composer.js";
 import { createLogger } from "../logger.js";
 
 const log = createLogger("scanner-esci2");
@@ -58,8 +62,8 @@ export interface Esci2Ctx {
   infoBody: Buffer;
   /** CAPA#1 reply body captured from INIT1. Buffer.alloc(0) until INIT1_CAPA_DATA fires. */
   capaBody: Buffer;
-  /** Resolved dialect post-INIT1, drives PARA build + init-poll count + source detection. Undefined until INIT1 completes. */
-  dialect: Dialect | undefined;
+  /** Resolved registry entry post-INIT1, drives PARA build + init-poll count + source detection. Undefined until INIT1 completes. */
+  entry: RegistryEntry | undefined;
   /** Panel-selected output format; drives action-aware dialects' PARA splice. */
   action: "jpg" | "pdf";
 }
@@ -67,24 +71,6 @@ export interface Esci2Ctx {
 export const ESCI2_TIMEOUT_MS = 30_000;
 export const ESCI2_REPLY_SIZE = 64;
 
-/**
- * Applies any source-axis overrides implied by a freshly resolved dialect.
- *
- * The TLS scanner shell pre-sets ctx.source to "adf" because the dominant
- * TLS path is ADF + flatbed with `sourceDetection: "stat-length"`, where
- * INIT_POLL_STAT then flips the source to flatbed if the printer queued
- * its filler bytes. Dialects with `sourceDetection: "fixed-flatbed"`
- * deliberately skip that override (see INIT_POLL_STAT), so without
- * pinning the source here the pre-set "adf" carries all the way through
- * to buildPara and trips a flatbed-only dialect's ADF guard. ET-2750
- * doesn't hit this because the plain-TCP shell pre-sets "flatbed" — but
- * any TLS + flatbed-only dialect (e.g. ET-2950) would.
- */
-export function applyDialectSourceOverride(ctx: Esci2Ctx, dialect: Dialect): void {
-  if (dialect.sourceDetection === "fixed-flatbed") {
-    ctx.source = "flatbed";
-  }
-}
 const LEGACY_REPLY_SIZE = 1;
 // 5000 zero-length retries gives ~100s of headroom for slow scan starts.
 // XP-7100 flatbed captures show up to 2612 zero-length IMG responses before
@@ -313,22 +299,13 @@ twoPhaseRead(
   (ctx, body) => {
     ctx.capaBody = body;
     const fingerprint = computeCapaFingerprint(body);
-    const dialect = lookupDialect(fingerprint);
-    if (dialect === null) {
-      const diagnostic = buildDiagnostic({
-        capaBody: ctx.capaBody,
-        infoBody: ctx.infoBody,
-        transport: ctx.transport,
-        fingerprint,
-      });
-      return { error: new UnsupportedDialectError(fingerprint, diagnostic) };
+    try {
+      ctx.entry = lookupRegistryEntry(fingerprint, ctx.capaBody, ctx.infoBody, ctx.transport);
+    } catch (err) {
+      return { error: err as Error };
     }
-    ctx.dialect = dialect;
-    // Surface the dialect that won the CAPA-fingerprint lookup so traces are
-    // self-documenting. Otherwise the only signal that resolution succeeded
-    // is the absence of an UnsupportedDialectError further downstream.
-    log.debug("Dialect resolved", { name: dialect.displayName, fingerprint });
-    applyDialectSourceOverride(ctx, dialect);
+    log.debug("Dialect resolved", { name: ctx.entry.displayName, fingerprint });
+    applyEntrySourceOverride(ctx, ctx.entry);
   },
 );
 
@@ -554,7 +531,7 @@ g.state(
     // stat-length heuristic would misclassify it as ADF, so skip the
     // override entirely and trust the `source: "flatbed"` value the
     // scanner shell pre-set in `initialCtx`.
-    if (ctx.initPollIteration === 0 && ctx.dialect!.sourceDetection === "stat-length") {
+    if (ctx.initPollIteration === 0 && ctx.entry!.sourceDetection === "stat-length") {
       if (header.length === 0) {
         ctx.source = "adf";
       } else if (header.length === 12) {
@@ -596,7 +573,7 @@ g.state(
     const typeGuard = expectIsType(packet, 0xa000, "INIT_POLL_FIN");
     if (typeGuard) return typeGuard;
     ctx.initPollIteration += 1;
-    const target = ctx.dialect!.initPollIterations;
+    const target = ctx.entry!.initPollIterations;
     if (ctx.initPollIteration < target) {
       return {
         next: "INIT_POLL_FS_Y",
@@ -616,14 +593,12 @@ g.state(
 // =============================================================================
 
 // Builds the PARA header + body send pair. Called once per dispatch in
-// POST_MODE_STAT and POST_MODE_STAT_DRAIN; ctx.dialect.buildPara selects
-// the correct blob for the detected hardware.
+// POST_MODE_STAT and POST_MODE_STAT_DRAIN; composePara + registry entry
+// selects the correct blob for the detected hardware.
 function buildParaSend(ctx: Esci2Ctx): Buffer[] {
-  const paraPayload = ctx.dialect!.buildPara({
-    source: ctx.source,
-    duplex: ctx.duplex,
-    action: ctx.action,
-  });
+  const paraSource: ParaSpec["source"] =
+    ctx.source === "flatbed" ? "flatbed" : ctx.duplex ? "adf-duplex" : "adf-simplex";
+  const paraPayload = composePara(makeParaSpec(ctx.entry!, paraSource, ctx.action));
   return [
     buildPassthruPacket(buildParaHeader(paraPayload.length), 0),
     buildPassthruPacket(paraPayload, ESCI2_REPLY_SIZE),
