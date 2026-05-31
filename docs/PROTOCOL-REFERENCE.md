@@ -12,7 +12,7 @@ Printer (unicast)    →  Service (TCP port 2968)          Push-scan trigger
 Service              →  Printer (TCP port 1865)          Scan session
 ```
 
-Each channel is independent enough to be developed and tested separately. Inside the scan session, the same `IS` framing wraps either ESC/I-2 commands (ET-4950 family + ET-2750) or legacy ESC/I commands (WF-3620 family). TLS is layered around it for ET-4950; the other two run on plain TCP.
+Each channel is independent enough to be developed and tested separately. Inside the scan session, the same `IS` framing wraps either ESC/I-2 commands (ET-4950 family over TLS; ET-2750 / XP-7100 / ET-4800 over plain TCP) or legacy ESC/I commands (WF-3620 family, plain TCP). TLS is layered around it only for the ET-4950 family; everything else runs on plain TCP.
 
 ### Discovery and keepalive (UDP multicast)
 
@@ -49,11 +49,11 @@ Implemented in `src/pushscan.ts`. `parsePushScanRequest` extracts the SOAP field
 
 Three transport variants ride on TCP port 1865, decided per scan session by `src/protocol-probe.ts` (covered in detail in [Protocol probe](#protocol-probe-three-arms) below):
 
-| Variant       | Transport    | Command set          | Hardware                    |
-| ------------- | ------------ | -------------------- | --------------------------- |
-| `esci2-tls`   | TLS over TCP | ESC/I-2 over IS      | ET-4950 / ET-3950 / ET-4956 |
-| `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750 (flatbed-only)      |
-| `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family              |
+| Variant       | Transport    | Command set          | Hardware                              |
+| ------------- | ------------ | -------------------- | ------------------------------------- |
+| `esci2-tls`   | TLS over TCP | ESC/I-2 over IS      | ET-4950 / ET-3950 / ET-4956 / ET-2950 |
+| `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750 / XP-7100 / ET-4800           |
+| `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family                        |
 
 The rest of this section walks the **canonical `esci2-tls` path** in depth, since it's the most mechanically complex (TLS on top, both command generations layered inside) and the foundation that the other two variants peel back from. The plain-TCP ESC/I-2 differences (ET-2750 / XP-7100 / ET-4800) live in [ESC/I-2 over plain TCP](#esci-2-over-plain-tcp), and the legacy ESC/I family (WF-3620) in [ESC/I variant](#esci-variant-wf-3620). Both are sibling sections, not appendices.
 
@@ -63,7 +63,7 @@ The `esci2-tls` image transfer happens over a TLS 1.2 session that the service i
 
 #### IS framing (universal across all three variants)
 
-Whether the session runs over TLS (ET-4950) or plain TCP (ET-2750, WF-3620), all traffic is wrapped in Epson's proprietary **IS framing**. Every message in both directions is an IS packet:
+Whether the session runs over TLS (ET-4950 family) or plain TCP (ET-2750, XP-7100, ET-4800, WF-3620), all traffic is wrapped in Epson's proprietary **IS framing**. Every message in both directions is an IS packet:
 
 ```
 Offset  Len  Field
@@ -76,7 +76,7 @@ Offset  Len  Field
  12      N   Payload
 ```
 
-The data-offset field is asymmetric: host-side is always `0x000C` (12); printer-side is always `0x300C` — confirmed across all seven ET-4950 Frida captures and the ET-2750 pcap. The `0x300C` is a printer-firmware constant that the SANE `epsonds` source treats as opaque too. Our builders write `0x000C` on outbound; our parser reads only the type and length fields and ignores offset 4-5 on inbound, so the asymmetry requires no code change.
+The data-offset field is asymmetric: host-side is always `0x000C` (12); printer-side is always `0x300C` — confirmed across all seven ET-4950 Frida captures and the ET-2750 / XP-7100 / ET-4800 pcaps. The `0x300C` is a printer-firmware constant that the SANE `epsonds` source treats as opaque too. Our builders write `0x000C` on outbound; our parser reads only the type and length fields and ignores offset 4-5 on inbound, so the asymmetry requires no code change.
 
 The packet type field determines the semantics of the payload. The ESC/I-2 path uses these types:
 
@@ -168,7 +168,7 @@ INIT2_CAPA       ← send CAPA, drain declared capability body
 INIT2_RESA       ← send RESA, drain declared resolution body
 INIT2_FIN        ← send FIN, await 64-byte reply
     │
-INIT_POLL × dialect.initPollIterations (3 for ET-4950 family + XP-7100, 2 for ET-2750):
+INIT_POLL × dialect.initPollIterations (3 for ET-4950 family + XP-7100 + ET-4800, 2 for ET-2750):
   INIT_POLL_FS_Y    ← send FS Y, await ACK
   INIT_POLL_STAT    ← send STAT, await 64-byte envelope
   INIT_POLL_STAT_DRAIN  ← drain N bytes if STAT reply declares length > 0 (flatbed only)
@@ -274,7 +274,7 @@ Flatbed scans are always single-sided regardless of the `PushScanIDIn[0]` value.
 
 The panel's Action selection is the second character of `PushScanIDIn`, interpreted as a bitmask: `1` = JPG, `2` = PDF, `4` = Preview on Computer. The service resolves this to an effective action via `resolveEffectiveAction` in `src/pushscan.ts`.
 
-A key protocol finding for the ESC/I-2 path (all ESC/I-2 dialects — ET-4950 family, ET-2750, XP-7100, ET-4800): **the printer is unaware of the JPG-vs-PDF distinction.** It always streams JPEG-encoded image data regardless of the panel's Action setting; PDF is composed on the host side using pdf-lib after all pages have been received. The ADF replay tests assert this directly — the same Frida JPG capture is reused as the fixture for both `action='jpg'` and `action='pdf'` test runs, and the state machine produces the expected outputs in both cases. (The committed JPG and PDF flatbed captures are separate Frida sessions and so differ slightly in capture-time polling cadence, but the protocol structure is the same.)
+A key protocol finding for the ESC/I-2 path: **the printer always streams JPEG-encoded image data regardless of the panel's Action setting.** PDF is composed host-side with pdf-lib after all pages have been received, so the printer is never told "PDF". The scan-parameter (PARA) bytes are action-invariant for most dialects (ET-4950 family, ET-2750, ET-4800) — the same capture replays for both `action='jpg'` and `action='pdf'`, and the ADF replay tests assert this by reusing one Frida JPG capture across both runs. **XP-7100 is the exception:** its registry entry carries per-action gamma / CMX classes, so it emits different PARA bytes for JPG vs PDF even though the image stream is identical JPEG either way. (The committed JPG and PDF flatbed captures are separate Frida sessions and so differ slightly in capture-time polling cadence, but the protocol structure is the same.)
 
 The ESC/I path (WF-3620) is different: the firmware locks the scan resolution to the panel's format choice (600 DPI for JPG, 300 DPI for PDF), so the wire bytes do differ between the two — see [ESC/I variant (WF-3620)](#esci-variant-wf-3620) below. Composition still happens host-side via pdf-lib in PDF mode, but the underlying pixel stream is captured at the lower resolution.
 
