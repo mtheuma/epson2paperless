@@ -182,7 +182,7 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
     }
   });
 
-  it("INIT_POLL_FIN loops on et2750Dialect while initPollIteration < 2", () => {
+  it("INIT_POLL_FIN loops on the ET-2750 registry entry while initPollIteration < 2", () => {
     const state = esci2Graph.states.INIT_POLL_FIN;
     expect(state.kind).toBe("decision");
     if (state.kind !== "decision") return;
@@ -197,7 +197,7 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
     expect(ctx.initPollIteration).toBe(1);
   });
 
-  it("INIT_POLL_FIN advances to MODE_SWITCH on et2750Dialect after 2 iterations", () => {
+  it("INIT_POLL_FIN advances to MODE_SWITCH on the ET-2750 registry entry after 2 iterations", () => {
     const state = esci2Graph.states.INIT_POLL_FIN;
     expect(state.kind).toBe("decision");
     if (state.kind !== "decision") return;
