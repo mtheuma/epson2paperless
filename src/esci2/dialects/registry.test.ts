@@ -3,8 +3,8 @@ import { describe, it, expect } from "vitest";
 import { REGISTRY } from "./registry.js";
 
 describe("REGISTRY", () => {
-  it("contains exactly four known fingerprints", () => {
-    expect(REGISTRY.size).toBe(4);
+  it("contains exactly five known fingerprints", () => {
+    expect(REGISTRY.size).toBe(5);
   });
 
   it("includes ET-4950 family entry", () => {
@@ -48,5 +48,18 @@ describe("REGISTRY", () => {
     expect(e!.gammaClass).toEqual({ jpg: "et4950-stock", pdf: "et4950-stock" });
     expect(e!.cmxClass).toEqual({ jpg: null, pdf: null });
     expect(e!.adfExtents).toBeNull();
+  });
+
+  it("includes ET-4800 entry (flatbed + ADF simplex, plain TCP)", () => {
+    const e = REGISTRY.get("7870a725ab969136d5eb04387bf01d3cc3168aabb3d11cfaca7d59a4169971c2");
+    expect(e).toBeDefined();
+    expect(e!.sourceDetection).toBe("stat-length");
+    expect(e!.initPollIterations).toBe(3);
+    expect(e!.gmm).toBe("UG18");
+    expect(e!.gammaClass).toEqual({ jpg: "et4800-stock", pdf: "et4800-stock" });
+    expect(e!.cmxClass).toEqual({ jpg: "et4800-um08", pdf: "et4800-um08" });
+    expect(e!.optionalSegments).toEqual({ qit: false, cct: false });
+    expect(e!.fbExtents).toEqual({ x0: 0, y0: 0, w: 2481, h: 3506 });
+    expect(e!.adfExtents).toEqual({ x0: 69, y0: 0, w: 2481, h: 3506 });
   });
 });
