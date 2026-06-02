@@ -84,4 +84,24 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       optionalSegments: { qit: false, cct: false },
     },
   ],
+  [
+    // ET-15000: A3-print / A4-scan EcoTank. Flatbed + ADF simplex (no duplex),
+    // ESC/I-2 over plain TCP. CAPA advertises GMM "UG10UG18" and CMX "UNITUM08"
+    // with QIT/CCT absent — structurally an ET-4800 that additionally lists the
+    // UG10 gamma mode. The gamma/CMX class bytes are reused from the ET-4800
+    // (closest plain-TCP sibling) pending a hardware capture of the ET-15000's
+    // own PARA; live-validated against a real ET-15000 (PID 116E, FW FB 1.01).
+    "d1d7293e92fa726e006429beacca1255e474de0d66b3559f87176d4e4b3d0e55",
+    {
+      displayName: "ET-15000 (ESC/I-2 over plain TCP)",
+      sourceDetection: "stat-length",
+      initPollIterations: 3,
+      fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
+      adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
+      gmm: "UG18",
+      gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
+      cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
+      optionalSegments: { qit: false, cct: false },
+    },
+  ],
 ]);
