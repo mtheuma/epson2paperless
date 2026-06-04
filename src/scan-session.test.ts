@@ -243,8 +243,13 @@ describe("runScanSession (engine pump)", () => {
     const transport = new FakeTransport();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
 
-    let encodeStartedAt = 0;
-    let sendObservedAt = 0;
+    // Ordering invariant proven deterministically (no wall-clock delta): the
+    // encode promise resolves on a later tick, flipping `encodeResolved`; when
+    // the 0xcafe send is observed we capture that flag. If the engine ever
+    // stopped awaiting the flushPage barrier and sent synchronously, the flag
+    // would still be false at send time and this test would catch it.
+    let encodeResolved = false;
+    let sawSendAfterEncode = false;
     const encodePromise = new Promise<Buffer>((resolve) => {
       setTimeout(() => {
         // Minimal valid JPEG: SOI + EOI
@@ -260,19 +265,20 @@ describe("runScanSession (engine pump)", () => {
           send: Buffer.from([0xca, 0xfe]),
           flushPage: {
             side: "front",
-            encode: () => {
-              encodeStartedAt = Date.now();
-              return encodePromise;
-            },
+            encode: () =>
+              encodePromise.then((b) => {
+                encodeResolved = true;
+                return b;
+              }),
           },
         },
       },
     });
 
-    // Wrap transport.write to record when our send was observed
+    // Wrap transport.write to record encode ordering when our send was observed
     const origWrite = transport.write.bind(transport);
     transport.write = (buf: Buffer) => {
-      if (buf.equals(Buffer.from([0xca, 0xfe]))) sendObservedAt = Date.now();
+      if (buf.equals(Buffer.from([0xca, 0xfe]))) sawSendAfterEncode = encodeResolved;
       return origWrite(buf);
     };
 
@@ -292,7 +298,7 @@ describe("runScanSession (engine pump)", () => {
     const result = await promise;
     expect(result.ok).toBe(true);
     // The send must happen AFTER encode resolved
-    expect(sendObservedAt).toBeGreaterThanOrEqual(encodeStartedAt + 30);
+    expect(sawSendAfterEncode).toBe(true);
 
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
