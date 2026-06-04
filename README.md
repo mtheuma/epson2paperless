@@ -26,6 +26,7 @@ What you get:
 | **ET-2750**           | ✅ Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS |
 | **ET-2950**           | 🟡 Experimental | Flatbed-only hardware                                 |
 | **ET-4800**           | ✅ Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS           |
+| **ET-15000**          | 🟡 Experimental | Flatbed verified; ADF simplex untested                |
 | **XP-7100**           | ✅ Verified     |                                                       |
 
 Compatibility reports are welcome whether your model works or doesn't. [Open an issue](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) using the compatibility template.
