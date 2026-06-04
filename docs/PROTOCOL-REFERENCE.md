@@ -12,7 +12,7 @@ Printer (unicast)    →  Service (TCP port 2968)          Push-scan trigger
 Service              →  Printer (TCP port 1865)          Scan session
 ```
 
-Each channel is independent enough to be developed and tested separately. Inside the scan session, the same `IS` framing wraps either ESC/I-2 commands (ET-4950 family + ET-2950 over TLS; ET-2750 / XP-7100 / ET-4800 over plain TCP) or legacy ESC/I commands (WF-3620 family, plain TCP). TLS is layered around it only for the ESC/I-2-over-TLS printers (the ET-4950 family and ET-2950 — a separate registry entry); everything else runs on plain TCP.
+Each channel is independent enough to be developed and tested separately. Inside the scan session, the same `IS` framing wraps either ESC/I-2 commands (ET-4950 family + ET-2950 over TLS; ET-2750 / XP-7100 / ET-4800 / ET-15000 over plain TCP) or legacy ESC/I commands (WF-3620 family, plain TCP). TLS is layered around it only for the ESC/I-2-over-TLS printers (the ET-4950 family and ET-2950 — a separate registry entry); everything else runs on plain TCP.
 
 ### Discovery and keepalive (UDP multicast)
 
@@ -49,13 +49,13 @@ Implemented in `src/pushscan.ts`. `parsePushScanRequest` extracts the SOAP field
 
 Three transport variants ride on TCP port 1865, decided per scan session by `src/protocol-probe.ts` (covered in detail in [Protocol probe](#protocol-probe-three-arms) below):
 
-| Variant       | Transport    | Command set          | Hardware                              |
-| ------------- | ------------ | -------------------- | ------------------------------------- |
-| `esci2-tls`   | TLS over TCP | ESC/I-2 over IS      | ET-4950 / ET-3950 / ET-4956 / ET-2950 |
-| `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750 / XP-7100 / ET-4800           |
-| `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family                        |
+| Variant       | Transport    | Command set          | Hardware                               |
+| ------------- | ------------ | -------------------- | -------------------------------------- |
+| `esci2-tls`   | TLS over TCP | ESC/I-2 over IS      | ET-4950 / ET-3950 / ET-4956 / ET-2950  |
+| `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750 / XP-7100 / ET-4800 / ET-15000 |
+| `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family                         |
 
-The rest of this section walks the **canonical `esci2-tls` path** in depth, since it's the most mechanically complex (TLS on top, both command generations layered inside) and the foundation that the other two variants peel back from. The plain-TCP ESC/I-2 differences (ET-2750 / XP-7100 / ET-4800) live in [ESC/I-2 over plain TCP](#esci-2-over-plain-tcp), and the legacy ESC/I family (WF-3620) in [ESC/I variant](#esci-variant-wf-3620). Both are sibling sections, not appendices.
+The rest of this section walks the **canonical `esci2-tls` path** in depth, since it's the most mechanically complex (TLS on top, both command generations layered inside) and the foundation that the other two variants peel back from. The plain-TCP ESC/I-2 differences (ET-2750 / XP-7100 / ET-4800 / ET-15000) live in [ESC/I-2 over plain TCP](#esci-2-over-plain-tcp), and the legacy ESC/I family (WF-3620) in [ESC/I variant](#esci-variant-wf-3620). Both are sibling sections, not appendices.
 
 #### TLS on the canonical path
 
@@ -253,10 +253,11 @@ The composed PARA length depends on the dialect (which gamma / CMX classes and o
 | ET-2750                     | `esci2-plain` | 936 B   | —           | —          |
 | XP-7100                     | `esci2-plain` | 944 B   | 952 B       | 956 B      |
 | ET-4800                     | `esci2-plain` | 936 B   | 944 B       | —          |
+| ET-15000                    | `esci2-plain` | 936 B   | 944 B       | —          |
 
-(ET-2950 and ET-2750 are flatbed-only hardware; ET-4800 is flatbed + ADF simplex — its `composePara` can emit a 948 B `#ADFDPLX` body, but the simplex-only panel never requests duplex, so that row is `—`.)
+(ET-2950 and ET-2750 are flatbed-only hardware; ET-4800 is flatbed + ADF simplex — its `composePara` can emit a 948 B `#ADFDPLX` body, but the simplex-only panel never requests duplex, so that row is `—`. ET-15000 reuses the ET-4800's class data and shares its PARA shape; only the flatbed body is hardware-verified, with the ADF row pending a capture.)
 
-PARA bodies are assembled at run time by `composePara` (`src/esci2/para-composer.ts`) from the resolved registry entry (`src/esci2/dialects/registry.ts`) plus the source / action axes — see [How printer-model differences are handled](#how-printer-model-differences-are-handled). The per-dialect byte data lives in `src/esci2/data/gamma-classes.ts` and `cmx-classes.ts`, each class byte-transcribed verbatim from that model's capture; none of it is hardcoded in `src/esci2/commands.ts` (that file holds only the command / header builders). Dialects differ by more than length: gamma constant (`#GMMUG18` for ET-2750 / XP-7100 / ET-4800 vs `#GMMUG10` for the ET-4950 family and ET-2950), optional-segment presence (`#QITOFF` / `#CCTCOL`, flagged per entry), and a model-specific inline `#CMXUM08` ICC-matrix block — so no dialect's body can be derived by editing another's.
+PARA bodies are assembled at run time by `composePara` (`src/esci2/para-composer.ts`) from the resolved registry entry (`src/esci2/dialects/registry.ts`) plus the source / action axes — see [How printer-model differences are handled](#how-printer-model-differences-are-handled). The per-dialect byte data lives in `src/esci2/data/gamma-classes.ts` and `cmx-classes.ts`, each class byte-transcribed verbatim from that model's capture; none of it is hardcoded in `src/esci2/commands.ts` (that file holds only the command / header builders). Dialects differ by more than length: gamma constant (`#GMMUG18` for ET-2750 / XP-7100 / ET-4800 / ET-15000 vs `#GMMUG10` for the ET-4950 family and ET-2950), optional-segment presence (`#QITOFF` / `#CCTCOL`, flagged per entry), and a model-specific inline `#CMXUM08` ICC-matrix block — so no dialect's body can be derived by editing another's.
 
 Within a dialect, the per-source variants differ in three places: the source token (`#FB ` / `#ADF` / `#ADFDPLX`), the `#PAG` page-count token (present for ADF, omitted for flatbed), and the `#ACQ` y-start offset (`0000069` for ADF, `0000000` for flatbed). The remainder — the three RGB gamma tables (`#GMTRED` / `#GMTGRN` / `#GMTBLU`), CMX colour-correction matrix, scan-area extents, and 1 MB buffer-size token — is byte-identical across sources within a dialect.
 
@@ -305,7 +306,7 @@ Only `esci2` (TLS) results are cached for the daemon's lifetime. The two non-TLS
 
 ## ESC/I-2 over plain TCP
 
-Several printers speak the ET-4950's ESC/I-2 vocabulary **without the TLS layer**: ET-2750 (flatbed-only), XP-7100 (flatbed + ADF, simplex and duplex), and ET-4800 (flatbed + ADF simplex). The wire is plain TCP on port 1865; the IS framing, command names, PARA structure, IMG pull loop, and async-event mechanics are otherwise identical to the TLS path. The scanner shell (`runEsci2ScanOverPlain` in `src/esci2/scanner.ts`) shares the protocol graph (`src/esci2/graph.ts`) with the TLS path — the only differences are at the socket factory (`net.connect` instead of `tls.connect`, no cert pinning, no TLS-error label adapter) and the per-dialect decisions the graph reads from the resolved registry entry.
+Several printers speak the ET-4950's ESC/I-2 vocabulary **without the TLS layer**: ET-2750 (flatbed-only), XP-7100 (flatbed + ADF, simplex and duplex), ET-4800 (flatbed + ADF simplex), and ET-15000 (an A3 EcoTank that mirrors the ET-4800's dialect; flatbed hardware-verified, ADF simplex pending a capture). The wire is plain TCP on port 1865; the IS framing, command names, PARA structure, IMG pull loop, and async-event mechanics are otherwise identical to the TLS path. The scanner shell (`runEsci2ScanOverPlain` in `src/esci2/scanner.ts`) shares the protocol graph (`src/esci2/graph.ts`) with the TLS path — the only differences are at the socket factory (`net.connect` instead of `tls.connect`, no cert pinning, no TLS-error label adapter) and the per-dialect decisions the graph reads from the resolved registry entry.
 
 Wire differences from the ET-4950 (decoded from the pcap captures under `tools/pcap-extract/captures/`):
 
