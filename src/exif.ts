@@ -60,3 +60,40 @@ export function setJpegOrientation(jpeg: Buffer, orientation: ExifOrientation): 
   jpeg.copy(out, 2 + app1.length, 2);
   return out;
 }
+
+/**
+ * Reads the EXIF Orientation tag from a JPEG, or undefined if there's no
+ * APP1/EXIF segment or no Orientation tag. Minimal TIFF parser — handles the
+ * single-IFD layout that setJpegOrientation and camera firmware produce.
+ */
+export function readJpegOrientation(jpeg: Buffer): ExifOrientation | undefined {
+  let off = 2; // skip SOI
+  while (off + 4 <= jpeg.length) {
+    if (jpeg[off] !== 0xff) break;
+    const marker = jpeg[off + 1];
+    const segLen = jpeg.readUInt16BE(off + 2);
+    if (marker === 0xe1) {
+      // APP1 — expect "Exif\0\0" then TIFF header.
+      const base = off + 4;
+      if (jpeg.toString("ascii", base, base + 4) === "Exif") {
+        const tiff = base + 6;
+        const le = jpeg.toString("ascii", tiff, tiff + 2) === "II";
+        const u16 = (p: number) => (le ? jpeg.readUInt16LE(p) : jpeg.readUInt16BE(p));
+        const u32 = (p: number) => (le ? jpeg.readUInt32LE(p) : jpeg.readUInt32BE(p));
+        const ifd0 = tiff + u32(tiff + 4);
+        const count = u16(ifd0);
+        for (let i = 0; i < count; i++) {
+          const entry = ifd0 + 2 + i * 12;
+          if (u16(entry) === 0x0112) {
+            const v = u16(entry + 8);
+            if (v === 1 || v === 3 || v === 6 || v === 8) return v;
+          }
+        }
+      }
+      return undefined;
+    }
+    if (marker === 0xda) break; // start of scan — no more metadata
+    off += 2 + segLen;
+  }
+  return undefined;
+}

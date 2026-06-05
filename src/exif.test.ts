@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { setJpegOrientation } from "./exif.js";
+import sharp from "sharp";
+import { setJpegOrientation, readJpegOrientation } from "./exif.js";
 
 describe("setJpegOrientation", () => {
   // A minimal valid JPEG prefix for tests: SOI + 3 arbitrary bytes.
@@ -73,5 +74,26 @@ describe("setJpegOrientation", () => {
     const result = setJpegOrientation(minimalJpeg, 3);
     // Bytes 2-3 of the output are the APP1 segment length (big-endian, excludes marker).
     expect(result.readUInt16BE(4)).toBe(0x0022);
+  });
+});
+
+describe("readJpegOrientation", () => {
+  it("reads back an orientation written by setJpegOrientation", async () => {
+    const jpeg = await sharp({
+      create: { width: 4, height: 4, channels: 3, background: { r: 1, g: 2, b: 3 } },
+    })
+      .jpeg()
+      .toBuffer();
+    const tagged = setJpegOrientation(jpeg, 3);
+    expect(readJpegOrientation(tagged)).toBe(3);
+  });
+
+  it("returns undefined for a JFIF-only JPEG with no EXIF", async () => {
+    const jpeg = await sharp({
+      create: { width: 4, height: 4, channels: 3, background: { r: 1, g: 2, b: 3 } },
+    })
+      .jpeg()
+      .toBuffer();
+    expect(readJpegOrientation(jpeg)).toBeUndefined();
   });
 });
