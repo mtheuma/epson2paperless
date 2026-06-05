@@ -37,7 +37,8 @@ export interface Transform {
 export interface CheckResult {
   name: string;
   pass: boolean;
-  measured: number;
+  /** The check's measured value, or null when the check isn't a single numeric comparison (e.g. page-size, or a missing region). */
+  measured: number | null;
   baseline?: number;
   tolerance?: number;
   detail?: string;

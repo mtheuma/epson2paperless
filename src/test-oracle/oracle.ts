@@ -30,8 +30,10 @@ export function measure(raster: Raster): Measurement {
   const t = fitTransform(crosshairPoints, pxCrosshairs);
   const crosshairResidualPx = residualPx(crosshairPoints, pxCrosshairs, t);
 
+  const swatchSample = (i: number) => inset(mapRect(t, swatchRect(i)), 6);
+
   const swatches = SWATCHES.map((s, i) => {
-    const m = meanRgb(raster, inset(mapRect(t, swatchRect(i)), 6));
+    const m = meanRgb(raster, swatchSample(i));
     return {
       label: s.label,
       rgb: [round(m.r), round(m.g), round(m.b)] as [number, number, number],
@@ -39,12 +41,12 @@ export function measure(raster: Raster): Measurement {
   });
 
   const greySpreads = greySwatchIndices.map((i) => {
-    const m = meanRgb(raster, inset(mapRect(t, swatchRect(i)), 6));
+    const m = meanRgb(raster, swatchSample(i));
     return { label: SWATCHES[i].label, spread: round(channelSpread(m)) };
   });
 
   const stripeVarianceMax = Math.max(
-    ...greySwatchIndices.map((i) => perRowVariance(raster, inset(mapRect(t, swatchRect(i)), 6))),
+    ...greySwatchIndices.map((i) => perRowVariance(raster, swatchSample(i))),
     perRowVariance(raster, inset(mapRect(t, ruleLineBand), 2)),
   );
 
@@ -64,8 +66,7 @@ export function assertAgainst(raster: Raster, baseline: Baseline): OracleReport 
   checks.push({
     name: "geometry:page-size",
     pass: raster.width === baseline.page.width && raster.height === baseline.page.height,
-    measured: raster.width,
-    baseline: baseline.page.width,
+    measured: null,
     detail: `${raster.width}x${raster.height} vs baseline ${baseline.page.width}x${baseline.page.height}`,
   });
 
@@ -82,7 +83,7 @@ export function assertAgainst(raster: Raster, baseline: Baseline): OracleReport 
       checks.push({
         name: `swatch:${bs.label}`,
         pass: false,
-        measured: NaN,
+        measured: null,
         detail: "missing in measurement",
       });
       continue;
@@ -101,7 +102,7 @@ export function assertAgainst(raster: Raster, baseline: Baseline): OracleReport 
     checks.push({
       name: `grey:${bg.label}`,
       pass: !!got && got.spread <= baseline.tolerances.greySpread,
-      measured: got?.spread ?? NaN,
+      measured: got?.spread ?? null,
       tolerance: baseline.tolerances.greySpread,
     });
   }
