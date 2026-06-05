@@ -42,7 +42,7 @@ export const SWATCHES: Swatch[] = [
   { r: 0, g: 160, b: 160, label: "00A0A0" },
 ];
 
-export const greySwatchIndices = [6, 7, 8];
+export const greySwatchIndices = [6, 7, 8] as const;
 
 const gridLeft =
   (LAYOUT.pageWidth - (3 * LAYOUT.swatchW + 2 * (LAYOUT.colSpacing - LAYOUT.swatchW))) / 2;
@@ -68,7 +68,12 @@ export const crosshairPoints = [
   { x: LAYOUT.pageWidth - LAYOUT.margin, y: LAYOUT.margin },
 ];
 
-/** Bottom horizontal-rule band (stripe/smear target), front + back identical. */
+/**
+ * Bottom horizontal-rule band (stripe/smear target), front + back identical.
+ * The 5 rules sit at `baseY + i*8` for i=0..4 (spanning 32pt); `h: 5 * 8` (40pt)
+ * is a deliberately generous bounding box with slack so the sampling region
+ * fully contains them.
+ */
 export const ruleLineBand: PointRect = {
   x: LAYOUT.margin + 20,
   y: LAYOUT.margin + 80,

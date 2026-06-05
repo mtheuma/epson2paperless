@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PDFDocument, PDFPage, PDFFont, StandardFonts, rgb } from "pdf-lib";
-import { LAYOUT, SWATCHES, swatchRect } from "./layout.js";
+import { LAYOUT, SWATCHES, swatchRect, crosshairPoints } from "./layout.js";
 
 function rgb255(r: number, g: number, b: number) {
   return rgb(r / 255, g / 255, b / 255);
@@ -24,10 +24,7 @@ function drawCrosshair(page: PDFPage, x: number, y: number, size = 12): void {
 }
 
 function drawCornerMarks(page: PDFPage): void {
-  drawCrosshair(page, LAYOUT.margin, LAYOUT.pageHeight - LAYOUT.margin);
-  drawCrosshair(page, LAYOUT.pageWidth - LAYOUT.margin, LAYOUT.pageHeight - LAYOUT.margin);
-  drawCrosshair(page, LAYOUT.margin, LAYOUT.margin);
-  drawCrosshair(page, LAYOUT.pageWidth - LAYOUT.margin, LAYOUT.margin);
+  for (const p of crosshairPoints) drawCrosshair(page, p.x, p.y);
 }
 
 function drawHorizontalLines(page: PDFPage, baseY: number, count: number): void {
