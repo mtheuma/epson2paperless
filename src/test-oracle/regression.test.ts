@@ -30,12 +30,17 @@ describe("scan-output oracle regression", () => {
     const baseline = loadBaseline(baselinePath);
     const outputDir = mkdtempSync(path.join(os.tmpdir(), "oracle-reg-"));
     try {
-      const records = trimStatCycles(readJsonl(baseline.replay.fixturePath), baseline.replay.trimStatCycles);
+      const records = trimStatCycles(
+        readJsonl(baseline.replay.fixturePath),
+        baseline.replay.trimStatCycles,
+      );
 
       // JPG sampling replay.
       const jpg = await replayCapture(records, outputDir, baseline.replay.duplex, "jpg");
       await jpg.sessionPromise;
-      const files = readdirSync(outputDir).filter((f) => f.endsWith(".jpg")).sort();
+      const files = readdirSync(outputDir)
+        .filter((f) => f.endsWith(".jpg"))
+        .sort();
       const raster = await decodeToRaster(readFileSync(path.join(outputDir, files[0])));
       const report = assertAgainst(raster, baseline);
       expect(report.pass, JSON.stringify(report.checks, null, 2)).toBe(true);
