@@ -12,6 +12,17 @@ const WINDOW_FRACTION = 0.18; // search window edge length as a fraction of the 
  * NEAR-BLACK-IN-ALL-CHANNELS pixels. The all-channel threshold is what keeps
  * the saturated red "F" / blue "B" markers (which sit near the TL crosshair)
  * from biasing the centroid — they're bright in one channel.
+ *
+ * Real-scan assumptions (observations for when this runs on actual scans, not
+ * the synthetic test page):
+ * - The NEAR_BLACK=60 cut is a hard threshold tuned for near-black ink;
+ *   anti-aliased / soft crosshair edges on a real scan get dropped, which
+ *   narrows but does not bias the (symmetric) centroid.
+ * - The window sizing assumes a roughly page-shaped (A4) input; on a near-square
+ *   crop the four windows approach each other.
+ * - Each window is assumed to contain no other near-black content besides the
+ *   crosshair (true for the compatibility page, whose corners are otherwise
+ *   empty); stray dark content inside a window would bias the centroid.
  */
 export function detectCrosshairs(r: Raster): Point[] {
   const half = Math.round((Math.min(r.width, r.height) * WINDOW_FRACTION) / 2);

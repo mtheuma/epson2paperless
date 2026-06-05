@@ -13,10 +13,14 @@ describe("detectCrosshairs", () => {
     }
   });
 
-  it("ignores a saturated coloured marker next to the TL crosshair", () => {
+  it("ignores a dark-but-single-channel-bright marker next to the TL crosshair", () => {
+    // {0,0,150} has an average channel value of 50 (< NEAR_BLACK 60), so a naive
+    // average/luminance-based filter WOULD count it and bias the TL centroid. The
+    // all-channel filter correctly excludes it because b=150 is not < 60, so this
+    // test passes only because the implementation uses the all-channel filter.
     const { raster, expectedCrosshairsPx } = buildTestPageRaster({
       scale: 2,
-      marker: { r: 255, g: 0, b: 0 },
+      marker: { r: 0, g: 0, b: 150 },
     });
     const found = detectCrosshairs(raster);
     expect(Math.abs(found[0].x - expectedCrosshairsPx[0].x)).toBeLessThan(3);
