@@ -10,6 +10,7 @@ import { FakeTlsSocket } from "./test-support/fake-tls-socket.js";
 import { FakePlainSocket } from "./test-support/fake-plain-socket.js";
 import { loadFixture, driveFixture } from "./test-support/replay.js";
 import type { FixtureEvent } from "./test-support/replay.js";
+import { readJsonl, trimStatCycles, replayCapture } from "./test-support/frida-replay.js";
 import { REGISTRY } from "./dialects/registry.js";
 import { makeParaSpec } from "./dialects/dispatch.js";
 import { composePara, type ParaSpec } from "./para-composer.js";
@@ -280,159 +281,6 @@ async function drivePastImgTerminator(
   return { fake, sessionPromise, feedEsci2Reply };
 }
 
-export interface CaptureRecord {
-  hook: "startup" | "waiting" | "send" | "recv" | "error" | "async_event";
-  type_hex?: string;
-  payload_hex?: string;
-  payload_size?: number;
-}
-
-/**
- * Trim the driver's variable STAT-cycle count to a fixed `keep`, matching the
- * scanner. The driver runs ~12 STAT heartbeat cycles after two capability-
- * discovery cycles; our scanner runs 3. Each STAT cycle is exactly 9 capture
- * records (3 sends + 6 recvs: envelope header + body per send). We keep the
- * first `keep` driver STAT cycles, drop the rest, and resume at FS X.
- *
- * Pre-STAT sends: LOCK (1) + cycle 1 (6) + cycle 2 (8) = 15 sends. The STAT
- * loop begins at the 16th send → sendIndices[15].
- */
-export function trimStatCycles(records: CaptureRecord[], keep: number): CaptureRecord[] {
-  const sendIndices = records.map((r, i) => (r.hook === "send" ? i : -1)).filter((i) => i !== -1);
-  if (sendIndices.length < 16) {
-    throw new Error(`trimStatCycles: capture has only ${sendIndices.length} sends, expected ≥ 16`);
-  }
-  const statLoopStart = sendIndices[15];
-  const fsXRecord = records.findIndex((r) => r.hook === "send" && r.payload_hex?.endsWith("1c58"));
-  if (fsXRecord === -1) {
-    throw new Error("trimStatCycles: no FS X send found (payload ending 1c58)");
-  }
-  // Detect cycle size by measuring from the first STAT-cycle send (sendIndices[15])
-  // to the second STAT-cycle send (sendIndices[16 + sendsPerCycle - 1]).
-  // Each cycle starts with a FS Y send; count total records until the next FS Y
-  // send to determine recordsPerStatCycle. FS Y payload ends in "1c59".
-  const fsYPayload = records[statLoopStart].payload_hex ?? "";
-  const nextCycleStart = records.findIndex(
-    (r, i) => i > statLoopStart && r.hook === "send" && (r.payload_hex ?? "") === fsYPayload,
-  );
-  if (nextCycleStart === -1) {
-    throw new Error(
-      "trimStatCycles: could not detect STAT cycle boundary (no second FS Y matching first)",
-    );
-  }
-  const recordsPerStatCycle = nextCycleStart - statLoopStart;
-  const trimmedStatEnd = statLoopStart + keep * recordsPerStatCycle;
-  return [...records.slice(0, trimmedStatEnd), ...records.slice(fsXRecord)];
-}
-
-describe("trimStatCycles", () => {
-  it("keeps LOCK + cycles 1+2, trims the STAT loop, and resumes at FS X", () => {
-    // Build a minimal capture: 15 pre-STAT sends (LOCK + 6 cycle-1 + 8 cycle-2),
-    // 5 STAT cycles (45 records), then an FS X send, then a post-FS-X send.
-    const pre = Array.from({ length: 15 }, (_, i) => ({
-      hook: "send" as const,
-      payload_hex: `aa${i.toString(16).padStart(2, "0")}`,
-    }));
-    const oneStatCycle: CaptureRecord[] = [
-      { hook: "send", payload_hex: "bb01" },
-      { hook: "recv" },
-      { hook: "recv" },
-      { hook: "send", payload_hex: "bb02" },
-      { hook: "recv" },
-      { hook: "recv" },
-      { hook: "send", payload_hex: "bb03" },
-      { hook: "recv" },
-      { hook: "recv" },
-    ];
-    const statLoop = Array.from({ length: 5 }, () => oneStatCycle).flat();
-    const fsX: CaptureRecord = {
-      hook: "send",
-      payload_hex: "49532000000c0000000a000000000002000000011c58",
-    };
-    const post: CaptureRecord = { hook: "send", payload_hex: "ffff" };
-    const all: CaptureRecord[] = [...pre, ...statLoop, fsX, post];
-
-    const trimmed = trimStatCycles(all, 3);
-
-    // 15 pre + (3 × 9) STAT + 2 post (FS X + post) = 44 records
-    expect(trimmed.length).toBe(15 + 27 + 2);
-    expect(trimmed[15 + 27].payload_hex).toBe(fsX.payload_hex);
-    expect(trimmed[15 + 27 + 1].payload_hex).toBe("ffff");
-  });
-
-  it("throws if capture has fewer than 16 sends", () => {
-    const tooShort: CaptureRecord[] = Array.from({ length: 10 }, () => ({
-      hook: "send",
-      payload_hex: "aa",
-    }));
-    expect(() => trimStatCycles(tooShort, 3)).toThrow(/expected ≥ 16/);
-  });
-
-  it("throws if no FS X send is present", () => {
-    const noFsX: CaptureRecord[] = Array.from({ length: 20 }, () => ({
-      hook: "send",
-      payload_hex: "aa",
-    }));
-    expect(() => trimStatCycles(noFsX, 3)).toThrow(/no FS X send/);
-  });
-});
-
-function readJsonl(filePath: string): CaptureRecord[] {
-  return readFileSync(filePath, "utf8")
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line) as CaptureRecord);
-}
-
-/**
- * Drive the scanner through a (pre-trimmed) captured session.
- * Feeds every `recv` record as bytes, asserts every `send` record matches
- * the scanner's nth write. Returns after the records are exhausted.
- */
-async function replayCapture(
-  records: CaptureRecord[],
-  outputDir: string,
-  duplex: boolean,
-  action: "jpg" | "pdf",
-): Promise<{
-  totalDriverSends: number;
-  scannerWrites: Buffer[];
-  sessionPromise: Promise<void>;
-}> {
-  const filtered = records.filter((r) => r.hook === "send" || r.hook === "recv");
-  const fake = new FakeTlsSocket();
-
-  const sessionPromise = runEsci2Scan(
-    { printerIp: "192.0.2.58", port: 1865, destId: 0x02, outputDir, tempDir: "", duplex, action },
-    fake.asFactory(),
-  );
-  fake.simulateConnect();
-
-  let expectedSendIdx = 0;
-  for (const rec of filtered) {
-    if (rec.hook === "recv") {
-      fake.feed(Buffer.from(rec.payload_hex ?? "", "hex"));
-      await waitImmediate();
-    } else {
-      // Wait for the scanner to produce this write — handles the engine's
-      // async flushPage barrier (multi-microtask: await encode → file I/O →
-      // unpause → write staged send) without hard-coding tick counts.
-      await fake.waitForWriteCount(expectedSendIdx + 1);
-      const actual = fake.writes[expectedSendIdx].toString("hex");
-      const expected = rec.payload_hex ?? "";
-      expect(actual, `send #${expectedSendIdx} (driver type=${rec.type_hex})`).toBe(expected);
-      expectedSendIdx++;
-    }
-  }
-
-  // Let the DONE-path finalization task run to completion.
-  await waitImmediate();
-  await waitImmediate();
-
-  const totalDriverSends = filtered.filter((r) => r.hook === "send").length;
-  return { totalDriverSends, scannerWrites: fake.writes, sessionPromise };
-}
-
 describe("scanner replay — full Windows-driver session", () => {
   // True if a JPEG buffer contains an EXIF APP1 (FF E1) marker within the
   // first ~1 KB. Good enough for these assertions — if we're injecting
@@ -495,7 +343,17 @@ describe("scanner replay — full Windows-driver session", () => {
       const raw = readJsonl(fixturePath);
       const trimmed = trimStatCycles(raw, 3);
       const result = await replayCapture(trimmed, outputDir, duplex, action);
-      expect(result.scannerWrites.length).toBe(result.totalDriverSends);
+      // Byte-for-byte shield: every scanner write must equal the captured
+      // driver `send` bytes, in order. Lifted out of replayCapture (which is
+      // expect-free for reuse) and re-asserted here.
+      const sends = trimmed.filter((r) => r.hook === "send");
+      expect(result.scannerWrites.length).toBe(sends.length);
+      for (let i = 0; i < sends.length; i++) {
+        expect(
+          result.scannerWrites[i].toString("hex"),
+          `send #${i} (type=${sends[i].type_hex})`,
+        ).toBe(sends[i].payload_hex ?? "");
+      }
       await expect(result.sessionPromise).resolves.toBeUndefined();
 
       const files = readdirSync(outputDir).sort();
@@ -564,7 +422,17 @@ describe("scanner replay — full Windows-driver session", () => {
       const raw = readJsonl(fixturePath);
       const trimmed = trimStatCycles(raw, 3);
       const result = await replayCapture(trimmed, outputDir, duplex, "pdf");
-      expect(result.scannerWrites.length).toBe(result.totalDriverSends);
+      // Byte-for-byte shield: every scanner write must equal the captured
+      // driver `send` bytes, in order. Lifted out of replayCapture (which is
+      // expect-free for reuse) and re-asserted here.
+      const sends = trimmed.filter((r) => r.hook === "send");
+      expect(result.scannerWrites.length).toBe(sends.length);
+      for (let i = 0; i < sends.length; i++) {
+        expect(
+          result.scannerWrites[i].toString("hex"),
+          `send #${i} (type=${sends[i].type_hex})`,
+        ).toBe(sends[i].payload_hex ?? "");
+      }
       await expect(result.sessionPromise).resolves.toBeUndefined();
 
       await waitForPdf(outputDir);
