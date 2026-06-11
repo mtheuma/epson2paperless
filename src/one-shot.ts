@@ -1,12 +1,14 @@
 import { loadConfig } from "./config.js";
 import { setLogLevel, setLogFormat, createLogger } from "./logger.js";
-import { createPushScanServer, resolveEffectiveAction } from "./pushscan.js";
+import { createPushScanServer } from "./pushscan.js";
 import { createInflightTracker } from "./lifecycle.js";
 import {
   logStartupBanner,
   startPrinterDiscovery,
   installCrashHandlers,
   buildPaperlessOptions,
+  buildPushScanServerOptions,
+  resolveScanDispatch,
   dispatchScanSession,
 } from "./startup.js";
 
@@ -32,32 +34,38 @@ async function main() {
 
   const inflight = createInflightTracker();
 
-  const pushscanServer = createPushScanServer(2968, (info) => {
-    const effective = resolveEffectiveAction(info.action, config.previewAction);
-    if (effective === null) {
-      log.warn(`Ignoring push-scan: action=${info.action}, previewAction=${config.previewAction}`);
-      return;
-    }
-    if (inflight.count > 0) {
-      log.warn("Additional push-scan received — ignoring (one-shot already in progress)");
-      return;
-    }
-    log.info(
-      `PushScan received (duplex=${info.duplex}, action=${effective}) — starting TLS scan session`,
-    );
+  const pushscanServer = createPushScanServer(
+    2968,
+    (info) => {
+      const scan = resolveScanDispatch(info, config);
+      if (scan === null) {
+        log.warn(
+          `Ignoring push-scan: action=${info.action}, previewAction=${config.previewAction}`,
+        );
+        return;
+      }
+      if (inflight.count > 0) {
+        log.warn("Additional push-scan received — ignoring (one-shot already in progress)");
+        return;
+      }
+      log.info(
+        `PushScan received (duplex=${scan.duplex}, action=${scan.action}) — starting TLS scan session`,
+      );
 
-    const scanPromise = dispatchScanSession({
-      config,
-      duplex: info.duplex,
-      action: effective,
-      paperless: buildPaperlessOptions(config),
-    });
-    void inflight.track(scanPromise);
-    scanPromise.then(
-      () => settle({ kind: "complete" }),
-      (err) => settle({ kind: "fail", err }),
-    );
-  });
+      const scanPromise = dispatchScanSession({
+        config,
+        duplex: scan.duplex,
+        action: scan.action,
+        paperless: buildPaperlessOptions(config),
+      });
+      void inflight.track(scanPromise);
+      scanPromise.then(
+        () => settle({ kind: "complete" }),
+        (err) => settle({ kind: "fail", err }),
+      );
+    },
+    buildPushScanServerOptions(config),
+  );
 
   log.info("epson2paperless ready — waiting for one scan from printer panel");
 

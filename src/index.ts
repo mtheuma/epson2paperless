@@ -1,6 +1,6 @@
 import { loadConfig } from "./config.js";
 import { setLogLevel, setLogFormat, createLogger } from "./logger.js";
-import { createPushScanServer, resolveEffectiveAction } from "./pushscan.js";
+import { createPushScanServer } from "./pushscan.js";
 import { createHealthServer, setLastScanTime } from "./health.js";
 import { createInflightTracker, shutdown as runShutdown } from "./lifecycle.js";
 import {
@@ -8,6 +8,8 @@ import {
   startPrinterDiscovery,
   installCrashHandlers,
   buildPaperlessOptions,
+  buildPushScanServerOptions,
+  resolveScanDispatch,
   dispatchScanSession,
 } from "./startup.js";
 
@@ -23,25 +25,31 @@ async function main() {
 
   const inflight = createInflightTracker();
 
-  const pushscanServer = createPushScanServer(2968, (info) => {
-    const effective = resolveEffectiveAction(info.action, config.previewAction);
-    if (effective === null) {
-      log.warn(`Ignoring push-scan: action=${info.action}, previewAction=${config.previewAction}`);
-      return;
-    }
-    log.info(
-      `PushScan received (duplex=${info.duplex}, action=${effective}) — starting TLS scan session`,
-    );
-    setLastScanTime(new Date().toISOString());
+  const pushscanServer = createPushScanServer(
+    2968,
+    (info) => {
+      const scan = resolveScanDispatch(info, config);
+      if (scan === null) {
+        log.warn(
+          `Ignoring push-scan: action=${info.action}, previewAction=${config.previewAction}`,
+        );
+        return;
+      }
+      log.info(
+        `PushScan received (duplex=${scan.duplex}, action=${scan.action}) — starting TLS scan session`,
+      );
+      setLastScanTime(new Date().toISOString());
 
-    const scanPromise = dispatchScanSession({
-      config,
-      duplex: info.duplex,
-      action: effective,
-      paperless: buildPaperlessOptions(config),
-    });
-    void inflight.track(scanPromise);
-  });
+      const scanPromise = dispatchScanSession({
+        config,
+        duplex: scan.duplex,
+        action: scan.action,
+        paperless: buildPaperlessOptions(config),
+      });
+      void inflight.track(scanPromise);
+    },
+    buildPushScanServerOptions(config),
+  );
 
   const healthServer = createHealthServer(config.healthPort);
 

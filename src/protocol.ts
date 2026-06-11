@@ -39,8 +39,12 @@ export function buildIsPacket(type: number, payload: Buffer = Buffer.alloc(0)): 
 /**
  * Lock packet (type 0x2100). No data header needed.
  */
-export function buildLockPacket(): Buffer {
-  const payload = Buffer.from([0x01, 0xa0, 0x04, 0x00, 0x00, 0x01, 0x2c]);
+export function buildLockPacket(timeoutSeconds = 300): Buffer {
+  const payload = Buffer.alloc(7);
+  payload[0] = 0x01;
+  payload[1] = 0xa0;
+  payload[2] = 0x04;
+  payload.writeUInt32BE(timeoutSeconds, 3);
   return buildIsPacket(0x2100, payload);
 }
 

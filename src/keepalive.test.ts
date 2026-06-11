@@ -82,6 +82,33 @@ describe("buildKeepalivePacket", () => {
     // Seq is still honoured
     expect(packet[11]).toBe(0x07);
   });
+
+  it("matches the FF-680W Mac v3 reference packet when version=3.0", () => {
+    const packet = buildKeepalivePacket(
+      {
+        clientName: "MacBookPro.lan",
+        ipAddress: "192.168.10.152",
+        eventPort: 2968,
+        destId: 0x02,
+        language: "en",
+        version: "3.0",
+      },
+      0x07,
+    );
+
+    // UDP payload from Wireshark capture (112 bytes).
+    // Byte 11 is 0x07 — the sequence echoed from the printer's announcement.
+    const expected = Buffer.from(
+      "0207000070000000000000070002656e0000005b285665723d332e30292c28436c" +
+        "69656e744e616d653d4d6163426f6f6b50726f2e6c616e292c284950416464" +
+        "726573733d3139322e3136382e31302e313532292c284576656e74506f7274" +
+        "3d32393638292c2847726f75703d302900",
+      "hex",
+    );
+
+    expect(packet.length).toBe(112);
+    expect(Buffer.compare(packet, expected)).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -109,6 +136,12 @@ describe("parsePrinterAnnouncement", () => {
     const result = parsePrinterAnnouncement(announcementBytes);
     expect(result).not.toBeNull();
     expect(result!.seq).toBe(0x07);
+  });
+
+  it("extracts the product name when present", () => {
+    const result = parsePrinterAnnouncement(announcementBytes);
+    expect(result).not.toBeNull();
+    expect(result!.productName).toBe("PID 11D1");
   });
 
   it("returns null for a keepalive packet (starts with 02 07 00 00)", () => {
@@ -170,6 +203,10 @@ describe("createKeepaliveResponder", () => {
     pkt[1] = 0x06;
     pkt[11] = seq;
     return pkt;
+  }
+
+  function makeFf680wAnnouncement(seq: number): Buffer {
+    return Buffer.concat([makeAnnouncement(seq), Buffer.from("\x08PID 016B\0", "latin1")]);
   }
 
   interface Harness {
@@ -237,7 +274,24 @@ describe("createKeepaliveResponder", () => {
     await new Promise((r) => setTimeout(r, 80));
 
     expect(h.received).toHaveLength(3);
-    h.received.forEach((p) => expect(p[11]).toBe(0x42));
+    h.received.forEach((p) => {
+      expect(p[11]).toBe(0x42);
+      const payload = p.subarray(20).toString("ascii");
+      expect(payload).not.toContain("(Ver=3.0)");
+      expect(payload).not.toContain("(Group=0)");
+    });
+
+    h.teardown();
+  });
+
+  it("uses v3 keepalive only for FF-680W announcements", async () => {
+    const h = await setupHarness({ burstCount: 1 });
+    await sendAnnouncement(h, makeFf680wAnnouncement(0x43));
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(h.received).toHaveLength(1);
+    expect(h.received[0].subarray(20).toString("ascii")).toContain("(Ver=3.0)");
+    expect(h.received[0].subarray(20).toString("ascii")).toContain("(Group=0)");
 
     h.teardown();
   });
@@ -264,7 +318,12 @@ describe("createKeepaliveResponder", () => {
 
     // Only the first announcement triggered a burst: 3 packets total.
     expect(h.received).toHaveLength(3);
-    h.received.forEach((p) => expect(p[11]).toBe(0x42));
+    h.received.forEach((p) => {
+      expect(p[11]).toBe(0x42);
+      const payload = p.subarray(20).toString("ascii");
+      expect(payload).not.toContain("(Ver=3.0)");
+      expect(payload).not.toContain("(Group=0)");
+    });
 
     h.teardown();
   });
