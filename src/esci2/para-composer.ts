@@ -9,6 +9,8 @@ export interface Extents {
   h: number;
 }
 
+export type ParaProfile = "standard" | "ff680w-adf";
+
 export interface ParaSpec {
   source: "flatbed" | "adf-simplex" | "adf-duplex";
   action: "jpg" | "pdf";
@@ -18,9 +20,10 @@ export interface ParaSpec {
   gammaClass: { jpg: GammaClassName; pdf: GammaClassName };
   cmxClass: { jpg: CmxClassName | null; pdf: CmxClassName | null };
   optionalSegments: { qit: boolean; cct: boolean };
+  profile?: ParaProfile;
 }
 
-const FIXED_PREFIX = Buffer.from(
+const STANDARD_FIXED_PREFIX = Buffer.from(
   "#RSMi0000300" + // bytes 0..12
     "#RSSi0000300" + // 12..24
     "#COLC024" + //    24..32
@@ -28,6 +31,18 @@ const FIXED_PREFIX = Buffer.from(
     "#JPGd090", //     40..48
   "ascii",
 );
+
+const FF680W_ADF_PREFIX = Buffer.from(
+  "#ADFCRP SKEWDPLXDFL1" + "#RSMi0000200" + "#RSSi0000200" + "#COLC024" + "#FMTJPG " + "#JPGd090",
+  "ascii",
+);
+
+const FF680W_ADF_TRAILER_BEFORE_ACQ = Buffer.from(
+  "#CRPi0000000" + "#DFAi0000000i0001550" + "#LAMOFF " + "#PAGd000",
+  "ascii",
+);
+
+const TRAILING_BSZ = Buffer.from("#BSZi1048576", "ascii");
 
 function renderAcq(e: Extents): Buffer {
   const fmt = (n: number) => n.toString().padStart(7, "0");
@@ -84,11 +99,19 @@ function validate(spec: ParaSpec): void {
 export function composePara(spec: ParaSpec): Buffer {
   validate(spec);
 
+  if (spec.profile === "ff680w-adf") {
+    return composeFf680wAdfPara(spec);
+  }
+
+  return composeStandardPara(spec);
+}
+
+function composeStandardPara(spec: ParaSpec): Buffer {
   const parts: Buffer[] = [];
   // 1. Source segment.
   parts.push(renderSourceSegment(spec.source));
   // 2. Fixed constants.
-  parts.push(FIXED_PREFIX);
+  parts.push(STANDARD_FIXED_PREFIX);
   // 3. GMM.
   parts.push(Buffer.from(`#GMM${spec.gmm}`, "ascii"));
   // 4. Gamma LUT triplet (verbatim bytes for the action's class).
@@ -114,9 +137,29 @@ export function composePara(spec: ParaSpec): Buffer {
   const acqExtents = spec.source === "flatbed" ? spec.fbExtents : spec.adfExtents!;
   parts.push(renderAcq(acqExtents));
   // 10. BSZ trailing constant.
-  parts.push(Buffer.from("#BSZi1048576", "ascii"));
+  parts.push(TRAILING_BSZ);
 
   return Buffer.concat(parts);
+}
+
+function composeFf680wAdfPara(spec: ParaSpec): Buffer {
+  if (spec.adfExtents === null) {
+    throw new Error("composePara: profile=ff680w-adf requires non-null adfExtents");
+  }
+  const cmxName = spec.cmxClass[spec.action];
+  if (cmxName === null) {
+    throw new Error("composePara: profile=ff680w-adf requires a CMX class");
+  }
+
+  return Buffer.concat([
+    FF680W_ADF_PREFIX,
+    Buffer.from(`#GMM${spec.gmm}`, "ascii"),
+    GAMMA_CLASSES[spec.gammaClass[spec.action]],
+    CMX_CLASSES[cmxName],
+    FF680W_ADF_TRAILER_BEFORE_ACQ,
+    renderAcq(spec.adfExtents),
+    TRAILING_BSZ,
+  ]);
 }
 
 export type { GammaClassName, CmxClassName };

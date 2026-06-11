@@ -220,6 +220,32 @@ describe("composePara — gamma LUT placement", () => {
   });
 });
 
+describe("composePara — FF-680W ADF profile", () => {
+  it("matches the Mac-observed FF-680W ADF profile shape", () => {
+    const body = composePara({
+      ...baselineSpec(),
+      source: "adf-duplex",
+      adfExtents: { x0: 0, y0: 0, w: 1700, h: 7200 },
+      gmm: "UG18",
+      gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
+      cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
+      optionalSegments: { qit: false, cct: false },
+      profile: "ff680w-adf",
+    });
+
+    expect(body.length).toBe(1000);
+    expect(body.subarray(0, 68).toString("ascii")).toBe(
+      "#ADFCRP SKEWDPLXDFL1#RSMi0000200#RSSi0000200#COLC024#FMTJPG #JPGd090",
+    );
+    expect(body.indexOf(Buffer.from("#GMTRED h100", "ascii"))).toBeGreaterThan(0);
+    expect(body.indexOf(Buffer.from("#CMXUM08h009", "ascii"))).toBeGreaterThan(0);
+    expect(body.subarray(body.length - 96).toString("ascii")).toBe(
+      "#CRPi0000000#DFAi0000000i0001550#LAMOFF #PAGd000" +
+        "#ACQi0000000i0000000i0001700i0007200#BSZi1048576",
+    );
+  });
+});
+
 describe("composePara — validation", () => {
   it("throws when ADF source is requested but adfExtents is null", () => {
     expect(() =>

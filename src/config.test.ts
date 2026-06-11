@@ -16,6 +16,7 @@ describe("loadConfig", () => {
     delete process.env.LOG_FORMAT;
     delete process.env.LANGUAGE;
     delete process.env.PREVIEW_ACTION;
+    delete process.env.JOB_NUMBER_ACTION;
     delete process.env.TEMP_DIR;
     delete process.env.SHUTDOWN_TIMEOUT_MS;
     delete process.env.PAPERLESS_URL;
@@ -127,6 +128,23 @@ describe("loadConfig", () => {
   it("rejects invalid PREVIEW_ACTION", () => {
     process.env.PRINTER_IP = "192.0.2.58";
     process.env.PREVIEW_ACTION = "invalid";
+    expect(() => loadConfig()).toThrow();
+  });
+
+  it("defaults JOB_NUMBER_ACTION to pdf", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    expect(loadConfig().jobNumberAction).toBe("pdf");
+  });
+
+  it("accepts JOB_NUMBER_ACTION=jpg", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.JOB_NUMBER_ACTION = "jpg";
+    expect(loadConfig().jobNumberAction).toBe("jpg");
+  });
+
+  it("rejects invalid JOB_NUMBER_ACTION", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.JOB_NUMBER_ACTION = "preview";
     expect(() => loadConfig()).toThrow();
   });
 

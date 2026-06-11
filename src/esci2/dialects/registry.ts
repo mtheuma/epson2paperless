@@ -1,9 +1,9 @@
 // src/esci2/dialects/registry.ts
-import type { GammaClassName, CmxClassName, Extents } from "../para-composer.js";
+import type { GammaClassName, CmxClassName, Extents, ParaProfile } from "../para-composer.js";
 
 export interface RegistryEntry {
   displayName: string;
-  sourceDetection: "stat-length" | "fixed-flatbed";
+  sourceDetection: "stat-length" | "fixed-flatbed" | "fixed-adf";
   initPollIterations: number;
   fbExtents: Extents;
   adfExtents: Extents | null;
@@ -11,6 +11,7 @@ export interface RegistryEntry {
   gammaClass: { jpg: GammaClassName; pdf: GammaClassName };
   cmxClass: { jpg: CmxClassName | null; pdf: CmxClassName | null };
   optionalSegments: { qit: boolean; cct: boolean };
+  paraProfile?: ParaProfile;
 }
 
 export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
@@ -102,6 +103,28 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
       optionalSegments: { qit: false, cct: false },
+    },
+  ],
+  [
+    // FF-680W: ADF-only FastFoto scanner. The panel JobNumberIn flow observed
+    // from Epson's Mac software uses plain TCP ESC/I-2, an 8-cycle init poll,
+    // and a 200-DPI ADF PARA dialect with CRP/SKEW/DPLX defaults. The INFO body
+    // has no FB AREA segment, so keep source fixed to ADF rather than applying
+    // the flatbed-oriented plain-TCP default.
+    "5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd",
+    {
+      displayName: "FF-680W (ESC/I-2 over plain TCP)",
+      sourceDetection: "fixed-adf",
+      initPollIterations: 8,
+      // Not used by the fixed-ADF profile, but ParaSpec keeps FB extents
+      // required for standard flatbed-capable dialects.
+      fbExtents: { x0: 0, y0: 0, w: 1700, h: 7200 },
+      adfExtents: { x0: 0, y0: 0, w: 1700, h: 7200 },
+      gmm: "UG18",
+      gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
+      cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
+      optionalSegments: { qit: false, cct: false },
+      paraProfile: "ff680w-adf",
     },
   ],
 ]);

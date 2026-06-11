@@ -6,6 +6,12 @@ import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import { detectVariant, type Variant } from "./protocol-probe.js";
 import { runEsci2Scan, runEsci2ScanOverPlain } from "./esci2/scanner.js";
 import { runEsciScan } from "./esci/scanner.js";
+import { runFf680wJobListCommit, runFf680wJobNumberCommit } from "./ff680w-job-control.js";
+import {
+  resolveEffectiveAction,
+  type PushScanInfo,
+  type PushScanServerOptions,
+} from "./pushscan.js";
 
 const log = createLogger("startup");
 
@@ -13,6 +19,12 @@ export function logStartupBanner(config: Config, modeMessage: string): void {
   log.info(modeMessage);
   log.info(`Printer IP: ${config.printerIp}`);
   log.info(`Destination name: ${config.scanDestName}`);
+  const scanDestNameBytes = Buffer.byteLength(config.scanDestName, "utf-8");
+  if (scanDestNameBytes >= 15) {
+    log.warn(
+      `SCAN_DEST_NAME is ${scanDestNameBytes} bytes; Epson discovery may reject names 15 bytes or longer`,
+    );
+  }
   log.info(`Output directory: ${config.outputDir}`);
 
   if (isPaperlessEnabled(config)) {
@@ -89,6 +101,49 @@ export function buildPaperlessOptions(config: Config): PaperlessUploadOptions | 
     token: config.paperlessToken,
     deleteAfterUpload: config.paperlessDeleteAfterUpload,
   };
+}
+
+const FF680W_PRODUCT_NAME = "PID 016B";
+
+export function buildPushScanServerOptions(config: Config): PushScanServerOptions {
+  return {
+    beforeResponse: async ({ kind, info }) => {
+      if (info.productName !== FF680W_PRODUCT_NAME) return;
+
+      if (kind === "jobList") {
+        log.debug("FF-680W JobList received — committing dummy job over TCP/1865");
+        await runFf680wJobListCommit({ printerIp: config.printerIp });
+        return;
+      }
+
+      if (kind === "pushScan" && info.jobNumber !== null && info.pushScanId === null) {
+        log.debug(
+          `FF-680W JobNumberIn=${info.jobNumber} received — reading selected job over TCP/1865`,
+        );
+        await runFf680wJobNumberCommit({ printerIp: config.printerIp });
+      }
+    },
+  };
+}
+
+export function resolveScanDispatch(
+  info: PushScanInfo,
+  config: Config,
+): { duplex: boolean; action: "jpg" | "pdf" } | null {
+  const effective = resolveEffectiveAction(info.action, config.previewAction);
+  if (effective !== null) {
+    return { duplex: info.duplex, action: effective };
+  }
+
+  if (info.jobNumber !== null && info.pushScanId === null) {
+    const duplex = info.productName === FF680W_PRODUCT_NAME ? true : info.duplex;
+    log.info(
+      `PushScan has JobNumberIn=${info.jobNumber} but no PushScanIDIn — using JOB_NUMBER_ACTION=${config.jobNumberAction}`,
+    );
+    return { duplex, action: config.jobNumberAction };
+  }
+
+  return null;
 }
 
 export interface DispatchArgs {
