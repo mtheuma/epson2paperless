@@ -3,10 +3,8 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { decodeToRaster } from "../../src/test-oracle/decode.js";
-import { measure } from "../../src/test-oracle/oracle.js";
-import { detectCrosshairs } from "../../src/test-oracle/crosshairs.js";
-import { fitTransform, mapRect } from "../../src/test-oracle/transform.js";
-import { crosshairPoints, swatchRect, SWATCHES } from "../test-page/layout.js";
+import { measureWithGeometry, swatchSampleBoxes } from "../../src/test-oracle/oracle.js";
+import { SWATCHES } from "../test-page/layout.js";
 import { saveBaseline, type Baseline } from "../../src/test-oracle/baseline.js";
 import { renderOverlay } from "./overlay.js";
 import {
@@ -37,7 +35,9 @@ export async function buildBaselineFromOutputDir(
   if (jpgs.length === 0) throw new Error(`no .jpg in ${outputDir}`);
   const jpeg = readFileSync(path.join(outputDir, jpgs[0]));
   const raster = await decodeToRaster(jpeg);
-  const m = measure(raster);
+  // Single fit: the geometry that produced the measurement also drives the
+  // overlay, so the overlay boxes are exactly the regions the baseline sampled.
+  const { measurement: m, geometry } = measureWithGeometry(raster);
 
   const baseline: Baseline = {
     approvedAt: meta.approvedAt,
@@ -55,7 +55,7 @@ export async function buildBaselineFromOutputDir(
     swatches: m.swatches,
     greySpreads: m.greySpreads,
     stripeVarianceMax: m.stripeVarianceMax,
-    expectedBackPages: [],
+    expectedBackPages: deriveBackPages(meta.duplex, jpgs.length),
     tolerances: {
       swatchDeltaE: 5,
       crosshairPx: Math.max(3, Math.ceil(m.crosshairResidualPx) + 2),
@@ -64,30 +64,45 @@ export async function buildBaselineFromOutputDir(
     },
   };
 
-  const pxCrosshairs = detectCrosshairs(raster);
-  const t = fitTransform(crosshairPoints, pxCrosshairs);
-  const boxes = SWATCHES.map((s, i) => {
-    const r = mapRect(t, swatchRect(i));
-    return { x: r.x, y: r.y, w: r.w, h: r.h, label: s.label };
-  });
-  const overlayPng = await renderOverlay(jpeg, { crosshairs: pxCrosshairs, boxes });
+  const boxes = swatchSampleBoxes(geometry.transform).map((r, i) => ({
+    x: r.x,
+    y: r.y,
+    w: r.w,
+    h: r.h,
+    label: SWATCHES[i].label,
+  }));
+  const overlayPng = await renderOverlay(jpeg, { crosshairs: geometry.pxCrosshairs, boxes });
   return { baseline, overlayPng };
+}
+
+/** In a duplex scan the back side of each sheet is the even-numbered page. */
+function deriveBackPages(duplex: boolean, pageCount: number): number[] {
+  if (!duplex) return [];
+  const pages: number[] = [];
+  for (let p = 2; p <= pageCount; p += 2) pages.push(p);
+  return pages;
 }
 
 async function main(): Promise<void> {
   const fixturePath = process.argv[2];
   if (!fixturePath) {
     console.error(
-      "usage: npm run oracle:baseline -- <fixture.jsonl> [--source flatbed|adf-simplex|adf-duplex]",
+      "usage: npm run oracle:baseline -- <fixture.jsonl> [--source flatbed|adf-simplex|adf-duplex] [--trim-stat-cycles N]",
     );
     process.exit(1);
   }
   const sourceArg = argValue("--source") ?? "flatbed";
   const duplex = sourceArg === "adf-duplex";
+  const trimArg = argValue("--trim-stat-cycles");
+  const trim = trimArg !== undefined ? Number(trimArg) : 3;
+  if (!Number.isInteger(trim) || trim < 0) {
+    console.error(`--trim-stat-cycles must be a non-negative integer, got: ${trimArg}`);
+    process.exit(1);
+  }
   const outputDir = mkdtempSync(path.join(os.tmpdir(), "oracle-baseline-"));
   try {
     const records = readJsonl(fixturePath);
-    const trimmed = trimStatCycles(records, 3);
+    const trimmed = trimStatCycles(records, trim);
     const { sessionPromise } = await replayCapture(trimmed, outputDir, duplex, "jpg");
     await sessionPromise;
 
@@ -95,7 +110,7 @@ async function main(): Promise<void> {
       fixturePath,
       source: sourceArg as BaselineMeta["source"],
       duplex,
-      trimStatCycles: 3,
+      trimStatCycles: trim,
       printerIp: "192.0.2.58",
       destId: 0x02,
       approvedAt: new Date().toISOString().slice(0, 10),

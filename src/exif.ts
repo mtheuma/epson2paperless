@@ -73,20 +73,26 @@ export function readJpegOrientation(jpeg: Buffer): ExifOrientation | undefined {
     const marker = jpeg[off + 1];
     const segLen = jpeg.readUInt16BE(off + 2);
     if (marker === 0xe1) {
-      // APP1 — expect "Exif\0\0" then TIFF header.
+      // APP1 — expect "Exif\0\0" then TIFF header. Every read below is
+      // bounds-checked against jpeg.length so a truncated or corrupt EXIF
+      // returns undefined (per this function's contract) rather than throwing
+      // a RangeError on an out-of-range buffer offset.
       const base = off + 4;
-      if (jpeg.toString("ascii", base, base + 4) === "Exif") {
-        const tiff = base + 6;
+      const tiff = base + 6;
+      if (tiff + 8 <= jpeg.length && jpeg.toString("ascii", base, base + 4) === "Exif") {
         const le = jpeg.toString("ascii", tiff, tiff + 2) === "II";
         const u16 = (p: number) => (le ? jpeg.readUInt16LE(p) : jpeg.readUInt16BE(p));
         const u32 = (p: number) => (le ? jpeg.readUInt32LE(p) : jpeg.readUInt32BE(p));
         const ifd0 = tiff + u32(tiff + 4);
-        const count = u16(ifd0);
-        for (let i = 0; i < count; i++) {
-          const entry = ifd0 + 2 + i * 12;
-          if (u16(entry) === 0x0112) {
-            const v = u16(entry + 8);
-            if (v === 1 || v === 3 || v === 6 || v === 8) return v;
+        if (ifd0 + 2 <= jpeg.length) {
+          const count = u16(ifd0);
+          for (let i = 0; i < count; i++) {
+            const entry = ifd0 + 2 + i * 12;
+            if (entry + 12 > jpeg.length) break; // entry runs past the buffer
+            if (u16(entry) === 0x0112) {
+              const v = u16(entry + 8);
+              if (v === 1 || v === 3 || v === 6 || v === 8) return v;
+            }
           }
         }
       }

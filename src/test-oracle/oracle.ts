@@ -1,4 +1,4 @@
-import type { CheckResult, OracleReport, Raster, Rgb } from "./types.js";
+import type { CheckResult, OracleReport, Point, Raster, Rect, Rgb, Transform } from "./types.js";
 import type { Baseline } from "./baseline.js";
 import { detectCrosshairs } from "./crosshairs.js";
 import { fitTransform, mapRect, residualPx } from "./transform.js";
@@ -12,9 +12,35 @@ import {
   SWATCHES,
 } from "../../tools/test-page/layout.js";
 
-/** Shrink a rect inward by `inset` px on every side to avoid edge bleed. */
-function inset(rect: { x: number; y: number; w: number; h: number }, by: number) {
+/** Inset applied to each swatch's mapped rect before sampling, to avoid edge bleed. */
+const SWATCH_INSET_PX = 6;
+
+/** Shrink a rect inward by `by` px on every side. */
+function inset(rect: Rect, by: number): Rect {
   return { x: rect.x + by, y: rect.y + by, w: rect.w - 2 * by, h: rect.h - 2 * by };
+}
+
+export interface Geometry {
+  transform: Transform;
+  pxCrosshairs: Point[];
+  crosshairResidualPx: number;
+}
+
+/** Detect the crosshairs and fit the point→pixel transform for a raster. */
+function fitRaster(raster: Raster): Geometry {
+  const pxCrosshairs = detectCrosshairs(raster);
+  const transform = fitTransform(crosshairPoints, pxCrosshairs);
+  return {
+    transform,
+    pxCrosshairs,
+    crosshairResidualPx: round2(residualPx(crosshairPoints, pxCrosshairs, transform)),
+  };
+}
+
+/** The inset pixel sample box for each of the 12 swatches under a transform.
+ *  Exported so the baseline CLI's overlay draws the exact regions sampled. */
+export function swatchSampleBoxes(t: Transform): Rect[] {
+  return SWATCHES.map((_, i) => inset(mapRect(t, swatchRect(i)), SWATCH_INSET_PX));
 }
 
 export interface Measurement {
@@ -24,38 +50,47 @@ export interface Measurement {
   stripeVarianceMax: number;
 }
 
-/** Sample all metrics from a raster (no baseline) — used to bake baselines. */
-export function measure(raster: Raster): Measurement {
-  const pxCrosshairs = detectCrosshairs(raster);
-  const t = fitTransform(crosshairPoints, pxCrosshairs);
-  const crosshairResidualPx = residualPx(crosshairPoints, pxCrosshairs, t);
+/** Sample all metrics from a raster AND return the fitted geometry, so callers
+ *  (e.g. the baseline CLI) can draw an overlay of the exact sampled regions
+ *  without re-detecting the crosshairs. */
+export function measureWithGeometry(raster: Raster): {
+  measurement: Measurement;
+  geometry: Geometry;
+} {
+  const geometry = fitRaster(raster);
+  const boxes = swatchSampleBoxes(geometry.transform);
+  // One mean per swatch; grey spreads reuse those means rather than re-scanning.
+  const means = boxes.map((b) => meanRgb(raster, b));
 
-  const swatchSample = (i: number) => inset(mapRect(t, swatchRect(i)), 6);
+  const swatches = SWATCHES.map((s, i) => ({
+    label: s.label,
+    rgb: [round(means[i].r), round(means[i].g), round(means[i].b)] as [number, number, number],
+  }));
 
-  const swatches = SWATCHES.map((s, i) => {
-    const m = meanRgb(raster, swatchSample(i));
-    return {
-      label: s.label,
-      rgb: [round(m.r), round(m.g), round(m.b)] as [number, number, number],
-    };
-  });
-
-  const greySpreads = greySwatchIndices.map((i) => {
-    const m = meanRgb(raster, swatchSample(i));
-    return { label: SWATCHES[i].label, spread: round(channelSpread(m)) };
-  });
+  const greySpreads = greySwatchIndices.map((i) => ({
+    label: SWATCHES[i].label,
+    spread: round(channelSpread(means[i])),
+  }));
 
   const stripeVarianceMax = Math.max(
-    ...greySwatchIndices.map((i) => perRowVariance(raster, swatchSample(i))),
-    perRowVariance(raster, inset(mapRect(t, ruleLineBand), 2)),
+    ...greySwatchIndices.map((i) => perRowVariance(raster, boxes[i])),
+    perRowVariance(raster, inset(mapRect(geometry.transform, ruleLineBand), 2)),
   );
 
   return {
-    crosshairResidualPx: round2(crosshairResidualPx),
-    swatches,
-    greySpreads,
-    stripeVarianceMax: round2(stripeVarianceMax),
+    measurement: {
+      crosshairResidualPx: geometry.crosshairResidualPx,
+      swatches,
+      greySpreads,
+      stripeVarianceMax: round2(stripeVarianceMax),
+    },
+    geometry,
   };
+}
+
+/** Sample all metrics from a raster (no baseline) — used to bake baselines. */
+export function measure(raster: Raster): Measurement {
+  return measureWithGeometry(raster).measurement;
 }
 
 /** Run all checks against a committed baseline. */

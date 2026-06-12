@@ -96,4 +96,33 @@ describe("readJpegOrientation", () => {
       .toBuffer();
     expect(readJpegOrientation(jpeg)).toBeUndefined();
   });
+
+  it("returns undefined (does not throw) on a corrupt EXIF IFD offset", () => {
+    // Valid SOI + APP1 + "Exif\0\0" + TIFF header, but the IFD0 offset points
+    // far past the buffer. The parser must bounds-check, not RangeError.
+    const buf = Buffer.from([
+      0xff,
+      0xd8, // SOI
+      0xff,
+      0xe1, // APP1
+      0x00,
+      0x10, // nominal segment length
+      0x45,
+      0x78,
+      0x69,
+      0x66,
+      0x00,
+      0x00, // "Exif\0\0"
+      0x49,
+      0x49,
+      0x2a,
+      0x00, // TIFF header (little-endian)
+      0xff,
+      0xff,
+      0xff,
+      0xff, // IFD0 offset pointing past the buffer
+    ]);
+    expect(() => readJpegOrientation(buf)).not.toThrow();
+    expect(readJpegOrientation(buf)).toBeUndefined();
+  });
 });

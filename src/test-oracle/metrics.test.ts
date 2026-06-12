@@ -23,4 +23,10 @@ describe("metrics", () => {
     }
     expect(perRowVariance(r, { x: 0, y: 0, w: 20, h: 20 })).toBeGreaterThan(1000);
   });
+
+  it("throws on an empty region (consistent with meanRgb, not silent NaN)", () => {
+    const r = blankRaster(20, 20);
+    expect(() => perRowVariance(r, { x: 5, y: 5, w: 0, h: 0 })).toThrow(/empty region/);
+    expect(() => meanRgb(r, { x: 5, y: 5, w: 0, h: 0 })).toThrow(/empty region/);
+  });
 });

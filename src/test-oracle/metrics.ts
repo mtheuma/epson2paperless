@@ -42,6 +42,7 @@ export function perRowVariance(r: Raster, rect: Rect): number {
     }
     if (n > 0) rowMeans.push(s / n);
   }
+  if (rowMeans.length === 0) throw new Error("perRowVariance: empty region");
   const mean = rowMeans.reduce((a, b) => a + b, 0) / rowMeans.length;
   return rowMeans.reduce((a, b) => a + (b - mean) ** 2, 0) / rowMeans.length;
 }
