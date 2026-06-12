@@ -36,6 +36,7 @@ export interface BuildPageOpts {
   scale?: number; // pixels per PDF point
   swatchColors?: Rgb[]; // override the 12 swatch fills (defaults to declared hex)
   marker?: Rgb; // colour of the asymmetric corner marker (default red "F")
+  shiftPx?: { dx: number; dy: number }; // uniformly translate all drawn content (exercises translation invariance)
 }
 
 /**
@@ -49,12 +50,17 @@ export function buildTestPageRaster(opts: BuildPageOpts = {}): {
   expectedCrosshairsPx: { x: number; y: number }[];
 } {
   const scale = opts.scale ?? 2;
+  const dx = opts.shiftPx?.dx ?? 0;
+  const dy = opts.shiftPx?.dy ?? 0;
   const width = Math.round(LAYOUT.pageWidth * scale);
   const height = Math.round(LAYOUT.pageHeight * scale);
   const raster = blankRaster(width, height);
 
-  const toPx = (x: number) => x * scale;
-  const toPy = (y: number) => (LAYOUT.pageHeight - y) * scale;
+  // The page size is unchanged; shiftPx translates all content (swatches,
+  // crosshairs, marker) together within the same raster, so detection still
+  // finds the marks at their shifted positions.
+  const toPx = (x: number) => x * scale + dx;
+  const toPy = (y: number) => (LAYOUT.pageHeight - y) * scale + dy;
   const ptRectToPx = (pr: { x: number; y: number; w: number; h: number }): Rect => {
     const top = toPy(pr.y + pr.h);
     const left = toPx(pr.x);

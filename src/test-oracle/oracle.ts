@@ -26,7 +26,17 @@ export interface Geometry {
   crosshairResidualPx: number;
 }
 
-/** Detect the crosshairs and fit the point→pixel transform for a raster. */
+/**
+ * Detect the crosshairs and fit the point→pixel transform for a raster.
+ *
+ * The fit makes all downstream sampling translation- and scale-invariant by
+ * design: a page that lands shifted or scaled on the bed/ADF is followed via
+ * its registration marks, so a *uniform* placement shift intentionally passes
+ * every check (it is benign scan positioning, not a regression — see the
+ * "accepts a uniformly shifted page" test). What the geometry checks catch is
+ * *non-affine* distortion: skew and stride drift raise the crosshair residual
+ * (the fit cannot absorb them), and a wrong output size fails geometry:page-size.
+ */
 function fitRaster(raster: Raster): Geometry {
   const pxCrosshairs = detectCrosshairs(raster);
   const transform = fitTransform(crosshairPoints, pxCrosshairs);

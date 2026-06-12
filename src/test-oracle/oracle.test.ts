@@ -39,6 +39,19 @@ describe("oracle", () => {
     expect(report.pass).toBe(true);
   });
 
+  it("accepts a uniformly shifted page (translation invariance is by design, not a false pass)", () => {
+    // Same page, same size, but all content + registration crosshairs translated
+    // together. The crosshair-fit transform absorbs the offset, so sampling
+    // follows the page and every check still passes. This documents the intended
+    // scan-positioning robustness — it is NOT a missed regression. Non-affine
+    // distortion (skew/stride) raises the residual and is caught separately.
+    const { raster } = buildTestPageRaster({ scale: 2 });
+    const baseline = baselineFrom(raster);
+    const { raster: shifted } = buildTestPageRaster({ scale: 2, shiftPx: { dx: 20, dy: 20 } });
+    const report = assertAgainst(shifted, baseline);
+    expect(report.pass, JSON.stringify(report.checks, null, 2)).toBe(true);
+  });
+
   it("fails when a swatch colour is shifted beyond tolerance", () => {
     const { raster: good } = buildTestPageRaster({ scale: 2 });
     const baseline = baselineFrom(good);
