@@ -20,6 +20,7 @@ const sample: Baseline = {
   swatches: [{ label: "FF0000", rgb: [200, 30, 25] }],
   greySpreads: [{ label: "C0C0C0", spread: 4 }],
   stripeVarianceMax: 12,
+  expectedPageCount: 1,
   expectedBackPages: [],
   tolerances: { swatchDeltaE: 4, crosshairPx: 6, greySpread: 10, stripeVariance: 25 },
 };

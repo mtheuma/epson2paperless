@@ -28,6 +28,7 @@ describe("buildBaselineFromOutputDir", () => {
       });
       expect(baseline.swatches).toHaveLength(12);
       expect(baseline.swatches.find((s) => s.label === "FF0000")?.rgb[0]).toBeGreaterThan(200);
+      expect(baseline.expectedPageCount).toBe(1);
       expect((await sharp(overlayPng).metadata()).format).toBe("png");
     } finally {
       rmSync(dir, { recursive: true, force: true });
@@ -55,6 +56,7 @@ describe("buildBaselineFromOutputDir", () => {
         approvedAt: "2026-06-05",
       });
       expect(baseline.expectedBackPages).toEqual([2]);
+      expect(baseline.expectedPageCount).toBe(2);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

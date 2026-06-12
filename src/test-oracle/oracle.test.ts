@@ -20,6 +20,7 @@ function baselineFrom(raster: ReturnType<typeof buildTestPageRaster>["raster"]):
     swatches: m.swatches,
     greySpreads: m.greySpreads,
     stripeVarianceMax: m.stripeVarianceMax,
+    expectedPageCount: 1,
     expectedBackPages: [],
     tolerances: {
       swatchDeltaE: 4,

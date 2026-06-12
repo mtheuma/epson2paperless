@@ -41,10 +41,11 @@ describe("scan-output oracle regression", () => {
       const files = readdirSync(outputDir)
         .filter((f) => f.endsWith(".jpg"))
         .sort();
-      // Guard before indexing so a dropped-page regression fails with a clear
-      // message rather than an opaque path.join(dir, undefined) TypeError.
-      expect(files.length, `expected at least one JPG page, got ${files.length}`).toBeGreaterThan(
-        0,
+      // Pin the absolute page count so a dropped/extra-page regression (the
+      // PR #79 class) fails here rather than slipping through the page-0-only
+      // pixel sampling below.
+      expect(files.length, `expected ${baseline.expectedPageCount} JPG page(s)`).toBe(
+        baseline.expectedPageCount,
       );
       const raster = await decodeToRaster(readFileSync(path.join(outputDir, files[0])));
       const report = assertAgainst(raster, baseline);
@@ -69,7 +70,7 @@ describe("scan-output oracle regression", () => {
           const pdfFile = readdirSync(pdfDir).find((f) => f.endsWith(".pdf"));
           expect(pdfFile, "expected a composed PDF in the PDF replay output").toBeDefined();
           const doc = await PDFDocument.load(readFileSync(path.join(pdfDir, pdfFile!)));
-          expect(doc.getPageCount(), "PDF page count").toBe(files.length);
+          expect(doc.getPageCount(), "PDF page count").toBe(baseline.expectedPageCount);
           for (let i = 0; i < doc.getPageCount(); i++) {
             const expected = baseline.expectedBackPages.includes(i + 1) ? 180 : 0;
             expect(doc.getPage(i).getRotation().angle, `PDF page ${i + 1}`).toBe(expected);

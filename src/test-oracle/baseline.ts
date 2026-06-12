@@ -19,6 +19,8 @@ export const BaselineSchema = z.object({
   ),
   greySpreads: z.array(z.object({ label: z.string(), spread: z.number() })),
   stripeVarianceMax: z.number(),
+  /** Total pages the fixture is expected to produce — pins dropped/extra-page regressions. */
+  expectedPageCount: z.number().int().positive(),
   expectedBackPages: z.array(z.number().int()),
   tolerances: z.object({
     swatchDeltaE: z.number(),

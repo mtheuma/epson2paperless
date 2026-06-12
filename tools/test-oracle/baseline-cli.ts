@@ -55,6 +55,7 @@ export async function buildBaselineFromOutputDir(
     swatches: m.swatches,
     greySpreads: m.greySpreads,
     stripeVarianceMax: m.stripeVarianceMax,
+    expectedPageCount: jpgs.length,
     expectedBackPages: deriveBackPages(meta.duplex, jpgs.length),
     tolerances: {
       swatchDeltaE: 5,
