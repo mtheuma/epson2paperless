@@ -2,8 +2,10 @@ import { readdirSync, readFileSync, writeFileSync, mkdtempSync, rmSync } from "n
 import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
+import { parseArgs } from "node:util";
 import { decodeToRaster } from "../../src/test-oracle/decode.js";
 import { measureWithGeometry, swatchSampleBoxes } from "../../src/test-oracle/oracle.js";
+import { readJpegOrientation } from "../../src/exif.js";
 import { SWATCHES } from "../test-page/layout.js";
 import { saveBaseline, type Baseline } from "../../src/test-oracle/baseline.js";
 import { renderOverlay } from "./overlay.js";
@@ -11,7 +13,15 @@ import {
   readJsonl,
   trimStatCycles,
   replayCapture,
+  REPLAY_PRINTER_IP,
+  REPLAY_DEST_ID,
 } from "../../src/esci2/test-support/frida-replay.js";
+
+const VALID_SOURCES: BaselineMeta["source"][] = ["flatbed", "adf-simplex", "adf-duplex"];
+const USAGE =
+  "usage: npm run oracle:baseline -- <fixture.jsonl> [--source flatbed|adf-simplex|adf-duplex] [--trim-stat-cycles N]";
+/** The dir regression.test.ts scans for committed baselines. */
+const DISCOVERY_ROOT = path.join("tools", "frida-capture", "captures");
 
 export interface BaselineMeta {
   fixturePath: string;
@@ -33,11 +43,19 @@ export async function buildBaselineFromOutputDir(
     .filter((f) => f.endsWith(".jpg"))
     .sort();
   if (jpgs.length === 0) throw new Error(`no .jpg in ${outputDir}`);
-  const jpeg = readFileSync(path.join(outputDir, jpgs[0]));
+  const pageBuffers = jpgs.map((f) => readFileSync(path.join(outputDir, f)));
+  const jpeg = pageBuffers[0];
   const raster = await decodeToRaster(jpeg);
   // Single fit: the geometry that produced the measurement also drives the
   // overlay, so the overlay boxes are exactly the regions the baseline sampled.
   const { measurement: m, geometry } = measureWithGeometry(raster);
+
+  // Record the back pages from the replay OUTPUT — the pages the scanner
+  // actually tagged with EXIF Orientation=3 — rather than assuming an even-page
+  // parity rule, so the baseline matches whatever the replay produces.
+  const expectedBackPages = pageBuffers
+    .map((buf, i) => (readJpegOrientation(buf) === 3 ? i + 1 : 0))
+    .filter((p) => p > 0);
 
   const baseline: Baseline = {
     approvedAt: meta.approvedAt,
@@ -56,7 +74,7 @@ export async function buildBaselineFromOutputDir(
     greySpreads: m.greySpreads,
     stripeVarianceMax: m.stripeVarianceMax,
     expectedPageCount: jpgs.length,
-    expectedBackPages: deriveBackPages(meta.duplex, jpgs.length),
+    expectedBackPages,
     tolerances: {
       swatchDeltaE: 5,
       crosshairPx: Math.max(3, Math.ceil(m.crosshairResidualPx) + 2),
@@ -76,44 +94,64 @@ export async function buildBaselineFromOutputDir(
   return { baseline, overlayPng };
 }
 
-/** In a duplex scan the back side of each sheet is the even-numbered page. */
-function deriveBackPages(duplex: boolean, pageCount: number): number[] {
-  if (!duplex) return [];
-  const pages: number[] = [];
-  for (let p = 2; p <= pageCount; p += 2) pages.push(p);
-  return pages;
-}
-
 async function main(): Promise<void> {
-  const fixturePath = process.argv[2];
+  // parseArgs rejects unknown flags and a flag whose value is missing (e.g.
+  // `--trim-stat-cycles` as the last token), so those fail clearly rather than
+  // silently defaulting; the outer catch prints the message.
+  const { values, positionals } = parseArgs({
+    allowPositionals: true,
+    options: {
+      source: { type: "string", default: "flatbed" },
+      "trim-stat-cycles": { type: "string", default: "3" },
+    },
+  });
+
+  const fixturePath = positionals[0];
   if (!fixturePath) {
+    console.error(USAGE);
+    process.exit(1);
+  }
+  // Refuse a path that doesn't end in .jsonl: the output paths are derived by
+  // replacing the .jsonl suffix, so a non-matching path would make the baseline
+  // / overlay paths equal the fixture path and overwrite the capture itself.
+  if (!fixturePath.endsWith(".jsonl")) {
+    console.error(`fixture must be a .jsonl file (got: ${fixturePath})`);
+    process.exit(1);
+  }
+
+  const source = values.source ?? "flatbed";
+  if (!VALID_SOURCES.includes(source as BaselineMeta["source"])) {
+    console.error(`--source must be one of: ${VALID_SOURCES.join(" | ")} (got: ${source})`);
+    process.exit(1);
+  }
+  const duplex = source === "adf-duplex";
+
+  const trimStr = values["trim-stat-cycles"] ?? "3";
+  const trim = Number(trimStr);
+  if (trimStr.trim() === "" || !Number.isInteger(trim) || trim < 0) {
     console.error(
-      "usage: npm run oracle:baseline -- <fixture.jsonl> [--source flatbed|adf-simplex|adf-duplex] [--trim-stat-cycles N]",
+      `--trim-stat-cycles must be a non-negative integer (got: ${JSON.stringify(trimStr)})`,
     );
     process.exit(1);
   }
-  const sourceArg = argValue("--source") ?? "flatbed";
-  const duplex = sourceArg === "adf-duplex";
-  const trimArg = argValue("--trim-stat-cycles");
-  const trim = trimArg !== undefined ? Number(trimArg) : 3;
-  if (!Number.isInteger(trim) || trim < 0) {
-    console.error(`--trim-stat-cycles must be a non-negative integer, got: ${trimArg}`);
-    process.exit(1);
-  }
+
   const outputDir = mkdtempSync(path.join(os.tmpdir(), "oracle-baseline-"));
   try {
     const records = readJsonl(fixturePath);
     const trimmed = trimStatCycles(records, trim);
-    const { sessionPromise } = await replayCapture(trimmed, outputDir, duplex, "jpg");
+    const { sessionPromise } = await replayCapture(trimmed, outputDir, duplex, "jpg", {
+      printerIp: REPLAY_PRINTER_IP,
+      destId: REPLAY_DEST_ID,
+    });
     await sessionPromise;
 
     const { baseline, overlayPng } = await buildBaselineFromOutputDir(outputDir, {
       fixturePath,
-      source: sourceArg as BaselineMeta["source"],
+      source: source as BaselineMeta["source"],
       duplex,
       trimStatCycles: trim,
-      printerIp: "192.0.2.58",
-      destId: 0x02,
+      printerIp: REPLAY_PRINTER_IP,
+      destId: REPLAY_DEST_ID,
       approvedAt: new Date().toISOString().slice(0, 10),
     });
     const baselinePath = fixturePath.replace(/\.jsonl$/, ".baseline.json");
@@ -122,6 +160,12 @@ async function main(): Promise<void> {
     writeFileSync(overlayPath, overlayPng);
     console.log(`Wrote ${baselinePath}`);
     console.log(`Wrote ${overlayPath} (gitignored — eyeball this, then commit the .json)`);
+    if (!path.resolve(baselinePath).startsWith(path.resolve(DISCOVERY_ROOT) + path.sep)) {
+      console.warn(
+        `WARNING: ${baselinePath} is outside ${DISCOVERY_ROOT}; the regression suite ` +
+          `only discovers baselines under that directory and will NOT run this one.`,
+      );
+    }
     console.table(
       baseline.swatches.map((s) => ({ swatch: s.label, R: s.rgb[0], G: s.rgb[1], B: s.rgb[2] })),
     );
@@ -129,11 +173,6 @@ async function main(): Promise<void> {
   } finally {
     rmSync(outputDir, { recursive: true, force: true });
   }
-}
-
-function argValue(flag: string): string | undefined {
-  const i = process.argv.indexOf(flag);
-  return i >= 0 ? process.argv[i + 1] : undefined;
 }
 
 const __filename = fileURLToPath(import.meta.url);

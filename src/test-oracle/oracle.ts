@@ -105,15 +105,33 @@ export function measure(raster: Raster): Measurement {
 
 /** Run all checks against a committed baseline. */
 export function assertAgainst(raster: Raster, baseline: Baseline): OracleReport {
-  const m = measure(raster);
   const checks: CheckResult[] = [];
 
+  // Page-size first: it needs only the raster dimensions and stays meaningful
+  // even when measurement can't run.
   checks.push({
     name: "geometry:page-size",
     pass: raster.width === baseline.page.width && raster.height === baseline.page.height,
     measured: null,
     detail: `${raster.width}x${raster.height} vs baseline ${baseline.page.width}x${baseline.page.height}`,
   });
+
+  // measure() throws on a badly degenerate raster (no detectable crosshairs, an
+  // off-image sample region) — exactly the input class page-size flags. Turn that
+  // into a failed check so the oracle always returns a readable report instead of
+  // a raw stack trace.
+  let m: Measurement;
+  try {
+    m = measure(raster);
+  } catch (err) {
+    checks.push({
+      name: "measure",
+      pass: false,
+      measured: null,
+      detail: err instanceof Error ? err.message : String(err),
+    });
+    return { pass: false, crosshairResidualPx: NaN, checks };
+  }
 
   checks.push({
     name: "geometry:crosshair-residual",

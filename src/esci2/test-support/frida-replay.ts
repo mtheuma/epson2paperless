@@ -55,7 +55,26 @@ export function trimStatCycles(records: CaptureRecord[], keep: number): CaptureR
   }
   const recordsPerStatCycle = nextCycleStart - statLoopStart;
   const trimmedStatEnd = statLoopStart + keep * recordsPerStatCycle;
+  if (trimmedStatEnd > fsXRecord) {
+    // keep is larger than the capture actually has; the two slices would overlap
+    // and duplicate FS X plus the whole image phase. Fail clearly instead.
+    throw new Error(
+      `trimStatCycles: keep=${keep} exceeds the capture's STAT cycle count ` +
+        `(trimmed end ${trimmedStatEnd} would overlap FS X at ${fsXRecord})`,
+    );
+  }
   return [...records.slice(0, trimmedStatEnd), ...records.slice(fsXRecord)];
+}
+
+/** Default replay connection params. The captured ET-4950 session is host-only
+ *  (a FakeTlsSocket), so these are placeholders, but the baseline records them
+ *  and a baseline can override them via ReplayOptions. */
+export const REPLAY_PRINTER_IP = "192.0.2.58";
+export const REPLAY_DEST_ID = 0x02;
+
+export interface ReplayOptions {
+  printerIp?: string;
+  destId?: number;
 }
 
 export interface ReplayResult {
@@ -77,12 +96,21 @@ export async function replayCapture(
   outputDir: string,
   duplex: boolean,
   action: "jpg" | "pdf",
+  opts: ReplayOptions = {},
 ): Promise<ReplayResult> {
   const filtered = records.filter((r) => r.hook === "send" || r.hook === "recv");
   const fake = new FakeTlsSocket();
 
   const sessionPromise = runEsci2Scan(
-    { printerIp: "192.0.2.58", port: 1865, destId: 0x02, outputDir, tempDir: "", duplex, action },
+    {
+      printerIp: opts.printerIp ?? REPLAY_PRINTER_IP,
+      port: 1865,
+      destId: opts.destId ?? REPLAY_DEST_ID,
+      outputDir,
+      tempDir: "",
+      duplex,
+      action,
+    },
     fake.asFactory(),
   );
   fake.simulateConnect();

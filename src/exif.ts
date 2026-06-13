@@ -73,10 +73,11 @@ export function readJpegOrientation(jpeg: Buffer): ExifOrientation | undefined {
     const marker = jpeg[off + 1];
     const segLen = jpeg.readUInt16BE(off + 2);
     if (marker === 0xe1) {
-      // APP1 — expect "Exif\0\0" then TIFF header. Every read below is
-      // bounds-checked against jpeg.length so a truncated or corrupt EXIF
-      // returns undefined (per this function's contract) rather than throwing
-      // a RangeError on an out-of-range buffer offset.
+      // APP1 — only an "Exif\0\0" APP1 carries the Orientation tag. Other APP1
+      // segments (e.g. an XMP APP1 written before the Exif one) are skipped so
+      // they don't hide a later Exif segment. Every read below is bounds-checked
+      // against jpeg.length so a truncated or corrupt EXIF returns undefined
+      // (per this function's contract) rather than throwing a RangeError.
       const base = off + 4;
       const tiff = base + 6;
       if (tiff + 8 <= jpeg.length && jpeg.toString("ascii", base, base + 4) === "Exif") {
@@ -95,8 +96,9 @@ export function readJpegOrientation(jpeg: Buffer): ExifOrientation | undefined {
             }
           }
         }
+        return undefined; // Exif APP1 parsed; no usable Orientation tag.
       }
-      return undefined;
+      // Non-Exif APP1 — fall through to skip it and keep scanning.
     }
     if (marker === 0xda) break; // start of scan — no more metadata
     off += 2 + segLen;

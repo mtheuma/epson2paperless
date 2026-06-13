@@ -74,10 +74,11 @@ function extractScannerParaWrite(fake: FakePlainSocket): Buffer {
   throw new Error("extractScannerParaWrite: PARA header write not found");
 }
 
-// Poll briefly for the async PDF compose chain to drop a .pdf into outputDir.
-// composePdfFromJpegs runs inside a setImmediate hop in doFinalize, so the file
-// appears a few event-loop ticks after the session promise settles. Bounded at
-// 50×10ms; callers assert the .pdf count afterwards, so a miss fails loudly.
+// Defensive poll for the composed .pdf. finalizeSession awaits the PDF compose
+// + write before the session promise settles, so the file is normally already on
+// disk once callers await that promise; this loop only guards against scheduler/
+// filesystem lag. Bounded at 50×10ms; callers assert the .pdf count afterwards,
+// so a miss fails loudly.
 async function waitForPdf(outputDir: string): Promise<void> {
   for (
     let i = 0;
