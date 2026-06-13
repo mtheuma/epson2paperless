@@ -8,7 +8,6 @@ import {
   crosshairPoints,
   swatchRect,
   greySwatchIndices,
-  ruleLineBand,
   SWATCHES,
 } from "../../tools/test-page/layout.js";
 
@@ -82,9 +81,13 @@ export function measureWithGeometry(raster: Raster): {
     spread: round(channelSpread(means[i])),
   }));
 
+  // Stripe/smear: per-row variance inside the flat grey swatches only (banding
+  // and planar-vs-interleaved layout bugs raise it). The intentionally
+  // high-variance rule-line band is deliberately NOT folded in — doing so let it
+  // set a loose ceiling that masked swatch banding; page skew is already covered
+  // by the crosshair-fit residual.
   const stripeVarianceMax = Math.max(
     ...greySwatchIndices.map((i) => perRowVariance(raster, boxes[i])),
-    perRowVariance(raster, inset(mapRect(geometry.transform, ruleLineBand), 2)),
   );
 
   return {

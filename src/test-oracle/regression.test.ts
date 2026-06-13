@@ -59,6 +59,11 @@ describe("scan-output oracle regression", () => {
       expect(files.length, `expected ${baseline.expectedPageCount} JPG page(s)`).toBe(
         baseline.expectedPageCount,
       );
+      // Pixel metrics are asserted on the FRONT page only (files[0]) — that's
+      // where the swatch grid lives. Later pages are covered by the page-count
+      // pin above, the per-page EXIF orientation loop below, and the PDF /Rotate
+      // checks; per-page colour is a documented follow-up (multi-front-sheet /
+      // WF-3620 path).
       const raster = await decodeToRaster(readFileSync(path.join(outputDir, files[0])));
       const report = assertAgainst(raster, baseline);
       expect(report.pass, JSON.stringify(report.checks, null, 2)).toBe(true);

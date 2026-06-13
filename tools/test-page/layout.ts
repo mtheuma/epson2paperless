@@ -68,19 +68,6 @@ export const crosshairPoints = [
   { x: LAYOUT.pageWidth - LAYOUT.margin, y: LAYOUT.margin },
 ];
 
-/**
- * Bottom horizontal-rule band (stripe/smear target), front + back identical.
- * The 5 rules sit at `baseY + i*8` for i=0..4 (spanning 32pt); `h: 5 * 8` (40pt)
- * is a deliberately generous bounding box with slack so the sampling region
- * fully contains them.
- */
-export const ruleLineBand: PointRect = {
-  x: LAYOUT.margin + 20,
-  y: LAYOUT.margin + 80,
-  w: LAYOUT.pageWidth - 2 * (LAYOUT.margin + 20),
-  h: 5 * 8,
-};
-
 /** Asymmetric corner marker region (F front / B back), near the TL crosshair. */
 export const markerRegion: PointRect = {
   x: LAYOUT.margin,
