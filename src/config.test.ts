@@ -16,7 +16,9 @@ describe("loadConfig", () => {
     delete process.env.LOG_FORMAT;
     delete process.env.LANGUAGE;
     delete process.env.PREVIEW_ACTION;
-    delete process.env.JOB_NUMBER_ACTION;
+    delete process.env.SCAN_FORMAT;
+    delete process.env.SCAN_SIDES;
+    delete process.env.SCAN_RESOLUTION;
     delete process.env.TEMP_DIR;
     delete process.env.SHUTDOWN_TIMEOUT_MS;
     delete process.env.PAPERLESS_URL;
@@ -131,20 +133,66 @@ describe("loadConfig", () => {
     expect(() => loadConfig()).toThrow();
   });
 
-  it("defaults JOB_NUMBER_ACTION to pdf", () => {
+  it("defaults SCAN_FORMAT to pdf", () => {
     process.env.PRINTER_IP = "192.0.2.58";
-    expect(loadConfig().jobNumberAction).toBe("pdf");
+    expect(loadConfig().scanFormat).toBe("pdf");
   });
 
-  it("accepts JOB_NUMBER_ACTION=jpg", () => {
+  it("accepts SCAN_FORMAT=jpg", () => {
     process.env.PRINTER_IP = "192.0.2.58";
-    process.env.JOB_NUMBER_ACTION = "jpg";
-    expect(loadConfig().jobNumberAction).toBe("jpg");
+    process.env.SCAN_FORMAT = "jpg";
+    expect(loadConfig().scanFormat).toBe("jpg");
   });
 
-  it("rejects invalid JOB_NUMBER_ACTION", () => {
+  it("rejects invalid SCAN_FORMAT", () => {
     process.env.PRINTER_IP = "192.0.2.58";
-    process.env.JOB_NUMBER_ACTION = "preview";
+    process.env.SCAN_FORMAT = "preview";
+    expect(() => loadConfig()).toThrow();
+  });
+
+  it("defaults SCAN_SIDES to duplex", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    expect(loadConfig().scanSides).toBe("duplex");
+  });
+
+  it("accepts SCAN_SIDES=simplex", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.SCAN_SIDES = "simplex";
+    expect(loadConfig().scanSides).toBe("simplex");
+  });
+
+  it("rejects invalid SCAN_SIDES", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.SCAN_SIDES = "both";
+    expect(() => loadConfig()).toThrow();
+  });
+
+  it("defaults SCAN_RESOLUTION to 200", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    expect(loadConfig().scanResolution).toBe(200);
+  });
+
+  it("coerces an advertised SCAN_RESOLUTION (300) to a number", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.SCAN_RESOLUTION = "300";
+    expect(loadConfig().scanResolution).toBe(300);
+  });
+
+  it("accepts the lowest advertised SCAN_RESOLUTION (50)", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.SCAN_RESOLUTION = "50";
+    expect(loadConfig().scanResolution).toBe(50);
+  });
+
+  it("rejects a non-advertised SCAN_RESOLUTION (250)", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.SCAN_RESOLUTION = "250";
+    expect(() => loadConfig()).toThrow();
+  });
+
+  it("rejects an out-of-range SCAN_RESOLUTION (1200)", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.SCAN_RESOLUTION = "1200";
     expect(() => loadConfig()).toThrow();
   });
 
