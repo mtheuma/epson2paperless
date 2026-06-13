@@ -101,10 +101,37 @@ describe("logStartupBanner", () => {
 });
 
 describe("resolveScanDispatch", () => {
-  it("uses JOB_NUMBER_ACTION for FF-680W-style JobNumberIn scans without PushScanIDIn", () => {
-    expect(resolveScanDispatch(FF680W_JOB_NUMBER_INFO, makeConfig({ scanFormat: "jpg" }))).toEqual({
+  it("uses SCAN_FORMAT + SCAN_SIDES for FF-680W-style JobNumberIn scans (duplex)", () => {
+    expect(
+      resolveScanDispatch(
+        FF680W_JOB_NUMBER_INFO,
+        makeConfig({ scanFormat: "jpg", scanSides: "duplex" }),
+      ),
+    ).toEqual({ duplex: true, action: "jpg" });
+  });
+
+  it("honours SCAN_SIDES=simplex for the job-number flow", () => {
+    expect(
+      resolveScanDispatch(
+        FF680W_JOB_NUMBER_INFO,
+        makeConfig({ scanFormat: "pdf", scanSides: "simplex" }),
+      ),
+    ).toEqual({ duplex: false, action: "pdf" });
+  });
+
+  it("still prefers panel PushScanIDIn when present (panel printers)", () => {
+    // Panel precedence guard: info.duplex and config.scanSides are set to OPPOSITE
+    // values so duplex:true can only come from the panel branch (info.duplex), not
+    // the job-number branch (which would yield config.scanSides==="duplex" → false).
+    const panelInfo = {
+      ...FF680W_JOB_NUMBER_INFO,
+      pushScanId: "01",
+      action: "pdf" as const,
       duplex: true,
-      action: "jpg",
+    };
+    expect(resolveScanDispatch(panelInfo, makeConfig({ scanSides: "simplex" }))).toEqual({
+      duplex: true,
+      action: "pdf",
     });
   });
 });
