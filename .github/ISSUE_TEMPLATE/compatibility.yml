@@ -51,6 +51,11 @@ body:
         - label: Flatbed, JPG
         - label: Flatbed, PDF
 
+  - type: markdown
+    attributes:
+      value: |
+        📎 **Captured a scan?** Don't attach the pcap here — it includes your printer's MAC and other identifying bytes. See [CONTRIBUTING.md → Contributing a scan capture](../../blob/main/CONTRIBUTING.md#contributing-a-scan-capture) to send it privately. (A scan of [our test page](../../blob/main/tools/test-page/compatibility-test-page.pdf) is the most useful.)
+
   - type: textarea
     id: notes
     attributes:
