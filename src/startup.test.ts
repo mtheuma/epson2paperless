@@ -49,7 +49,9 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     language: "en",
     jpegQuality: 90,
     previewAction: "reject",
-    jobNumberAction: "pdf",
+    scanFormat: "pdf",
+    scanSides: "duplex",
+    scanResolution: 200,
     printerProtocol: "auto",
     diagnoseProtocol: false,
     tempDir: "",
@@ -100,9 +102,10 @@ describe("logStartupBanner", () => {
 
 describe("resolveScanDispatch", () => {
   it("uses JOB_NUMBER_ACTION for FF-680W-style JobNumberIn scans without PushScanIDIn", () => {
-    expect(
-      resolveScanDispatch(FF680W_JOB_NUMBER_INFO, makeConfig({ jobNumberAction: "jpg" })),
-    ).toEqual({ duplex: true, action: "jpg" });
+    expect(resolveScanDispatch(FF680W_JOB_NUMBER_INFO, makeConfig({ scanFormat: "jpg" }))).toEqual({
+      duplex: true,
+      action: "jpg",
+    });
   });
 });
 

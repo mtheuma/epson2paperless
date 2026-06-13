@@ -138,9 +138,9 @@ export function resolveScanDispatch(
   if (info.jobNumber !== null && info.pushScanId === null) {
     const duplex = info.productName === FF680W_PRODUCT_NAME ? true : info.duplex;
     log.info(
-      `PushScan has JobNumberIn=${info.jobNumber} but no PushScanIDIn — using JOB_NUMBER_ACTION=${config.jobNumberAction}`,
+      `PushScan has JobNumberIn=${info.jobNumber} but no PushScanIDIn — using SCAN_FORMAT=${config.scanFormat}`,
     );
-    return { duplex, action: config.jobNumberAction };
+    return { duplex, action: config.scanFormat };
   }
 
   return null;
