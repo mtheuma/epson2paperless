@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { esci2Graph, ESCI2_TIMEOUT_MS } from "./graph.js";
 import { applyEntrySourceOverride } from "./dialects/dispatch.js";
 import { REGISTRY } from "./dialects/registry.js";
-import { IS_HEADER_SIZE, buildPurereadPacket } from "../protocol.js";
+import { IS_HEADER_SIZE, buildPurereadPacket, parseIsPacket } from "../protocol.js";
 
 describe("esci2Graph (smoke)", () => {
   it("builds with the expected initial state and timeout", () => {
@@ -475,6 +475,7 @@ function makeCtx(
     source: "adf",
     transport: "tls",
     action: "jpg",
+    resolution: 200,
     initPollIteration: 0,
     imgChunkSize: 0,
     pageEndKind: "none",
@@ -488,6 +489,44 @@ function makeCtx(
     ...overrides,
   };
 }
+
+const FF680W_FP = "5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd";
+
+describe("esci2Graph POST_MODE_STAT — PARA reflects ctx.resolution + source", () => {
+  // Drives the state that calls buildParaSend(ctx) and inspects the emitted
+  // phase-2 PARA passthru. Proves ctx.resolution/source actually reach the wire
+  // bytes via the graph — composePara unit tests alone don't cover the thread.
+  function emitParaBody(overrides: Partial<import("./graph.js").Esci2Ctx>): string {
+    const state = esci2Graph.states.POST_MODE_STAT;
+    expect(state.kind).toBe("decision");
+    if (state.kind !== "decision") throw new Error("POST_MODE_STAT not a decision");
+    const ctx = makeCtx({ entry: REGISTRY.get(FF680W_FP)!, source: "adf", ...overrides });
+    // STAT reply header length 0 → PARA branch (send = buildParaSend(ctx)).
+    const result = state.decide(ctx, {
+      type: 0xa000,
+      payload: Buffer.from("STATx0000000" + " ".repeat(52), "ascii"),
+    });
+    if (!("send" in result)) throw new Error("expected a send from POST_MODE_STAT");
+    expect(Array.isArray(result.send)).toBe(true); // phase-1 header + phase-2 body
+    const sends = result.send as Buffer[];
+    expect(sends.length).toBe(2);
+    // Strip the 8-byte passthru preamble (cmd_size + reply_size) to reach the PARA body.
+    return parseIsPacket(sends[1])!.payload.subarray(8).toString("latin1");
+  }
+
+  it("emits #RSMi0000300 and scaled #ACQ when ctx.resolution=300", () => {
+    const body = emitParaBody({ resolution: 300, duplex: false });
+    expect(body).toContain("#RSMi0000300");
+    expect(body).toContain("#RSSi0000300");
+    expect(body).toContain("#ACQi0000000i0000000i0002550i0010800");
+  });
+
+  it("emits the DPLX token for duplex and omits it for simplex", () => {
+    expect(emitParaBody({ resolution: 200, duplex: true })).toContain("SKEWDPLXDFL1");
+    expect(emitParaBody({ resolution: 200, duplex: false })).toContain("SKEWDFL1");
+    expect(emitParaBody({ resolution: 200, duplex: false })).not.toContain("DPLX");
+  });
+});
 
 describe("esci2Graph INIT_POLL_STAT source detection", () => {
   it("detects source=adf when STAT header length is 0 on iteration 0", () => {

@@ -216,6 +216,7 @@ describe("dispatchScanSession", () => {
       tempDir: "/tmp/scan",
       duplex: true,
       action: "pdf",
+      resolution: 200,
       paperless: PAPERLESS_OPTS,
       printerCertFingerprint: fp,
     });
@@ -239,6 +240,7 @@ describe("dispatchScanSession", () => {
     expect(call.paperless).toBe(PAPERLESS_OPTS);
     expect(call.duplex).toBe(false);
     expect(call.action).toBe("jpg");
+    expect(call.resolution).toBe(200);
   });
 
   it("variant=esci routes to runEsciScan with forcedSource + jpegQuality + diagnoseProtocol", async () => {
