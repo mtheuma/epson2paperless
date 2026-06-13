@@ -66,6 +66,11 @@ export interface Esci2Ctx {
   entry: RegistryEntry | undefined;
   /** Panel-selected output format; drives action-aware dialects' PARA splice. */
   action: "jpg" | "pdf";
+  /**
+   * Scan resolution in DPI, threaded from config.scanResolution. Only the
+   * ff680w-adf PARA profile consumes it; other dialects pin resolution.
+   */
+  resolution: number;
 }
 
 export const ESCI2_TIMEOUT_MS = 30_000;
@@ -598,7 +603,7 @@ g.state(
 function buildParaSend(ctx: Esci2Ctx): Buffer[] {
   const paraSource: ParaSpec["source"] =
     ctx.source === "flatbed" ? "flatbed" : ctx.duplex ? "adf-duplex" : "adf-simplex";
-  const paraPayload = composePara(makeParaSpec(ctx.entry!, paraSource, ctx.action));
+  const paraPayload = composePara(makeParaSpec(ctx.entry!, paraSource, ctx.action, ctx.resolution));
   return [
     buildPassthruPacket(buildParaHeader(paraPayload.length), 0),
     buildPassthruPacket(paraPayload, ESCI2_REPLY_SIZE),

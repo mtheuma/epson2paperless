@@ -169,6 +169,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
       tempDir: args.config.tempDir,
       duplex: args.duplex,
       action: args.action,
+      resolution: args.config.scanResolution,
       paperless: args.paperless,
       printerCertFingerprint: args.config.printerCertFingerprint,
     });
@@ -187,6 +188,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
       tempDir: args.config.tempDir,
       duplex: args.duplex,
       action: args.action,
+      resolution: args.config.scanResolution,
       paperless: args.paperless,
     });
   }
