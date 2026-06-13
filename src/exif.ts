@@ -101,6 +101,7 @@ export function readJpegOrientation(jpeg: Buffer): ExifOrientation | undefined {
       // Non-Exif APP1 — fall through to skip it and keep scanning.
     }
     if (marker === 0xda) break; // start of scan — no more metadata
+    if (segLen < 2) break; // malformed segment length (min is 2) — can't safely advance
     off += 2 + segLen;
   }
   return undefined;

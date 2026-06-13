@@ -126,14 +126,16 @@ async function main(): Promise<void> {
   }
   const duplex = source === "adf-duplex";
 
-  const trimStr = values["trim-stat-cycles"] ?? "3";
-  const trim = Number(trimStr);
-  if (trimStr.trim() === "" || !Number.isInteger(trim) || trim < 0) {
+  const trimStr = (values["trim-stat-cycles"] ?? "3").trim();
+  // Decimal digits only: Number() would otherwise silently accept hex (0x3) and
+  // exponent (1e1) forms that Number.isInteger passes.
+  if (!/^\d+$/.test(trimStr)) {
     console.error(
-      `--trim-stat-cycles must be a non-negative integer (got: ${JSON.stringify(trimStr)})`,
+      `--trim-stat-cycles must be a non-negative integer (got: ${JSON.stringify(values["trim-stat-cycles"])})`,
     );
     process.exit(1);
   }
+  const trim = Number(trimStr);
 
   const outputDir = mkdtempSync(path.join(os.tmpdir(), "oracle-baseline-"));
   try {

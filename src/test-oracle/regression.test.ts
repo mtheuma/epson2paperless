@@ -63,13 +63,20 @@ describe("scan-output oracle regression", () => {
       const report = assertAgainst(raster, baseline);
       expect(report.pass, JSON.stringify(report.checks, null, 2)).toBe(true);
 
-      // Per-page EXIF orientation: back pages carry Orientation=3, front pages
-      // carry NO tag. Asserting the complement catches an over-tagging regression
-      // (every page stamped) that the pixel checks can't see.
+      // Per-page EXIF orientation: a page is a back page iff its orientation is 3
+      // (the ADF U-turn flip). Back pages MUST read 3; front pages MUST NOT be 3.
+      // We assert front pages `!== 3` rather than `=== undefined` to stay symmetric
+      // with the bake's back-page rule (readJpegOrientation === 3): a printer that
+      // stamps a benign front-page tag (e.g. Orientation=1) should not false-fail
+      // a correct capture, while an over-tagging regression (front stamped 3) and
+      // an under-tagging one (back missing 3) are both still caught.
       for (let p = 1; p <= files.length; p++) {
         const orient = readJpegOrientation(readFileSync(path.join(outputDir, files[p - 1])));
-        const expectedOrient = baseline.expectedBackPages.includes(p) ? 3 : undefined;
-        expect(orient, `JPG page ${p} EXIF orientation`).toBe(expectedOrient);
+        if (baseline.expectedBackPages.includes(p)) {
+          expect(orient, `JPG back page ${p} EXIF orientation`).toBe(3);
+        } else {
+          expect(orient, `JPG front page ${p} EXIF orientation`).not.toBe(3);
+        }
       }
 
       // PDF replay for EVERY baseline (not just duplex): page count + per-page

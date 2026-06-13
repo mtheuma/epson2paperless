@@ -125,4 +125,18 @@ describe("readJpegOrientation", () => {
     expect(() => readJpegOrientation(buf)).not.toThrow();
     expect(readJpegOrientation(buf)).toBeUndefined();
   });
+
+  it("skips a non-Exif APP1 (XMP) and still finds a following Exif APP1", () => {
+    // The 36-byte Exif APP1 (Orientation=3) that setJpegOrientation emits.
+    const exifApp1 = setJpegOrientation(Buffer.from([0xff, 0xd8]), 3).subarray(2, 38);
+    // A leading XMP APP1 (also marker 0xE1) that must be skipped, not bailed on.
+    const xmpBody = Buffer.from("http://ns.adobe.com/xap/1.0/\0<x:xmpmeta/>", "ascii");
+    const xmpLen = 2 + xmpBody.length; // segment length includes its 2 length bytes
+    const xmpApp1 = Buffer.concat([
+      Buffer.from([0xff, 0xe1, (xmpLen >> 8) & 0xff, xmpLen & 0xff]),
+      xmpBody,
+    ]);
+    const buf = Buffer.concat([Buffer.from([0xff, 0xd8]), xmpApp1, exifApp1]);
+    expect(readJpegOrientation(buf)).toBe(3);
+  });
 });
