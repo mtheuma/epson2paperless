@@ -10,6 +10,7 @@
     "scan": "tsx src/one-shot.ts",
     "printer-fingerprint": "tsx tools/printer-fingerprint.ts",
     "test-page:generate": "tsx tools/test-page/generate.ts",
+    "oracle:baseline": "tsx tools/test-oracle/baseline-cli.ts",
     "kill-dev": "node scripts/kill-dev.mjs",
     "test": "vitest run --exclude=.claude/** --exclude=.superpowers/**",
     "test:watch": "vitest",

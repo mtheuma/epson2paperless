@@ -60,3 +60,49 @@ export function setJpegOrientation(jpeg: Buffer, orientation: ExifOrientation): 
   jpeg.copy(out, 2 + app1.length, 2);
   return out;
 }
+
+/**
+ * Reads the EXIF Orientation tag from a JPEG, or undefined if there's no
+ * APP1/EXIF segment or no Orientation tag. Minimal TIFF parser — handles the
+ * single-IFD layout that setJpegOrientation and camera firmware produce.
+ */
+export function readJpegOrientation(jpeg: Buffer): ExifOrientation | undefined {
+  let off = 2; // skip SOI
+  while (off + 4 <= jpeg.length) {
+    if (jpeg[off] !== 0xff) break;
+    const marker = jpeg[off + 1];
+    const segLen = jpeg.readUInt16BE(off + 2);
+    if (marker === 0xe1) {
+      // APP1 — only an "Exif\0\0" APP1 carries the Orientation tag. Other APP1
+      // segments (e.g. an XMP APP1 written before the Exif one) are skipped so
+      // they don't hide a later Exif segment. Every read below is bounds-checked
+      // against jpeg.length so a truncated or corrupt EXIF returns undefined
+      // (per this function's contract) rather than throwing a RangeError.
+      const base = off + 4;
+      const tiff = base + 6;
+      if (tiff + 8 <= jpeg.length && jpeg.toString("ascii", base, base + 4) === "Exif") {
+        const le = jpeg.toString("ascii", tiff, tiff + 2) === "II";
+        const u16 = (p: number) => (le ? jpeg.readUInt16LE(p) : jpeg.readUInt16BE(p));
+        const u32 = (p: number) => (le ? jpeg.readUInt32LE(p) : jpeg.readUInt32BE(p));
+        const ifd0 = tiff + u32(tiff + 4);
+        if (ifd0 + 2 <= jpeg.length) {
+          const count = u16(ifd0);
+          for (let i = 0; i < count; i++) {
+            const entry = ifd0 + 2 + i * 12;
+            if (entry + 12 > jpeg.length) break; // entry runs past the buffer
+            if (u16(entry) === 0x0112) {
+              const v = u16(entry + 8);
+              if (v === 1 || v === 3 || v === 6 || v === 8) return v;
+            }
+          }
+        }
+        return undefined; // Exif APP1 parsed; no usable Orientation tag.
+      }
+      // Non-Exif APP1 — fall through to skip it and keep scanning.
+    }
+    if (marker === 0xda) break; // start of scan — no more metadata
+    if (segLen < 2) break; // malformed segment length (min is 2) — can't safely advance
+    off += 2 + segLen;
+  }
+  return undefined;
+}

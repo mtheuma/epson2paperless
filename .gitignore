@@ -2,6 +2,7 @@ node_modules/
 dist/
 *.bin
 *.raw
+*.baseline.overlay.png
 test-output/
 .claude/
 .reference/
