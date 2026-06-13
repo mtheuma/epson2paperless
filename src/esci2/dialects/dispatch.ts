@@ -51,6 +51,7 @@ export function makeParaSpec(
   entry: RegistryEntry,
   source: ParaSpec["source"],
   action: ParaSpec["action"],
+  resolution?: number,
 ): ParaSpec {
   return {
     source,
@@ -62,5 +63,6 @@ export function makeParaSpec(
     cmxClass: entry.cmxClass,
     optionalSegments: entry.optionalSegments,
     profile: entry.paraProfile,
+    resolution,
   };
 }
