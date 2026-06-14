@@ -13,6 +13,10 @@ const log = createLogger("ff680w-job");
 const DEFAULT_JOB_CONTROL_PORT = 1865;
 const DEFAULT_TIMEOUT_MS = 3000;
 const JOB_LOCK_TIMEOUT_SECONDS = 30;
+// Sanity cap on a declared IS payload length. Job-control replies are a handful
+// of bytes; anything past this signals a desynced stream, so fail fast instead
+// of blocking read() until the timeout.
+const MAX_JOB_REPLY_PAYLOAD = 65536;
 
 export type Ff680wJobSocketFactory = (host: string, port: number) => net.Socket;
 
@@ -63,6 +67,7 @@ async function runJobControl(
   const socketFactory = opts.socketFactory ?? ((host, p) => net.connect(p, host));
   const socket = socketFactory(opts.printerIp, port);
   const reader = new IsPacketReader(socket, timeoutMs);
+  let locked = false;
 
   try {
     await waitForConnect(socket, timeoutMs, label);
@@ -71,6 +76,7 @@ async function runJobControl(
     socket.write(buildLockPacket(JOB_LOCK_TIMEOUT_SECONDS));
 
     await expectPacket(reader, 0xa100, `${label} lock ack`, (packet) => packet.payload[0] === 0x06);
+    locked = true;
     socket.write(jobPacket);
 
     const jobReply = await expectPacket(reader, 0xa300, `${label} reply`);
@@ -82,12 +88,25 @@ async function runJobControl(
 
     socket.write(buildUnlockPacket());
     await expectPacket(reader, 0xa101, `${label} unlock ack`);
+    locked = false;
     socket.end();
 
     log.debug(`${label} control transaction completed`);
     return Buffer.from(jobReply.payload);
   } catch (err) {
-    socket.destroy(err instanceof Error ? err : undefined);
+    // If we acquired the lock but failed before unlocking, best-effort send an
+    // UNLOCK so the printer doesn't sit locked for JOB_LOCK_TIMEOUT_SECONDS and
+    // reject the scan-session lock that opens on this same port moments later.
+    // end() flushes the UNLOCK then half-closes; fall back to destroy on throw.
+    if (locked && !socket.destroyed) {
+      try {
+        socket.end(buildUnlockPacket());
+      } catch {
+        socket.destroy();
+      }
+    } else {
+      socket.destroy(err instanceof Error ? err : undefined);
+    }
     throw err;
   } finally {
     reader.dispose();
@@ -125,6 +144,18 @@ class IsPacketReader {
       throw new Error(
         `${label}: expected IS packet, got ${this.buffer.subarray(0, 2).toString("hex")}`,
       );
+    }
+    // Once the 12-byte IS header is buffered, sanity-cap the declared payload
+    // length (offset 6, BE u32). Job-control replies are tiny; a wild size from
+    // a desynced/corrupt stream would otherwise make read() block on more data
+    // until the timeout. Fail fast with a clear framing error instead.
+    if (this.buffer.length >= 12) {
+      const declared = this.buffer.readUInt32BE(6);
+      if (declared > MAX_JOB_REPLY_PAYLOAD) {
+        throw new Error(
+          `${label}: IS payload length ${declared} exceeds ${MAX_JOB_REPLY_PAYLOAD} — framing desync`,
+        );
+      }
     }
   }
 }
