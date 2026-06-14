@@ -15,7 +15,7 @@ The first two channels are shared across supported models. The scan-session chan
 | Variant       | Transport    | Command set          | Hardware                              |
 | ------------- | ------------ | -------------------- | ------------------------------------- |
 | `esci2-tls`   | TLS over TCP | ESC/I-2 over IS      | ET-4950 / ET-3950 / ET-4956 / ET-2950 |
-| `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750 / XP-7100 / ET-4800           |
+| `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750 / XP-7100 / ET-4800 / FF-680W |
 | `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family                        |
 
 `esci2-tls` is internal shorthand for the TLS ESC/I-2 path. In configuration, this is selected with `PRINTER_PROTOCOL=esci2`.
@@ -95,6 +95,8 @@ The protocol graphs intentionally stay separate. They share the engine and outpu
 ## Source, sides, and action
 
 The push-scan SOAP request tells the service the panel's Sides and Action choices, but it does not explicitly say whether the physical source is ADF or flatbed. Source is inferred from protocol responses:
+
+Some scanners report no panel selection at all. The FF-680W (an ADF-only photo scanner, so its source is always ADF) sends a bare `JobNumberIn` trigger with no Sides or Action, so the service takes sides, output format, and resolution from `SCAN_SIDES`, `SCAN_FORMAT`, and `SCAN_RESOLUTION` rather than from the panel.
 
 - ESC/I-2 ADF-capable printers use an INIT_POLL `STAT` length heuristic.
 - ET-2750 and ET-2950 are fixed flatbed.
