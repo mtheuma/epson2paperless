@@ -22,7 +22,7 @@ describe("buildPushScanResponse default x-uid (xuid=1)", () => {
   it("contains the required Epson headers with spaces before colons", () => {
     expect(response).toContain("Server : Epson Net Scan Monitor/2.0");
     expect(response).toContain("x-protocol-name : Epson Network Service Protocol");
-    expect(response).toContain("x-protocol-version : 3.00");
+    expect(response).toContain("x-protocol-version : 2.00");
     expect(response).toContain("x-status : 0001");
   });
 
@@ -55,9 +55,19 @@ describe("buildPushScanResponse", () => {
     const response = buildPushScanResponse("42");
     expect(response).toContain("Server : Epson Net Scan Monitor/2.0");
     expect(response).toContain("x-protocol-name : Epson Network Service Protocol");
-    expect(response).toContain("x-protocol-version : 3.00");
+    expect(response).toContain("x-protocol-version : 2.00");
     expect(response).toContain("x-status : 0001");
     expect(response).toContain("<StatusOut>OK</StatusOut>");
+  });
+
+  it("defaults x-protocol-version to 2.00 (the pre-FF-680W fleet value)", () => {
+    expect(buildPushScanResponse("1")).toContain("x-protocol-version : 2.00\r\n");
+  });
+
+  it("echoes a provided protocolVersion (3.00 for the FF-680W)", () => {
+    const response = buildPushScanResponse("1", { protocolVersion: "3.00" });
+    expect(response).toContain("x-protocol-version : 3.00\r\n");
+    expect(response).not.toContain("x-protocol-version : 2.00");
   });
 });
 
@@ -489,6 +499,66 @@ describe("createPushScanServer", () => {
     const response = await responsePromise;
     expect(response).toContain("x-uid : 42\r\n");
     expect(response).not.toContain("x-uid : 1\r\n");
+
+    client.destroy();
+    server.close();
+  });
+
+  it("echoes the request's x-protocol-version (3.00 for the FF-680W)", async () => {
+    const server = createPushScanServer(0, () => {});
+    await new Promise<void>((r) => {
+      if (server.listening) r();
+      else server.once("listening", () => r());
+    });
+    const port = (server.address() as AddressInfo).port;
+
+    const body = buildSoapBody("01", "PID 016B", "C0A80A08");
+    const request =
+      `POST /PushScan HTTP/1.0\r\n` +
+      `Content-Type: application/octet-stream\r\n` +
+      `Content-Length: ${Buffer.byteLength(body, "utf-8")}\r\n` +
+      `x-uid: 5\r\n` +
+      `x-protocol-version: 3.00\r\n` +
+      `\r\n` +
+      body;
+
+    const client = net.createConnection(port, "127.0.0.1");
+    await new Promise<void>((r) => client.once("connect", () => r()));
+    const responsePromise = readFullHttpResponse(client);
+    client.write(request);
+
+    const response = await responsePromise;
+    expect(response).toContain("x-protocol-version : 3.00\r\n");
+    expect(response).not.toContain("x-protocol-version : 2.00");
+
+    client.destroy();
+    server.close();
+  });
+
+  it("defaults the response x-protocol-version to 2.00 when the request omits it", async () => {
+    const server = createPushScanServer(0, () => {});
+    await new Promise<void>((r) => {
+      if (server.listening) r();
+      else server.once("listening", () => r());
+    });
+    const port = (server.address() as AddressInfo).port;
+
+    const body = buildSoapBody("01", "PID 11D1", "C0A8013A");
+    const request =
+      `POST /PushScan HTTP/1.0\r\n` +
+      `Content-Type: application/octet-stream\r\n` +
+      `Content-Length: ${Buffer.byteLength(body, "utf-8")}\r\n` +
+      `x-uid: 6\r\n` +
+      `\r\n` +
+      body;
+
+    const client = net.createConnection(port, "127.0.0.1");
+    await new Promise<void>((r) => client.once("connect", () => r()));
+    const responsePromise = readFullHttpResponse(client);
+    client.write(request);
+
+    const response = await responsePromise;
+    expect(response).toContain("x-protocol-version : 2.00\r\n");
 
     client.destroy();
     server.close();

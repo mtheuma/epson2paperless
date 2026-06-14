@@ -32,6 +32,15 @@ function buildResponseBody(status: "OK" | "ERROR", capabilities: string[] = []):
 export interface PushScanResponseOptions {
   status?: "OK" | "ERROR";
   capabilities?: string[];
+  /**
+   * Value echoed in the `x-protocol-version` header. The printer sends its own
+   * version in the request (`2.00` for the ESC/I-2 + legacy fleet, `3.00` for
+   * the FF-680W's NetScanMonitor v3) and we mirror it back. Defaults to `2.00`
+   * — the verified value for every model that predates the FF-680W — so a
+   * request without the header (or an unknown caller) reproduces the original
+   * behaviour rather than advertising v3 to a v2 device.
+   */
+  protocolVersion?: string;
 }
 
 export function buildPushScanResponse(xuid: string, opts: PushScanResponseOptions = {}): string {
@@ -43,7 +52,7 @@ export function buildPushScanResponse(xuid: string, opts: PushScanResponseOption
     `Content-Type : application/octet-stream\r\n` +
     `Content-Length : ${bodyLength}\r\n` +
     `x-protocol-name : Epson Network Service Protocol\r\n` +
-    `x-protocol-version : 3.00\r\n` +
+    `x-protocol-version : ${opts.protocolVersion ?? "2.00"}\r\n` +
     `x-uid : ${xuid}\r\n` +
     `x-status : 0001\r\n`;
   return headers + "\r\n" + body;
@@ -251,9 +260,22 @@ export function createPushScanServer(
       const xuid = xuidMatch ? xuidMatch[1] : "1";
       log.debug(`Echoing x-uid : ${xuid}`);
 
+      // Mirror the printer's own protocol version (2.00 fleet / 3.00 FF-680W)
+      // rather than advertising a fixed version to every device.
+      const verMatch = headers.match(/x-protocol-version\s*:\s*(\S+)/i);
+      const protocolVersion = verMatch ? verMatch[1] : "2.00";
+
       const sendResponse = (status: "OK" | "ERROR") => {
+        // The pre-response hook can run for a few hundred ms (an out-of-band
+        // job-control round-trip); if the printer closed the trigger socket
+        // meanwhile, writing would error and onPushScan must not fire.
+        if (socket.destroyed || socket.writableEnded) {
+          log.warn(`Push-scan socket closed before ${kind} response could be sent`);
+          return;
+        }
         const response = buildPushScanResponse(xuid, {
           status,
+          protocolVersion,
           capabilities: status === "OK" ? capabilities : [],
         });
 
