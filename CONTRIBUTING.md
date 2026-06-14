@@ -15,14 +15,16 @@ Open a GitHub issue with:
 
 ## Contributing a scan capture
 
-The most useful thing you can send is a capture of your scanner scanning the project's **standard test page**. But first, check how your printer connects.
+The most useful thing you can send is a capture of the project's **[standard test page](https://github.com/mtheuma/epson2paperless/blob/main/tools/test-page/compatibility-test-page.pdf)**. First, check whether your printer uses TLS.
 
-**TLS models can't be captured with Wireshark.** The newer EcoTanks (ET-4950, ET-3950, ET-4956, ET-2950) encrypt the scan session, so a Wireshark capture comes out unreadable. If you have one of those, open a [compatibility report](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) and say so; that's still valuable, and those need a different, heavier capture method I can help with. Not sure which your model uses? Open a compatibility report first and I'll tell you whether a capture is worth it.
+**TLS models can't be captured with Wireshark.** Newer EcoTanks (ET-4950, ET-3950, ET-4956, ET-2950) encrypt the scan session, so a Wireshark capture is unreadable.
+
+If you have one of those models, open a [compatibility report](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) and say so. That's still valuable; TLS models need a different, heavier capture method I can help with. Not sure whether your printer uses TLS? Open a compatibility report first and I'll tell you whether a capture is worth it.
 
 If you know your printer doesn't use TLS, a Wireshark capture is exactly what we need, and you only need to send it once:
 
-1. **Print the test page:** `tools/test-page/compatibility-test-page.pdf` at 100% scale (turn off "fit to page"), plain white A4.
-2. **Capture the scan:** set Wireshark's capture filter to `host <printer-ip>` (or `tshark -f "host <printer-ip>"`), then scan the printed page from the panel via **Scan to Computer** into epson2paperless, page 1 (the colour grid) first. Do one scan per mode your hardware supports: Flatbed JPG/PDF, plus ADF 1-Sided / 2-Sided JPG/PDF if you have an ADF.
+1. **Print the test page:** [compatibility-test-page.pdf](https://github.com/mtheuma/epson2paperless/blob/main/tools/test-page/compatibility-test-page.pdf) at 100% scale (turn off "fit to page"), plain white A4.
+2. **Capture the scan:** set Wireshark's capture filter to `host <printer-ip>` (or `tshark -f "host <printer-ip>"`), then scan the printed page from the panel via **Scan to Computer** into epson2paperless. Put page 1 (the colour grid) first. Do one scan per mode your hardware supports: Flatbed JPG/PDF, plus ADF 1-Sided / 2-Sided JPG/PDF if you have an ADF.
 3. **Send it privately:** a pcap contains your printer's MAC and other identifying bytes, so don't attach it to the issue. Upload to the [Dropbox drop folder](https://www.dropbox.com/request/yksswgt8rqv53l1x9dal) (write-only, no account needed), or email it to `epson2paperless.vineyard182@passmail.com`. Note the model and which mode each capture was.
 
 I'll take it from there.
@@ -51,7 +53,7 @@ npm test                             # full test suite
 ## Pull requests
 
 - Branch off `main`. PR back to `main`.
-- Commit-message style: `type: short summary` (`feat:`, `fix:`, `chore:`, `refactor:`, `test:`). The body explains the _why_ when it isn't obvious from the diff.
+- Commit-message style: `type: short summary` (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`). The body explains the _why_ when it isn't obvious from the diff.
 - The CI gate is `npm run lint`, `npm run format:check`, and `npm test`. All three must pass. The local pre-push hook (`git config core.hooksPath .githooks`, one-time per clone) runs the first two on every push so you catch lint/format issues before CI does; tests are left to CI to keep the hook fast.
 - If your PR addresses an open issue, link it in the description.
 - Protocol changes that affect wire bytes need matching updates to the Frida-capture fixtures in `tools/frida-capture/captures/`. The byte-for-byte replay test in `src/scanner.test.ts` will fail otherwise. See `tools/frida-capture/README.md` for the re-capture workflow.
