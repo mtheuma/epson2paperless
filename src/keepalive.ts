@@ -191,11 +191,22 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
           };
           const packet = buildKeepalivePacket(keepalive, announcement.seq);
 
+          // Source-port policy. The FF-680W's reference (Mac) driver sends its
+          // keepalive from an ephemeral source port — verified in the capture —
+          // so v3 announcements egress via the dedicated unbound `sender`. The
+          // already-verified v2 fleet keeps sending from the bound multicast
+          // socket (port 2968) exactly as before this device was added, so a
+          // wire detail those printers were validated against doesn't change.
+          const useEphemeralSender = keepalive.version === "3.0";
+
           for (let i = 0; i < opts.burstCount; i++) {
             const burstIndex = i + 1;
             const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
-              if (!sender) return;
-              sender.send(packet, opts.printerPort, opts.printerIp, (err) => {
+              // Resolve the live socket inside the timer so stop() (which nulls
+              // both) still cancels an in-flight burst.
+              const burstSocket = useEphemeralSender ? sender : socket;
+              if (!burstSocket) return;
+              burstSocket.send(packet, opts.printerPort, opts.printerIp, (err) => {
                 if (err) {
                   log.error(`Keepalive burst send #${burstIndex} failed`, err);
                 } else {
