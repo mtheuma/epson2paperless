@@ -134,6 +134,13 @@ describe("resolveScanDispatch", () => {
       action: "pdf",
     });
   });
+
+  it("refuses a JobNumberIn scan from a non-FF-680W product (no guessing)", () => {
+    // Only the FF-680W's job-number flow falls back to config defaults; any
+    // other product that sends JobNumberIn without a PushScanIDIn is ignored.
+    const otherInfo = { ...FF680W_JOB_NUMBER_INFO, productName: "PID 11D1" };
+    expect(resolveScanDispatch(otherInfo, makeConfig())).toBeNull();
+  });
 });
 
 describe("buildPushScanServerOptions", () => {
