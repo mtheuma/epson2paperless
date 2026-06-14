@@ -15,15 +15,17 @@ Open a GitHub issue with:
 
 ## Contributing a scan capture
 
-A capture of your scanner scanning the project's **standard test page** is what lets us add or verify support for your model, and you only need to send it once.
+The most useful thing you can send is a capture of your scanner scanning the project's **standard test page**. But first, check how your printer connects.
+
+**TLS models can't be captured with Wireshark.** The newer EcoTanks (ET-4950, ET-3950, ET-4956, ET-2950) encrypt the scan session, so a Wireshark capture comes out unreadable. If you have one of those, open a [compatibility report](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) and say so; that's still valuable, and those need a different, heavier capture method I can help with. Not sure which your model uses? Open a compatibility report first and I'll tell you whether a capture is worth it.
+
+For every other model, a Wireshark capture is exactly what we need, and you only need to send it once:
 
 1. **Print the test page:** `tools/test-page/compatibility-test-page.pdf` at 100% scale (turn off "fit to page"), plain white A4.
 2. **Capture the scan:** set Wireshark's capture filter to `host <printer-ip>` (or `tshark -f "host <printer-ip>"`), then scan the printed page from the panel via **Scan to Computer** into epson2paperless, page 1 (the colour grid) first. Do one scan per mode your hardware supports: Flatbed JPG/PDF, plus ADF 1-Sided / 2-Sided JPG/PDF if you have an ADF.
 3. **Send it privately:** a pcap contains your printer's MAC and other identifying bytes, so don't attach it to the issue. Upload to the [Dropbox drop folder](https://www.dropbox.com/request/yksswgt8rqv53l1x9dal) (write-only, no account needed), or email it to `epson2paperless.vineyard182@passmail.com`. Note the model and which mode each capture was.
 
 I'll take it from there.
-
-_(TLS models such as the ET-4950/4956/3950 encrypt the scan session, so a Wireshark capture won't be usable; a compatibility report on its own is still useful.)_
 
 ## Proposing changes
 
