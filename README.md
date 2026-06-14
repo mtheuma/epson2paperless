@@ -85,33 +85,35 @@ Within about 60 seconds, your destination (default `Paperless`) appears in the p
 
 Configuration is via environment variables. Only `PRINTER_IP` is required.
 
-| Variable           | Required | Default          | What it does                                                                                                                                            |
-| ------------------ | -------- | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PRINTER_IP`       | ✅       | —                | The printer's IPv4 address.                                                                                                                             |
-| `SCAN_DEST_NAME`   |          | `Paperless`      | The label the printer shows on its panel. Keep below 15 UTF-8 bytes for broad compatibility. Give each instance a distinct name.                        |
-| `OUTPUT_DIR`       |          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                        |
-| `LOG_LEVEL`        |          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                    |
-| `LOG_FORMAT`       |          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line, for `docker logs` + Loki / `jq`).                                                       |
-| `PREVIEW_ACTION`   |          | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen. |
-| `SCAN_FORMAT`      |          | `pdf`            | Output format for scanners that report no panel choice (`JobNumberIn` flow, e.g. FF-680W): `jpg` or `pdf`. Panel printers ignore it.                    |
-| `SCAN_SIDES`       |          | `duplex`         | `simplex` or `duplex` for scanners that report no panel choice (FF-680W). Panel printers use their panel's Sides setting and ignore this.               |
-| `SCAN_RESOLUTION`  |          | `200`            | DPI for the FF-680W only (other models scan at a fixed resolution). One of `50,75,100,150,200,240,300,360,400,600`; `200`/`300` are verified.           |
-| `PRINTER_PROTOCOL` |          | `auto`           | `auto` (probe each session), `esci2` (force ESC/I-2 over TLS), `esci2-plain` (force ESC/I-2 over plain TCP), `esci` (force plain-TCP ESC/I).            |
-| `JPEG_QUALITY`     |          | `90`             | JPEG encoder quality 1–100 for the ESC/I path (where raw pixels are host-encoded to JPEG).                                                              |
-| `TEMP_DIR`         |          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                               |
-| `HEALTH_PORT`      |          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                   |
+Each setting's **Scope** column shows which printers it affects: `All`, `Panel` (panel-driven models), `FF-680W`, `Legacy ESC/I` (WF-3620 family), or `ESC/I-2 TLS` (ET-4950 family). A setting outside a printer's path is simply ignored.
+
+| Variable           | Required | Scope        | Default          | What it does                                                                                                                                            |
+| ------------------ | -------- | ------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PRINTER_IP`       | ✅       | All          | —                | The printer's IPv4 address.                                                                                                                             |
+| `SCAN_DEST_NAME`   |          | All          | `Paperless`      | The label the printer shows on its panel. Keep below 15 UTF-8 bytes for broad compatibility. Give each instance a distinct name.                        |
+| `OUTPUT_DIR`       |          | All          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                        |
+| `LOG_LEVEL`        |          | All          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                    |
+| `LOG_FORMAT`       |          | All          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line, for `docker logs` + Loki / `jq`).                                                       |
+| `PREVIEW_ACTION`   |          | Panel        | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen. |
+| `SCAN_FORMAT`      |          | FF-680W      | `pdf`            | Output format (`jpg` / `pdf`) when the printer reports no panel choice.                                                                                 |
+| `SCAN_SIDES`       |          | FF-680W      | `duplex`         | `simplex` or `duplex` (the FF-680W has no panel Sides selector).                                                                                        |
+| `SCAN_RESOLUTION`  |          | FF-680W      | `200`            | Scan DPI. One of `50,75,100,150,200,240,300,360,400,600`; `200`/`300` verified.                                                                         |
+| `PRINTER_PROTOCOL` |          | All          | `auto`           | `auto` (probe each session), `esci2` (force ESC/I-2 over TLS), `esci2-plain` (force ESC/I-2 over plain TCP), `esci` (force plain-TCP ESC/I).            |
+| `JPEG_QUALITY`     |          | Legacy ESC/I | `90`             | JPEG encoder quality 1–100 (host-encoded raw pixels).                                                                                                   |
+| `TEMP_DIR`         |          | All          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                               |
+| `HEALTH_PORT`      |          | All          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                   |
 
 <details>
 <summary>Advanced (leave as default unless you know why)</summary>
 
-| Variable                   | Default | What it does                                                                                                                                                                                                                                                                      |
-| -------------------------- | ------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SCAN_DEST_ID`             | `0x02`  | Keepalive "Scan to Computer" selector. `0x02` is the only working value; others stop the destination appearing. For multiple instances, vary `SCAN_DEST_NAME` instead.                                                                                                            |
-| `LANGUAGE`                 | `en`    | 2-letter locale sent to the printer; no observed user-visible effect.                                                                                                                                                                                                             |
-| `ESCI_FORCE_SOURCE`        | —       | Diagnostic override for the ESC/I path when FS F autodetection misfires. Set to `flatbed`, `adf-simplex`, or `adf-duplex` to bypass the wire-byte detection.                                                                                                                      |
-| `PRINTER_CERT_FINGERPRINT` | —       | Optional SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`). When set, scans abort if the peer cert doesn't match. **Requires `PRINTER_PROTOCOL=esci2`.** Auto-detection can't pin reliably, and the non-TLS variants (`esci`, `esci2-plain`) have no cert to verify. |
-| `DIAGNOSE_PROTOCOL`        | `false` | Compatibility-report aid. On a legacy `ESC @` non-ACK, sends one extra `FS Y` probe and aborts with annotated `[diagnose]` log lines. Leave off in normal use.                                                                                                                    |
-| `SHUTDOWN_TIMEOUT_MS`      | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                                                                                                                                                                         |
+| Variable                   | Scope        | Default | What it does                                                                                                                                                                                      |
+| -------------------------- | ------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SCAN_DEST_ID`             | All          | `0x02`  | Keepalive "Scan to Computer" selector. `0x02` is the only working value; others stop the destination appearing. For multiple instances, vary `SCAN_DEST_NAME` instead.                            |
+| `LANGUAGE`                 | All          | `en`    | 2-letter locale sent to the printer; no observed user-visible effect.                                                                                                                             |
+| `ESCI_FORCE_SOURCE`        | Legacy ESC/I | —       | Diagnostic override when FS F source autodetection misfires. Set to `flatbed`, `adf-simplex`, or `adf-duplex` to bypass the wire-byte detection.                                                  |
+| `PRINTER_CERT_FINGERPRINT` | ESC/I-2 TLS  | —       | SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`); scans abort on mismatch. **Requires `PRINTER_PROTOCOL=esci2`** — `auto` can't pin reliably and the non-TLS variants have no cert. |
+| `DIAGNOSE_PROTOCOL`        | Legacy ESC/I | `false` | Compatibility-report aid. On a legacy `ESC @` non-ACK, sends one extra `FS Y` probe and aborts with annotated `[diagnose]` log lines. Leave off in normal use.                                    |
+| `SHUTDOWN_TIMEOUT_MS`      | All          | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                                                                                         |
 
 </details>
 
