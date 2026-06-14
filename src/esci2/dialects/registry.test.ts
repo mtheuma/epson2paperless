@@ -3,8 +3,8 @@ import { describe, it, expect } from "vitest";
 import { REGISTRY } from "./registry.js";
 
 describe("REGISTRY", () => {
-  it("contains exactly six known fingerprints", () => {
-    expect(REGISTRY.size).toBe(6);
+  it("contains exactly seven known fingerprints", () => {
+    expect(REGISTRY.size).toBe(7);
   });
 
   it("includes ET-4950 family entry", () => {
@@ -74,5 +74,18 @@ describe("REGISTRY", () => {
     expect(e!.optionalSegments).toEqual({ qit: false, cct: false });
     expect(e!.fbExtents).toEqual({ x0: 0, y0: 0, w: 2481, h: 3506 });
     expect(e!.adfExtents).toEqual({ x0: 69, y0: 0, w: 2481, h: 3506 });
+  });
+
+  it("includes FF-680W entry (ADF-only, plain TCP)", () => {
+    const e = REGISTRY.get("5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd");
+    expect(e).toBeDefined();
+    expect(e!.sourceDetection).toBe("fixed-adf");
+    expect(e!.initPollIterations).toBe(8);
+    expect(e!.gmm).toBe("UG18");
+    expect(e!.gammaClass).toEqual({ jpg: "ff680w-adf", pdf: "ff680w-adf" });
+    expect(e!.cmxClass).toEqual({ jpg: "et2750-um08", pdf: "et2750-um08" });
+    expect(e!.optionalSegments).toEqual({ qit: false, cct: false });
+    expect(e!.paraProfile).toBe("ff680w-adf");
+    expect(e!.adfExtents).toEqual({ x0: 0, y0: 0, w: 1700, h: 7200 });
   });
 });

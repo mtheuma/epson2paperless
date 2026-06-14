@@ -220,6 +220,59 @@ describe("composePara — gamma LUT placement", () => {
   });
 });
 
+function ff680wSpec(overrides: Partial<ParaSpec> = {}): ParaSpec {
+  return {
+    ...baselineSpec(),
+    source: "adf-duplex",
+    adfExtents: { x0: 0, y0: 0, w: 1700, h: 7200 }, // 200-DPI reference
+    gmm: "UG18",
+    gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
+    cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
+    optionalSegments: { qit: false, cct: false },
+    profile: "ff680w-adf",
+    ...overrides,
+  };
+}
+
+describe("composePara — FF-680W ADF profile", () => {
+  it("duplex @200dpi matches the captured 1000-byte body", () => {
+    const body = composePara(ff680wSpec({ source: "adf-duplex", resolution: 200 }));
+    expect(body.length).toBe(1000);
+    expect(body.subarray(0, 68).toString("ascii")).toBe(
+      "#ADFCRP SKEWDPLXDFL1#RSMi0000200#RSSi0000200#COLC024#FMTJPG #JPGd090",
+    );
+    expect(body.subarray(body.length - 96).toString("ascii")).toBe(
+      "#CRPi0000000#DFAi0000000i0001550#LAMOFF #PAGd000" +
+        "#ACQi0000000i0000000i0001700i0007200#BSZi1048576",
+    );
+  });
+
+  it("simplex @200dpi drops the DPLX token (996 bytes)", () => {
+    const body = composePara(ff680wSpec({ source: "adf-simplex", resolution: 200 }));
+    expect(body.length).toBe(996);
+    expect(body.subarray(0, 64).toString("ascii")).toBe(
+      "#ADFCRP SKEWDFL1#RSMi0000200#RSSi0000200#COLC024#FMTJPG #JPGd090",
+    );
+    expect(body.includes(Buffer.from("DPLX", "ascii"))).toBe(false);
+  });
+
+  it("derives RSM/RSS and scales ACQ extents from resolution (300dpi)", () => {
+    const body = composePara(ff680wSpec({ source: "adf-simplex", resolution: 300 }));
+    expect(body.subarray(0, 64).toString("ascii")).toBe(
+      "#ADFCRP SKEWDFL1#RSMi0000300#RSSi0000300#COLC024#FMTJPG #JPGd090",
+    );
+    expect(
+      body.indexOf(Buffer.from("#ACQi0000000i0000000i0002550i0010800", "ascii")),
+    ).toBeGreaterThan(0);
+  });
+
+  it("defaults resolution to 200 when spec.resolution is unset", () => {
+    const body = composePara(ff680wSpec({ source: "adf-duplex" }));
+    expect(body.length).toBe(1000);
+    expect(body.indexOf(Buffer.from("#RSMi0000200", "ascii"))).toBeGreaterThan(0);
+  });
+});
+
 describe("composePara — validation", () => {
   it("throws when ADF source is requested but adfExtents is null", () => {
     expect(() =>

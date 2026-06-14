@@ -5,6 +5,8 @@ import {
   buildPushScanResponse,
   parsePushScanRequest,
   createPushScanServer,
+  parseCapabilityIns,
+  parsePushScanRequestKind,
   computeActionFromId,
   resolveEffectiveAction,
   type PushScanInfo,
@@ -56,6 +58,16 @@ describe("buildPushScanResponse", () => {
     expect(response).toContain("x-protocol-version : 2.00");
     expect(response).toContain("x-status : 0001");
     expect(response).toContain("<StatusOut>OK</StatusOut>");
+  });
+
+  it("defaults x-protocol-version to 2.00 (the pre-FF-680W fleet value)", () => {
+    expect(buildPushScanResponse("1")).toContain("x-protocol-version : 2.00\r\n");
+  });
+
+  it("echoes a provided protocolVersion (3.00 for the FF-680W)", () => {
+    const response = buildPushScanResponse("1", { protocolVersion: "3.00" });
+    expect(response).toContain("x-protocol-version : 3.00\r\n");
+    expect(response).not.toContain("x-protocol-version : 2.00");
   });
 });
 
@@ -143,9 +155,51 @@ describe("parsePushScanRequest", () => {
     expect(result.action).toBe("unknown");
   });
 
+  it("extracts FF-680W JobNumberIn when PushScanIDIn is absent", () => {
+    const result = parsePushScanRequest(
+      `<s:Body><p:PushScan><ProductNameIn>PID 016B</ProductNameIn><JobNumberIn>0</JobNumberIn></p:PushScan></s:Body>`,
+    );
+    expect(result.productName).toBe("PID 016B");
+    expect(result.pushScanId).toBeNull();
+    expect(result.jobNumber).toBe("0");
+    expect(result.action).toBe("unknown");
+  });
+
   it("sets action='unknown' for too-short PushScanIDIn", () => {
     const result = parsePushScanRequest(body("0"));
     expect(result.action).toBe("unknown");
+  });
+});
+
+describe("parsePushScanRequestKind", () => {
+  it("classifies FF-680W JobList requests and extracts capabilities", () => {
+    const body =
+      `<?xml version="1.0" ?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body>` +
+      `<p:JobList xmlns:p="http://schema.epson.net/EpsonNet/Scan/2004/pushscan">` +
+      `<CapabilityIn>OfficeFormat</CapabilityIn><CapabilityIn>PanelData=0110</CapabilityIn>` +
+      `</p:JobList></s:Body></s:Envelope>`;
+
+    expect(parsePushScanRequestKind(body)).toBe("jobList");
+    expect(parseCapabilityIns(body)).toEqual(["OfficeFormat", "PanelData=0110"]);
+  });
+
+  it("extracts namespaced JobList capabilities", () => {
+    const body =
+      `<?xml version="1.0" ?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body>` +
+      `<p:JobList xmlns:p="http://schema.epson.net/EpsonNet/Scan/2004/pushscan">` +
+      `<p:CapabilityIn>OfficeFormat</p:CapabilityIn><p:CapabilityIn>PanelData=0110</p:CapabilityIn>` +
+      `</p:JobList></s:Body></s:Envelope>`;
+
+    expect(parsePushScanRequestKind(body)).toBe("jobList");
+    expect(parseCapabilityIns(body)).toEqual(["OfficeFormat", "PanelData=0110"]);
+  });
+
+  it("classifies PushScan, ScanEnd, and unknown requests", () => {
+    expect(
+      parsePushScanRequestKind("<s:Body><p:PushScan><JobNumberIn>0</JobNumberIn></p:PushScan>"),
+    ).toBe("pushScan");
+    expect(parsePushScanRequestKind("<s:Body><p:ScanEnd></p:ScanEnd>")).toBe("scanEnd");
+    expect(parsePushScanRequestKind("<xml>nothing</xml>")).toBe("unknown");
   });
 });
 
@@ -322,6 +376,102 @@ describe("createPushScanServer", () => {
     server.close();
   });
 
+  it("responds to JobList with capabilities and does not invoke the scan callback", async () => {
+    let callbackCount = 0;
+    const server = createPushScanServer(0, () => {
+      callbackCount += 1;
+    });
+    await new Promise<void>((r) => {
+      if (server.listening) r();
+      else server.once("listening", () => r());
+    });
+    const port = (server.address() as AddressInfo).port;
+
+    const body =
+      `<?xml version="1.0" ?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body>` +
+      `<p:JobList xmlns:p="http://schema.epson.net/EpsonNet/Scan/2004/pushscan">` +
+      `<ProductNameIn>PID 016B</ProductNameIn><IPAddressIn>C0A80A76</IPAddressIn>` +
+      `<CapabilityIn>OfficeFormat</CapabilityIn><CapabilityIn>PanelData=0110</CapabilityIn>` +
+      `</p:JobList></s:Body></s:Envelope>`;
+    const request =
+      `POST /PushScan HTTP/1.0\r\n` +
+      `Content-Type: application/octet-stream\r\n` +
+      `Content-Length: ${Buffer.byteLength(body, "utf-8")}\r\n` +
+      `x-uid: 4\r\n` +
+      `\r\n` +
+      body;
+
+    const client = net.createConnection(port, "127.0.0.1");
+    await new Promise<void>((r) => client.once("connect", () => r()));
+
+    const responsePromise = readFullHttpResponse(client);
+    client.write(request);
+
+    const response = await responsePromise;
+    expect(response).toContain("x-uid : 4\r\n");
+    expect(response).toContain("Content-Length : 380\r\n");
+    expect(response).toContain("<CapabilityOut>OfficeFormat</CapabilityOut>");
+    expect(response).toContain("<CapabilityOut>PanelData=0110</CapabilityOut>");
+    expect(callbackCount).toBe(0);
+
+    client.destroy();
+    server.close();
+  });
+
+  it("waits for beforeResponse before sending the HTTP response", async () => {
+    let releaseHook!: () => void;
+    let hookStarted = false;
+    let hookFinished = false;
+    let response = "";
+
+    const server = createPushScanServer(0, () => {}, {
+      beforeResponse: async () => {
+        hookStarted = true;
+        await new Promise<void>((resolve) => {
+          releaseHook = resolve;
+        });
+        hookFinished = true;
+      },
+    });
+    await new Promise<void>((r) => {
+      if (server.listening) r();
+      else server.once("listening", () => r());
+    });
+    const port = (server.address() as AddressInfo).port;
+
+    const body = buildSoapBody("01", "PID 11D1", "C0A8013A");
+    const request =
+      `POST /PushScan HTTP/1.0\r\n` +
+      `Content-Type: application/octet-stream\r\n` +
+      `Content-Length: ${Buffer.byteLength(body, "utf-8")}\r\n` +
+      `x-uid: 9\r\n` +
+      `\r\n` +
+      body;
+
+    const client = net.createConnection(port, "127.0.0.1");
+    client.on("data", (chunk) => {
+      response += chunk.toString("utf-8");
+    });
+    await new Promise<void>((r) => client.once("connect", () => r()));
+
+    const responsePromise = readFullHttpResponse(client);
+    client.write(request);
+    await new Promise((r) => setTimeout(r, 20));
+
+    expect(hookStarted).toBe(true);
+    expect(response).toBe("");
+
+    releaseHook();
+    await responsePromise;
+
+    expect(hookFinished).toBe(true);
+    expect(response).toContain("HTTP/1.0 200 OK");
+    expect(response).toContain("x-uid : 9\r\n");
+
+    client.destroy();
+    server.close();
+  });
+
   it("echoes the request's x-uid header into the response", async () => {
     const server = createPushScanServer(0, () => {});
     await new Promise<void>((r) => {
@@ -349,6 +499,66 @@ describe("createPushScanServer", () => {
     const response = await responsePromise;
     expect(response).toContain("x-uid : 42\r\n");
     expect(response).not.toContain("x-uid : 1\r\n");
+
+    client.destroy();
+    server.close();
+  });
+
+  it("echoes the request's x-protocol-version (3.00 for the FF-680W)", async () => {
+    const server = createPushScanServer(0, () => {});
+    await new Promise<void>((r) => {
+      if (server.listening) r();
+      else server.once("listening", () => r());
+    });
+    const port = (server.address() as AddressInfo).port;
+
+    const body = buildSoapBody("01", "PID 016B", "C0A80A08");
+    const request =
+      `POST /PushScan HTTP/1.0\r\n` +
+      `Content-Type: application/octet-stream\r\n` +
+      `Content-Length: ${Buffer.byteLength(body, "utf-8")}\r\n` +
+      `x-uid: 5\r\n` +
+      `x-protocol-version: 3.00\r\n` +
+      `\r\n` +
+      body;
+
+    const client = net.createConnection(port, "127.0.0.1");
+    await new Promise<void>((r) => client.once("connect", () => r()));
+    const responsePromise = readFullHttpResponse(client);
+    client.write(request);
+
+    const response = await responsePromise;
+    expect(response).toContain("x-protocol-version : 3.00\r\n");
+    expect(response).not.toContain("x-protocol-version : 2.00");
+
+    client.destroy();
+    server.close();
+  });
+
+  it("defaults the response x-protocol-version to 2.00 when the request omits it", async () => {
+    const server = createPushScanServer(0, () => {});
+    await new Promise<void>((r) => {
+      if (server.listening) r();
+      else server.once("listening", () => r());
+    });
+    const port = (server.address() as AddressInfo).port;
+
+    const body = buildSoapBody("01", "PID 11D1", "C0A8013A");
+    const request =
+      `POST /PushScan HTTP/1.0\r\n` +
+      `Content-Type: application/octet-stream\r\n` +
+      `Content-Length: ${Buffer.byteLength(body, "utf-8")}\r\n` +
+      `x-uid: 6\r\n` +
+      `\r\n` +
+      body;
+
+    const client = net.createConnection(port, "127.0.0.1");
+    await new Promise<void>((r) => client.once("connect", () => r()));
+    const responsePromise = readFullHttpResponse(client);
+    client.write(request);
+
+    const response = await responsePromise;
+    expect(response).toContain("x-protocol-version : 2.00\r\n");
 
     client.destroy();
     server.close();

@@ -10,18 +10,32 @@ vi.mock("./esci2/scanner.js", () => ({
 vi.mock("./esci/scanner.js", () => ({
   runEsciScan: vi.fn(() => Promise.resolve()),
 }));
+vi.mock("./ff680w-job-control.js", () => ({
+  runFf680wJobListCommit: vi.fn(() => Promise.resolve()),
+  runFf680wJobNumberCommit: vi.fn(() => Promise.resolve(Buffer.from("0300020000020001", "hex"))),
+}));
 
-import { dispatchScanSession } from "./startup.js";
+import {
+  buildPushScanServerOptions,
+  dispatchScanSession,
+  logStartupBanner,
+  resolveScanDispatch,
+} from "./startup.js";
 import { detectVariant } from "./protocol-probe.js";
 import { runEsci2Scan, runEsci2ScanOverPlain } from "./esci2/scanner.js";
 import { runEsciScan } from "./esci/scanner.js";
+import { runFf680wJobListCommit, runFf680wJobNumberCommit } from "./ff680w-job-control.js";
 import type { Config } from "./config.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
+import { setLogFormat, setLogLevel } from "./logger.js";
+import type { PushScanInfo } from "./pushscan.js";
 
 const detectVariantMock = vi.mocked(detectVariant);
 const runEsci2ScanMock = vi.mocked(runEsci2Scan);
 const runEsci2ScanOverPlainMock = vi.mocked(runEsci2ScanOverPlain);
 const runEsciScanMock = vi.mocked(runEsciScan);
+const runFf680wJobListCommitMock = vi.mocked(runFf680wJobListCommit);
+const runFf680wJobNumberCommitMock = vi.mocked(runFf680wJobNumberCommit);
 
 function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
@@ -35,6 +49,9 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     language: "en",
     jpegQuality: 90,
     previewAction: "reject",
+    scanFormat: "pdf",
+    scanSides: "duplex",
+    scanResolution: 200,
     printerProtocol: "auto",
     diagnoseProtocol: false,
     tempDir: "",
@@ -49,6 +66,139 @@ const PAPERLESS_OPTS: PaperlessUploadOptions = {
   token: "test-token",
   deleteAfterUpload: true,
 };
+
+const FF680W_JOB_NUMBER_INFO: PushScanInfo = {
+  pushScanId: null,
+  jobNumber: "0",
+  productName: "PID 016B",
+  ipAddress: "C0A80A08",
+  duplex: false,
+  action: "unknown",
+};
+
+describe("logStartupBanner", () => {
+  beforeEach(() => {
+    setLogLevel("info");
+    setLogFormat("text");
+  });
+
+  it("warns when SCAN_DEST_NAME is 15 UTF-8 bytes or longer", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    try {
+      setLogLevel("warn");
+      logStartupBanner(makeConfig({ scanDestName: "123456789012345" }), "starting");
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining(
+          "SCAN_DEST_NAME is 15 bytes; Epson discovery may reject names 15 bytes or longer",
+        ),
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+});
+
+describe("resolveScanDispatch", () => {
+  it("uses SCAN_FORMAT + SCAN_SIDES for FF-680W-style JobNumberIn scans (duplex)", () => {
+    expect(
+      resolveScanDispatch(
+        FF680W_JOB_NUMBER_INFO,
+        makeConfig({ scanFormat: "jpg", scanSides: "duplex" }),
+      ),
+    ).toEqual({ duplex: true, action: "jpg" });
+  });
+
+  it("honours SCAN_SIDES=simplex for the job-number flow", () => {
+    expect(
+      resolveScanDispatch(
+        FF680W_JOB_NUMBER_INFO,
+        makeConfig({ scanFormat: "pdf", scanSides: "simplex" }),
+      ),
+    ).toEqual({ duplex: false, action: "pdf" });
+  });
+
+  it("still prefers panel PushScanIDIn when present (panel printers)", () => {
+    // Panel precedence guard: info.duplex and config.scanSides are set to OPPOSITE
+    // values so duplex:true can only come from the panel branch (info.duplex), not
+    // the job-number branch (which would yield config.scanSides==="duplex" → false).
+    const panelInfo = {
+      ...FF680W_JOB_NUMBER_INFO,
+      pushScanId: "01",
+      action: "pdf" as const,
+      duplex: true,
+    };
+    expect(resolveScanDispatch(panelInfo, makeConfig({ scanSides: "simplex" }))).toEqual({
+      duplex: true,
+      action: "pdf",
+    });
+  });
+
+  it("refuses a JobNumberIn scan from a non-FF-680W product (no guessing)", () => {
+    // Only the FF-680W's job-number flow falls back to config defaults; any
+    // other product that sends JobNumberIn without a PushScanIDIn is ignored.
+    const otherInfo = { ...FF680W_JOB_NUMBER_INFO, productName: "PID 11D1" };
+    expect(resolveScanDispatch(otherInfo, makeConfig())).toBeNull();
+  });
+});
+
+describe("buildPushScanServerOptions", () => {
+  beforeEach(() => {
+    runFf680wJobListCommitMock.mockReset().mockResolvedValue(undefined);
+    runFf680wJobNumberCommitMock
+      .mockReset()
+      .mockResolvedValue(Buffer.from("0300020000020001", "hex"));
+  });
+
+  it("runs the FF-680W JOBW commit before replying to JobList", async () => {
+    const options = buildPushScanServerOptions(makeConfig({ printerIp: "203.0.113.20" }));
+
+    await options.beforeResponse?.({
+      kind: "jobList",
+      headers: "",
+      body: "",
+      xuid: "4",
+      info: { ...FF680W_JOB_NUMBER_INFO, jobNumber: null },
+      capabilities: ["OfficeFormat"],
+    });
+
+    expect(runFf680wJobListCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.20" });
+    expect(runFf680wJobNumberCommitMock).not.toHaveBeenCalled();
+  });
+
+  it("runs the FF-680W JOBR commit before replying to JobNumberIn PushScan", async () => {
+    const options = buildPushScanServerOptions(makeConfig({ printerIp: "203.0.113.21" }));
+
+    await options.beforeResponse?.({
+      kind: "pushScan",
+      headers: "",
+      body: "",
+      xuid: "5",
+      info: FF680W_JOB_NUMBER_INFO,
+      capabilities: [],
+    });
+
+    expect(runFf680wJobNumberCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.21" });
+    expect(runFf680wJobListCommitMock).not.toHaveBeenCalled();
+  });
+
+  it("does not run FF-680W job-control for other products", async () => {
+    const options = buildPushScanServerOptions(makeConfig());
+
+    await options.beforeResponse?.({
+      kind: "jobList",
+      headers: "",
+      body: "",
+      xuid: "6",
+      info: { ...FF680W_JOB_NUMBER_INFO, productName: "PID 11D1" },
+      capabilities: ["OfficeFormat"],
+    });
+
+    expect(runFf680wJobListCommitMock).not.toHaveBeenCalled();
+    expect(runFf680wJobNumberCommitMock).not.toHaveBeenCalled();
+  });
+});
 
 describe("dispatchScanSession", () => {
   beforeEach(() => {
@@ -100,6 +250,7 @@ describe("dispatchScanSession", () => {
       tempDir: "/tmp/scan",
       duplex: true,
       action: "pdf",
+      resolution: 200,
       paperless: PAPERLESS_OPTS,
       printerCertFingerprint: fp,
     });
@@ -123,6 +274,7 @@ describe("dispatchScanSession", () => {
     expect(call.paperless).toBe(PAPERLESS_OPTS);
     expect(call.duplex).toBe(false);
     expect(call.action).toBe("jpg");
+    expect(call.resolution).toBe(200);
   });
 
   it("variant=esci routes to runEsciScan with forcedSource + jpegQuality + diagnoseProtocol", async () => {

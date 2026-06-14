@@ -5,6 +5,7 @@ import { UnsupportedDialectError } from "../diagnostic.js";
 
 const ET4950_FP = "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2";
 const ET2750_FP = "de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7";
+const FF680W_FP = "5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd";
 const UNKNOWN_FP = "0000000000000000000000000000000000000000000000000000000000000000";
 
 const ET4950_CAPA = Buffer.from("#GMMLISTUG10UG18#CMXLISTUNITUM08", "ascii"); // minimal stub
@@ -44,6 +45,13 @@ describe("applyEntrySourceOverride", () => {
     expect(ctx.source).toBe("flatbed");
   });
 
+  it("pins ctx.source = 'adf' for fixed-adf entries", () => {
+    const entry = REGISTRY.get(FF680W_FP)!; // fixed-adf
+    const ctx = { source: "flatbed" as "adf" | "flatbed", duplex: false };
+    applyEntrySourceOverride(ctx, entry);
+    expect(ctx.source).toBe("adf");
+  });
+
   it("leaves ctx.source unchanged for stat-length entries", () => {
     const entry = REGISTRY.get(ET4950_FP)!; // stat-length
     const ctx = { source: "adf" as "adf" | "flatbed", duplex: false };
@@ -75,5 +83,11 @@ describe("makeParaSpec", () => {
     const spec = makeParaSpec(entry, "adf-duplex", "pdf");
     expect(spec.source).toBe("adf-duplex");
     expect(spec.action).toBe("pdf");
+  });
+
+  it("projects FF-680W paraProfile", () => {
+    const entry = REGISTRY.get(FF680W_FP)!;
+    const spec = makeParaSpec(entry, "adf-duplex", "jpg");
+    expect(spec.profile).toBe("ff680w-adf");
   });
 });

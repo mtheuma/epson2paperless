@@ -3,41 +3,66 @@ import { createLogger } from "./logger.js";
 
 const log = createLogger("pushscan");
 
-// Fixed SOAP response body — must not be reformatted or Content-Length will break
-const RESPONSE_BODY =
-  `<?xml version="1.0" ?>\r\n` +
-  `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">\r\n` +
-  `  <s:Body>\r\n` +
-  `    <p:PushScanResponse xmlns:p="http://schema.epson.net/EpsonNet/Scan/2004/pushscan">\r\n` +
-  `      <StatusOut>OK</StatusOut>\r\n` +
-  `    </p:PushScanResponse>\r\n` +
-  `  </s:Body>\r\n` +
-  `</s:Envelope>\r\n`;
+const XML_NAMESPACE = "http://schema.epson.net/EpsonNet/Scan/2004/pushscan";
 
-const RESPONSE_BODY_LENGTH = Buffer.byteLength(RESPONSE_BODY, "utf-8");
+export type PushScanRequestKind = "jobList" | "pushScan" | "scanEnd" | "unknown";
+
+function buildResponseBody(status: "OK" | "ERROR", capabilities: string[] = []): string {
+  const capabilityLines = capabilities
+    .map((capability) => `      <CapabilityOut>${capability}</CapabilityOut>\r\n`)
+    .join("");
+  return (
+    `<?xml version="1.0" ?>\r\n` +
+    `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">\r\n` +
+    `  <s:Body>\r\n` +
+    `    <p:PushScanResponse xmlns:p="${XML_NAMESPACE}">\r\n` +
+    `      <StatusOut>${status}</StatusOut>\r\n` +
+    capabilityLines +
+    `    </p:PushScanResponse>\r\n` +
+    `  </s:Body>\r\n` +
+    `</s:Envelope>\r\n`
+  );
+}
 
 // The printer sends an `x-uid` header in each push-scan request — a per-scan
 // counter it increments and expects to see echoed back in our 200 OK. When
 // the values mismatch, the printer surfaces "Scanning Error" on the panel
 // even though the scan itself completes. See
 // `docs/PROTOCOL-REFERENCE.md#push-scan-trigger-tcp-soap-ish`.
-export function buildPushScanResponse(xuid: string): string {
+export interface PushScanResponseOptions {
+  status?: "OK" | "ERROR";
+  capabilities?: string[];
+  /**
+   * Value echoed in the `x-protocol-version` header. The printer sends its own
+   * version in the request (`2.00` for the ESC/I-2 + legacy fleet, `3.00` for
+   * the FF-680W's NetScanMonitor v3) and we mirror it back. Defaults to `2.00`
+   * — the verified value for every model that predates the FF-680W — so a
+   * request without the header (or an unknown caller) reproduces the original
+   * behaviour rather than advertising v3 to a v2 device.
+   */
+  protocolVersion?: string;
+}
+
+export function buildPushScanResponse(xuid: string, opts: PushScanResponseOptions = {}): string {
+  const body = buildResponseBody(opts.status ?? "OK", opts.capabilities ?? []);
+  const bodyLength = Buffer.byteLength(body, "utf-8");
   const headers =
     `HTTP/1.0 200 OK\r\n` +
     `Server : Epson Net Scan Monitor/2.0\r\n` +
     `Content-Type : application/octet-stream\r\n` +
-    `Content-Length : ${RESPONSE_BODY_LENGTH}\r\n` +
+    `Content-Length : ${bodyLength}\r\n` +
     `x-protocol-name : Epson Network Service Protocol\r\n` +
-    `x-protocol-version : 2.00\r\n` +
+    `x-protocol-version : ${opts.protocolVersion ?? "2.00"}\r\n` +
     `x-uid : ${xuid}\r\n` +
     `x-status : 0001\r\n`;
-  return headers + "\r\n" + RESPONSE_BODY;
+  return headers + "\r\n" + body;
 }
 
 export type PushScanAction = "jpg" | "pdf" | "preview" | "unknown";
 
 export interface PushScanInfo {
   pushScanId: string | null;
+  jobNumber: string | null;
   productName: string | null;
   ipAddress: string | null;
   /**
@@ -68,11 +93,26 @@ export function parsePushScanRequest(body: string): PushScanInfo {
   const action = computeActionFromId(pushScanId);
   return {
     pushScanId,
+    jobNumber: getId("JobNumberIn"),
     productName: getId("ProductNameIn"),
     ipAddress: getId("IPAddressIn"),
     duplex,
     action,
   };
+}
+
+export function parsePushScanRequestKind(body: string): PushScanRequestKind {
+  if (/<(?:\w+:)?JobList(?:\s|>)/.test(body)) return "jobList";
+  if (/<(?:\w+:)?PushScan(?:\s|>)/.test(body)) return "pushScan";
+  if (/<(?:\w+:)?ScanEnd(?:\s|>)/.test(body)) return "scanEnd";
+  return "unknown";
+}
+
+export function parseCapabilityIns(body: string): string[] {
+  return Array.from(
+    body.matchAll(/<(?:\w+:)?CapabilityIn>([^<]*)<\/(?:\w+:)?CapabilityIn>/g),
+    (match) => match[1],
+  );
 }
 
 /**
@@ -146,16 +186,36 @@ export function resolveEffectiveAction(
 
 export type PushScanCallback = (info: PushScanInfo) => void;
 
+export interface PushScanPreResponseContext {
+  kind: PushScanRequestKind;
+  headers: string;
+  body: string;
+  xuid: string;
+  info: PushScanInfo;
+  capabilities: string[];
+}
+
+export type PushScanPreResponseHook = (ctx: PushScanPreResponseContext) => Promise<void> | void;
+
+export interface PushScanServerOptions {
+  beforeResponse?: PushScanPreResponseHook;
+}
+
 /**
  * Creates a raw TCP server on the given port that handles POST /PushScan.
  * Uses net.createServer (not http) because Epson's protocol requires
  * non-standard header formatting with spaces before colons.
  */
-export function createPushScanServer(port: number, onPushScan: PushScanCallback): net.Server {
+export function createPushScanServer(
+  port: number,
+  onPushScan: PushScanCallback,
+  options: PushScanServerOptions = {},
+): net.Server {
   const server = net.createServer((socket) => {
     const chunks: Buffer[] = [];
 
     let totalBytes = 0;
+    let handled = false;
     const HEADER_TERMINATOR = Buffer.from("\r\n\r\n");
 
     socket.on("data", (chunk: Buffer) => {
@@ -180,14 +240,17 @@ export function createPushScanServer(port: number, onPushScan: PushScanCallback)
 
       if (combined.length - bodyStart < contentLength) return; // Still waiting for body
 
+      if (handled) return;
+      handled = true;
+
       const body = combined.subarray(bodyStart, bodyStart + contentLength).toString("utf-8");
       log.info("Received PushScan request");
       log.debug("Request headers", headers);
       log.debug("Request body", body);
 
-      // Parse and log the scan info
+      const kind = parsePushScanRequestKind(body);
       const info = parsePushScanRequest(body);
-      log.info(`Scan requested: product=${info.productName}, id=${info.pushScanId}`);
+      const capabilities = kind === "jobList" ? parseCapabilityIns(body) : [];
 
       // Echo the printer's x-uid into our response so the printer can
       // correlate our 200 OK with the scan it triggered. Falls back to "1"
@@ -197,12 +260,49 @@ export function createPushScanServer(port: number, onPushScan: PushScanCallback)
       const xuid = xuidMatch ? xuidMatch[1] : "1";
       log.debug(`Echoing x-uid : ${xuid}`);
 
-      // Send the per-request response, then half-close the TCP socket (FIN)
-      // so the printer sees a clean HTTP/1.0 close.
-      socket.end(buildPushScanResponse(xuid), "utf-8", () => {
-        log.debug("Sent PushScan response");
-        onPushScan(info);
-      });
+      // Mirror the printer's own protocol version (2.00 fleet / 3.00 FF-680W)
+      // rather than advertising a fixed version to every device.
+      const verMatch = headers.match(/x-protocol-version\s*:\s*(\S+)/i);
+      const protocolVersion = verMatch ? verMatch[1] : "2.00";
+
+      const sendResponse = (status: "OK" | "ERROR") => {
+        // The pre-response hook can run for a few hundred ms (an out-of-band
+        // job-control round-trip); if the printer closed the trigger socket
+        // meanwhile, writing would error and onPushScan must not fire.
+        if (socket.destroyed || socket.writableEnded) {
+          log.warn(`Push-scan socket closed before ${kind} response could be sent`);
+          return;
+        }
+        const response = buildPushScanResponse(xuid, {
+          status,
+          protocolVersion,
+          capabilities: status === "OK" ? capabilities : [],
+        });
+
+        // Send the per-request response, then half-close the TCP socket (FIN)
+        // so the printer sees a clean HTTP/1.0 close.
+        socket.end(response, "utf-8", () => {
+          log.debug(`Sent ${kind} response`);
+          if (status !== "OK" || kind !== "pushScan") return;
+
+          log.info(
+            `Scan requested: product=${info.productName}, id=${info.pushScanId}, job=${info.jobNumber}`,
+          );
+          onPushScan(info);
+        });
+      };
+
+      void (async () => {
+        try {
+          await options.beforeResponse?.({ kind, headers, body, xuid, info, capabilities });
+        } catch (err) {
+          log.error(`Pre-response hook failed for ${kind}`, err);
+          sendResponse("ERROR");
+          return;
+        }
+
+        sendResponse("OK");
+      })();
     });
 
     socket.on("error", (err) => {

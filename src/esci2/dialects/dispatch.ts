@@ -24,12 +24,12 @@ export function lookupRegistryEntry(
 }
 
 /**
- * Pins ctx.source = "flatbed" when the resolved entry uses fixed-flatbed
- * source detection. Replaces the legacy applyDialectSourceOverride helper.
+ * Pins ctx.source for entries with fixed source detection. Replaces the
+ * legacy applyDialectSourceOverride helper.
  *
- * Necessary because the TLS scanner shell pre-sets ctx.source = "adf"
- * (src/esci2/scanner.ts) and expects the override to flip it for
- * flatbed-only TLS printers (ET-2950).
+ * Necessary because scanner shells pre-set a transport-level default before
+ * the registry resolves. Fixed-source entries override that default once the
+ * CAPA fingerprint is known.
  */
 export function applyEntrySourceOverride(
   ctx: { source: "adf" | "flatbed" },
@@ -37,6 +37,8 @@ export function applyEntrySourceOverride(
 ): void {
   if (entry.sourceDetection === "fixed-flatbed") {
     ctx.source = "flatbed";
+  } else if (entry.sourceDetection === "fixed-adf") {
+    ctx.source = "adf";
   }
 }
 
@@ -49,6 +51,7 @@ export function makeParaSpec(
   entry: RegistryEntry,
   source: ParaSpec["source"],
   action: ParaSpec["action"],
+  resolution?: number,
 ): ParaSpec {
   return {
     source,
@@ -59,5 +62,7 @@ export function makeParaSpec(
     gammaClass: entry.gammaClass,
     cmxClass: entry.cmxClass,
     optionalSegments: entry.optionalSegments,
+    profile: entry.paraProfile,
+    resolution,
   };
 }

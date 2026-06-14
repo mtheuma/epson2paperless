@@ -60,8 +60,22 @@ describe("gamma-classes", () => {
     expect(grnLut[grnLut.length - 1]).toBe(0xff);
   });
 
+  it("exposes ff680w-adf with the expected size and segment order", () => {
+    const g = GAMMA_CLASSES["ff680w-adf"];
+    expect(g.length).toBe(804);
+    expect(g.subarray(0, 12).toString("ascii")).toBe("#GMTRED h100");
+    expect(g.subarray(268, 280).toString("ascii")).toBe("#GMTBLU h100");
+    expect(g.subarray(536, 548).toString("ascii")).toBe("#GMTGRN h100");
+  });
+
   it("class names enumerate as a type", () => {
-    const _names: GammaClassName[] = ["et4950-stock", "xp7100-jpg", "xp7100-pdf", "et4800-stock"];
-    expect(_names).toHaveLength(4);
+    const _names: GammaClassName[] = [
+      "et4950-stock",
+      "xp7100-jpg",
+      "xp7100-pdf",
+      "et4800-stock",
+      "ff680w-adf",
+    ];
+    expect(_names).toHaveLength(5);
   });
 });

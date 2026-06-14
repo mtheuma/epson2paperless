@@ -139,6 +139,11 @@ describe("buildLockPacket", () => {
     expect(packet.length).toBe(19);
   });
 
+  it("supports the 30-second lock timeout used by FF-680W job-control sessions", () => {
+    const packet = buildLockPacket(30);
+    expect(packet.toString("hex")).toBe("49532100000c00000007000001a0040000001e");
+  });
+
   it("matches the first SEND record in the 1p-simplex-JPG Frida capture (record 4)", () => {
     // Evidence-based regression shield: if either the code or the capture
     // drifts, this test fails with a clear diff. Other captures have the

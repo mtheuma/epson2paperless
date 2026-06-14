@@ -1,6 +1,13 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 
+// FF-680W CAPA-advertised resolutions (#RSMLIST). SCAN_RESOLUTION is validated
+// against this set. 200 and 300 are wire-verified by PARA capture; the rest rely
+// on the linear DPI-scaling formula in para-composer.ts. FF-680W only — other
+// models ignore SCAN_RESOLUTION and scan at their dialect's fixed resolution.
+export const FF680W_RESOLUTIONS = [50, 75, 100, 150, 200, 240, 300, 360, 400, 600] as const;
+export const DEFAULT_SCAN_RESOLUTION = 200;
+
 // IPv4 dotted-quad — each octet bounded to 0-255 with no leading zeros on
 // multi-digit values. Leading zeros are rejected at this layer because
 // Node's `dgram.connect()` does NOT treat strings like `001.002.003.004`
@@ -26,6 +33,17 @@ const configSchema = z
     language: z.string().length(2).default("en"),
     jpegQuality: z.coerce.number().int().min(1).max(100).default(90),
     previewAction: z.enum(["reject", "jpg", "pdf"]).default("reject"),
+    // Panel-less fallbacks — consulted only when the printer doesn't report the
+    // setting at trigger time (the job-number flow; currently the FF-680W).
+    scanFormat: z.enum(["jpg", "pdf"]).default("pdf"),
+    scanSides: z.enum(["simplex", "duplex"]).default("duplex"),
+    scanResolution: z.coerce
+      .number()
+      .int()
+      .refine((v) => (FF680W_RESOLUTIONS as readonly number[]).includes(v), {
+        message: `SCAN_RESOLUTION must be one of the FF-680W advertised DPIs: ${FF680W_RESOLUTIONS.join(", ")}`,
+      })
+      .default(DEFAULT_SCAN_RESOLUTION),
     esciForceSource: z.enum(["flatbed", "adf-simplex", "adf-duplex"]).optional(),
     printerProtocol: z.enum(["auto", "esci2", "esci2-plain", "esci"]).default("auto"),
     // Diagnostic-only. When true and the legacy `ESC @` init returns a non-ACK,
@@ -119,6 +137,9 @@ export function loadConfig(): Config {
     language: process.env.LANGUAGE || undefined,
     jpegQuality: process.env.JPEG_QUALITY || undefined,
     previewAction: process.env.PREVIEW_ACTION || undefined,
+    scanFormat: process.env.SCAN_FORMAT || undefined,
+    scanSides: process.env.SCAN_SIDES || undefined,
+    scanResolution: process.env.SCAN_RESOLUTION || undefined,
     tempDir: process.env.TEMP_DIR || undefined,
     shutdownTimeoutMs: process.env.SHUTDOWN_TIMEOUT_MS || undefined,
     paperlessUrl: process.env.PAPERLESS_URL || undefined,

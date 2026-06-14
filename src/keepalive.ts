@@ -9,6 +9,9 @@ export interface KeepaliveOptions {
   eventPort: number;
   destId: number;
   language: string;
+  /** Epson NetScanMonitor protocol version. Omitted keeps the v2 wire format. */
+  version?: "2.0" | "3.0";
+  group?: number;
 }
 
 /**
@@ -28,10 +31,15 @@ export interface KeepaliveOptions {
  *   Offset 20+:   key-value string + null terminator
  */
 export function buildKeepalivePacket(opts: KeepaliveOptions, seq: number): Buffer {
-  const kvString =
-    `(ClientName=${opts.clientName}),` +
-    `(IPAddress=${opts.ipAddress}),` +
-    `(EventPort=${opts.eventPort})\0`;
+  const version = opts.version ?? "2.0";
+  const fields = [
+    ...(version === "3.0" ? ["(Ver=3.0)"] : []),
+    `(ClientName=${opts.clientName})`,
+    `(IPAddress=${opts.ipAddress})`,
+    `(EventPort=${opts.eventPort})`,
+    ...(version === "3.0" ? [`(Group=${opts.group ?? 0})`] : []),
+  ];
+  const kvString = `${fields.join(",")}\0`;
 
   const stringBytes = Buffer.from(kvString, "ascii");
   const headerLen = 20;
@@ -67,12 +75,15 @@ export function buildKeepalivePacket(opts: KeepaliveOptions, seq: number): Buffe
  * Returns `{ seq }` if the packet looks like a valid announcement, or `null` if it
  * doesn't match (so callers can ignore unrelated multicast traffic).
  */
-export function parsePrinterAnnouncement(data: Buffer): { seq: number } | null {
+export function parsePrinterAnnouncement(
+  data: Buffer,
+): { seq: number; productName: string | null } | null {
   if (data.length < 12) return null;
   if (data[0] !== 0x02 || data[1] !== 0x06 || data[2] !== 0x00 || data[3] !== 0x00) {
     return null;
   }
-  return { seq: data[11] };
+  const productMatch = data.toString("latin1").match(/PID [0-9A-Fa-f]{4}/);
+  return { seq: data[11], productName: productMatch ? productMatch[0].toUpperCase() : null };
 }
 
 export interface KeepaliveResponderOptions {
@@ -123,6 +134,7 @@ export interface KeepaliveResponder {
  */
 export function createKeepaliveResponder(opts: KeepaliveResponderOptions): KeepaliveResponder {
   let socket: dgram.Socket | null = null;
+  let sender: dgram.Socket | null = null;
   let boundPort = 0;
   // Track all pending burst timers so we can cancel them on stop()
   const pendingTimers: ReturnType<typeof setTimeout>[] = [];
@@ -138,9 +150,13 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
     start(): Promise<void> {
       return new Promise((resolve, reject) => {
         socket = dgram.createSocket({ type: "udp4", reuseAddr: true });
+        sender = dgram.createSocket("udp4");
 
         socket.on("error", (err) => {
           log.error("Keepalive responder socket error", err);
+        });
+        sender.on("error", (err) => {
+          log.error("Keepalive sender socket error", err);
         });
 
         socket.on("message", (data: Buffer, rinfo: dgram.RemoteInfo) => {
@@ -168,13 +184,29 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
 
           // Packet bytes are identical across all N packets in the burst —
           // build once and reuse.
-          const packet = buildKeepalivePacket(opts.keepalive, announcement.seq);
+          const keepalive: KeepaliveOptions = {
+            ...opts.keepalive,
+            version:
+              opts.keepalive.version ?? (announcement.productName === "PID 016B" ? "3.0" : "2.0"),
+          };
+          const packet = buildKeepalivePacket(keepalive, announcement.seq);
+
+          // Source-port policy. The FF-680W's reference (Mac) driver sends its
+          // keepalive from an ephemeral source port — verified in the capture —
+          // so v3 announcements egress via the dedicated unbound `sender`. The
+          // already-verified v2 fleet keeps sending from the bound multicast
+          // socket (port 2968) exactly as before this device was added, so a
+          // wire detail those printers were validated against doesn't change.
+          const useEphemeralSender = keepalive.version === "3.0";
 
           for (let i = 0; i < opts.burstCount; i++) {
             const burstIndex = i + 1;
             const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
-              if (!socket) return;
-              socket.send(packet, opts.printerPort, opts.printerIp, (err) => {
+              // Resolve the live socket inside the timer so stop() (which nulls
+              // both) still cancels an in-flight burst.
+              const burstSocket = useEphemeralSender ? sender : socket;
+              if (!burstSocket) return;
+              burstSocket.send(packet, opts.printerPort, opts.printerIp, (err) => {
                 if (err) {
                   log.error(`Keepalive burst send #${burstIndex} failed`, err);
                 } else {
@@ -226,6 +258,10 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
         }
         socket.close();
         socket = null;
+      }
+      if (sender) {
+        sender.close();
+        sender = null;
       }
       log.info("Keepalive responder stopped");
     },
