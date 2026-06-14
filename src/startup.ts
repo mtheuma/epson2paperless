@@ -135,10 +135,14 @@ export function resolveScanDispatch(
     return { duplex: info.duplex, action: effective };
   }
 
-  if (info.jobNumber !== null && info.pushScanId === null) {
+  if (
+    info.productName === FF680W_PRODUCT_NAME &&
+    info.jobNumber !== null &&
+    info.pushScanId === null
+  ) {
     const duplex = config.scanSides === "duplex";
     log.info(
-      `PushScan has JobNumberIn=${info.jobNumber} but no PushScanIDIn — ` +
+      `FF-680W JobNumberIn=${info.jobNumber} with no PushScanIDIn — ` +
         `using SCAN_SIDES=${config.scanSides}, SCAN_FORMAT=${config.scanFormat}`,
     );
     return { duplex, action: config.scanFormat };
