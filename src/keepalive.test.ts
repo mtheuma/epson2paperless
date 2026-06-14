@@ -214,6 +214,8 @@ describe("createKeepaliveResponder", () => {
     announcer: dgram.Socket;
     responder: KeepaliveResponder;
     received: Buffer[];
+    /** Source UDP port each burst packet was sent from (parallel to `received`). */
+    receivedFrom: number[];
     teardown: () => void;
   }
 
@@ -230,7 +232,11 @@ describe("createKeepaliveResponder", () => {
     const listenerPort = listener.address().port;
 
     const received: Buffer[] = [];
-    listener.on("message", (msg) => received.push(msg));
+    const receivedFrom: number[] = [];
+    listener.on("message", (msg, rinfo) => {
+      received.push(msg);
+      receivedFrom.push(rinfo.port);
+    });
 
     const responder = createKeepaliveResponder({
       keepalive: KEEPALIVE_OPTS,
@@ -252,6 +258,7 @@ describe("createKeepaliveResponder", () => {
       announcer,
       responder,
       received,
+      receivedFrom,
       teardown: () => {
         responder.stop();
         listener.close();
@@ -292,6 +299,32 @@ describe("createKeepaliveResponder", () => {
     expect(h.received).toHaveLength(1);
     expect(h.received[0].subarray(20).toString("ascii")).toContain("(Ver=3.0)");
     expect(h.received[0].subarray(20).toString("ascii")).toContain("(Group=0)");
+
+    h.teardown();
+  });
+
+  it("sends the v2 fleet keepalive from the bound multicast socket (port preserved)", async () => {
+    const h = await setupHarness({ burstCount: 2 });
+    await sendAnnouncement(h, makeAnnouncement(0x44));
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(h.receivedFrom).toHaveLength(2);
+    // v2 bursts egress from the bound multicast socket, exactly as before the
+    // FF-680W's ephemeral-sender path was added.
+    h.receivedFrom.forEach((srcPort) => expect(srcPort).toBe(h.responder.boundPort));
+
+    h.teardown();
+  });
+
+  it("sends the FF-680W (v3) keepalive from the separate ephemeral sender socket", async () => {
+    const h = await setupHarness({ burstCount: 2 });
+    await sendAnnouncement(h, makeFf680wAnnouncement(0x45));
+    await new Promise((r) => setTimeout(r, 60));
+
+    expect(h.receivedFrom).toHaveLength(2);
+    // v3 bursts egress from the dedicated `sender` socket (matching the FF-680W
+    // reference driver's ephemeral source port), NOT the bound multicast socket.
+    h.receivedFrom.forEach((srcPort) => expect(srcPort).not.toBe(h.responder.boundPort));
 
     h.teardown();
   });
