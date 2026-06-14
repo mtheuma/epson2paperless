@@ -6,8 +6,7 @@ body:
   - type: markdown
     attributes:
       value: |
-        Thanks for sharing a compatibility report — both successes and failures
-        help the [Compatible printers](https://github.com/mtheuma/epson2paperless#compatible-printers) table grow.
+        Thanks for sharing a compatibility report — both successes and failures help the [Compatible printers](https://github.com/mtheuma/epson2paperless#compatible-printers) table grow.
 
   - type: input
     id: model
