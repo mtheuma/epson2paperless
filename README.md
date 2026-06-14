@@ -87,21 +87,21 @@ Configuration is via environment variables. Only `PRINTER_IP` is required.
 
 Each setting's **Scope** column shows which printers it affects: `All`, `Panel` (panel-driven models), `FF-680W`, `Legacy ESC/I` (WF-3620 family), or `ESC/I-2 TLS` (ET-4950 family). A setting outside a printer's path is simply ignored.
 
-| Variable           | Required | Scope        | Default          | What it does                                                                                                                                            |
-| ------------------ | -------- | ------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PRINTER_IP`       | ✅       | All          | —                | The printer's IPv4 address.                                                                                                                             |
-| `SCAN_DEST_NAME`   |          | All          | `Paperless`      | The label the printer shows on its panel. Keep below 15 UTF-8 bytes for broad compatibility. Give each instance a distinct name.                        |
-| `OUTPUT_DIR`       |          | All          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                        |
-| `LOG_LEVEL`        |          | All          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                    |
-| `LOG_FORMAT`       |          | All          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line, for `docker logs` + Loki / `jq`).                                                       |
-| `PREVIEW_ACTION`   |          | Panel        | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen. |
-| `SCAN_FORMAT`      |          | FF-680W      | `pdf`            | Output format (`jpg` / `pdf`) when the printer reports no panel choice.                                                                                 |
-| `SCAN_SIDES`       |          | FF-680W      | `duplex`         | `simplex` or `duplex` (the FF-680W has no panel Sides selector).                                                                                        |
-| `SCAN_RESOLUTION`  |          | FF-680W      | `200`            | Scan DPI. One of `50,75,100,150,200,240,300,360,400,600`; `200`/`300` verified.                                                                         |
-| `PRINTER_PROTOCOL` |          | All          | `auto`           | `auto` (probe each session), `esci2` (force ESC/I-2 over TLS), `esci2-plain` (force ESC/I-2 over plain TCP), `esci` (force plain-TCP ESC/I).            |
-| `JPEG_QUALITY`     |          | Legacy ESC/I | `90`             | JPEG encoder quality 1–100 (host-encoded raw pixels).                                                                                                   |
-| `TEMP_DIR`         |          | All          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                               |
-| `HEALTH_PORT`      |          | All          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                   |
+| Variable                    | Scope        | Default          | What it does                                                                                                                                            |
+| --------------------------- | ------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PRINTER_IP`<br>✅ required | All          | —                | The printer's IPv4 address.                                                                                                                             |
+| `SCAN_DEST_NAME`            | All          | `Paperless`      | The label the printer shows on its panel. Keep below 15 UTF-8 bytes for broad compatibility. Give each instance a distinct name.                        |
+| `OUTPUT_DIR`                | All          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                        |
+| `LOG_LEVEL`                 | All          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                    |
+| `LOG_FORMAT`                | All          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line, for `docker logs` + Loki / `jq`).                                                       |
+| `PREVIEW_ACTION`            | Panel        | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen. |
+| `SCAN_FORMAT`               | FF-680W      | `pdf`            | Output format (`jpg` / `pdf`) when the printer reports no panel choice.                                                                                 |
+| `SCAN_SIDES`                | FF-680W      | `duplex`         | `simplex` or `duplex` (the FF-680W has no panel Sides selector).                                                                                        |
+| `SCAN_RESOLUTION`           | FF-680W      | `200`            | Scan DPI. One of `50,75,100,150,200,240,300,360,400,600`; `200`/`300` verified.                                                                         |
+| `PRINTER_PROTOCOL`          | All          | `auto`           | `auto` (probe each session), `esci2` (force ESC/I-2 over TLS), `esci2-plain` (force ESC/I-2 over plain TCP), `esci` (force plain-TCP ESC/I).            |
+| `JPEG_QUALITY`              | Legacy ESC/I | `90`             | JPEG encoder quality 1–100 (host-encoded raw pixels).                                                                                                   |
+| `TEMP_DIR`                  | All          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                               |
+| `HEALTH_PORT`               | All          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                   |
 
 <details>
 <summary>Advanced (leave as default unless you know why)</summary>
