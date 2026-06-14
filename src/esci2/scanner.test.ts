@@ -21,37 +21,55 @@ function waitImmediate(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
 }
 
-// Recover the captured PARA body bytes from a fixture's host→printer events.
-// The driver emits PARA as two consecutive h>p IS frames:
+// Recover the captured scan PARA body bytes from a fixture's host→printer
+// events. The driver emits each PARA as two consecutive h>p IS frames:
 //   frame 1: 12-byte IS header + 8-byte preamble + 12-byte "PARAx0000NNN"
 //   frame 2: 12-byte IS header + 8-byte preamble + <NNN bytes of PARA body>
+// Most dialects send exactly one PARA. The FF-680W sends a tiny 12-byte
+// "#D&T" date/time PARA *before* the real scan PARA, so when more than one
+// PARA is present we select the scan PARA — the one whose body carries the
+// "#RSM" resolution segment (mirrors analyze-para.ts). The scanner never
+// emits the #D&T PARA, so its single PARA write lines up with this one.
 function extractCapturedParaBody(fixture: FixtureEvent[]): Buffer {
+  const bodies = extractAllCapturedParaBodies(fixture);
+  if (bodies.length === 0) {
+    throw new Error("extractCapturedParaBody: PARA header not found in fixture");
+  }
+  if (bodies.length === 1) return bodies[0];
+  const RSM = Buffer.from("#RSM", "ascii");
+  const scan = bodies.find((b) => b.includes(RSM));
+  if (!scan) {
+    throw new Error("extractCapturedParaBody: no scan PARA (#RSM) found among multiple PARAs");
+  }
+  return scan;
+}
+
+// Walk every PARA in the fixture and return each declared body, in capture
+// order. Each PARA is a "PARAx0000NNN" header frame followed by a body frame
+// (or frames) carrying NNN payload bytes after the 20-byte IS header + preamble.
+function extractAllCapturedParaBodies(fixture: FixtureEvent[]): Buffer[] {
   const PARA_HDR_HEX = Buffer.from("PARAx", "ascii").toString("hex");
-  let hdrIdx = -1;
+  const bodies: Buffer[] = [];
   for (let i = 0; i < fixture.length; i++) {
     const e = fixture[i];
     if (e.dir !== "h>p" || !("hex" in e)) continue;
-    if (e.hex.includes(PARA_HDR_HEX)) {
-      hdrIdx = i;
-      break;
+    if (!e.hex.includes(PARA_HDR_HEX)) continue;
+    const m = e.hex.match(/5041524178([0-9a-fA-F]{14})/);
+    if (!m) throw new Error("extractAllCapturedParaBodies: PARA header malformed");
+    const declared = parseInt(Buffer.from(m[1], "hex").toString("ascii"), 16);
+    // Body wrapper is the next h>p event. Skip its 12-byte IS header +
+    // 8-byte cmd_size/reply_size preamble = 20 bytes (40 hex chars).
+    let bodyHex = "";
+    let isFirst = true;
+    for (let j = i + 1; j < fixture.length && bodyHex.length / 2 < declared; j++) {
+      const ev = fixture[j];
+      if (ev.dir !== "h>p" || !("hex" in ev)) continue;
+      bodyHex += isFirst ? ev.hex.slice(40) : ev.hex;
+      isFirst = false;
     }
+    bodies.push(Buffer.from(bodyHex.slice(0, declared * 2), "hex"));
   }
-  if (hdrIdx < 0) throw new Error("extractCapturedParaBody: PARA header not found in fixture");
-  const hdrHex = (fixture[hdrIdx] as { hex: string }).hex;
-  const m = hdrHex.match(/5041524178([0-9a-fA-F]{14})/);
-  if (!m) throw new Error("extractCapturedParaBody: PARA header malformed");
-  const declared = parseInt(Buffer.from(m[1], "hex").toString("ascii"), 16);
-  // Body wrapper is the very next h>p event. Skip its 12-byte IS header +
-  // 8-byte cmd_size/reply_size preamble = 20 bytes (40 hex chars).
-  let bodyHex = "";
-  let isFirst = true;
-  for (let j = hdrIdx + 1; j < fixture.length && bodyHex.length / 2 < declared; j++) {
-    const e = fixture[j];
-    if (e.dir !== "h>p" || !("hex" in e)) continue;
-    bodyHex += isFirst ? e.hex.slice(40) : e.hex;
-    isFirst = false;
-  }
-  return Buffer.from(bodyHex.slice(0, declared * 2), "hex");
+  return bodies;
 }
 
 // Recover the PARA body bytes the scanner emitted, by searching the fake
@@ -1180,5 +1198,102 @@ describe("runEsci2ScanOverPlain — ET-4800 fixture replay", () => {
     const files = readdirSync(outputDir);
     expect(files.filter((f) => f.endsWith(".jpg"))).toEqual([]); // temp dir cleaned, no stragglers
     expect(files.filter((f) => f.endsWith(".pdf")).length).toBe(1);
+  }, 60_000);
+});
+
+const FF680W_FP = "5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd";
+
+describe("runEsci2ScanOverPlain — FF-680W fixture replay", () => {
+  let outputDir: string;
+  let tempDir: string;
+
+  beforeEach(() => {
+    outputDir = mkdtempSync(path.join(os.tmpdir(), "ff680w-out-"));
+    tempDir = mkdtempSync(path.join(os.tmpdir(), "ff680w-tmp-"));
+  });
+
+  afterEach(() => {
+    rmSync(outputDir, { recursive: true, force: true });
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const FIX_DIR = path.join("tools", "pcap-extract", "captures", "ff-680w");
+
+  async function runOne(opts: {
+    fixtureFile: string;
+    duplex: boolean;
+    resolution: number;
+  }): Promise<number> {
+    const fixture = loadFixture(path.join(FIX_DIR, opts.fixtureFile));
+    const fake = new FakePlainSocket();
+    const sessionPromise = runEsci2ScanOverPlain(
+      {
+        printerIp: "192.168.10.8",
+        port: 1865,
+        destId: 0x02,
+        outputDir,
+        tempDir,
+        duplex: opts.duplex,
+        action: "pdf",
+        resolution: opts.resolution,
+      },
+      fake.asFactory(),
+    );
+    await driveFixture(fixture, fake, sessionPromise);
+
+    // Byte-equivalence shield: the scanner's PARA wire bytes must match the
+    // captured Wireshark session's *scan* PARA. The FF-680W sends a 12-byte
+    // "#D&T" date/time PARA before the real scan PARA, so extractCapturedParaBody
+    // selects the #RSM-bearing scan PARA; the scanner never emits the #D&T one,
+    // so its single PARA write lines up with it.
+    const capturedPara = extractCapturedParaBody(fixture);
+    const scannerPara = extractScannerParaWrite(fake);
+    expect(scannerPara.equals(capturedPara)).toBe(true);
+
+    // Cross-check the recipe: the captured scan PARA equals what the composer
+    // builds for these axes. Source is fixed to ADF (no flatbed on this
+    // hardware); duplex selects the DPLX segment; resolution is threaded into
+    // the #RSM/#RSS/#ACQ segments (the only dialect that consumes it).
+    const paraSource: ParaSpec["source"] = opts.duplex ? "adf-duplex" : "adf-simplex";
+    const recipePara = composePara(
+      makeParaSpec(REGISTRY.get(FF680W_FP)!, paraSource, "pdf", opts.resolution),
+    );
+    expect(capturedPara.equals(recipePara)).toBe(true);
+
+    await waitForPdf(outputDir);
+    const files = readdirSync(outputDir);
+    expect(files.filter((f) => f.endsWith(".jpg"))).toEqual([]); // temp dir cleaned, no stragglers
+    const pdfs = files.filter((f) => f.endsWith(".pdf"));
+    expect(pdfs.length).toBe(1);
+    expect(pdfs[0]).toMatch(/^scan_\d{4}-\d{2}-\d{2}_\d{6}\.pdf$/);
+    const doc = await PDFDocument.load(readFileSync(path.join(outputDir, pdfs[0])));
+    return doc.getPageCount();
+  }
+
+  it("ADF duplex 200 DPI → two PDF pages (front + back)", async () => {
+    const pages = await runOne({
+      fixtureFile: "adf-duplex-200.jsonl",
+      duplex: true,
+      resolution: 200,
+    });
+    expect(pages).toBe(2);
+  }, 60_000);
+
+  it("ADF simplex 200 DPI → one PDF page", async () => {
+    const pages = await runOne({
+      fixtureFile: "adf-simplex-200.jsonl",
+      duplex: false,
+      resolution: 200,
+    });
+    expect(pages).toBe(1);
+  }, 60_000);
+
+  it("ADF simplex 300 DPI → one PDF page", async () => {
+    const pages = await runOne({
+      fixtureFile: "adf-simplex-300.jsonl",
+      duplex: false,
+      resolution: 300,
+    });
+    expect(pages).toBe(1);
   }, 60_000);
 });
