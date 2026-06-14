@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
-import { setJpegOrientation } from "./exif.js";
+import sharp from "sharp";
+import { setJpegOrientation, readJpegOrientation } from "./exif.js";
 
 describe("setJpegOrientation", () => {
   // A minimal valid JPEG prefix for tests: SOI + 3 arbitrary bytes.
@@ -73,5 +74,69 @@ describe("setJpegOrientation", () => {
     const result = setJpegOrientation(minimalJpeg, 3);
     // Bytes 2-3 of the output are the APP1 segment length (big-endian, excludes marker).
     expect(result.readUInt16BE(4)).toBe(0x0022);
+  });
+});
+
+describe("readJpegOrientation", () => {
+  it("reads back an orientation written by setJpegOrientation", async () => {
+    const jpeg = await sharp({
+      create: { width: 4, height: 4, channels: 3, background: { r: 1, g: 2, b: 3 } },
+    })
+      .jpeg()
+      .toBuffer();
+    const tagged = setJpegOrientation(jpeg, 3);
+    expect(readJpegOrientation(tagged)).toBe(3);
+  });
+
+  it("returns undefined for a JFIF-only JPEG with no EXIF", async () => {
+    const jpeg = await sharp({
+      create: { width: 4, height: 4, channels: 3, background: { r: 1, g: 2, b: 3 } },
+    })
+      .jpeg()
+      .toBuffer();
+    expect(readJpegOrientation(jpeg)).toBeUndefined();
+  });
+
+  it("returns undefined (does not throw) on a corrupt EXIF IFD offset", () => {
+    // Valid SOI + APP1 + "Exif\0\0" + TIFF header, but the IFD0 offset points
+    // far past the buffer. The parser must bounds-check, not RangeError.
+    const buf = Buffer.from([
+      0xff,
+      0xd8, // SOI
+      0xff,
+      0xe1, // APP1
+      0x00,
+      0x10, // nominal segment length
+      0x45,
+      0x78,
+      0x69,
+      0x66,
+      0x00,
+      0x00, // "Exif\0\0"
+      0x49,
+      0x49,
+      0x2a,
+      0x00, // TIFF header (little-endian)
+      0xff,
+      0xff,
+      0xff,
+      0xff, // IFD0 offset pointing past the buffer
+    ]);
+    expect(() => readJpegOrientation(buf)).not.toThrow();
+    expect(readJpegOrientation(buf)).toBeUndefined();
+  });
+
+  it("skips a non-Exif APP1 (XMP) and still finds a following Exif APP1", () => {
+    // The 36-byte Exif APP1 (Orientation=3) that setJpegOrientation emits.
+    const exifApp1 = setJpegOrientation(Buffer.from([0xff, 0xd8]), 3).subarray(2, 38);
+    // A leading XMP APP1 (also marker 0xE1) that must be skipped, not bailed on.
+    const xmpBody = Buffer.from("http://ns.adobe.com/xap/1.0/\0<x:xmpmeta/>", "ascii");
+    const xmpLen = 2 + xmpBody.length; // segment length includes its 2 length bytes
+    const xmpApp1 = Buffer.concat([
+      Buffer.from([0xff, 0xe1, (xmpLen >> 8) & 0xff, xmpLen & 0xff]),
+      xmpBody,
+    ]);
+    const buf = Buffer.concat([Buffer.from([0xff, 0xd8]), xmpApp1, exifApp1]);
+    expect(readJpegOrientation(buf)).toBe(3);
   });
 });
