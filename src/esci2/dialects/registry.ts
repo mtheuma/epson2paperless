@@ -127,4 +127,28 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       paraProfile: "ff680w-adf",
     },
   ],
+  [
+    // ET-8500: A4 EcoTank Photo. Flatbed-only (CAPA reports ADF: N / duplex: N),
+    // ESC/I-2 over TLS. Mechanically an ET-2950 (TLS, flatbed-only, fixed-flatbed
+    // source detection, 3-cycle init poll) but its PARA-segment shape matches the
+    // ET-15000/ET-4800 family: CAPA advertises GMM "UG10UG18" and CMX "UNITUM08"
+    // with QIT present (PREFON OFF) and CCT absent. Its #FB AREA value
+    // "d850i0001170" is byte-identical to the ET-4800/ET-2750, so the A4 flatbed
+    // extents are reused from the ET-4800. The gamma/CMX class bytes are reused
+    // from the ET-4800 (closest UG10UG18/UNITUM08 sibling) pending a Frida capture
+    // of the ET-8500's own PARA. Speculative entry from the issue #120 diagnostic
+    // block (PID 1193, FW FB 2.00); awaiting live validation by the reporter.
+    "05b5c7eaad217e9538883f3fffe9796464689a5d9006c5b3e3c3fd2c24e21467",
+    {
+      displayName: "ET-8500 (ESC/I-2 over TLS)",
+      sourceDetection: "fixed-flatbed",
+      initPollIterations: 3,
+      fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
+      adfExtents: null,
+      gmm: "UG18",
+      gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
+      cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
+      optionalSegments: { qit: true, cct: false },
+    },
+  ],
 ]);
