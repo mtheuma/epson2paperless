@@ -76,13 +76,13 @@ describe("REGISTRY", () => {
     expect(e!.adfExtents).toEqual({ x0: 69, y0: 0, w: 2481, h: 3506 });
   });
 
-  it("includes ET-8500 entry (flatbed-only, TLS, reuses ET-4800 class bytes)", () => {
+  it("includes ET-8500 entry (flatbed-only, TLS; TLS-sibling gamma + ET-4800 CMX)", () => {
     const e = REGISTRY.get("05b5c7eaad217e9538883f3fffe9796464689a5d9006c5b3e3c3fd2c24e21467");
     expect(e).toBeDefined();
     expect(e!.sourceDetection).toBe("fixed-flatbed");
     expect(e!.initPollIterations).toBe(3);
     expect(e!.gmm).toBe("UG18");
-    expect(e!.gammaClass).toEqual({ jpg: "et4800-stock", pdf: "et4800-stock" });
+    expect(e!.gammaClass).toEqual({ jpg: "et4950-stock", pdf: "et4950-stock" });
     expect(e!.cmxClass).toEqual({ jpg: "et4800-um08", pdf: "et4800-um08" });
     expect(e!.optionalSegments).toEqual({ qit: true, cct: false });
     expect(e!.fbExtents).toEqual({ x0: 0, y0: 0, w: 2481, h: 3506 });
