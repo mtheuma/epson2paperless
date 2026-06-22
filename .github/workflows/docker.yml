@@ -4,6 +4,12 @@ on:
   push:
     branches: [main]
     tags: ["v*"]
+  # Manual trigger for building a branch into a throwaway GHCR image
+  # (e.g. ghcr.io/<repo>:<branch>) so a compatibility reporter can test an
+  # unmerged speculative-printer PR without polluting main or cutting a release.
+  # The merge job's `type=ref,event=branch` tag names the image after the ref;
+  # `latest` stays gated to v* tags, so a branch build never moves it.
+  workflow_dispatch:
 
 concurrency:
   group: docker-${{ github.ref }}
