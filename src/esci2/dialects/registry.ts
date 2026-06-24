@@ -127,4 +127,37 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       paraProfile: "ff680w-adf",
     },
   ],
+  [
+    // ET-8500: A4 EcoTank Photo. Flatbed-only (CAPA reports ADF: N / duplex: N).
+    // Presents over ESC/I-2 on both TLS (issue #120, Peter-Maguire) and plain TCP
+    // (issue #123, anaxci) across reporters — identical CAPA fingerprint either
+    // way, so this one transport-agnostic entry serves both. Source detection and
+    // init poll mirror the ET-2950 (flatbed-only, fixed-flatbed, 3-cycle), but its
+    // PARA-segment shape matches the ET-15000/ET-4800 family: CAPA advertises GMM
+    // "UG10UG18" and CMX "UNITUM08" with QIT present (PREFON OFF) and CCT absent.
+    // Its #FB AREA value "d850i0001170" is byte-identical to the ET-4800/ET-2750,
+    // so the A4 flatbed extents are reused from the ET-4800, and the CMX class
+    // bytes from the ET-4800's matching UNITUM08 variant (et4800-um08).
+    //
+    // The gamma curve is NOT advertised in CAPA, so it can't be pinned from the
+    // diagnostic the way extents/CMX/GMM can. We default it to the near-identity
+    // et4950-stock used by the TLS sibling (ET-4950/ET-2950) rather than the
+    // ET-4800's contrast-boosting curve: for an unknown photo scanner a flat curve
+    // is the lower-risk guess (if wrong it degrades mildly, vs crushing shadows).
+    // Originally speculative from the issue #120 diagnostic (PID 1193, FW FB 2.00);
+    // since confirmed working by the reporter (flatbed JPG + PDF, colours accurate,
+    // nothing washed out). A Frida capture would still pin the gamma/CMX exactly.
+    "05b5c7eaad217e9538883f3fffe9796464689a5d9006c5b3e3c3fd2c24e21467",
+    {
+      displayName: "ET-8500 (ESC/I-2)",
+      sourceDetection: "fixed-flatbed",
+      initPollIterations: 3,
+      fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
+      adfExtents: null,
+      gmm: "UG18",
+      gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
+      cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
+      optionalSegments: { qit: true, cct: false },
+    },
+  ],
 ]);
