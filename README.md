@@ -25,7 +25,7 @@ What you get:
 | **WF-3620**           | ✅ Verified     | Plain TCP scanner, no TLS pinning                     |
 | **ET-2750**           | ✅ Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS |
 | **ET-2950**           | 🟡 Experimental | Flatbed-only hardware                                 |
-| **ET-8500**           | 🟡 Experimental | Flatbed-only hardware; awaiting hardware confirmation |
+| **ET-8500**           | 🟡 Experimental | Flatbed-only hardware                                 |
 | **ET-4800**           | ✅ Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS           |
 | **ET-15000**          | 🟡 Experimental | Flatbed verified; ADF simplex untested                |
 | **XP-7100**           | ✅ Verified     |                                                       |

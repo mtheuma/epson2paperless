@@ -9,7 +9,8 @@ const entry = REGISTRY.get(ET8500_FP)!;
 // The registry entry's static fields are asserted in registry.test.ts alongside
 // the other dialects. This file covers only what's specific to the ET-8500's
 // composed PARA. The ET-8500 is an A4 EcoTank Photo (flatbed-only, ESC/I-2 over
-// TLS). It pairs the TLS-sibling et4950-stock gamma with the ET-4800's
+// both TLS and plain TCP across reporters). It pairs the TLS-sibling
+// et4950-stock gamma with the ET-4800's
 // et4800-um08 CMX, and (unlike the ET-4800) carries the optional #QITOFF
 // segment — every gamma triplet is 804 bytes, so its flatbed PARA is still the
 // ET-4800's 936 bytes plus 8 for #QITOFF (944 total).
