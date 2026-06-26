@@ -15,19 +15,13 @@ vi.mock("./ff680w-job-control.js", () => ({
   runFf680wJobNumberCommit: vi.fn(() => Promise.resolve(Buffer.from("0300020000020001", "hex"))),
 }));
 
-import {
-  buildPushScanServerOptions,
-  dispatchScanSession,
-  logStartupBanner,
-  resolveScanDispatch,
-} from "./startup.js";
+import { buildPushScanServerOptions, dispatchScanSession, resolveScanDispatch } from "./startup.js";
 import { detectVariant } from "./protocol-probe.js";
 import { runEsci2Scan, runEsci2ScanOverPlain } from "./esci2/scanner.js";
 import { runEsciScan } from "./esci/scanner.js";
 import { runFf680wJobListCommit, runFf680wJobNumberCommit } from "./ff680w-job-control.js";
 import type { Config } from "./config.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
-import { setLogFormat, setLogLevel } from "./logger.js";
 import type { PushScanInfo } from "./pushscan.js";
 
 const detectVariantMock = vi.mocked(detectVariant);
@@ -75,30 +69,6 @@ const FF680W_JOB_NUMBER_INFO: PushScanInfo = {
   duplex: false,
   action: "unknown",
 };
-
-describe("logStartupBanner", () => {
-  beforeEach(() => {
-    setLogLevel("info");
-    setLogFormat("text");
-  });
-
-  it("warns when SCAN_DEST_NAME is 15 UTF-8 bytes or longer", () => {
-    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-
-    try {
-      setLogLevel("warn");
-      logStartupBanner(makeConfig({ scanDestName: "123456789012345" }), "starting");
-
-      expect(warnSpy).toHaveBeenCalledWith(
-        expect.stringContaining(
-          "SCAN_DEST_NAME is 15 bytes; Epson discovery may reject names 15 bytes or longer",
-        ),
-      );
-    } finally {
-      warnSpy.mockRestore();
-    }
-  });
-});
 
 describe("resolveScanDispatch", () => {
   it("uses SCAN_FORMAT + SCAN_SIDES for FF-680W-style JobNumberIn scans (duplex)", () => {

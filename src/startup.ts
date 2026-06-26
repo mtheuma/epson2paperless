@@ -19,12 +19,6 @@ export function logStartupBanner(config: Config, modeMessage: string): void {
   log.info(modeMessage);
   log.info(`Printer IP: ${config.printerIp}`);
   log.info(`Destination name: ${config.scanDestName}`);
-  const scanDestNameBytes = Buffer.byteLength(config.scanDestName, "utf-8");
-  if (scanDestNameBytes >= 15) {
-    log.warn(
-      `SCAN_DEST_NAME is ${scanDestNameBytes} bytes; Epson discovery may reject names 15 bytes or longer`,
-    );
-  }
   log.info(`Output directory: ${config.outputDir}`);
 
   if (isPaperlessEnabled(config)) {
