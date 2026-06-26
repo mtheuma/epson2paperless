@@ -88,21 +88,21 @@ Configuration is via environment variables. Only `PRINTER_IP` is required.
 
 Each setting's **Scope** column shows which printers it affects: `All`, `Panel` (panel-driven models), `FF-680W`, `Legacy ESC/I` (WF-3620 family), or `ESC/I-2 TLS` (ET-4950 family). A setting outside a printer's path is simply ignored.
 
-| Variable                    | Scope        | Default          | What it does                                                                                                                                            |
-| --------------------------- | ------------ | ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PRINTER_IP`<br>✅ required | All          | —                | The printer's IPv4 address.                                                                                                                             |
-| `SCAN_DEST_NAME`            | All          | `Paperless`      | The label the printer shows on its panel. Keep below 15 UTF-8 bytes for broad compatibility. Give each instance a distinct name.                        |
-| `OUTPUT_DIR`                | All          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                        |
-| `LOG_LEVEL`                 | All          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                    |
-| `LOG_FORMAT`                | All          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line, for `docker logs` + Loki / `jq`).                                                       |
-| `PREVIEW_ACTION`            | Panel        | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen. |
-| `SCAN_FORMAT`               | FF-680W      | `pdf`            | Output format (`jpg` / `pdf`) when the printer reports no panel choice.                                                                                 |
-| `SCAN_SIDES`                | FF-680W      | `duplex`         | `simplex` or `duplex` (the FF-680W has no panel Sides selector).                                                                                        |
-| `SCAN_RESOLUTION`           | FF-680W      | `200`            | Scan DPI. One of `50,75,100,150,200,240,300,360,400,600`; `200`/`300` verified.                                                                         |
-| `PRINTER_PROTOCOL`          | All          | `auto`           | `auto` (probe each session), `esci2` (force ESC/I-2 over TLS), `esci2-plain` (force ESC/I-2 over plain TCP), `esci` (force plain-TCP ESC/I).            |
-| `JPEG_QUALITY`              | Legacy ESC/I | `90`             | JPEG encoder quality 1–100 (host-encoded raw pixels).                                                                                                   |
-| `TEMP_DIR`                  | All          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                               |
-| `HEALTH_PORT`               | All          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                   |
+| Variable                    | Scope        | Default          | What it does                                                                                                                                                                            |
+| --------------------------- | ------------ | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PRINTER_IP`<br>✅ required | All          | —                | The printer's IPv4 address.                                                                                                                                                             |
+| `SCAN_DEST_NAME`            | All          | `Paperless`      | The label the printer shows on its panel. Give each instance a distinct name. On FF-680W, this must also match the scanner's paired host name; see [FF-680W pairing](#ff-680w-pairing). |
+| `OUTPUT_DIR`                | All          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                                                        |
+| `LOG_LEVEL`                 | All          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                                                    |
+| `LOG_FORMAT`                | All          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line, for `docker logs` + Loki / `jq`).                                                                                       |
+| `PREVIEW_ACTION`            | Panel        | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen.                                 |
+| `SCAN_FORMAT`               | FF-680W      | `pdf`            | Output format (`jpg` / `pdf`) when the printer reports no panel choice.                                                                                                                 |
+| `SCAN_SIDES`                | FF-680W      | `duplex`         | `simplex` or `duplex` (the FF-680W has no panel Sides selector).                                                                                                                        |
+| `SCAN_RESOLUTION`           | FF-680W      | `200`            | Scan DPI. One of `50,75,100,150,200,240,300,360,400,600`; `200`/`300` verified.                                                                                                         |
+| `PRINTER_PROTOCOL`          | All          | `auto`           | `auto` (probe each session), `esci2` (force ESC/I-2 over TLS), `esci2-plain` (force ESC/I-2 over plain TCP), `esci` (force plain-TCP ESC/I).                                            |
+| `JPEG_QUALITY`              | Legacy ESC/I | `90`             | JPEG encoder quality 1–100 (host-encoded raw pixels).                                                                                                                                   |
+| `TEMP_DIR`                  | All          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                                                               |
+| `HEALTH_PORT`               | All          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                                                   |
 
 <details>
 <summary>Advanced (leave as default unless you know why)</summary>
@@ -162,6 +162,27 @@ The printer broadcasts a discovery beacon roughly once a minute; wait at least 6
 - Confirm the PC is on the same subnet as the printer. Try `ping <printer-ip>`.
 - Check your firewall. UDP port `2968` needs to be allowed for multicast traffic from the printer.
 - Make sure Epson Event Manager isn't running on the same PC. It binds the same port. Other Epson software (drivers, ScanSmart) is fine.
+
+### FF-680W pairing
+
+The FF-680W stores a paired host name on the scanner. The `ClientName` advertised by `epson2paperless` must match that stored value exactly, so the scanner's paired name should be the same as `SCAN_DEST_NAME`. If you have run the commercial Epson software, it will likely have set this value to the hostname of the computer running that software.
+
+You can read the current paired name with SNMP:
+
+```bash
+snmpget -v1 -c epson <printer-ip> \
+  1.3.6.1.4.1.1248.1.1.3.1.10.2.5.0
+```
+
+Set it to the same value you use for `SCAN_DEST_NAME`:
+
+```bash
+snmpset -v1 -c epson <printer-ip> \
+  1.3.6.1.4.1.1248.1.1.3.1.10.2.5.0 \
+  s 'Paperless'
+```
+
+For example, if you run with `SCAN_DEST_NAME=Paperless`, set the SNMP value to `Paperless` too.
 
 **Service hangs after a scan.**
 Rare edge case. Restart the service with `Ctrl-C` and relaunch.
