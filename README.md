@@ -163,6 +163,12 @@ The printer broadcasts a discovery beacon roughly once a minute; wait at least 6
 - Check your firewall. UDP port `2968` needs to be allowed for multicast traffic from the printer.
 - Make sure Epson Event Manager isn't running on the same PC. It binds the same port. Other Epson software (drivers, ScanSmart) is fine.
 
+**Service hangs after a scan.**
+Rare edge case. Restart the service with `Ctrl-C` and relaunch.
+
+**Output folder fills with duplicates named `scan_..._1.jpg`.**
+Normal. If two scans land in the same second, the service appends `_1`, `_2` to avoid overwriting.
+
 ### FF-680W pairing
 
 The FF-680W stores a paired host name on the scanner. The `ClientName` advertised by `epson2paperless` must match that stored value exactly, so the scanner's paired name should be the same as `SCAN_DEST_NAME`. If you have run the commercial Epson software, it will likely have set this value to the hostname of the computer running that software.
@@ -183,12 +189,6 @@ snmpset -v1 -c epson <printer-ip> \
 ```
 
 For example, if you run with `SCAN_DEST_NAME=Paperless`, set the SNMP value to `Paperless` too.
-
-**Service hangs after a scan.**
-Rare edge case. Restart the service with `Ctrl-C` and relaunch.
-
-**Output folder fills with duplicates named `scan_..._1.jpg`.**
-Normal. If two scans land in the same second, the service appends `_1`, `_2` to avoid overwriting.
 
 ## Further reading
 
