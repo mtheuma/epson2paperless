@@ -15,11 +15,7 @@ vi.mock("./ff680w-job-control.js", () => ({
   runFf680wJobNumberCommit: vi.fn(() => Promise.resolve(Buffer.from("0300020000020001", "hex"))),
 }));
 
-import {
-  buildPushScanServerOptions,
-  dispatchScanSession,
-  resolveScanDispatch,
-} from "./startup.js";
+import { buildPushScanServerOptions, dispatchScanSession, resolveScanDispatch } from "./startup.js";
 import { detectVariant } from "./protocol-probe.js";
 import { runEsci2Scan, runEsci2ScanOverPlain } from "./esci2/scanner.js";
 import { runEsciScan } from "./esci/scanner.js";
