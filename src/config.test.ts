@@ -30,6 +30,7 @@ describe("loadConfig", () => {
     delete process.env.PRINTER_PROTOCOL;
     delete process.env.LEGACY_FORCE_SOURCE;
     delete process.env.ESCI_FORCE_SOURCE;
+    delete process.env.NETSCAN_VERSION;
   });
 
   it("throws if PRINTER_IP is missing", () => {
@@ -343,6 +344,25 @@ describe("loadConfig", () => {
     process.env.PRINTER_IP = "10.0.0.1";
     delete process.env.PRINTER_PROTOCOL;
     expect(loadConfig().printerProtocol).toBe("auto");
+  });
+
+  it("defaults NETSCAN_VERSION to auto", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    expect(loadConfig().netscanVersion).toBe("auto");
+  });
+
+  it("accepts NETSCAN_VERSION=3.0 and NETSCAN_VERSION=2.0", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.NETSCAN_VERSION = "3.0";
+    expect(loadConfig().netscanVersion).toBe("3.0");
+    process.env.NETSCAN_VERSION = "2.0";
+    expect(loadConfig().netscanVersion).toBe("2.0");
+  });
+
+  it("rejects an unknown NETSCAN_VERSION value", () => {
+    process.env.PRINTER_IP = "10.0.0.1";
+    process.env.NETSCAN_VERSION = "4.0";
+    expect(() => loadConfig()).toThrow();
   });
 
   it("rejects PRINTER_CERT_FINGERPRINT with PRINTER_PROTOCOL=esci", () => {

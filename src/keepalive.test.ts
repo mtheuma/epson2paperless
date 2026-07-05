@@ -221,11 +221,10 @@ describe("createKeepaliveResponder", () => {
 
   // Stand up a loopback listener (fake printer), a responder wired to that
   // port, and an announcer (fake multicast source). Overrides merge into the
-  // default opts. Returns `teardown` to close all three sockets in one call.
+  // default opts (a `keepalive` override replaces the whole block). Returns
+  // `teardown` to close all three sockets in one call.
   async function setupHarness(
-    overrides: Partial<
-      Omit<KeepaliveResponderOptions, "keepalive" | "printerIp" | "printerPort">
-    > = {},
+    overrides: Partial<Omit<KeepaliveResponderOptions, "printerIp" | "printerPort">> = {},
   ): Promise<Harness> {
     const listener = dgram.createSocket("udp4");
     await new Promise<void>((r) => listener.bind(0, "127.0.0.1", () => r()));
@@ -325,6 +324,43 @@ describe("createKeepaliveResponder", () => {
     // v3 bursts egress from the dedicated `sender` socket (matching the FF-680W
     // reference driver's ephemeral source port), NOT the bound multicast socket.
     h.receivedFrom.forEach((srcPort) => expect(srcPort).not.toBe(h.responder.boundPort));
+
+    h.teardown();
+  });
+
+  it("forced version=3.0 sends v3 keepalives for a non-FF-680W announcement (NETSCAN_VERSION override)", async () => {
+    const h = await setupHarness({
+      burstCount: 1,
+      keepalive: { ...KEEPALIVE_OPTS, version: "3.0" },
+    });
+    // Bare announcement with no PID string — would get v2 under auto-selection.
+    await sendAnnouncement(h, makeAnnouncement(0x46));
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(h.received).toHaveLength(1);
+    const payload = h.received[0].subarray(20).toString("ascii");
+    expect(payload).toContain("(Ver=3.0)");
+    expect(payload).toContain("(Group=0)");
+    // Forcing v3 also switches to the ephemeral sender's source port.
+    expect(h.receivedFrom[0]).not.toBe(h.responder.boundPort);
+
+    h.teardown();
+  });
+
+  it("forced version=2.0 sends v2 keepalives even for an FF-680W announcement", async () => {
+    const h = await setupHarness({
+      burstCount: 1,
+      keepalive: { ...KEEPALIVE_OPTS, version: "2.0" },
+    });
+    await sendAnnouncement(h, makeFf680wAnnouncement(0x47));
+    await new Promise((r) => setTimeout(r, 40));
+
+    expect(h.received).toHaveLength(1);
+    const payload = h.received[0].subarray(20).toString("ascii");
+    expect(payload).not.toContain("(Ver=3.0)");
+    expect(payload).not.toContain("(Group=0)");
+    // v2 keeps the pre-FF-680W source-port behaviour: the bound multicast socket.
+    expect(h.receivedFrom[0]).toBe(h.responder.boundPort);
 
     h.teardown();
   });

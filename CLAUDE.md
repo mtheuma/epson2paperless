@@ -44,6 +44,7 @@ Noteworthy for dev:
 - `PRINTER_PROTOCOL` (`auto` / `esci2` / `esci2-plain` / `esci`, default `auto`) — transport-variant selector. `auto` runs a three-arm probe: TLS handshake → plain-TCP ESC/I-2 handshake-open (`0x8000` packet) → plain-TCP ESC/I `ESC @` ACK. The three explicit values skip the probe and select the matching scanner directly.
 - `ESCI_FORCE_SOURCE` (`adf-simplex` / `adf-duplex` / `flatbed`) — legacy ESC/I path only. Overrides the FS W source byte when probe-based detection isn't enough. Zod-rejected when paired with `PRINTER_PROTOCOL=esci2` or `esci2-plain`.
 - `DIAGNOSE_PROTOCOL=true` — compatibility-report aid. When the legacy `ESC @` init returns a non-ACK, sends one extra `FS Y` probe (the ET-4950 ESC/I-2 path's first command) and aborts with `[diagnose]` log lines tagged with the IS packet type and payload. Off by default; only useful when triaging an unknown printer that gets past welcome+lock.
+- `NETSCAN_VERSION` (`auto` / `2.0` / `3.0`, default `auto`) — compatibility-triage aid. Forces the NetScanMonitor keepalive wire format instead of selecting it from the announced PID (`3.0` for the FF-680W, `2.0` otherwise). Forcing `3.0` also switches the burst to an ephemeral source port, matching the v3 reference driver. Lets reporters with unrecognised button-only DS-family scanners test v3 registration without a code change.
 - `SHUTDOWN_TIMEOUT_MS` — how long graceful shutdown waits for in-flight scans before forcing exit (default 30000).
 
 ## Architecture (brief — full protocol detail in `docs/PROTOCOL-REFERENCE.md`)
