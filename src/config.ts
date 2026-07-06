@@ -52,6 +52,12 @@ const configSchema = z
     // help classify unsupported printers that get past welcome+lock but reject
     // `ESC @`. Should remain false in normal operation.
     diagnoseProtocol: z.boolean().default(false),
+    // Compatibility-triage aid. `auto` picks the NetScanMonitor keepalive wire
+    // format from the announced PID (3.0 for the FF-680W, 2.0 for everything
+    // else). Forcing `3.0` lets reporters with unrecognised button-only
+    // scanners (DS-series family) test v3 registration without a code change;
+    // v3 also switches the burst to an ephemeral source port (see keepalive.ts).
+    netscanVersion: z.enum(["auto", "2.0", "3.0"]).default("auto"),
     tempDir: z.string().default(""),
     shutdownTimeoutMs: z.coerce.number().int().min(100).default(30000),
     paperlessUrl: z.string().url("PAPERLESS_URL must be a valid URL").optional(),
@@ -156,6 +162,7 @@ export function loadConfig(): Config {
       process.env.DIAGNOSE_PROTOCOL === undefined
         ? undefined
         : process.env.DIAGNOSE_PROTOCOL === "true",
+    netscanVersion: process.env.NETSCAN_VERSION || undefined,
   };
 
   return configSchema.parse(raw);

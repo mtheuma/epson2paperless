@@ -178,10 +178,6 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
           }, dedupWindowMs);
           seenSeqs.set(announcement.seq, expiry);
 
-          log.info(
-            `Printer announcement received from ${rinfo.address} — seq=${seqHex}; sending burst of ${opts.burstCount}`,
-          );
-
           // Packet bytes are identical across all N packets in the burst —
           // build once and reuse.
           const keepalive: KeepaliveOptions = {
@@ -189,6 +185,14 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
             version:
               opts.keepalive.version ?? (announcement.productName === "PID 016B" ? "3.0" : "2.0"),
           };
+
+          // Surface the announced PID and the chosen keepalive version at INFO —
+          // compatibility reports for unrecognised models hinge on both.
+          log.info(
+            `Printer announcement received from ${rinfo.address} — seq=${seqHex}, ` +
+              `product=${announcement.productName ?? "<not reported>"}; ` +
+              `sending burst of ${opts.burstCount} (keepalive v${keepalive.version})`,
+          );
           const packet = buildKeepalivePacket(keepalive, announcement.seq);
 
           // Source-port policy. The FF-680W's reference (Mac) driver sends its
