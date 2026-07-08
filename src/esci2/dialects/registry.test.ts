@@ -3,8 +3,8 @@ import { describe, it, expect } from "vitest";
 import { REGISTRY } from "./registry.js";
 
 describe("REGISTRY", () => {
-  it("contains exactly eight known fingerprints", () => {
-    expect(REGISTRY.size).toBe(8);
+  it("contains exactly nine known fingerprints", () => {
+    expect(REGISTRY.size).toBe(9);
   });
 
   it("includes ET-4950 family entry", () => {
@@ -98,7 +98,22 @@ describe("REGISTRY", () => {
     expect(e!.gammaClass).toEqual({ jpg: "ff680w-adf", pdf: "ff680w-adf" });
     expect(e!.cmxClass).toEqual({ jpg: "et2750-um08", pdf: "et2750-um08" });
     expect(e!.optionalSegments).toEqual({ qit: false, cct: false });
-    expect(e!.paraProfile).toBe("ff680w-adf");
+    expect(e!.paraProfile).toBe("adf-crp");
     expect(e!.adfExtents).toEqual({ x0: 0, y0: 0, w: 1700, h: 7200 });
+    expect(e!.monoGammaClass).toBeUndefined();
+  });
+
+  it("includes DS-575W entry (ADF-only, greyscale-capable, plain TCP)", () => {
+    const e = REGISTRY.get("90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b074");
+    expect(e).toBeDefined();
+    expect(e!.sourceDetection).toBe("fixed-adf");
+    expect(e!.initPollIterations).toBe(12);
+    expect(e!.gmm).toBe("UG18");
+    expect(e!.gammaClass).toEqual({ jpg: "ff680w-adf", pdf: "ff680w-adf" });
+    expect(e!.cmxClass).toEqual({ jpg: "et2750-um08", pdf: "et2750-um08" });
+    expect(e!.optionalSegments).toEqual({ qit: false, cct: false });
+    expect(e!.paraProfile).toBe("adf-crp");
+    expect(e!.adfExtents).toEqual({ x0: 0, y0: 0, w: 1700, h: 3100 });
+    expect(e!.monoGammaClass).toBe("ds575w-mono");
   });
 });

@@ -30,6 +30,7 @@ What you get:
 | **ET-15000**          | 🟡 Experimental | Flatbed verified; ADF simplex untested                |
 | **XP-7100**           | ✅ Verified     |                                                       |
 | **FF-680W**           | 🟡 Experimental | ADF-only; 200/300 DPI verified, other DPIs untested   |
+| **DS-575W**           | 🟡 Experimental | ADF-only sheet-fed; colour + greyscale                |
 
 Compatibility reports are welcome whether your model works or doesn't. [Open an issue](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) using the compatibility template.
 
@@ -86,7 +87,7 @@ Within about 60 seconds, your destination (default `Paperless`) appears in the p
 
 Configuration is via environment variables. Only `PRINTER_IP` is required.
 
-Each setting's **Scope** column shows which printers it affects: `All`, `Panel` (panel-driven models), `FF-680W`, `Legacy ESC/I` (WF-3620 family), or `ESC/I-2 TLS` (ET-4950 family). A setting outside a printer's path is simply ignored.
+Each setting's **Scope** column shows which printers it affects: `All`, `Panel` (panel-driven models), `FF-680W`, `DS-575W`, `Legacy ESC/I` (WF-3620 family), or `ESC/I-2 TLS` (ET-4950 family). A setting outside a printer's path is simply ignored.
 
 | Variable                    | Scope        | Default          | What it does                                                                                                                                                                            |
 | --------------------------- | ------------ | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -99,6 +100,7 @@ Each setting's **Scope** column shows which printers it affects: `All`, `Panel` 
 | `SCAN_FORMAT`               | FF-680W      | `pdf`            | Output format (`jpg` / `pdf`) when the printer reports no panel choice.                                                                                                                 |
 | `SCAN_SIDES`                | FF-680W      | `duplex`         | `simplex` or `duplex` (the FF-680W has no panel Sides selector).                                                                                                                        |
 | `SCAN_RESOLUTION`           | FF-680W      | `200`            | Scan DPI. One of `50,75,100,150,200,240,300,360,400,600`; `200`/`300` verified.                                                                                                         |
+| `SCAN_COLOR_MODE`           | DS-575W      | `color`          | `color` or `grayscale` (the DS-575W has no panel colour selector). Other models ignore it and scan in colour.                                                                           |
 | `PRINTER_PROTOCOL`          | All          | `auto`           | `auto` (probe each session), `esci2` (force ESC/I-2 over TLS), `esci2-plain` (force ESC/I-2 over plain TCP), `esci` (force plain-TCP ESC/I).                                            |
 | `JPEG_QUALITY`              | Legacy ESC/I | `90`             | JPEG encoder quality 1–100 (host-encoded raw pixels).                                                                                                                                   |
 | `TEMP_DIR`                  | All          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                                                               |

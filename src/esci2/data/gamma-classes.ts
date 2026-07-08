@@ -6,13 +6,20 @@
 //   - xp7100-pdf:   xp-7100-fixtures/pdf-single.bin, offsets 60..864.
 //   - et4800-stock: tools/pcap-extract/captures/et-4800/flatbed-jpg.jsonl, PARA body offsets 60..864.
 //   - ff680w-adf:   working-20260611.txt, FF-680W ADF PushScan PARA body offsets 84..888.
+//   - ds575w-mono:  tools/pcap-extract/captures/ds-575w/adf-simplex-400-mono-jpg.jsonl scan PARA body, #GMTMONO segment.
 //
-// Each class is the 804-byte sequence of three #GMT h100 segments. Most drivers order them GRN/RED/BLU; FF-680W orders them RED/BLU/GRN.
+// Colour classes are the 804-byte sequence of three #GMT h100 segments. Most
+// drivers order them GRN/RED/BLU; FF-680W orders them RED/BLU/GRN. The DS-575W
+// reuses the ff680w-adf class verbatim for its colour scans.
+//
+// ds575w-mono is the exception: a single 268-byte #GMTMONO segment used for the
+// DS-575W's greyscale scans (one channel, no RGB triplet).
 //
 // Important: the et4950-stock LUT is NOT a strict mathematical [0..255]
 // identity — RED skips 0x14 and duplicates 0xc6; BLU duplicates 0x24 and
-// skips 0xa6. These anomalies are present in the captured Frida fixture
-// and replay tests pin them. Do not "fix" them.
+// skips 0xa6. Likewise ds575w-mono duplicates 0x34 and skips 0x8e. These
+// anomalies are present in the captures and replay tests pin them. Do not
+// "fix" them.
 //
 // The et4800-stock LUT is a contrast-boosting curve: each channel has a
 // ~38-byte zero floor at the low end (input 0..~0x26 → output 0) and saturates
@@ -23,7 +30,8 @@ export type GammaClassName =
   | "xp7100-jpg"
   | "xp7100-pdf"
   | "et4800-stock"
-  | "ff680w-adf";
+  | "ff680w-adf"
+  | "ds575w-mono";
 
 export const GAMMA_CLASSES: Readonly<Record<GammaClassName, Buffer>> = {
   "et4950-stock": Buffer.from(
@@ -44,6 +52,10 @@ export const GAMMA_CLASSES: Readonly<Record<GammaClassName, Buffer>> = {
   ),
   "ff680w-adf": Buffer.from(
     "23474d545245442068313030000102030405060708090a0b0c0d0e101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff23474d54424c552068313030000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30313233343435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff23474d5447524e2068313030000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30313233343435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
+    "hex",
+  ),
+  "ds575w-mono": Buffer.from(
+    "23474d544d4f4e4f68313030000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30313233343435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
     "hex",
   ),
 };

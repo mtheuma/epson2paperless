@@ -52,6 +52,7 @@ export function makeParaSpec(
   source: ParaSpec["source"],
   action: ParaSpec["action"],
   resolution?: number,
+  colorMode?: ParaSpec["colorMode"],
 ): ParaSpec {
   return {
     source,
@@ -64,5 +65,7 @@ export function makeParaSpec(
     optionalSegments: entry.optionalSegments,
     profile: entry.paraProfile,
     resolution,
+    colorMode,
+    monoGammaClass: entry.monoGammaClass,
   };
 }

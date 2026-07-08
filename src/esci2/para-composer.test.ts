@@ -1,6 +1,7 @@
 // src/esci2/para-composer.test.ts
 import { describe, it, expect } from "vitest";
 import { composePara, type ParaSpec } from "./para-composer.js";
+import { GAMMA_CLASSES } from "./data/gamma-classes.js";
 
 // A reusable baseline spec — ET-4950 flatbed JPG params. Tests override fields
 // individually to isolate axes.
@@ -229,12 +230,12 @@ function ff680wSpec(overrides: Partial<ParaSpec> = {}): ParaSpec {
     gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
     cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
     optionalSegments: { qit: false, cct: false },
-    profile: "ff680w-adf",
+    profile: "adf-crp",
     ...overrides,
   };
 }
 
-describe("composePara — FF-680W ADF profile", () => {
+describe("composePara — adf-crp profile (FF-680W)", () => {
   it("duplex @200dpi matches the captured 1000-byte body", () => {
     const body = composePara(ff680wSpec({ source: "adf-duplex", resolution: 200 }));
     expect(body.length).toBe(1000);
@@ -270,6 +271,63 @@ describe("composePara — FF-680W ADF profile", () => {
     const body = composePara(ff680wSpec({ source: "adf-duplex" }));
     expect(body.length).toBe(1000);
     expect(body.indexOf(Buffer.from("#RSMi0000200", "ascii"))).toBeGreaterThan(0);
+  });
+});
+
+// DS-575W reuses the adf-crp profile but adds a colour-mode axis. adfExtents are
+// stored at the 200-DPI reference (1700 × 3100 = 8.5" × 15.5").
+function ds575wSpec(overrides: Partial<ParaSpec> = {}): ParaSpec {
+  return {
+    ...baselineSpec(),
+    source: "adf-simplex",
+    adfExtents: { x0: 0, y0: 0, w: 1700, h: 3100 },
+    gmm: "UG18",
+    gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
+    cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
+    optionalSegments: { qit: false, cct: false },
+    profile: "adf-crp",
+    monoGammaClass: "ds575w-mono",
+    ...overrides,
+  };
+}
+
+describe("composePara — adf-crp colour-mode axis (DS-575W)", () => {
+  it("colour (default) simplex @600 → #COLC024 + 804-byte RGB gamma (996 bytes)", () => {
+    const body = composePara(ds575wSpec({ resolution: 600 }));
+    expect(body.length).toBe(996);
+    expect(body.subarray(0, 72).toString("ascii")).toBe(
+      "#ADFCRP SKEWDFL1#RSMi0000600#RSSi0000600#COLC024#FMTJPG #JPGd090#GMMUG18",
+    );
+    const gmt = body.indexOf("#GMT");
+    expect(body.subarray(gmt, gmt + 804).equals(GAMMA_CLASSES["ff680w-adf"])).toBe(true);
+  });
+
+  it("greyscale simplex @400 → #COLM008 + 268-byte mono gamma (460 bytes)", () => {
+    const body = composePara(ds575wSpec({ resolution: 400, colorMode: "grayscale" }));
+    expect(body.length).toBe(460);
+    expect(body.subarray(0, 72).toString("ascii")).toBe(
+      "#ADFCRP SKEWDFL1#RSMi0000400#RSSi0000400#COLM008#FMTJPG #JPGd090#GMMUG18",
+    );
+    const gmt = body.indexOf("#GMT");
+    expect(body.subarray(gmt, gmt + 268).equals(GAMMA_CLASSES["ds575w-mono"])).toBe(true);
+  });
+
+  it("greyscale duplex keeps the DPLX token (#ADFCRP SKEWDPLXDFL1 + #COLM008)", () => {
+    const body = composePara(
+      ds575wSpec({ source: "adf-duplex", resolution: 600, colorMode: "grayscale" }),
+    );
+    expect(body.subarray(0, 20).toString("ascii")).toBe("#ADFCRP SKEWDPLXDFL1");
+    expect(body.includes(Buffer.from("#COLM008", "ascii"))).toBe(true);
+  });
+
+  it("ignores colorMode=grayscale when the dialect supplies no monoGammaClass", () => {
+    // Colour-only dialects (e.g. FF-680W) leave monoGammaClass unset; a global
+    // grayscale setting must not flip them to #COLM008.
+    const body = composePara(
+      ff680wSpec({ source: "adf-simplex", resolution: 200, colorMode: "grayscale" }),
+    );
+    expect(body.includes(Buffer.from("#COLC024", "ascii"))).toBe(true);
+    expect(body.includes(Buffer.from("#COLM008", "ascii"))).toBe(false);
   });
 });
 

@@ -12,7 +12,7 @@ import { resolveSessionTimestamp } from "../output.js";
 import { esci2Graph, type Esci2Ctx } from "./graph.js";
 import { withEsci2UnlockOnDestroy, withTlsErrorLabels } from "./transport.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
-import { DEFAULT_SCAN_RESOLUTION } from "../config.js";
+import { DEFAULT_SCAN_RESOLUTION, DEFAULT_SCAN_COLOR_MODE } from "../config.js";
 
 export interface ScanSession {
   printerIp: string;
@@ -26,6 +26,8 @@ export interface ScanSession {
   action: "jpg" | "pdf";
   /** Scan resolution in DPI (FF-680W only; default applied at config layer). */
   resolution?: number;
+  /** Colour mode (greyscale-capable adf-crp dialects only; default at config layer). */
+  colorMode?: "color" | "grayscale";
   paperless?: PaperlessUploadOptions;
   printerCertFingerprint?: string;
 }
@@ -71,6 +73,7 @@ function buildInitialCtx(session: ScanSession, transport: "tls" | "plain"): Esci
     transport,
     action: session.action,
     resolution: session.resolution ?? DEFAULT_SCAN_RESOLUTION,
+    colorMode: session.colorMode ?? DEFAULT_SCAN_COLOR_MODE,
     initPollIteration: 0,
     imgChunkSize: 0,
     pageEndKind: "none",

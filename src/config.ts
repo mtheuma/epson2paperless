@@ -8,6 +8,11 @@ import { z } from "zod";
 export const FF680W_RESOLUTIONS = [50, 75, 100, 150, 200, 240, 300, 360, 400, 600] as const;
 export const DEFAULT_SCAN_RESOLUTION = 200;
 
+// SCAN_COLOR_MODE selects colour vs greyscale. Only greyscale-capable dialects
+// (currently the DS-575W) act on it; all other models ignore it and scan in
+// colour, so the default is "color".
+export const DEFAULT_SCAN_COLOR_MODE = "color" as const;
+
 // IPv4 dotted-quad — each octet bounded to 0-255 with no leading zeros on
 // multi-digit values. Leading zeros are rejected at this layer because
 // Node's `dgram.connect()` does NOT treat strings like `001.002.003.004`
@@ -44,6 +49,7 @@ const configSchema = z
         message: `SCAN_RESOLUTION must be one of the FF-680W advertised DPIs: ${FF680W_RESOLUTIONS.join(", ")}`,
       })
       .default(DEFAULT_SCAN_RESOLUTION),
+    scanColorMode: z.enum(["color", "grayscale"]).default(DEFAULT_SCAN_COLOR_MODE),
     esciForceSource: z.enum(["flatbed", "adf-simplex", "adf-duplex"]).optional(),
     printerProtocol: z.enum(["auto", "esci2", "esci2-plain", "esci"]).default("auto"),
     // Diagnostic-only. When true and the legacy `ESC @` init returns a non-ACK,
@@ -146,6 +152,7 @@ export function loadConfig(): Config {
     scanFormat: process.env.SCAN_FORMAT || undefined,
     scanSides: process.env.SCAN_SIDES || undefined,
     scanResolution: process.env.SCAN_RESOLUTION || undefined,
+    scanColorMode: process.env.SCAN_COLOR_MODE || undefined,
     tempDir: process.env.TEMP_DIR || undefined,
     shutdownTimeoutMs: process.env.SHUTDOWN_TIMEOUT_MS || undefined,
     paperlessUrl: process.env.PAPERLESS_URL || undefined,

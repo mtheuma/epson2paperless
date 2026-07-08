@@ -12,6 +12,13 @@ export interface RegistryEntry {
   cmxClass: { jpg: CmxClassName | null; pdf: CmxClassName | null };
   optionalSegments: { qit: boolean; cct: boolean };
   paraProfile?: ParaProfile;
+  /**
+   * Single-channel gamma LUT for greyscale scans (adf-crp profile only).
+   * Presence marks the dialect as greyscale-capable: when SCAN_COLOR_MODE is
+   * "grayscale" the composer emits #COLM008 + this LUT. Dialects that omit it
+   * ignore the setting and always scan in colour.
+   */
+  monoGammaClass?: GammaClassName;
 }
 
 export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
@@ -124,7 +131,42 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
       cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
       optionalSegments: { qit: false, cct: false },
-      paraProfile: "ff680w-adf",
+      paraProfile: "adf-crp",
+    },
+  ],
+  [
+    // DS-575W: ADF-only, button-only sheet-fed scanner — a FastFoto/DS-family
+    // sibling of the FF-680W (PID 0169 vs 016B). ESC/I-2 over plain TCP, 12-cycle
+    // init poll, fixed-ADF (the init-poll STAT is len=12, which stat-length would
+    // misread as flatbed). Its #ADFCRP PARA is byte-identical in layout to the
+    // FF-680W's, so it reuses the adf-crp profile; the only differences are ADF
+    // extents and the colour axis. Colour scans reuse the FF-680W's RGB gamma
+    // (ff680w-adf) and the ET-2750's CMX (et2750-um08) — both byte-identical in
+    // EliSauder's captures (issue #128). Greyscale scans use the novel 268-byte
+    // ds575w-mono LUT + #COLM008. adfExtents are stored at the 200-DPI reference
+    // (8.5" × 15.5"); wire captures at 400 and 600 DPI confirm linear scaling.
+    //
+    // The #ADFCRP flag bytes (SKEW/DFL1/DPLX) are GUI-driven scan options this
+    // service does not model; the composer pins the FF-680W canonical
+    // (SKEW+[DPLX]+DFL1). The colour capture matches it exactly (strict PARA
+    // oracle in scanner.test.ts); the mono captures used different GUI orderings,
+    // so they are driven to completion functionally with the mono gamma/CMX
+    // pinned directly. End-to-end correctness is confirmed by the contributor
+    // running a branch build against real hardware.
+    "90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b074",
+    {
+      displayName: "DS-575W (ESC/I-2 over plain TCP)",
+      sourceDetection: "fixed-adf",
+      initPollIterations: 12,
+      // Not used by the fixed-ADF profile, but ParaSpec requires FB extents.
+      fbExtents: { x0: 0, y0: 0, w: 1700, h: 3100 },
+      adfExtents: { x0: 0, y0: 0, w: 1700, h: 3100 },
+      gmm: "UG18",
+      gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
+      cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
+      optionalSegments: { qit: false, cct: false },
+      paraProfile: "adf-crp",
+      monoGammaClass: "ds575w-mono",
     },
   ],
   [
