@@ -46,10 +46,17 @@ export async function postProcessTempPages(
   log: MinimalLog,
 ): Promise<void> {
   if (profile === "none") return;
-  const pages = fs
-    .readdirSync(tempDir)
-    .filter((f) => /^page_\d+\.jpg$/.test(f))
-    .sort();
+  let pages: string[];
+  try {
+    pages = fs
+      .readdirSync(tempDir)
+      .filter((f) => /^page_\d+\.jpg$/.test(f))
+      .sort();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.error(`post-process skipped, could not read temp dir ${tempDir}: ${msg}`);
+    return;
+  }
   for (const name of pages) {
     const full = path.join(tempDir, name);
     const tmp = `${full}.tmp`;

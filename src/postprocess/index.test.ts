@@ -64,4 +64,10 @@ describe("postProcessTempPages", () => {
     expect(fs.readdirSync(dir).some((f) => f.endsWith(".tmp"))).toBe(false);
     fs.rmSync(dir, { recursive: true, force: true });
   });
+
+  it("a non-existent temp dir resolves (never throws) so a directory-level failure never fails the scan", async () => {
+    await expect(
+      postProcessTempPages("/no/such/dir/xyz", "document", { jpegQuality: 90 }, noopLog),
+    ).resolves.toBeUndefined();
+  });
 });

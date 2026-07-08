@@ -92,7 +92,8 @@ export function correctDocumentPixels(pixels: Buffer, channels: number): Correct
 export async function correctDocumentImage(jpeg: Buffer, jpegQuality: number): Promise<Buffer> {
   const { data, info } = await sharp(jpeg)
     .rotate() // bake in EXIF orientation (duplex back pages carry Orientation=3)
-    .removeAlpha() // guarantee 3-channel RGB
+    .toColourspace("srgb") // promote grayscale/CMYK sources to 3-channel RGB
+    .removeAlpha() // strip any alpha channel .toColourspace() may have kept
     .raw()
     .toBuffer({ resolveWithObject: true });
   const { data: corrected } = correctDocumentPixels(data, info.channels);

@@ -48,6 +48,38 @@ describe("correctDocumentPixels", () => {
     expect(applied).toBe(false);
     expect(data.equals(buf)).toBe(true);
   });
+
+  it("lifts a knee-band pixel strictly between its input value and 255 (not identity, not plateau)", () => {
+    // 20x20 grid: 399 background pixels at 220 (so the 95th-pct paperWhite is
+    // exactly 220 — clipPoint=170, kneeStart=150) and one pixel at 160, which
+    // falls strictly inside the (150, 170) knee band.
+    const rows = Array.from({ length: 20 }, () =>
+      Array.from({ length: 20 }, () => [220, 220, 220] as number[]),
+    );
+    rows[0][0] = [160, 160, 160];
+    const { buf } = raw(rows);
+
+    const { data, applied } = correctDocumentPixels(buf, 3);
+    expect(applied).toBe(true);
+    // Expected smoothstep at t=0.5: round(160*0.5 + 255*0.5) = 208.
+    expect([data[0], data[1], data[2]]).toEqual([208, 208, 208]);
+    expect(data[0]).toBeGreaterThan(160);
+    expect(data[0]).toBeLessThan(255);
+  });
+
+  it("guard trips via MIN_NEAR_WHITE_FRACTION (not MIN_PAPER_WHITE) when paper is bright but sparse", () => {
+    // 10x10 grid: 90 mid-tone pixels at 50, 10 bright pixels at 200.
+    // 95th-pct paperWhite = 200 (well above MIN_PAPER_WHITE=170), but only
+    // 10/100 = 0.10 pixels are near-white (< MIN_NEAR_WHITE_FRACTION=0.15).
+    const rows = Array.from({ length: 10 }, (_, y) =>
+      Array.from({ length: 10 }, () => (y === 0 ? [200, 200, 200] : [50, 50, 50])),
+    );
+    const { buf } = raw(rows);
+
+    const { data, applied } = correctDocumentPixels(buf, 3);
+    expect(applied).toBe(false);
+    expect(data.equals(buf)).toBe(true);
+  });
 });
 
 async function solidJpeg(w: number, h: number, rgb: [number, number, number]): Promise<Buffer> {
@@ -96,6 +128,26 @@ describe("correctDocumentImage", () => {
     // grey survives — not clipped to white, close to its input value
     expect(data[g]).toBeLessThan(200);
     expect(Math.abs(data[g] - 150)).toBeLessThan(8);
+  });
+
+  it("decodes a grayscale (1-channel) JPEG without throwing and produces a valid same-size JPEG", async () => {
+    const w = 48,
+      h = 48;
+    const grayBuf = Buffer.alloc(w * h);
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        // Bright paper background with a darker content block, all in a single channel.
+        const inBlock = x >= 20 && x < 32 && y >= 20 && y < 32;
+        grayBuf[y * w + x] = inBlock ? 120 : 230;
+      }
+    const jpeg = await sharp(grayBuf, { raw: { width: w, height: h, channels: 1 } })
+      .jpeg({ quality: 95 })
+      .toBuffer();
+
+    const out = await correctDocumentImage(jpeg, 90);
+    const { info } = await sharp(out).raw().toBuffer({ resolveWithObject: true });
+    expect(info.width).toBe(w);
+    expect(info.height).toBe(h);
   });
 
   it("bakes EXIF Orientation=3 into pixels so duplex back pages are not un-rotated", async () => {
