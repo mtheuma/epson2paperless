@@ -3,6 +3,7 @@ import { createLogger } from "./logger.js";
 import { generateFilename, writeOutputFile, promoteTempPagesToOutput } from "./output.js";
 import { composePdfFromJpegs } from "./pdf.js";
 import { uploadAllToPaperless, type PaperlessUploadOptions } from "./paperless-upload.js";
+import { postProcessTempPages, type PostProcessProfile } from "./postprocess/index.js";
 
 const log = createLogger("output-tail");
 
@@ -13,6 +14,8 @@ export interface FinalizeSessionArgs {
   action: "jpg" | "pdf";
   backPageIndices: number[];
   paperless: PaperlessUploadOptions | undefined;
+  postProcess?: PostProcessProfile;
+  jpegQuality?: number;
 }
 
 /**
@@ -24,8 +27,18 @@ export interface FinalizeSessionArgs {
  * the wire before the synchronous disk write or the printer RSTs).
  */
 export async function finalizeSession(args: FinalizeSessionArgs): Promise<void> {
-  const { sessionTempDir, outputDir, sessionTs, action, backPageIndices, paperless } = args;
+  const {
+    sessionTempDir,
+    outputDir,
+    sessionTs,
+    action,
+    backPageIndices,
+    paperless,
+    postProcess = "none",
+    jpegQuality = 90,
+  } = args;
   try {
+    await postProcessTempPages(sessionTempDir, postProcess, { jpegQuality }, log);
     let savedPaths: string[];
     if (action === "jpg") {
       savedPaths = promoteTempPagesToOutput(sessionTempDir, outputDir, sessionTs, "jpg");
