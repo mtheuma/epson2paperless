@@ -1,3 +1,5 @@
+import sharp from "sharp";
+
 // Tunable constants — starting values; refined against the oracle (Task 7).
 // clipPoint = paperWhite - CLIP_BELOW_PAPER (plateau to 255 above it);
 // kneeStart = clipPoint - KNEE_WIDTH (identity below it). CLIP_BELOW_PAPER must
@@ -84,4 +86,17 @@ export function correctDocumentPixels(pixels: Buffer, channels: number): Correct
     out[i + 2] = lut[2][pixels[i + 2]];
   }
   return { data: out, applied: true };
+}
+
+/** Full page transform: decode → auto-orient → correct → re-encode. */
+export async function correctDocumentImage(jpeg: Buffer, jpegQuality: number): Promise<Buffer> {
+  const { data, info } = await sharp(jpeg)
+    .rotate() // bake in EXIF orientation (duplex back pages carry Orientation=3)
+    .removeAlpha() // guarantee 3-channel RGB
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  const { data: corrected } = correctDocumentPixels(data, info.channels);
+  return sharp(corrected, { raw: { width: info.width, height: info.height, channels: 3 } })
+    .jpeg({ quality: jpegQuality })
+    .toBuffer();
 }

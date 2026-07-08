@@ -1,3 +1,5 @@
+import { correctDocumentImage } from "./document.js";
+
 export type PostProcessProfile = "none" | "document";
 
 export interface PostProcessOptions {
@@ -19,7 +21,6 @@ export async function applyPostProcess(
     case "none":
       return jpeg;
     case "document":
-      // Implemented in Task 4.
-      throw new Error("document profile not yet implemented");
+      return correctDocumentImage(jpeg, opts.jpegQuality);
   }
 }

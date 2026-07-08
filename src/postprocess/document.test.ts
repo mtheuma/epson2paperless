@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
-import { correctDocumentPixels } from "./document.js";
+import sharp from "sharp";
+import { correctDocumentPixels, correctDocumentImage } from "./document.js";
+import { setJpegOrientation, readJpegOrientation } from "../exif.js";
 
 // Build a 3-channel raw image: `rows` of per-pixel [r,g,b].
 function raw(rows: number[][][]): { buf: Buffer; w: number; h: number } {
@@ -39,5 +41,80 @@ describe("correctDocumentPixels", () => {
     const { data, applied } = correctDocumentPixels(buf, 3);
     expect(applied).toBe(false);
     expect(data.equals(buf)).toBe(true);
+  });
+});
+
+async function solidJpeg(w: number, h: number, rgb: [number, number, number]): Promise<Buffer> {
+  const buf = Buffer.alloc(w * h * 3);
+  for (let i = 0; i < buf.length; i += 3) {
+    buf[i] = rgb[0];
+    buf[i + 1] = rgb[1];
+    buf[i + 2] = rgb[2];
+  }
+  return sharp(buf, { raw: { width: w, height: h, channels: 3 } })
+    .jpeg({ quality: 95 })
+    .toBuffer();
+}
+
+describe("correctDocumentImage", () => {
+  it("drives a cast paper background toward neutral white", async () => {
+    const jpeg = await solidJpeg(64, 64, [222, 220, 244]);
+    const out = await correctDocumentImage(jpeg, 90);
+    const { data } = await sharp(out).raw().toBuffer({ resolveWithObject: true });
+    // center pixel is neutral white within JPEG tolerance
+    const c = (64 * 32 + 32) * 3;
+    expect(data[c]).toBeGreaterThan(250);
+    expect(Math.abs(data[c] - data[c + 2])).toBeLessThan(4);
+  });
+
+  it("preserves a below-knee grey block through the full JPEG round-trip (within tolerance)", async () => {
+    // Mostly paper (so paperWhite is high and the guard passes) with a grey block.
+    const w = 64,
+      h = 64,
+      buf = Buffer.alloc(w * h * 3);
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 3;
+        const grey = x >= 40 && x < 56 && y >= 40 && y < 56;
+        const v = grey ? [150, 150, 150] : [230, 228, 248];
+        buf[i] = v[0];
+        buf[i + 1] = v[1];
+        buf[i + 2] = v[2];
+      }
+    const jpeg = await sharp(buf, { raw: { width: w, height: h, channels: 3 } })
+      .jpeg({ quality: 95 })
+      .toBuffer();
+    const out = await correctDocumentImage(jpeg, 90);
+    const { data } = await sharp(out).raw().toBuffer({ resolveWithObject: true });
+    const g = (48 * w + 48) * 3; // inside the grey block
+    // grey survives — not clipped to white, close to its input value
+    expect(data[g]).toBeLessThan(200);
+    expect(Math.abs(data[g] - 150)).toBeLessThan(8);
+  });
+
+  it("bakes EXIF Orientation=3 into pixels so duplex back pages are not un-rotated", async () => {
+    // Top half red, bottom half blue; Orientation=3 means a viewer rotates 180.
+    const w = 8,
+      h = 8,
+      buf = Buffer.alloc(w * h * 3);
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 3;
+        const top = y < h / 2;
+        buf[i] = top ? 220 : 20;
+        buf[i + 1] = 20;
+        buf[i + 2] = top ? 20 : 220;
+      }
+    const base = await sharp(buf, { raw: { width: w, height: h, channels: 3 } })
+      .jpeg({ quality: 95 })
+      .toBuffer();
+    const oriented = setJpegOrientation(base, 3);
+
+    const out = await correctDocumentImage(oriented, 90);
+    // orientation baked in → tag gone (or 1), pixels physically rotated
+    expect(readJpegOrientation(out) ?? 1).toBe(1);
+    const { data } = await sharp(out).raw().toBuffer({ resolveWithObject: true });
+    // after 180° rotation the top row is now the original bottom (blue-dominant)
+    expect(data[2]).toBeGreaterThan(data[0]); // B > R at top-left
   });
 });
