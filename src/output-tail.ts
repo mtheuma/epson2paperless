@@ -4,6 +4,7 @@ import { generateFilename, writeOutputFile, promoteTempPagesToOutput } from "./o
 import { composePdfFromJpegs } from "./pdf.js";
 import { uploadAllToPaperless, type PaperlessUploadOptions } from "./paperless-upload.js";
 import { postProcessTempPages, type PostProcessProfile } from "./postprocess/index.js";
+import type { ToneCurveName } from "./postprocess/tone-curves.js";
 import { DEFAULT_JPEG_QUALITY } from "./config.js";
 
 const log = createLogger("output-tail");
@@ -17,6 +18,8 @@ export interface FinalizeSessionArgs {
   paperless: PaperlessUploadOptions | undefined;
   postProcess?: PostProcessProfile;
   jpegQuality?: number;
+  /** Pinned per-dialect tone curve for the `document` profile; omit for none. */
+  toneCurve?: ToneCurveName;
 }
 
 /**
@@ -37,9 +40,10 @@ export async function finalizeSession(args: FinalizeSessionArgs): Promise<void> 
     paperless,
     postProcess = "none",
     jpegQuality = DEFAULT_JPEG_QUALITY,
+    toneCurve,
   } = args;
   try {
-    await postProcessTempPages(sessionTempDir, postProcess, { jpegQuality }, log);
+    await postProcessTempPages(sessionTempDir, postProcess, { jpegQuality, toneCurve }, log);
     let savedPaths: string[];
     if (action === "jpg") {
       savedPaths = promoteTempPagesToOutput(sessionTempDir, outputDir, sessionTs, "jpg");

@@ -2,12 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { correctDocumentImage } from "./document.js";
 import { sortedPageFiles } from "../output.js";
+import type { ToneCurveName } from "./tone-curves.js";
 
 export type PostProcessProfile = "none" | "document";
 
 export interface PostProcessOptions {
   /** JPEG quality for the re-encode (document profile). */
   jpegQuality: number;
+  /**
+   * Pinned per-dialect perceptual tone curve (stage 2 of `document`). Omitted
+   * for printers without a captured curve — those get the white-point clip only.
+   */
+  toneCurve?: ToneCurveName;
 }
 
 /**
@@ -24,7 +30,7 @@ export async function applyPostProcess(
     case "none":
       return jpeg;
     case "document":
-      return correctDocumentImage(jpeg, opts.jpegQuality);
+      return correctDocumentImage(jpeg, opts.jpegQuality, opts.toneCurve);
   }
 }
 

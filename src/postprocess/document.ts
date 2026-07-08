@@ -1,4 +1,5 @@
 import sharp from "sharp";
+import { TONE_CURVES, type ToneCurveName } from "./tone-curves.js";
 
 // Tunable constants — starting values; refined against the oracle (Task 7).
 // clipPoint = paperWhite - CLIP_BELOW_PAPER (plateau to 255 above it);
@@ -59,13 +60,36 @@ function buildLut(paperWhite: number): Uint8Array {
   return lut;
 }
 
+/** Compose a pinned tone curve onto the adaptive clip LUT: final = tone∘clip. */
+function composeToneCurve(
+  clip: [Uint8Array, Uint8Array, Uint8Array],
+  toneCurve: ToneCurveName,
+): [Uint8Array, Uint8Array, Uint8Array] {
+  const tone = TONE_CURVES[toneCurve];
+  const out: Uint8Array[] = [];
+  for (let c = 0; c < 3; c++) {
+    const composed = new Uint8Array(256);
+    for (let v = 0; v < 256; v++) composed[v] = tone[c][clip[c][v]];
+    out.push(composed);
+  }
+  return [out[0], out[1], out[2]];
+}
+
 /**
- * Per-channel near-white clip anchored on the measured paper white-point.
- * Neutralizes the paper cast and flattens the paper band (with its column dips
- * and show-through) to pure white, while leaving below-knee content unchanged.
- * Returns applied=false (pixels copied unchanged) when the low-paper guard trips.
+ * Stage 1 (all printers): per-channel near-white clip anchored on the measured
+ * paper white-point — neutralizes the paper cast and flattens the paper band
+ * (column dips + show-through) to pure white, leaving below-knee content
+ * unchanged. Stage 2 (printers with a pinned curve): compose the perceptual
+ * tone curve onto the clip so content matches how the printed page actually
+ * looks. Returns applied=false (pixels copied unchanged) when the low-paper
+ * guard trips — the tone curve's domain assumes a clipped input, so it is not
+ * applied without stage 1.
  */
-export function correctDocumentPixels(pixels: Buffer, channels: number): CorrectionResult {
+export function correctDocumentPixels(
+  pixels: Buffer,
+  channels: number,
+  toneCurve?: ToneCurveName,
+): CorrectionResult {
   const paperWhite = estimatePaperWhite(pixels, channels);
   const minWhite = Math.min(paperWhite[0], paperWhite[1], paperWhite[2]);
 
@@ -83,7 +107,12 @@ export function correctDocumentPixels(pixels: Buffer, channels: number): Correct
     return { data: Buffer.from(pixels), applied: false };
   }
 
-  const lut = [buildLut(paperWhite[0]), buildLut(paperWhite[1]), buildLut(paperWhite[2])];
+  const clip: [Uint8Array, Uint8Array, Uint8Array] = [
+    buildLut(paperWhite[0]),
+    buildLut(paperWhite[1]),
+    buildLut(paperWhite[2]),
+  ];
+  const lut = toneCurve ? composeToneCurve(clip, toneCurve) : clip;
   // allocUnsafe avoids copying pixels we're about to overwrite entirely; every
   // byte of the 3-channel loop below is written, so no stale memory leaks
   // through. Channels beyond RGB (shouldn't occur — caller normalizes to RGB
@@ -99,7 +128,11 @@ export function correctDocumentPixels(pixels: Buffer, channels: number): Correct
 }
 
 /** Full page transform: decode → auto-orient → correct → re-encode. */
-export async function correctDocumentImage(jpeg: Buffer, jpegQuality: number): Promise<Buffer> {
+export async function correctDocumentImage(
+  jpeg: Buffer,
+  jpegQuality: number,
+  toneCurve?: ToneCurveName,
+): Promise<Buffer> {
   const [{ orientation, density }, { data, info }] = await Promise.all([
     sharp(jpeg).metadata(),
     sharp(jpeg)
@@ -109,7 +142,7 @@ export async function correctDocumentImage(jpeg: Buffer, jpegQuality: number): P
       .raw()
       .toBuffer({ resolveWithObject: true }),
   ]);
-  const { data: corrected, applied } = correctDocumentPixels(data, info.channels);
+  const { data: corrected, applied } = correctDocumentPixels(data, info.channels, toneCurve);
 
   // Skip the re-encode only when it would be a pure no-op: the LUT
   // correction didn't fire AND there's no EXIF orientation baked into the

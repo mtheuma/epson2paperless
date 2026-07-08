@@ -172,6 +172,7 @@ export async function runEsci2Scan(
     action: session.action,
     postProcess: session.postProcess ?? "none",
     jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
+    resolveToneCurve: (ctx) => ctx.entry?.toneCurve,
     paperless: session.paperless,
   });
   if (!result.ok) throw result.reason;
@@ -200,6 +201,7 @@ export async function runEsci2ScanOverPlain(
     action: session.action,
     postProcess: session.postProcess ?? "none",
     jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
+    resolveToneCurve: (ctx) => ctx.entry?.toneCurve,
     paperless: session.paperless,
   });
   if (!result.ok) throw result.reason;

@@ -8,6 +8,7 @@ import type * as tls from "node:tls";
 import { IS_HEADER_SIZE } from "./protocol.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import type { PostProcessProfile } from "./postprocess/index.js";
+import type { ToneCurveName } from "./postprocess/tone-curves.js";
 import { DEFAULT_JPEG_QUALITY } from "./config.js";
 
 // =============================================================================
@@ -312,6 +313,14 @@ export interface RunScanSessionOpts<Ctx> {
   action: "jpg" | "pdf";
   postProcess?: PostProcessProfile;
   jpegQuality?: number;
+  /**
+   * Resolves the pinned tone curve for the `document` profile from the final
+   * context — the dialect is only known mid-scan (ESC/I-2 sets it at INIT1),
+   * so the scanner shell supplies this callback and `runFinalize` reads it once
+   * the scan has resolved the entry. Omitted (or returning undefined) means the
+   * printer has no captured curve → white-point clip only.
+   */
+  resolveToneCurve?: (ctx: Ctx) => ToneCurveName | undefined;
   paperless?: PaperlessUploadOptions;
   /**
    * Test-only: allow reaching DONE without any flushPage having fired.
@@ -378,6 +387,7 @@ export async function runScanSession<Ctx>(
         paperless: opts.paperless,
         postProcess: opts.postProcess ?? "none",
         jpegQuality: opts.jpegQuality ?? DEFAULT_JPEG_QUALITY,
+        toneCurve: opts.resolveToneCurve?.(ctx),
       });
     }
 

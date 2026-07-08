@@ -80,6 +80,30 @@ describe("correctDocumentPixels", () => {
     expect(applied).toBe(false);
     expect(data.equals(buf)).toBe(true);
   });
+
+  it("tone curve lifts below-knee content beyond the white-point clip (stage 2)", () => {
+    // Paper at 220 (clipPoint=170, kneeStart=150); one content pixel at 128,
+    // below the knee so stage 1 (clip) leaves it exactly unchanged.
+    const rows = Array.from({ length: 20 }, () =>
+      Array.from({ length: 20 }, () => [128, 128, 128] as number[]),
+    );
+    // fill most of the grid with paper so the guard passes and paperWhite=220
+    for (let y = 0; y < 20; y++) for (let x = 1; x < 20; x++) rows[y][x] = [220, 220, 220];
+    const { buf } = raw(rows);
+
+    const plain = correctDocumentPixels(buf, 3); // stage 1 only
+    const toned = correctDocumentPixels(buf, 3, "et4950-family"); // stage 1 + 2
+    expect(plain.applied).toBe(true);
+    expect(toned.applied).toBe(true);
+    // stage 1 leaves the below-knee grey exactly unchanged...
+    expect(plain.data[0]).toBe(128);
+    // ...the tone curve lifts it toward the printed-page brightness.
+    expect(toned.data[0]).toBeGreaterThan(plain.data[0]);
+    // paper stays (near-)white in both — stage 1 clips to 255, the curve maps
+    // ~255 back to Epson's paper level (~254), still effectively white.
+    expect(plain.data[3]).toBe(255);
+    expect(toned.data[3]).toBeGreaterThan(250);
+  });
 });
 
 async function solidJpeg(w: number, h: number, rgb: [number, number, number]): Promise<Buffer> {

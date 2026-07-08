@@ -1,5 +1,6 @@
 // src/esci2/dialects/registry.ts
 import type { GammaClassName, CmxClassName, Extents, ParaProfile } from "../para-composer.js";
+import type { ToneCurveName } from "../../postprocess/tone-curves.js";
 
 export interface RegistryEntry {
   displayName: string;
@@ -12,6 +13,12 @@ export interface RegistryEntry {
   cmxClass: { jpg: CmxClassName | null; pdf: CmxClassName | null };
   optionalSegments: { qit: boolean; cct: boolean };
   paraProfile?: ParaProfile;
+  /**
+   * Pinned perceptual tone curve for the `document` post-process profile
+   * (stage 2). Set only for printers with a captured raw→Epson oracle pair;
+   * omitted printers get the adaptive white-point clip only.
+   */
+  toneCurve?: ToneCurveName;
 }
 
 export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
@@ -27,6 +34,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: null, pdf: null },
       optionalSegments: { qit: true, cct: true },
+      toneCurve: "et4950-family",
     },
   ],
   [
