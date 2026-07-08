@@ -5,10 +5,16 @@ import { setJpegOrientation, readJpegOrientation } from "../exif.js";
 
 // Build a 3-channel raw image: `rows` of per-pixel [r,g,b].
 function raw(rows: number[][][]): { buf: Buffer; w: number; h: number } {
-  const h = rows.length, w = rows[0].length;
+  const h = rows.length,
+    w = rows[0].length;
   const buf = Buffer.alloc(w * h * 3);
   let i = 0;
-  for (const row of rows) for (const [r, g, b] of row) { buf[i++] = r; buf[i++] = g; buf[i++] = b; }
+  for (const row of rows)
+    for (const [r, g, b] of row) {
+      buf[i++] = r;
+      buf[i++] = g;
+      buf[i++] = b;
+    }
   return { buf, w, h };
 }
 
@@ -16,7 +22,7 @@ describe("correctDocumentPixels", () => {
   it("flattens the paper band (incl. column dips) to 255 and leaves below-knee content exact", () => {
     // Wide paper band ~220 with a dip column at 185; one dark content pixel at 128.
     const paperRow = Array.from({ length: 64 }, (_, x) =>
-      x === 10 ? [185, 185, 210] : [222, 220, 244] as number[],
+      x === 10 ? [185, 185, 210] : ([222, 220, 244] as number[]),
     );
     // Enough paper rows to satisfy the near-white fraction; one content pixel.
     const rows = Array.from({ length: 20 }, () => paperRow.map((p) => [...p]));
