@@ -221,6 +221,8 @@ describe("dispatchScanSession", () => {
       tempDir: "/tmp/scan",
       duplex: true,
       action: "pdf",
+      postProcess: "none",
+      jpegQuality: 90,
       resolution: 200,
       paperless: PAPERLESS_OPTS,
       printerCertFingerprint: fp,
@@ -275,6 +277,7 @@ describe("dispatchScanSession", () => {
       forcedSource: "adf-duplex",
       format: "pdf",
       jpegQuality: 75,
+      postProcess: "none",
       paperless: PAPERLESS_OPTS,
       diagnoseProtocol: true,
     });

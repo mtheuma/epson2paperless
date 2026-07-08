@@ -12,6 +12,7 @@ import { esciGraph, type EsciCtx } from "./graph.js";
 import type { Source, Format } from "./commands.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
 import { withRawSocketCleanClose } from "./transport.js";
+import type { PostProcessProfile } from "../postprocess/index.js";
 
 export { appendImageChunk } from "./graph.js";
 
@@ -27,6 +28,7 @@ export interface LegacyScanSession {
   forcedSource: Source | null;
   format: Format;
   jpegQuality: number;
+  postProcess?: PostProcessProfile;
   paperless?: PaperlessUploadOptions;
   /**
    * When true, a non-ACK reply to ESC @ triggers an additional FS Y probe
@@ -106,6 +108,8 @@ export async function runEsciScan(
     sessionTs: resolveSessionTimestamp(new Date(), session.outputDir),
     action: session.format === "pdf" ? "pdf" : "jpg",
     paperless: session.paperless,
+    postProcess: session.postProcess ?? "none",
+    jpegQuality: session.jpegQuality,
   });
 
   // Fire the public onSourceDetected hook only on success paths AND only

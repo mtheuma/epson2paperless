@@ -7,6 +7,7 @@ import * as path from "node:path";
 import type * as tls from "node:tls";
 import { IS_HEADER_SIZE } from "./protocol.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
+import type { PostProcessProfile } from "./postprocess/index.js";
 
 // =============================================================================
 // Transport
@@ -308,6 +309,8 @@ export interface RunScanSessionOpts<Ctx> {
   tempDir: string;
   sessionTs: Date;
   action: "jpg" | "pdf";
+  postProcess?: PostProcessProfile;
+  jpegQuality?: number;
   paperless?: PaperlessUploadOptions;
   /**
    * Test-only: allow reaching DONE without any flushPage having fired.
@@ -372,6 +375,8 @@ export async function runScanSession<Ctx>(
         action: opts.action,
         backPageIndices,
         paperless: opts.paperless,
+        postProcess: opts.postProcess ?? "none",
+        jpegQuality: opts.jpegQuality ?? 90,
       });
     }
 

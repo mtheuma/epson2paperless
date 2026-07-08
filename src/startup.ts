@@ -178,6 +178,8 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
       tempDir: args.config.tempDir,
       duplex: args.duplex,
       action: args.action,
+      postProcess: args.config.postProcess,
+      jpegQuality: args.config.jpegQuality,
       resolution: args.config.scanResolution,
       paperless: args.paperless,
       printerCertFingerprint: args.config.printerCertFingerprint,
@@ -197,6 +199,8 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
       tempDir: args.config.tempDir,
       duplex: args.duplex,
       action: args.action,
+      postProcess: args.config.postProcess,
+      jpegQuality: args.config.jpegQuality,
       resolution: args.config.scanResolution,
       paperless: args.paperless,
     });
@@ -213,6 +217,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     forcedSource: args.config.esciForceSource ?? null,
     format: args.action,
     jpegQuality: args.config.jpegQuality,
+    postProcess: args.config.postProcess,
     paperless: args.paperless,
     diagnoseProtocol: args.config.diagnoseProtocol,
   });
