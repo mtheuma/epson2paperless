@@ -59,10 +59,11 @@ const configSchema = z
     // `ESC @`. Should remain false in normal operation.
     diagnoseProtocol: z.boolean().default(false),
     // Compatibility-triage aid. `auto` picks the NetScanMonitor keepalive wire
-    // format from the announced PID (3.0 for the FF-680W, 2.0 for everything
-    // else). Forcing `3.0` lets reporters with unrecognised button-only
-    // scanners (DS-series family) test v3 registration without a code change;
-    // v3 also switches the burst to an ephemeral source port (see keepalive.ts).
+    // format from the announced PID (3.0 for the FF-680W and DS-575W, 2.0 for
+    // everything else — see V3_KEEPALIVE_PRODUCTS in keepalive.ts). Forcing
+    // `3.0` lets reporters with other unrecognised button-only scanners (DS-series
+    // family) test v3 registration without a code change; v3 also switches the
+    // burst to an ephemeral source port (see keepalive.ts).
     netscanVersion: z.enum(["auto", "2.0", "3.0"]).default("auto"),
     tempDir: z.string().default(""),
     shutdownTimeoutMs: z.coerce.number().int().min(100).default(30000),
