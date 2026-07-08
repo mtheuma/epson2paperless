@@ -7,6 +7,7 @@ import { z } from "zod";
 // models ignore SCAN_RESOLUTION and scan at their dialect's fixed resolution.
 export const FF680W_RESOLUTIONS = [50, 75, 100, 150, 200, 240, 300, 360, 400, 600] as const;
 export const DEFAULT_SCAN_RESOLUTION = 200;
+export const DEFAULT_JPEG_QUALITY = 90;
 
 // IPv4 dotted-quad — each octet bounded to 0-255 with no leading zeros on
 // multi-digit values. Leading zeros are rejected at this layer because
@@ -31,7 +32,7 @@ const configSchema = z
     logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
     logFormat: z.enum(["text", "json"]).default("text"),
     language: z.string().length(2).default("en"),
-    jpegQuality: z.coerce.number().int().min(1).max(100).default(90),
+    jpegQuality: z.coerce.number().int().min(1).max(100).default(DEFAULT_JPEG_QUALITY),
     previewAction: z.enum(["reject", "jpg", "pdf"]).default("reject"),
     postProcess: z.enum(["none", "document"]).default("none"),
     // Panel-less fallbacks — consulted only when the printer doesn't report the

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { loadConfig, isPaperlessEnabled } from "./config.js";
+import { loadConfig, isPaperlessEnabled, DEFAULT_JPEG_QUALITY } from "./config.js";
 import { buildPaperlessOptions } from "./startup.js";
 
 describe("loadConfig", () => {
@@ -260,10 +260,11 @@ describe("loadConfig", () => {
     expect(() => loadConfig()).toThrow();
   });
 
-  it("defaults JPEG_QUALITY to 90", () => {
+  it("defaults JPEG_QUALITY to DEFAULT_JPEG_QUALITY", () => {
     process.env.PRINTER_IP = "10.0.0.1";
     delete process.env.JPEG_QUALITY;
-    expect(loadConfig().jpegQuality).toBe(90);
+    expect(loadConfig().jpegQuality).toBe(DEFAULT_JPEG_QUALITY);
+    expect(DEFAULT_JPEG_QUALITY).toBe(90); // pin the actual value so a drift here is caught explicitly
   });
 
   it("accepts a JPEG_QUALITY override", () => {

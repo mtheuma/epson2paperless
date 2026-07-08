@@ -12,7 +12,7 @@ import { resolveSessionTimestamp } from "../output.js";
 import { esci2Graph, type Esci2Ctx } from "./graph.js";
 import { withEsci2UnlockOnDestroy, withTlsErrorLabels } from "./transport.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
-import { DEFAULT_SCAN_RESOLUTION } from "../config.js";
+import { DEFAULT_SCAN_RESOLUTION, DEFAULT_JPEG_QUALITY } from "../config.js";
 import type { PostProcessProfile } from "../postprocess/index.js";
 
 export interface ScanSession {
@@ -171,7 +171,7 @@ export async function runEsci2Scan(
     sessionTs: resolveSessionTimestamp(new Date(), session.outputDir),
     action: session.action,
     postProcess: session.postProcess ?? "none",
-    jpegQuality: session.jpegQuality ?? 90,
+    jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
     paperless: session.paperless,
   });
   if (!result.ok) throw result.reason;
@@ -199,7 +199,7 @@ export async function runEsci2ScanOverPlain(
     sessionTs: resolveSessionTimestamp(new Date(), session.outputDir),
     action: session.action,
     postProcess: session.postProcess ?? "none",
-    jpegQuality: session.jpegQuality ?? 90,
+    jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
     paperless: session.paperless,
   });
   if (!result.ok) throw result.reason;

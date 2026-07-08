@@ -13,6 +13,7 @@ const CLIP_BELOW_PAPER = 50; // plateau: values >= paperWhite - this map to 255
 const KNEE_WIDTH = 20; // soft-knee width below the clip point (identity below it)
 const MIN_PAPER_WHITE = 170; // low-paper guard: skip if the paper is this dim
 const MIN_NEAR_WHITE_FRACTION = 0.15; // skip if too little near-white paper is present
+const STRIDE = 4; // sample every Nth pixel for the paper-white + near-white estimates
 
 export interface CorrectionResult {
   data: Buffer; // corrected raw pixels (copy of input length)
@@ -21,12 +22,14 @@ export interface CorrectionResult {
 
 function estimatePaperWhite(pixels: Buffer, channels: number): [number, number, number] {
   const hist = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
-  for (let i = 0; i < pixels.length; i += channels) {
+  const step = channels * STRIDE;
+  let total = 0;
+  for (let i = 0; i < pixels.length; i += step) {
     hist[0][pixels[i]]++;
     hist[1][pixels[i + 1]]++;
     hist[2][pixels[i + 2]]++;
+    total++;
   }
-  const total = pixels.length / channels;
   const pct = (h: Uint32Array): number => {
     const target = total * PAPER_PERCENTILE;
     let cum = 0;
@@ -68,18 +71,25 @@ export function correctDocumentPixels(pixels: Buffer, channels: number): Correct
 
   const nearThresh = minWhite - 15;
   let nearWhite = 0;
-  const total = pixels.length / channels;
-  for (let i = 0; i < pixels.length; i += channels) {
+  let sampled = 0;
+  const step = channels * STRIDE;
+  for (let i = 0; i < pixels.length; i += step) {
+    sampled++;
     if (pixels[i] >= nearThresh && pixels[i + 1] >= nearThresh && pixels[i + 2] >= nearThresh) {
       nearWhite++;
     }
   }
-  if (minWhite < MIN_PAPER_WHITE || nearWhite / total < MIN_NEAR_WHITE_FRACTION) {
+  if (minWhite < MIN_PAPER_WHITE || nearWhite / sampled < MIN_NEAR_WHITE_FRACTION) {
     return { data: Buffer.from(pixels), applied: false };
   }
 
   const lut = [buildLut(paperWhite[0]), buildLut(paperWhite[1]), buildLut(paperWhite[2])];
-  const out = Buffer.from(pixels); // copy; preserves any channel beyond RGB
+  // allocUnsafe avoids copying pixels we're about to overwrite entirely; every
+  // byte of the 3-channel loop below is written, so no stale memory leaks
+  // through. Channels beyond RGB (shouldn't occur — caller normalizes to RGB
+  // via toColourspace/removeAlpha) would otherwise be silently dropped, so
+  // fall back to a full copy in that case to preserve them.
+  const out = channels === 3 ? Buffer.allocUnsafe(pixels.length) : Buffer.from(pixels);
   for (let i = 0; i < pixels.length; i += channels) {
     out[i] = lut[0][pixels[i]];
     out[i + 1] = lut[1][pixels[i + 1]];
@@ -90,14 +100,37 @@ export function correctDocumentPixels(pixels: Buffer, channels: number): Correct
 
 /** Full page transform: decode → auto-orient → correct → re-encode. */
 export async function correctDocumentImage(jpeg: Buffer, jpegQuality: number): Promise<Buffer> {
-  const { data, info } = await sharp(jpeg)
-    .rotate() // bake in EXIF orientation (duplex back pages carry Orientation=3)
-    .toColourspace("srgb") // promote grayscale/CMYK sources to 3-channel RGB
-    .removeAlpha() // strip any alpha channel .toColourspace() may have kept
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-  const { data: corrected } = correctDocumentPixels(data, info.channels);
-  return sharp(corrected, { raw: { width: info.width, height: info.height, channels: 3 } })
-    .jpeg({ quality: jpegQuality })
-    .toBuffer();
+  const [{ orientation, density }, { data, info }] = await Promise.all([
+    sharp(jpeg).metadata(),
+    sharp(jpeg)
+      .rotate() // bake in EXIF orientation (duplex back pages carry Orientation=3)
+      .toColourspace("srgb") // promote grayscale/CMYK sources to 3-channel RGB
+      .removeAlpha() // strip any alpha channel .toColourspace() may have kept
+      .raw()
+      .toBuffer({ resolveWithObject: true }),
+  ]);
+  const { data: corrected, applied } = correctDocumentPixels(data, info.channels);
+
+  // Skip the re-encode only when it would be a pure no-op: the LUT
+  // correction didn't fire AND there's no EXIF orientation baked into the
+  // pixels above by `.rotate()` — an orientation tag other than 1 means the
+  // decode physically rotated the pixels, and that rotation must still reach
+  // the output (e.g. a duplex back page) even when the paper-correction
+  // guard trips. Only when neither applies is the original buffer identical
+  // in substance to what a re-encode would produce, so return it untouched
+  // and skip the generational JPEG quality loss.
+  const needsRotateBake = orientation !== undefined && orientation !== 1;
+  if (!applied && !needsRotateBake) return jpeg;
+
+  // Preserve the input's DPI on the re-encode. The raw pixel buffer we're
+  // encoding from carries no metadata of its own (it's a fresh `sharp()`
+  // pipeline over a Buffer, not a decode), so `.withMetadata()` has nothing
+  // to inherit — pulling `density` from the ORIGINAL jpeg's metadata and
+  // pinning `orientation: 1` explicitly is required, not just belt-and-
+  // braces: the pixels above already had EXIF orientation baked in via
+  // `.rotate()`, so writing anything other than "upright" here would rotate
+  // the image a second time in EXIF-aware viewers.
+  let pipeline = sharp(corrected, { raw: { width: info.width, height: info.height, channels: 3 } });
+  if (density) pipeline = pipeline.withMetadata({ density, orientation: 1 });
+  return pipeline.jpeg({ quality: jpegQuality }).toBuffer();
 }

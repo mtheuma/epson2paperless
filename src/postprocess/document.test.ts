@@ -150,6 +150,33 @@ describe("correctDocumentImage", () => {
     expect(info.height).toBe(h);
   });
 
+  it("guard: when the low-paper guard trips, returns the original JPEG buffer unchanged (no re-encode)", async () => {
+    const jpeg = await solidJpeg(64, 64, [60, 90, 120]);
+    const out = await correctDocumentImage(jpeg, 90);
+    expect(out).toBe(jpeg); // same buffer instance, not just equal bytes
+    expect(out.equals(jpeg)).toBe(true);
+  });
+
+  it("preserves the input's JFIF density on the re-encode", async () => {
+    const w = 64,
+      h = 64,
+      buf = Buffer.alloc(w * h * 3);
+    for (let i = 0; i < buf.length; i += 3) {
+      buf[i] = 222;
+      buf[i + 1] = 220;
+      buf[i + 2] = 244;
+    }
+    const jpeg = await sharp(buf, { raw: { width: w, height: h, channels: 3 } })
+      .withMetadata({ density: 300 })
+      .jpeg({ quality: 95 })
+      .toBuffer();
+    expect((await sharp(jpeg).metadata()).density).toBe(300); // sanity: input carries the density we intend to assert on
+
+    const out = await correctDocumentImage(jpeg, 90);
+    const outMeta = await sharp(out).metadata();
+    expect(outMeta.density).toBe(300);
+  });
+
   it("bakes EXIF Orientation=3 into pixels so duplex back pages are not un-rotated", async () => {
     // Top half red, bottom half blue; Orientation=3 means a viewer rotates 180.
     const w = 8,

@@ -4,6 +4,7 @@ import { generateFilename, writeOutputFile, promoteTempPagesToOutput } from "./o
 import { composePdfFromJpegs } from "./pdf.js";
 import { uploadAllToPaperless, type PaperlessUploadOptions } from "./paperless-upload.js";
 import { postProcessTempPages, type PostProcessProfile } from "./postprocess/index.js";
+import { DEFAULT_JPEG_QUALITY } from "./config.js";
 
 const log = createLogger("output-tail");
 
@@ -35,7 +36,7 @@ export async function finalizeSession(args: FinalizeSessionArgs): Promise<void> 
     backPageIndices,
     paperless,
     postProcess = "none",
-    jpegQuality = 90,
+    jpegQuality = DEFAULT_JPEG_QUALITY,
   } = args;
   try {
     await postProcessTempPages(sessionTempDir, postProcess, { jpegQuality }, log);

@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { correctDocumentImage } from "./document.js";
+import { sortedPageFiles } from "../output.js";
 
 export type PostProcessProfile = "none" | "document";
 
@@ -46,18 +47,15 @@ export async function postProcessTempPages(
   log: MinimalLog,
 ): Promise<void> {
   if (profile === "none") return;
-  let pages: string[];
+  let pages: ReturnType<typeof sortedPageFiles>;
   try {
-    pages = fs
-      .readdirSync(tempDir)
-      .filter((f) => /^page_\d+\.jpg$/.test(f))
-      .sort();
+    pages = sortedPageFiles(fs.readdirSync(tempDir), "jpg");
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     log.error(`post-process skipped, could not read temp dir ${tempDir}: ${msg}`);
     return;
   }
-  for (const name of pages) {
+  for (const { name } of pages) {
     const full = path.join(tempDir, name);
     const tmp = `${full}.tmp`;
     try {

@@ -8,6 +8,7 @@ import type * as tls from "node:tls";
 import { IS_HEADER_SIZE } from "./protocol.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import type { PostProcessProfile } from "./postprocess/index.js";
+import { DEFAULT_JPEG_QUALITY } from "./config.js";
 
 // =============================================================================
 // Transport
@@ -376,7 +377,7 @@ export async function runScanSession<Ctx>(
         backPageIndices,
         paperless: opts.paperless,
         postProcess: opts.postProcess ?? "none",
-        jpegQuality: opts.jpegQuality ?? 90,
+        jpegQuality: opts.jpegQuality ?? DEFAULT_JPEG_QUALITY,
       });
     }
 
