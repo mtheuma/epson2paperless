@@ -31,6 +31,7 @@ describe("loadConfig", () => {
     delete process.env.LEGACY_FORCE_SOURCE;
     delete process.env.ESCI_FORCE_SOURCE;
     delete process.env.NETSCAN_VERSION;
+    delete process.env.POST_PROCESS;
   });
 
   it("throws if PRINTER_IP is missing", () => {
@@ -131,6 +132,23 @@ describe("loadConfig", () => {
   it("rejects invalid PREVIEW_ACTION", () => {
     process.env.PRINTER_IP = "192.0.2.58";
     process.env.PREVIEW_ACTION = "invalid";
+    expect(() => loadConfig()).toThrow();
+  });
+
+  it("defaults POST_PROCESS to none", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    expect(loadConfig().postProcess).toBe("none");
+  });
+
+  it("accepts POST_PROCESS=document", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.POST_PROCESS = "document";
+    expect(loadConfig().postProcess).toBe("document");
+  });
+
+  it("rejects an unknown POST_PROCESS", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.POST_PROCESS = "sharpen";
     expect(() => loadConfig()).toThrow();
   });
 

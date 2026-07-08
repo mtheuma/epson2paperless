@@ -43,6 +43,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     language: "en",
     jpegQuality: 90,
     previewAction: "reject",
+    postProcess: "none",
     scanFormat: "pdf",
     scanSides: "duplex",
     scanResolution: 200,

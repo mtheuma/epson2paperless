@@ -33,6 +33,7 @@ const configSchema = z
     language: z.string().length(2).default("en"),
     jpegQuality: z.coerce.number().int().min(1).max(100).default(90),
     previewAction: z.enum(["reject", "jpg", "pdf"]).default("reject"),
+    postProcess: z.enum(["none", "document"]).default("none"),
     // Panel-less fallbacks — consulted only when the printer doesn't report the
     // setting at trigger time (the job-number flow; currently the FF-680W).
     scanFormat: z.enum(["jpg", "pdf"]).default("pdf"),
@@ -143,6 +144,7 @@ export function loadConfig(): Config {
     language: process.env.LANGUAGE || undefined,
     jpegQuality: process.env.JPEG_QUALITY || undefined,
     previewAction: process.env.PREVIEW_ACTION || undefined,
+    postProcess: process.env.POST_PROCESS || undefined,
     scanFormat: process.env.SCAN_FORMAT || undefined,
     scanSides: process.env.SCAN_SIDES || undefined,
     scanResolution: process.env.SCAN_RESOLUTION || undefined,
