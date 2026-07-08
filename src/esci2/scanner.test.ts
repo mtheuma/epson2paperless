@@ -1300,21 +1300,29 @@ describe("runEsci2ScanOverPlain — FF-680W fixture replay", () => {
 
 const DS575W_FP = "90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b074";
 
-// The DS-575W's #ADFCRP flags (SKEW/DFL1/DPLX) are GUI-driven scan options this
-// service doesn't model, and their bytes/order vary per capture. The composer
-// pins the FF-680W canonical (SKEW+[DPLX]+DFL1). To compare a mono fixture's
-// captured PARA against the composed one we drop that variable flags field —
-// the bytes between "#ADFCRP " and the following "#RSM" — from both. Everything
-// downstream (#RSM/#RSS, #COL, gamma, CMX, extents, trailer) is still pinned.
-function stripAdfCrpFlags(para: Buffer): Buffer {
+// The DS-575W's #ADFCRP flags field mixes SKEW/DFL1 (GUI-driven scan options
+// this service doesn't model, whose bytes/order vary per capture) with DPLX (the
+// duplex axis this service DOES model, from ctx.duplex). To compare a mono
+// fixture's captured PARA against the composed one we canonicalise the flags
+// field: keep DPLX so a simplex/duplex framing regression is still caught, and
+// drop the unmodeled SKEW/DFL1 tokens whose ordering the capture happened to
+// use. Everything downstream (#RSM/#RSS, #COL, gamma, CMX, extents, trailer) is
+// pinned as-is.
+function normalizeAdfCrpFlags(para: Buffer): Buffer {
   const HEAD = Buffer.from("#ADFCRP ", "ascii");
   const RSM = Buffer.from("#RSM", "ascii");
   if (!para.subarray(0, HEAD.length).equals(HEAD)) {
-    throw new Error("stripAdfCrpFlags: PARA does not start with #ADFCRP");
+    throw new Error("normalizeAdfCrpFlags: PARA does not start with #ADFCRP");
   }
   const rsm = para.indexOf(RSM);
-  if (rsm < 0) throw new Error("stripAdfCrpFlags: no #RSM segment");
-  return Buffer.concat([para.subarray(0, HEAD.length), para.subarray(rsm)]);
+  if (rsm < 0) throw new Error("normalizeAdfCrpFlags: no #RSM segment");
+  const flags = para.subarray(HEAD.length, rsm).toString("ascii");
+  const kept = flags.includes("DPLX") ? "DPLX" : "";
+  return Buffer.concat([
+    para.subarray(0, HEAD.length),
+    Buffer.from(kept, "ascii"),
+    para.subarray(rsm),
+  ]);
 }
 
 describe("runEsci2ScanOverPlain — DS-575W fixture replay", () => {
@@ -1360,18 +1368,19 @@ describe("runEsci2ScanOverPlain — DS-575W fixture replay", () => {
     );
     await driveFixture(fixture, fake, sessionPromise);
 
-    // PARA pin (flags-stripped — see stripAdfCrpFlags). The scanner emits our
-    // canonical-flags greyscale PARA; the capture used a different GUI flag
-    // ordering, so compare everything except the flags field.
+    // PARA pin (flags-normalised — see normalizeAdfCrpFlags). The scanner emits
+    // our canonical-flags greyscale PARA; the capture used a different GUI flag
+    // ordering, so we keep the modeled DPLX token and drop the unmodeled
+    // SKEW/DFL1 before comparing.
     const capturedPara = extractCapturedParaBody(fixture);
     const scannerPara = extractScannerParaWrite(fake);
-    expect(stripAdfCrpFlags(scannerPara).equals(stripAdfCrpFlags(capturedPara))).toBe(true);
+    expect(normalizeAdfCrpFlags(scannerPara).equals(normalizeAdfCrpFlags(capturedPara))).toBe(true);
 
     const source: ParaSpec["source"] = opts.duplex ? "adf-duplex" : "adf-simplex";
     const recipePara = composePara(
       makeParaSpec(REGISTRY.get(DS575W_FP)!, source, "jpg", opts.resolution, "grayscale"),
     );
-    expect(stripAdfCrpFlags(recipePara).equals(stripAdfCrpFlags(capturedPara))).toBe(true);
+    expect(normalizeAdfCrpFlags(recipePara).equals(normalizeAdfCrpFlags(capturedPara))).toBe(true);
 
     const jpgs = readdirSync(outputDir).filter((f) => f.endsWith(".jpg"));
     for (const f of jpgs) expect(f).toMatch(/^scan_\d{4}-\d{2}-\d{2}_\d{6}(_\d{2})?\.jpg$/);

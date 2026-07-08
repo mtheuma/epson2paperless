@@ -476,6 +476,7 @@ function makeCtx(
     transport: "tls",
     action: "jpg",
     resolution: 200,
+    colorMode: "color",
     initPollIteration: 0,
     imgChunkSize: 0,
     pageEndKind: "none",

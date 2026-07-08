@@ -38,8 +38,12 @@ export interface ParaSpec {
    */
   colorMode?: "color" | "grayscale";
   /**
-   * Single-channel gamma LUT for grayscale scans on the adf-crp profile.
-   * Required when colorMode is "grayscale"; ignored otherwise.
+   * Single-channel gamma LUT for grayscale scans on the adf-crp profile. Its
+   * presence is what makes a dialect greyscale-capable: grayscale is emitted
+   * only when colorMode is "grayscale" AND this is set. A dialect that leaves it
+   * unset stays colour (#COLC024) even under a global SCAN_COLOR_MODE=grayscale,
+   * the same way colour-only dialects ignore an unsupported setting. Ignored
+   * entirely in colour mode.
    */
   monoGammaClass?: GammaClassName;
 }

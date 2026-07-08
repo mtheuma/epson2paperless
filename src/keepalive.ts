@@ -3,6 +3,12 @@ import { createLogger } from "./logger.js";
 
 const log = createLogger("keepalive");
 
+// Announced PIDs (uppercased "PID XXXX") that use the NetScanMonitor v3.0
+// keepalive wire format. These are the button-only DS-family scanners — the
+// FF-680W (016B) and its DS-575W sibling (0169). Everything else defaults to
+// v2.0. `NETSCAN_VERSION` still overrides this per the config docs.
+const V3_KEEPALIVE_PRODUCTS = new Set(["PID 016B", "PID 0169"]);
+
 export interface KeepaliveOptions {
   clientName: string;
   ipAddress: string;
@@ -183,7 +189,10 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
           const keepalive: KeepaliveOptions = {
             ...opts.keepalive,
             version:
-              opts.keepalive.version ?? (announcement.productName === "PID 016B" ? "3.0" : "2.0"),
+              opts.keepalive.version ??
+              (announcement.productName && V3_KEEPALIVE_PRODUCTS.has(announcement.productName)
+                ? "3.0"
+                : "2.0"),
           };
 
           // Surface the announced PID and the chosen keepalive version at INFO —
