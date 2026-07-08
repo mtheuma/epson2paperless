@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { loadConfig, isPaperlessEnabled } from "./config.js";
+import { loadConfig, isPaperlessEnabled, DEFAULT_JPEG_QUALITY } from "./config.js";
 import { buildPaperlessOptions } from "./startup.js";
 
 describe("loadConfig", () => {
@@ -31,6 +31,7 @@ describe("loadConfig", () => {
     delete process.env.LEGACY_FORCE_SOURCE;
     delete process.env.ESCI_FORCE_SOURCE;
     delete process.env.NETSCAN_VERSION;
+    delete process.env.POST_PROCESS;
   });
 
   it("throws if PRINTER_IP is missing", () => {
@@ -131,6 +132,23 @@ describe("loadConfig", () => {
   it("rejects invalid PREVIEW_ACTION", () => {
     process.env.PRINTER_IP = "192.0.2.58";
     process.env.PREVIEW_ACTION = "invalid";
+    expect(() => loadConfig()).toThrow();
+  });
+
+  it("defaults POST_PROCESS to none", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    expect(loadConfig().postProcess).toBe("none");
+  });
+
+  it("accepts POST_PROCESS=document", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.POST_PROCESS = "document";
+    expect(loadConfig().postProcess).toBe("document");
+  });
+
+  it("rejects an unknown POST_PROCESS", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.POST_PROCESS = "sharpen";
     expect(() => loadConfig()).toThrow();
   });
 
@@ -242,10 +260,11 @@ describe("loadConfig", () => {
     expect(() => loadConfig()).toThrow();
   });
 
-  it("defaults JPEG_QUALITY to 90", () => {
+  it("defaults JPEG_QUALITY to DEFAULT_JPEG_QUALITY", () => {
     process.env.PRINTER_IP = "10.0.0.1";
     delete process.env.JPEG_QUALITY;
-    expect(loadConfig().jpegQuality).toBe(90);
+    expect(loadConfig().jpegQuality).toBe(DEFAULT_JPEG_QUALITY);
+    expect(DEFAULT_JPEG_QUALITY).toBe(90); // pin the actual value so a drift here is caught explicitly
   });
 
   it("accepts a JPEG_QUALITY override", () => {

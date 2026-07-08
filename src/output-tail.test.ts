@@ -7,8 +7,21 @@ vi.mock("./paperless-upload.js", () => ({
   uploadAllToPaperless: vi.fn(() => Promise.resolve()),
 }));
 
+// Wrap (not replace) the real implementation so every existing test's file-
+// system behaviour is unchanged (postProcess defaults to "none", which the
+// real postProcessTempPages already no-ops on) while letting the new test
+// below assert on the jpegQuality it was actually called with.
+vi.mock("./postprocess/index.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./postprocess/index.js")>();
+  return { ...actual, postProcessTempPages: vi.fn(actual.postProcessTempPages) };
+});
+
 import { finalizeSession } from "./output-tail.js";
 import { uploadAllToPaperless, type PaperlessUploadOptions } from "./paperless-upload.js";
+import { postProcessTempPages } from "./postprocess/index.js";
+import { DEFAULT_JPEG_QUALITY } from "./config.js";
+
+const postProcessMock = vi.mocked(postProcessTempPages);
 
 const SAMPLE_JPEG_PATH = "test-fixtures/sample-page.jpg";
 
@@ -28,6 +41,7 @@ describe("output-tail", () => {
     tempDir = mkdtempSync(path.join(os.tmpdir(), "out-tail-tmp-"));
     outputDir = mkdtempSync(path.join(os.tmpdir(), "out-tail-out-"));
     uploadMock.mockReset().mockResolvedValue(undefined);
+    postProcessMock.mockClear();
   });
 
   afterEach(() => {
@@ -192,6 +206,28 @@ describe("output-tail", () => {
 
     // Temp dir was still cleaned up (the finally block ran).
     expect(() => readdirSync(tempDir)).toThrow(/ENOENT/);
+  });
+
+  it("falls back to DEFAULT_JPEG_QUALITY when jpegQuality is omitted", async () => {
+    const fakeJpeg = Buffer.from("ffd8ffe000104a464946", "hex");
+    writeFileSync(path.join(tempDir, "page_001.jpg"), fakeJpeg);
+
+    await finalizeSession({
+      sessionTempDir: tempDir,
+      outputDir,
+      sessionTs: new Date("2026-08-08T08:08:08Z"),
+      action: "jpg",
+      backPageIndices: [],
+      paperless: undefined,
+      // jpegQuality intentionally omitted
+    });
+
+    expect(postProcessMock).toHaveBeenCalledWith(
+      tempDir,
+      "none",
+      { jpegQuality: DEFAULT_JPEG_QUALITY },
+      expect.anything(),
+    );
   });
 
   it("removes the temp dir even when promotion fails", async () => {
