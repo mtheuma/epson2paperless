@@ -1,5 +1,6 @@
 import dgram from "node:dgram";
 import { createLogger } from "./logger.js";
+import { PID_FF680W, PID_DS575W } from "./printer-ids.js";
 
 const log = createLogger("keepalive");
 
@@ -7,7 +8,7 @@ const log = createLogger("keepalive");
 // keepalive wire format. These are the button-only DS-family scanners — the
 // FF-680W (016B) and its DS-575W sibling (0169). Everything else defaults to
 // v2.0. `NETSCAN_VERSION` still overrides this per the config docs.
-const V3_KEEPALIVE_PRODUCTS = new Set(["PID 016B", "PID 0169"]);
+const V3_KEEPALIVE_PRODUCTS = new Set([PID_FF680W, PID_DS575W]);
 
 export interface KeepaliveOptions {
   clientName: string;

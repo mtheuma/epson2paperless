@@ -7,6 +7,7 @@ import { detectVariant, type Variant } from "./protocol-probe.js";
 import { runEsci2Scan, runEsci2ScanOverPlain } from "./esci2/scanner.js";
 import { runEsciScan } from "./esci/scanner.js";
 import { runFf680wJobListCommit, runFf680wJobNumberCommit } from "./ff680w-job-control.js";
+import { PID_FF680W, PID_DS575W } from "./printer-ids.js";
 import {
   resolveEffectiveAction,
   type PushScanInfo,
@@ -109,12 +110,12 @@ export function buildPaperlessOptions(config: Config): PaperlessUploadOptions | 
 
 // Button-only scanners (no destination-picker panel) trigger scanning through a
 // JobList → dummy-job-commit → JobNumber handshake rather than a direct
-// PushScanIDIn. Both the FF-680W (PID 016B) and its DS-575W sibling (PID 0169)
-// use this flow; the job-control commands in ff680w-job-control.ts were
-// reverse-engineered from the FF-680W, and the DS-575W's JobList is structurally
-// identical (verified on the wire, issue #128). Mirrors V3_KEEPALIVE_PRODUCTS in
-// keepalive.ts.
-const JOB_CONTROL_PRODUCTS = new Set(["PID 016B", "PID 0169"]);
+// PushScanIDIn. Both the FF-680W and its DS-575W sibling use this flow; the
+// job-control commands in ff680w-job-control.ts were reverse-engineered from the
+// FF-680W, and the DS-575W's JobList is structurally identical (verified on the
+// wire, issue #128). Mirrors V3_KEEPALIVE_PRODUCTS in keepalive.ts — separate
+// axis, shared membership today (see printer-ids.ts).
+const JOB_CONTROL_PRODUCTS = new Set([PID_FF680W, PID_DS575W]);
 
 function usesJobControl(productName: string | null): boolean {
   return productName !== null && JOB_CONTROL_PRODUCTS.has(productName);

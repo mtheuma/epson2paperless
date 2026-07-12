@@ -23,6 +23,7 @@ import { runFf680wJobListCommit, runFf680wJobNumberCommit } from "./ff680w-job-c
 import type { Config } from "./config.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import type { PushScanInfo } from "./pushscan.js";
+import { PID_FF680W, PID_DS575W } from "./printer-ids.js";
 
 const detectVariantMock = vi.mocked(detectVariant);
 const runEsci2ScanMock = vi.mocked(runEsci2Scan);
@@ -64,7 +65,7 @@ const PAPERLESS_OPTS: PaperlessUploadOptions = {
 const FF680W_JOB_NUMBER_INFO: PushScanInfo = {
   pushScanId: null,
   jobNumber: "0",
-  productName: "PID 016B",
+  productName: PID_FF680W,
   ipAddress: "C0A80A08",
   duplex: false,
   action: "unknown",
@@ -74,7 +75,7 @@ const FF680W_JOB_NUMBER_INFO: PushScanInfo = {
 // same JobList → JobNumber job-control handshake, under its own PID 0169.
 const DS575W_JOB_NUMBER_INFO: PushScanInfo = {
   ...FF680W_JOB_NUMBER_INFO,
-  productName: "PID 0169",
+  productName: PID_DS575W,
 };
 
 describe("resolveScanDispatch", () => {
@@ -167,6 +168,22 @@ describe("buildPushScanServerOptions", () => {
     });
 
     expect(runFf680wJobNumberCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.21" });
+    expect(runFf680wJobListCommitMock).not.toHaveBeenCalled();
+  });
+
+  it("runs the JOBR commit for the DS-575W JobNumberIn PushScan (PID 0169)", async () => {
+    const options = buildPushScanServerOptions(makeConfig({ printerIp: "203.0.113.23" }));
+
+    await options.beforeResponse?.({
+      kind: "pushScan",
+      headers: "",
+      body: "",
+      xuid: "8",
+      info: DS575W_JOB_NUMBER_INFO,
+      capabilities: [],
+    });
+
+    expect(runFf680wJobNumberCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.23" });
     expect(runFf680wJobListCommitMock).not.toHaveBeenCalled();
   });
 
