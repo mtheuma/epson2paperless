@@ -70,6 +70,13 @@ const FF680W_JOB_NUMBER_INFO: PushScanInfo = {
   action: "unknown",
 };
 
+// DS-575W (issue #128) is a button-only sibling of the FF-680W that drives the
+// same JobList → JobNumber job-control handshake, under its own PID 0169.
+const DS575W_JOB_NUMBER_INFO: PushScanInfo = {
+  ...FF680W_JOB_NUMBER_INFO,
+  productName: "PID 0169",
+};
+
 describe("resolveScanDispatch", () => {
   it("uses SCAN_FORMAT + SCAN_SIDES for FF-680W-style JobNumberIn scans (duplex)", () => {
     expect(
@@ -105,9 +112,19 @@ describe("resolveScanDispatch", () => {
     });
   });
 
-  it("refuses a JobNumberIn scan from a non-FF-680W product (no guessing)", () => {
-    // Only the FF-680W's job-number flow falls back to config defaults; any
-    // other product that sends JobNumberIn without a PushScanIDIn is ignored.
+  it("uses SCAN_FORMAT + SCAN_SIDES for the DS-575W job-number flow (PID 0169)", () => {
+    expect(
+      resolveScanDispatch(
+        DS575W_JOB_NUMBER_INFO,
+        makeConfig({ scanFormat: "pdf", scanSides: "duplex" }),
+      ),
+    ).toEqual({ duplex: true, action: "pdf" });
+  });
+
+  it("refuses a JobNumberIn scan from a non-job-control product (no guessing)", () => {
+    // Only the job-control scanners (FF-680W, DS-575W) fall back to config
+    // defaults; any other product that sends JobNumberIn without a PushScanIDIn
+    // is ignored.
     const otherInfo = { ...FF680W_JOB_NUMBER_INFO, productName: "PID 11D1" };
     expect(resolveScanDispatch(otherInfo, makeConfig())).toBeNull();
   });
@@ -153,7 +170,23 @@ describe("buildPushScanServerOptions", () => {
     expect(runFf680wJobListCommitMock).not.toHaveBeenCalled();
   });
 
-  it("does not run FF-680W job-control for other products", async () => {
+  it("runs the JOBW commit for the DS-575W JobList (PID 0169)", async () => {
+    const options = buildPushScanServerOptions(makeConfig({ printerIp: "203.0.113.22" }));
+
+    await options.beforeResponse?.({
+      kind: "jobList",
+      headers: "",
+      body: "",
+      xuid: "7",
+      info: { ...DS575W_JOB_NUMBER_INFO, jobNumber: null },
+      capabilities: ["OfficeFormat"],
+    });
+
+    expect(runFf680wJobListCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.22" });
+    expect(runFf680wJobNumberCommitMock).not.toHaveBeenCalled();
+  });
+
+  it("does not run job-control for other products", async () => {
     const options = buildPushScanServerOptions(makeConfig());
 
     await options.beforeResponse?.({

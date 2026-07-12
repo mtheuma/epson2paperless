@@ -107,22 +107,33 @@ export function buildPaperlessOptions(config: Config): PaperlessUploadOptions | 
   };
 }
 
-const FF680W_PRODUCT_NAME = "PID 016B";
+// Button-only scanners (no destination-picker panel) trigger scanning through a
+// JobList → dummy-job-commit → JobNumber handshake rather than a direct
+// PushScanIDIn. Both the FF-680W (PID 016B) and its DS-575W sibling (PID 0169)
+// use this flow; the job-control commands in ff680w-job-control.ts were
+// reverse-engineered from the FF-680W, and the DS-575W's JobList is structurally
+// identical (verified on the wire, issue #128). Mirrors V3_KEEPALIVE_PRODUCTS in
+// keepalive.ts.
+const JOB_CONTROL_PRODUCTS = new Set(["PID 016B", "PID 0169"]);
+
+function usesJobControl(productName: string | null): boolean {
+  return productName !== null && JOB_CONTROL_PRODUCTS.has(productName);
+}
 
 export function buildPushScanServerOptions(config: Config): PushScanServerOptions {
   return {
     beforeResponse: async ({ kind, info }) => {
-      if (info.productName !== FF680W_PRODUCT_NAME) return;
+      if (!usesJobControl(info.productName)) return;
 
       if (kind === "jobList") {
-        log.debug("FF-680W JobList received — committing dummy job over TCP/1865");
+        log.debug(`${info.productName} JobList received — committing dummy job over TCP/1865`);
         await runFf680wJobListCommit({ printerIp: config.printerIp });
         return;
       }
 
       if (kind === "pushScan" && info.jobNumber !== null && info.pushScanId === null) {
         log.debug(
-          `FF-680W JobNumberIn=${info.jobNumber} received — reading selected job over TCP/1865`,
+          `${info.productName} JobNumberIn=${info.jobNumber} received — reading selected job over TCP/1865`,
         );
         await runFf680wJobNumberCommit({ printerIp: config.printerIp });
       }
@@ -139,14 +150,10 @@ export function resolveScanDispatch(
     return { duplex: info.duplex, action: effective };
   }
 
-  if (
-    info.productName === FF680W_PRODUCT_NAME &&
-    info.jobNumber !== null &&
-    info.pushScanId === null
-  ) {
+  if (usesJobControl(info.productName) && info.jobNumber !== null && info.pushScanId === null) {
     const duplex = config.scanSides === "duplex";
     log.info(
-      `FF-680W JobNumberIn=${info.jobNumber} with no PushScanIDIn — ` +
+      `${info.productName} JobNumberIn=${info.jobNumber} with no PushScanIDIn — ` +
         `using SCAN_SIDES=${config.scanSides}, SCAN_FORMAT=${config.scanFormat}`,
     );
     return { duplex, action: config.scanFormat };
