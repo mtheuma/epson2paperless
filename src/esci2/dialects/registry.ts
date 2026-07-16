@@ -8,6 +8,18 @@ export interface RegistryEntry {
   initPollIterations: number;
   fbExtents: Extents;
   adfExtents: Extents | null;
+  /**
+   * Whether the hardware's ADF can scan both sides. Read by
+   * assertSourceSupported at PARA-build time: composing an `adf-duplex` PARA
+   * for a simplex-only ADF sends the printer a segment its firmware never
+   * advertised. The panel used to make this unreachable by never offering
+   * 2-sided on such models; the host trigger (scan-now) can request it
+   * directly, because SCAN_SIDES defaults to "duplex".
+   *
+   * `false` for flatbed-only models, where it is unreachable but must still
+   * be stated.
+   */
+  adfDuplex: boolean;
   gmm: string;
   gammaClass: { jpg: GammaClassName; pdf: GammaClassName };
   cmxClass: { jpg: CmxClassName | null; pdf: CmxClassName | null };
@@ -30,6 +42,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       initPollIterations: 3,
       fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
       adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
+      adfDuplex: true,
       gmm: "UG10",
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: null, pdf: null },
@@ -45,6 +58,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       initPollIterations: 2,
       fbExtents: { x0: 0, y0: 0, w: 2477, h: 3500 },
       adfExtents: null,
+      adfDuplex: false, // no ADF
       gmm: "UG18",
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
@@ -59,6 +73,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       initPollIterations: 3,
       fbExtents: { x0: 0, y0: 0, w: 2550, h: 3300 },
       adfExtents: { x0: 0, y0: 0, w: 2550, h: 3300 },
+      adfDuplex: true,
       gmm: "UG18",
       gammaClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
       cmxClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
@@ -73,6 +88,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       initPollIterations: 3,
       fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
       adfExtents: null,
+      adfDuplex: false, // no ADF
       gmm: "UG10",
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: null, pdf: null },
@@ -87,6 +103,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       initPollIterations: 3, // same as ET-4950 family; fixtures trimmed to 3 cycles
       fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
       adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
+      adfDuplex: false, // ADF simplex
       gmm: "UG18",
       gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
@@ -107,6 +124,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       initPollIterations: 3,
       fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
       adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
+      adfDuplex: false, // ADF simplex
       gmm: "UG18",
       gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
@@ -128,6 +146,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       // required for standard flatbed-capable dialects.
       fbExtents: { x0: 0, y0: 0, w: 1700, h: 7200 },
       adfExtents: { x0: 0, y0: 0, w: 1700, h: 7200 },
+      adfDuplex: true,
       gmm: "UG18",
       gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
       cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
@@ -162,6 +181,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       initPollIterations: 3,
       fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
       adfExtents: null,
+      adfDuplex: false, // no ADF
       gmm: "UG18",
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },

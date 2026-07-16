@@ -101,4 +101,42 @@ describe("REGISTRY", () => {
     expect(e!.paraProfile).toBe("ff680w-adf");
     expect(e!.adfExtents).toEqual({ x0: 0, y0: 0, w: 1700, h: 7200 });
   });
+
+  it("declares adfDuplex on every entry", () => {
+    for (const [fp, e] of REGISTRY) {
+      expect(typeof e.adfDuplex, `entry ${fp} (${e.displayName})`).toBe("boolean");
+    }
+  });
+
+  it("pins adfDuplex per model", () => {
+    const expected: Record<string, boolean> = {
+      // ET-4950 / ET-3950 / ET-4956 — ADF duplex hardware
+      "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2": true,
+      // XP-7100 — ADF duplex hardware
+      "56d26c61896ca417807ac68d37775036fa1e702ee44c0beaa27d8a6ea9fa457e": true,
+      // FF-680W — duplex ADF scanner
+      "5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd": true,
+      // ET-4800 — ADF simplex
+      "7870a725ab969136d5eb04387bf01d3cc3168aabb3d11cfaca7d59a4169971c2": false,
+      // ET-15000 — ADF simplex
+      "d1d7293e92fa726e006429beacca1255e474de0d66b3559f87176d4e4b3d0e55": false,
+      // ET-2750 — no ADF
+      "de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7": false,
+      // ET-2950 — no ADF
+      "b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb": false,
+      // ET-8500 — no ADF
+      "05b5c7eaad217e9538883f3fffe9796464689a5d9006c5b3e3c3fd2c24e21467": false,
+    };
+    for (const [fp, want] of Object.entries(expected)) {
+      expect(REGISTRY.get(fp)!.adfDuplex, `fingerprint ${fp}`).toBe(want);
+    }
+  });
+
+  it("never claims adfDuplex without ADF extents", () => {
+    for (const [fp, e] of REGISTRY) {
+      if (e.adfDuplex) {
+        expect(e.adfExtents, `entry ${fp} (${e.displayName})`).not.toBeNull();
+      }
+    }
+  });
 });
