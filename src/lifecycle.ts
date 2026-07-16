@@ -72,6 +72,67 @@ export function createInflightTracker(): InflightTracker {
   };
 }
 
+export interface ScanNowDeps {
+  /** The scan session promise. */
+  scan: Promise<void>;
+  /** Resolves with the first SIGINT/SIGTERM seen. Never rejects. */
+  signalled: Promise<NodeJS.Signals>;
+  shutdownTimeoutMs: number;
+}
+
+/**
+ * Drives a host-triggered single scan to an exit code.
+ *
+ * A signal drains rather than aborts: killing a scan mid-flight discards
+ * pages the printer has already fed. Once a signal is seen its exit code is
+ * authoritative — a scan that fails during the drain must not rewrite 130/143
+ * to 1. That's guaranteed by mapping `scan` to a value up front, so the
+ * settled promise never rejects and a late failure has nothing to escape
+ * through.
+ *
+ * The bounded wait is delegated to inflight.waitAll, which clears its timer in
+ * a finally. Don't hand-roll it with an unref'd timer: node could then exit
+ * naturally with 0 while a signal's exit code was still pending.
+ *
+ * The tracker is created here rather than injected. Requiring the caller to
+ * register `scan` would put the drain invariant in untested wiring: omit the
+ * registration and every test here still passes while signals stop draining.
+ */
+export async function runScanNowLifecycle(deps: ScanNowDeps): Promise<number> {
+  const inflight = createInflightTracker();
+  void inflight.track(deps.scan);
+
+  const scanSettled: Promise<{ kind: "complete" } | { kind: "fail"; err: unknown }> =
+    deps.scan.then(
+      () => ({ kind: "complete" }) as const,
+      (err: unknown) => ({ kind: "fail", err }) as const,
+    );
+
+  const first = await Promise.race([
+    scanSettled,
+    deps.signalled.then((signal) => ({ kind: "signal", signal }) as const),
+  ]);
+
+  if (first.kind === "signal") {
+    log.info(`Received ${first.signal} — waiting up to ${deps.shutdownTimeoutMs}ms for the scan`);
+    const drain = await inflight.waitAll(deps.shutdownTimeoutMs);
+    if (drain.timedOut > 0) {
+      log.warn(`Scan still in flight after ${deps.shutdownTimeoutMs}ms — exiting anyway`);
+    } else {
+      log.info("Scan drained before exit");
+    }
+    return first.signal === "SIGTERM" ? 143 : 130;
+  }
+
+  if (first.kind === "complete") {
+    log.info("Scan complete — shutting down");
+    return 0;
+  }
+
+  log.error("Scan failed — shutting down", first.err);
+  return 1;
+}
+
 export interface ShutdownDeps {
   pushscanServer: { close: () => void };
   healthServer: { close: () => void };

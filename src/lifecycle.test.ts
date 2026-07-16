@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   createInflightTracker,
+  runScanNowLifecycle,
   shutdown,
   type ShutdownDeps,
   __resetShutdownStateForTesting,
@@ -200,5 +201,67 @@ describe("shutdown", () => {
     await shutdown(deps);
     expect(deps.callOrder).toEqual(["pushscan", "responder"]);
     expect(deps.exitCalls).toEqual([0]);
+  });
+});
+
+describe("runScanNowLifecycle", () => {
+  const never = new Promise<NodeJS.Signals>(() => {});
+
+  function deps(scan: Promise<void>, signalled: Promise<NodeJS.Signals>, shutdownTimeoutMs = 50) {
+    return { scan, signalled, shutdownTimeoutMs };
+  }
+
+  it("exits 0 when the scan completes", async () => {
+    await expect(runScanNowLifecycle(deps(Promise.resolve(), never))).resolves.toBe(0);
+  });
+
+  it("exits 1 when the scan fails", async () => {
+    const scan = Promise.reject(new Error("boom"));
+    await expect(runScanNowLifecycle(deps(scan, never))).resolves.toBe(1);
+  });
+
+  it("exits 130 on SIGINT", async () => {
+    const scan = new Promise<void>((r) => setTimeout(r, 5));
+    await expect(
+      runScanNowLifecycle(deps(scan, Promise.resolve("SIGINT" as NodeJS.Signals))),
+    ).resolves.toBe(130);
+  });
+
+  it("exits 143 on SIGTERM", async () => {
+    const scan = new Promise<void>((r) => setTimeout(r, 5));
+    await expect(
+      runScanNowLifecycle(deps(scan, Promise.resolve("SIGTERM" as NodeJS.Signals))),
+    ).resolves.toBe(143);
+  });
+
+  it("lets an in-flight scan finish during the drain", async () => {
+    let done = false;
+    const scan = new Promise<void>((r) =>
+      setTimeout(() => {
+        done = true;
+        r();
+      }, 20),
+    );
+    const code = await runScanNowLifecycle(
+      deps(scan, Promise.resolve("SIGINT" as NodeJS.Signals), 500),
+    );
+    expect(done).toBe(true); // drained, not aborted
+    expect(code).toBe(130); // signal still authoritative
+  });
+
+  it("exits on the signal code when the drain times out", async () => {
+    const code = await runScanNowLifecycle(
+      deps(new Promise<void>(() => {}), Promise.resolve("SIGTERM" as NodeJS.Signals), 20),
+    );
+    expect(code).toBe(143);
+  });
+
+  // The bug this guards: a scan that fails AFTER a signal must not turn 130 into 1,
+  // and must not surface as an unhandled rejection.
+  it("keeps the signal exit code when the scan fails during the drain", async () => {
+    const scan = new Promise<void>((_, reject) => setTimeout(() => reject(new Error("late")), 10));
+    await expect(
+      runScanNowLifecycle(deps(scan, Promise.resolve("SIGINT" as NodeJS.Signals), 500)),
+    ).resolves.toBe(130);
   });
 });
