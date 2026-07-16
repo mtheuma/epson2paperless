@@ -18,18 +18,19 @@ What you get:
 
 ## Compatible printers
 
-| Model                 | Status          | Notes                                                 |
-| --------------------- | --------------- | ----------------------------------------------------- |
-| **ET-3950**           | ✅ Verified     |                                                       |
-| **ET-4950 / ET-4956** | ✅ Verified     |                                                       |
-| **WF-3620**           | ✅ Verified     | Plain TCP scanner, no TLS pinning                     |
-| **ET-2750**           | ✅ Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS |
-| **ET-2950**           | 🟡 Experimental | Flatbed-only hardware                                 |
-| **ET-8500**           | 🟡 Experimental | Flatbed-only hardware                                 |
-| **ET-4800**           | ✅ Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS           |
-| **ET-15000**          | 🟡 Experimental | Flatbed verified; ADF simplex untested                |
-| **XP-7100**           | ✅ Verified     |                                                       |
-| **FF-680W**           | 🟡 Experimental | ADF-only; 200/300 DPI verified, other DPIs untested   |
+| Model                 | Status          | Notes                                                      |
+| --------------------- | --------------- | ---------------------------------------------------------- |
+| **ET-3950**           | ✅ Verified     |                                                            |
+| **ET-4950 / ET-4956** | ✅ Verified     |                                                            |
+| **WF-3620**           | ✅ Verified     | Plain TCP scanner, no TLS pinning                          |
+| **ET-2750**           | ✅ Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS      |
+| **ET-2810**           | 🟡 Experimental | Flatbed-only hardware; no panel trigger — needs `scan:now` |
+| **ET-2950**           | 🟡 Experimental | Flatbed-only hardware                                      |
+| **ET-8500**           | 🟡 Experimental | Flatbed-only hardware                                      |
+| **ET-4800**           | ✅ Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS                |
+| **ET-15000**          | 🟡 Experimental | Flatbed verified; ADF simplex untested                     |
+| **XP-7100**           | ✅ Verified     |                                                            |
+| **FF-680W**           | 🟡 Experimental | ADF-only; 200/300 DPI verified, other DPIs untested        |
 
 Compatibility reports are welcome whether your model works or doesn't. [Open an issue](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) using the compatibility template.
 
@@ -71,6 +72,40 @@ Within about 60 seconds, your destination (default `Paperless`) appears in the p
 
 **One-shot mode.** `npm run scan` runs a single scan and exits, handy for cron jobs or end-to-end tests. Exit codes: `0` success, `1` scan failure, `130` SIGINT (Ctrl-C), `143` SIGTERM. No health endpoint is opened, and any push-scan that arrives after the first is ignored with a warning.
 
+**Host-triggered scan.** `npm run scan:now` scans immediately and exits, without waiting
+for a panel button. It skips discovery and the push-scan listener entirely and pulls the
+scan directly. Use it for cron, Home Assistant, smart buttons, or printers that don't
+offer "Scan to Computer" as a network destination at all (the ET-2810). It exits `0` on
+success and `1` on failure, and on `SIGINT`/`SIGTERM` it lets an in-flight scan finish
+first, bounded by `SHUTDOWN_TIMEOUT_MS`.
+
+There's no panel to pick the format, so `SCAN_FORMAT` (`jpg`/`pdf`, default `pdf`) and
+`SCAN_SIDES` (`simplex`/`duplex`, default `duplex`) decide. `scan:now` reads these and
+`PRINTER_IP` from the environment like the daemon and takes no command-line arguments, so
+set them however you set any env var. From a clone:
+
+    PRINTER_IP=192.0.2.58 npm run scan:now                                    # defaults: pdf, duplex
+    PRINTER_IP=192.0.2.58 SCAN_FORMAT=jpg SCAN_SIDES=simplex npm run scan:now
+
+In Docker `PRINTER_IP` already lives in your compose file / env-file, and you override per
+invocation with `-e` (handy for two smart buttons on different settings):
+
+    docker compose run --rm epson2paperless dist/scan-now.js
+    docker compose run --rm -e SCAN_SIDES=simplex epson2paperless dist/scan-now.js
+
+Use `docker compose run`, not bare `docker run`: compose reuses the output volume and host
+networking, whereas a bare `docker run --rm` needs `-v ./output:/output --network host` or
+the scan is written inside the container and lost on exit.
+
+The printer serves one scan at a time, so don't trigger `scan:now` while a panel scan (or
+another `scan:now`) is already running.
+
+The host trigger is validated end-to-end on the ET-4956. Other models are untested over
+this path: it may work, and reports are welcome either way. The FF-680W is expected to
+fail, because its panel flow does job preparation that a host-triggered scan skips. On ADF
+models without duplex hardware (ET-4800, ET-15000), set `SCAN_SIDES=simplex` — a duplex
+request is refused rather than sent to the printer.
+
 ## Use it
 
 1. Load pages in the ADF, or leave the ADF empty and place a single sheet on the flatbed glass. The printer detects which source is loaded.
@@ -88,22 +123,22 @@ Configuration is via environment variables. Only `PRINTER_IP` is required.
 
 Each setting's **Scope** column shows which printers it affects: `All`, `Panel` (panel-driven models), `FF-680W`, `Legacy ESC/I` (WF-3620 family), or `ESC/I-2 TLS` (ET-4950 family). A setting outside a printer's path is simply ignored.
 
-| Variable                    | Scope   | Default          | What it does                                                                                                                                                                            |
-| --------------------------- | ------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PRINTER_IP`<br>✅ required | All     | —                | The printer's IPv4 address.                                                                                                                                                             |
-| `SCAN_DEST_NAME`            | All     | `Paperless`      | The label the printer shows on its panel. Give each instance a distinct name. On FF-680W, this must also match the scanner's paired host name; see [FF-680W pairing](#ff-680w-pairing). |
-| `OUTPUT_DIR`                | All     | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                                                        |
-| `LOG_LEVEL`                 | All     | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                                                    |
-| `LOG_FORMAT`                | All     | `text`           | `text` (human-readable) or `json` (ndjson, one record per line, for `docker logs` + Loki / `jq`).                                                                                       |
-| `PREVIEW_ACTION`            | Panel   | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen.                                 |
-| `SCAN_FORMAT`               | FF-680W | `pdf`            | Output format (`jpg` / `pdf`) when the printer reports no panel choice.                                                                                                                 |
-| `SCAN_SIDES`                | FF-680W | `duplex`         | `simplex` or `duplex` (the FF-680W has no panel Sides selector).                                                                                                                        |
-| `SCAN_RESOLUTION`           | FF-680W | `200`            | Scan DPI. One of `50,75,100,150,200,240,300,360,400,600`; `200`/`300` verified.                                                                                                         |
-| `PRINTER_PROTOCOL`          | All     | `auto`           | `auto` (probe each session), `esci2` (force ESC/I-2 over TLS), `esci2-plain` (force ESC/I-2 over plain TCP), `esci` (force plain-TCP ESC/I).                                            |
-| `JPEG_QUALITY`              | All     | `90`             | JPEG encoder quality 1–100 (host-encoded raw pixels). Also sets the re-encode quality when `POST_PROCESS=document`.                                                                     |
-| `POST_PROCESS`              | All     | `none`           | `document` neutralizes the paper white-point (removes blue cast, show-through, ADF sensor lines) and re-encodes at `JPEG_QUALITY`; `none` leaves the printer's raw JPEG untouched.      |
-| `TEMP_DIR`                  | All     | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                                                               |
-| `HEALTH_PORT`               | All     | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                                                   |
+| Variable                    | Scope               | Default          | What it does                                                                                                                                                                            |
+| --------------------------- | ------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PRINTER_IP`<br>✅ required | All                 | —                | The printer's IPv4 address.                                                                                                                                                             |
+| `SCAN_DEST_NAME`            | All                 | `Paperless`      | The label the printer shows on its panel. Give each instance a distinct name. On FF-680W, this must also match the scanner's paired host name; see [FF-680W pairing](#ff-680w-pairing). |
+| `OUTPUT_DIR`                | All                 | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                                                        |
+| `LOG_LEVEL`                 | All                 | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                                                    |
+| `LOG_FORMAT`                | All                 | `text`           | `text` (human-readable) or `json` (ndjson, one record per line, for `docker logs` + Loki / `jq`).                                                                                       |
+| `PREVIEW_ACTION`            | Panel               | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen.                                 |
+| `SCAN_FORMAT`               | FF-680W, `scan:now` | `pdf`            | Output format (`jpg` / `pdf`) when no panel choice reaches us: the FF-680W, and every host-triggered scan.                                                                              |
+| `SCAN_SIDES`                | FF-680W, `scan:now` | `duplex`         | `simplex` or `duplex` when no panel choice reaches us. The FF-680W has no panel Sides selector. Set `simplex` for host-triggered scans on ADF models without duplex hardware.           |
+| `SCAN_RESOLUTION`           | FF-680W             | `200`            | Scan DPI. One of `50,75,100,150,200,240,300,360,400,600`; `200`/`300` verified.                                                                                                         |
+| `PRINTER_PROTOCOL`          | All                 | `auto`           | `auto` (probe each session), `esci2` (force ESC/I-2 over TLS), `esci2-plain` (force ESC/I-2 over plain TCP), `esci` (force plain-TCP ESC/I).                                            |
+| `JPEG_QUALITY`              | All                 | `90`             | JPEG encoder quality 1–100 (host-encoded raw pixels). Also sets the re-encode quality when `POST_PROCESS=document`.                                                                     |
+| `POST_PROCESS`              | All                 | `none`           | `document` neutralizes the paper white-point (removes blue cast, show-through, ADF sensor lines) and re-encodes at `JPEG_QUALITY`; `none` leaves the printer's raw JPEG untouched.      |
+| `TEMP_DIR`                  | All                 | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                                                               |
+| `HEALTH_PORT`               | All                 | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                                                   |
 
 <details>
 <summary>Advanced (leave as default unless you know why)</summary>

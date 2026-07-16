@@ -528,6 +528,46 @@ describe("esci2Graph POST_MODE_STAT — PARA reflects ctx.resolution + source", 
   });
 });
 
+describe("esci2Graph POST_MODE_STAT — duplex capability guard", () => {
+  const ET4800_FP = "7870a725ab969136d5eb04387bf01d3cc3168aabb3d11cfaca7d59a4169971c2";
+  const ET2810_FP = "708704b6abb184cede037fcd9893ea81f69651fde28780cde0162dfa33a33f6e";
+  // STAT reply header length 0 → the PARA branch, i.e. send = buildParaSend(ctx).
+  const statPayload = Buffer.from("STATx0000000" + " ".repeat(52), "ascii");
+
+  function decidePostModeStat(overrides: Partial<import("./graph.js").Esci2Ctx>) {
+    const state = esci2Graph.states.POST_MODE_STAT;
+    if (state.kind !== "decision") throw new Error("POST_MODE_STAT not a decision");
+    return state.decide(makeCtx(overrides), { type: 0xa000, payload: statPayload });
+  }
+
+  it("throws for ADF + duplex on the ET-4800 (simplex-only ADF)", () => {
+    expect(() =>
+      decidePostModeStat({ entry: REGISTRY.get(ET4800_FP)!, source: "adf", duplex: true }),
+    ).toThrow(/no duplex ADF/);
+  });
+
+  it("sends PARA for ADF + simplex on the ET-4800", () => {
+    const result = decidePostModeStat({
+      entry: REGISTRY.get(ET4800_FP)!,
+      source: "adf",
+      duplex: false,
+    });
+    expect("send" in result).toBe(true);
+  });
+
+  // The ET-2810 is flatbed-only and SCAN_SIDES defaults to "duplex", so this is
+  // the shape of EVERY default-config host-triggered scan on it. duplex is inert
+  // once the source is flatbed and the guard must not fire.
+  it("sends PARA for flatbed + duplex on a flatbed-only entry", () => {
+    const result = decidePostModeStat({
+      entry: REGISTRY.get(ET2810_FP)!,
+      source: "flatbed",
+      duplex: true,
+    });
+    expect("send" in result).toBe(true);
+  });
+});
+
 describe("esci2Graph INIT_POLL_STAT source detection", () => {
   it("detects source=adf when STAT header length is 0 on iteration 0", () => {
     const state = esci2Graph.states.INIT_POLL_STAT;

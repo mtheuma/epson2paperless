@@ -27,6 +27,7 @@ import {
   lookupRegistryEntry,
   applyEntrySourceOverride,
   makeParaSpec,
+  assertSourceSupported,
 } from "./dialects/dispatch.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
 import { composePara, type ParaSpec } from "./para-composer.js";
@@ -603,6 +604,7 @@ g.state(
 function buildParaSend(ctx: Esci2Ctx): Buffer[] {
   const paraSource: ParaSpec["source"] =
     ctx.source === "flatbed" ? "flatbed" : ctx.duplex ? "adf-duplex" : "adf-simplex";
+  assertSourceSupported(ctx.entry!, paraSource);
   const paraPayload = composePara(makeParaSpec(ctx.entry!, paraSource, ctx.action, ctx.resolution));
   return [
     buildPassthruPacket(buildParaHeader(paraPayload.length), 0),

@@ -35,8 +35,8 @@ const configSchema = z
     jpegQuality: z.coerce.number().int().min(1).max(100).default(DEFAULT_JPEG_QUALITY),
     previewAction: z.enum(["reject", "jpg", "pdf"]).default("reject"),
     postProcess: z.enum(["none", "document"]).default("none"),
-    // Panel-less fallbacks — consulted only when the printer doesn't report the
-    // setting at trigger time (the job-number flow; currently the FF-680W).
+    // Panel-less fallbacks — consulted whenever no panel choice reaches us:
+    // the FF-680W job-number flow, and every host-triggered scan (scan-now).
     scanFormat: z.enum(["jpg", "pdf"]).default("pdf"),
     scanSides: z.enum(["simplex", "duplex"]).default("duplex"),
     scanResolution: z.coerce
