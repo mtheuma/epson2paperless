@@ -76,35 +76,29 @@ Within about 60 seconds, your destination (default `Paperless`) appears in the p
 for a panel button. It skips discovery and the push-scan listener entirely and pulls the
 scan directly. Use it for cron, Home Assistant, smart buttons, or printers that don't
 offer "Scan to Computer" as a network destination at all (the ET-2810). It exits `0` on
-success and `1` on scan failure. On `SIGINT`/`SIGTERM` it waits up to `SHUTDOWN_TIMEOUT_MS`
-for an in-flight scan to finish: if it finishes you get its real result (`0`/`1`), so an
-automation runner won't retry a scan that already succeeded; only a scan still running when
-the wait elapses exits `130`/`143`.
+success and `1` on failure, and on `SIGINT`/`SIGTERM` it lets an in-flight scan finish
+first, bounded by `SHUTDOWN_TIMEOUT_MS`.
 
 There's no panel to pick the format, so `SCAN_FORMAT` (`jpg`/`pdf`, default `pdf`) and
-`SCAN_SIDES` (`simplex`/`duplex`, default `duplex`) decide. `scan:now` reads `PRINTER_IP`
-and these settings from the environment, exactly like the daemon — it takes no
-command-line arguments. From a clone:
+`SCAN_SIDES` (`simplex`/`duplex`, default `duplex`) decide. `scan:now` reads these and
+`PRINTER_IP` from the environment like the daemon and takes no command-line arguments, so
+set them however you set any env var. From a clone:
 
-    PRINTER_IP=192.0.2.58 npm run scan:now
+    PRINTER_IP=192.0.2.58 npm run scan:now                                    # defaults: pdf, duplex
+    PRINTER_IP=192.0.2.58 SCAN_FORMAT=jpg SCAN_SIDES=simplex npm run scan:now
 
-In Docker (`PRINTER_IP` is already set in your compose file / env-file):
+In Docker `PRINTER_IP` already lives in your compose file / env-file, and you override per
+invocation with `-e` (handy for two smart buttons on different settings):
 
     docker compose run --rm epson2paperless dist/scan-now.js
-
-Two buttons with different settings need no extra config — override per invocation:
-
     docker compose run --rm -e SCAN_SIDES=simplex epson2paperless dist/scan-now.js
-    docker compose run --rm -e SCAN_SIDES=duplex  epson2paperless dist/scan-now.js
 
-Use `docker compose run`, not bare `docker run`: it reuses the service's environment,
-host networking, and the `./output` volume. A bare `docker run --rm` with no `-v
-./output:/output` writes the scan inside the container and discards it on exit. Without
-compose you need `-v ./output:/output --network host` explicitly.
+Use `docker compose run`, not bare `docker run`: compose reuses the output volume and host
+networking, whereas a bare `docker run --rm` needs `-v ./output:/output --network host` or
+the scan is written inside the container and lost on exit.
 
-`compose run` starts a second container alongside a running daemon. That's safe —
-`scan-now` binds no ports and joins no multicast group. Don't fire it while a panel scan
-is already in flight, though: the printer serves one scan session at a time.
+The printer serves one scan at a time, so don't trigger `scan:now` while a panel scan (or
+another `scan:now`) is already running.
 
 The host trigger is proven on the ET-2810. Other models are untested over this path: it
 may work, and reports are welcome either way. The FF-680W is expected to fail, because its
