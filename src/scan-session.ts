@@ -11,6 +11,20 @@ import type { PostProcessProfile } from "./postprocess/index.js";
 import type { ToneCurveName } from "./postprocess/tone-curves.js";
 import { DEFAULT_JPEG_QUALITY } from "./config.js";
 
+/**
+ * Compact hex preview of a packet payload for diagnostics: length plus the
+ * first `max` bytes as a contiguous hex string, with a trailing `…` when the
+ * payload is longer. Lets a validation-failure error name the offending reply
+ * bytes so a debug log alone can diagnose an unexpected reply — e.g. an
+ * unknown printer answering FS Y with a non-`0x06` byte — without needing a
+ * pcap of the session.
+ */
+function payloadPreview(payload: Buffer, max = 16): string {
+  const head = payload.subarray(0, max).toString("hex");
+  const ellipsis = payload.length > max ? "…" : "";
+  return `payload len=${payload.length}, head=0x${head}${ellipsis}`;
+}
+
 // =============================================================================
 // Transport
 // =============================================================================
@@ -751,7 +765,7 @@ export async function runScanSession<Ctx>(
           settle({
             ok: false,
             reason: new Error(
-              `Validation failed in state ${currentState} for packet type 0x${packet.type.toString(16).padStart(4, "0")}`,
+              `Validation failed in state ${currentState} for packet type 0x${packet.type.toString(16).padStart(4, "0")} (${payloadPreview(packet.payload)})`,
             ),
             finalCtx: ctx,
           });
