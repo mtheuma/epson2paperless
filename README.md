@@ -82,7 +82,13 @@ automation runner won't retry a scan that already succeeded; only a scan still r
 the wait elapses exits `130`/`143`.
 
 There's no panel to pick the format, so `SCAN_FORMAT` (`jpg`/`pdf`, default `pdf`) and
-`SCAN_SIDES` (`simplex`/`duplex`, default `duplex`) decide. In Docker:
+`SCAN_SIDES` (`simplex`/`duplex`, default `duplex`) decide. `scan:now` reads `PRINTER_IP`
+and these settings from the environment, exactly like the daemon — it takes no
+command-line arguments. From a clone:
+
+    PRINTER_IP=192.0.2.58 npm run scan:now
+
+In Docker (`PRINTER_IP` is already set in your compose file / env-file):
 
     docker compose run --rm epson2paperless dist/scan-now.js
 
