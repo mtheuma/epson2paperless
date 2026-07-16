@@ -3,8 +3,8 @@ import { describe, it, expect } from "vitest";
 import { REGISTRY } from "./registry.js";
 
 describe("REGISTRY", () => {
-  it("contains exactly eight known fingerprints", () => {
-    expect(REGISTRY.size).toBe(8);
+  it("contains exactly nine known fingerprints", () => {
+    expect(REGISTRY.size).toBe(9);
   });
 
   it("includes ET-4950 family entry", () => {
@@ -126,6 +126,8 @@ describe("REGISTRY", () => {
       b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb: false,
       // ET-8500 — no ADF
       "05b5c7eaad217e9538883f3fffe9796464689a5d9006c5b3e3c3fd2c24e21467": false,
+      // ET-2810 — no ADF
+      "708704b6abb184cede037fcd9893ea81f69651fde28780cde0162dfa33a33f6e": false,
     };
     for (const [fp, want] of Object.entries(expected)) {
       expect(REGISTRY.get(fp)!.adfDuplex, `fingerprint ${fp}`).toBe(want);

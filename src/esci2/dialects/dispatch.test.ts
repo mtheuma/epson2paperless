@@ -10,6 +10,7 @@ import { UnsupportedDialectError } from "../diagnostic.js";
 
 const ET4950_FP = "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2";
 const ET2750_FP = "de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7";
+const ET2810_FP = "708704b6abb184cede037fcd9893ea81f69651fde28780cde0162dfa33a33f6e";
 const FF680W_FP = "5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd";
 const UNKNOWN_FP = "0000000000000000000000000000000000000000000000000000000000000000";
 const ET4800_FP = "7870a725ab969136d5eb04387bf01d3cc3168aabb3d11cfaca7d59a4169971c2";
@@ -125,10 +126,8 @@ describe("assertSourceSupported", () => {
   // duplex=true. The source resolves to flatbed, so duplex is inert and the
   // guard must not fire. An earlier design rejected on `duplex` at entry
   // resolution and broke exactly this case.
-  // NOTE: uses ET2750_FP (also flatbed-only) as a stand-in until Task 3 lands
-  // the ET-2810 registry entry; switch then.
   it("allows flatbed on a flatbed-only entry even though duplex was requested", () => {
-    const entry = REGISTRY.get(ET2750_FP)!;
+    const entry = REGISTRY.get(ET2810_FP)!;
     expect(() => assertSourceSupported(entry, "flatbed")).not.toThrow();
   });
 });

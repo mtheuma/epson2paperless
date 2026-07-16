@@ -155,6 +155,37 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
     },
   ],
   [
+    // ET-2810: entry-level A4 EcoTank. Flatbed-only (CAPA reports ADF: N /
+    // duplex: N), ESC/I-2 over plain TCP. CAPA advertises GMM "UG10UG18" and
+    // CMX "UNITUM08" with QIT/CCT absent, and its #FB AREA value "d850i0001170"
+    // is byte-identical to the ET-4800 — i.e. an ET-4800/ET-15000-shaped dialect
+    // that happens to have no ADF. Extents and CMX class are therefore reused
+    // from the ET-4800; gamma is inherited from it too (et4800-stock) rather
+    // than guessed flat, because that is the combination the reporter actually
+    // exercised on hardware (issue #132, PID 118A, FW FB 1.00): they patched
+    // this entry in at runtime and got a valid flatbed PDF out. Gamma is not
+    // advertised in CAPA, so it stays unpinned until a test-page scan or Frida
+    // capture confirms the tone curve.
+    //
+    // NOTE: the ET-2810 never triggers a scan on its own — its two-button combo
+    // is a USB-host scan and it registers no network Scan-to-Computer
+    // destination, so no beacon and no push-scan ever arrive. This entry is only
+    // reachable via a host-initiated scan trigger; it is inert without one.
+    "708704b6abb184cede037fcd9893ea81f69651fde28780cde0162dfa33a33f6e",
+    {
+      displayName: "ET-2810 (ESC/I-2 over plain TCP)",
+      sourceDetection: "fixed-flatbed",
+      initPollIterations: 3,
+      fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
+      adfExtents: null,
+      adfDuplex: false,
+      gmm: "UG18",
+      gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
+      cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
+      optionalSegments: { qit: false, cct: false },
+    },
+  ],
+  [
     // ET-8500: A4 EcoTank Photo. Flatbed-only (CAPA reports ADF: N / duplex: N).
     // Presents over ESC/I-2 on both TLS (issue #120, Peter-Maguire) and plain TCP
     // (issue #123, anaxci) across reporters — identical CAPA fingerprint either

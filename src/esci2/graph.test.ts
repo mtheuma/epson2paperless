@@ -530,9 +530,7 @@ describe("esci2Graph POST_MODE_STAT — PARA reflects ctx.resolution + source", 
 
 describe("esci2Graph POST_MODE_STAT — duplex capability guard", () => {
   const ET4800_FP = "7870a725ab969136d5eb04387bf01d3cc3168aabb3d11cfaca7d59a4169971c2";
-  // Stand-in for the ET-2810 (flatbed-only) until Task 3 lands that registry
-  // entry; ET-2750 is also flatbed-only. Switch to the ET-2810 fingerprint then.
-  const ET2750_FP = "de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7";
+  const ET2810_FP = "708704b6abb184cede037fcd9893ea81f69651fde28780cde0162dfa33a33f6e";
   // STAT reply header length 0 → the PARA branch, i.e. send = buildParaSend(ctx).
   const statPayload = Buffer.from("STATx0000000" + " ".repeat(52), "ascii");
 
@@ -562,7 +560,7 @@ describe("esci2Graph POST_MODE_STAT — duplex capability guard", () => {
   // once the source is flatbed and the guard must not fire.
   it("sends PARA for flatbed + duplex on a flatbed-only entry", () => {
     const result = decidePostModeStat({
-      entry: REGISTRY.get(ET2750_FP)!,
+      entry: REGISTRY.get(ET2810_FP)!,
       source: "flatbed",
       duplex: true,
     });
