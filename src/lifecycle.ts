@@ -83,12 +83,23 @@ export interface ScanNowDeps {
 /**
  * Drives a host-triggered single scan to an exit code.
  *
- * A signal drains rather than aborts: killing a scan mid-flight discards
- * pages the printer has already fed. Once a signal is seen its exit code is
- * authoritative — a scan that fails during the drain must not rewrite 130/143
- * to 1. That's guaranteed by mapping `scan` to a value up front, so the
- * settled promise never rejects and a late failure has nothing to escape
- * through.
+ * A signal drains rather than aborts: killing a scan mid-flight discards pages
+ * the printer has already fed. The exit code then reflects what the drain
+ * found, not merely that a signal arrived:
+ *   - scan still in flight when the drain times out → the signal code
+ *     (130 SIGINT / 143 SIGTERM). The signal is what actually ends the run.
+ *   - scan settled during the drain → its real result (0 complete, 1 failed).
+ *
+ * Returning the signal code for a scan that finished cleanly would misreport a
+ * success — and, worse, push an automation runner that retries on non-zero to
+ * fire a second physical scan (and a duplicate Paperless upload, since the
+ * first run may already have committed and deleted the local file). So a clean
+ * drain returns the scan's own outcome; a failed scan during the drain returns
+ * 1 rather than hiding the failure behind the signal.
+ *
+ * `scan` is mapped to a value up front, so `scanSettled` never rejects and a
+ * late failure has nothing to escape through as an unhandled rejection — which
+ * is also why awaiting it after the drain is safe.
  *
  * The bounded wait is delegated to inflight.waitAll, which clears its timer in
  * a finally. Don't hand-roll it with an unref'd timer: node could then exit
@@ -117,11 +128,19 @@ export async function runScanNowLifecycle(deps: ScanNowDeps): Promise<number> {
     log.info(`Received ${first.signal} — waiting up to ${deps.shutdownTimeoutMs}ms for the scan`);
     const drain = await inflight.waitAll(deps.shutdownTimeoutMs);
     if (drain.timedOut > 0) {
+      // Scan genuinely still running — the signal is what ends the process.
       log.warn(`Scan still in flight after ${deps.shutdownTimeoutMs}ms — exiting anyway`);
-    } else {
-      log.info("Scan drained before exit");
+      return first.signal === "SIGTERM" ? 143 : 130;
     }
-    return first.signal === "SIGTERM" ? 143 : 130;
+    // Scan settled during the drain: report what actually happened, not the
+    // signal. scanSettled is already resolved and never rejects.
+    const settled = await scanSettled;
+    if (settled.kind === "complete") {
+      log.info(`Scan completed during ${first.signal} drain — shutting down`);
+      return 0;
+    }
+    log.error(`Scan failed during ${first.signal} drain — shutting down`, settled.err);
+    return 1;
   }
 
   if (first.kind === "complete") {

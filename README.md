@@ -75,9 +75,11 @@ Within about 60 seconds, your destination (default `Paperless`) appears in the p
 **Host-triggered scan.** `npm run scan:now` scans immediately and exits, without waiting
 for a panel button. It skips discovery and the push-scan listener entirely and pulls the
 scan directly. Use it for cron, Home Assistant, smart buttons, or printers that don't
-offer "Scan to Computer" as a network destination at all (the ET-2810). Exit codes match
-one-shot: `0` success, `1` scan failure, `130` SIGINT, `143` SIGTERM. A signal lets an
-in-flight scan finish, bounded by `SHUTDOWN_TIMEOUT_MS`.
+offer "Scan to Computer" as a network destination at all (the ET-2810). It exits `0` on
+success and `1` on scan failure. On `SIGINT`/`SIGTERM` it waits up to `SHUTDOWN_TIMEOUT_MS`
+for an in-flight scan to finish: if it finishes you get its real result (`0`/`1`), so an
+automation runner won't retry a scan that already succeeded; only a scan still running when
+the wait elapses exits `130`/`143`.
 
 There's no panel to pick the format, so `SCAN_FORMAT` (`jpg`/`pdf`, default `pdf`) and
 `SCAN_SIDES` (`simplex`/`duplex`, default `duplex`) decide. In Docker:

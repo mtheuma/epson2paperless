@@ -220,21 +220,27 @@ describe("runScanNowLifecycle", () => {
     await expect(runScanNowLifecycle(deps(scan, never))).resolves.toBe(1);
   });
 
-  it("exits 130 on SIGINT", async () => {
-    const scan = new Promise<void>((r) => setTimeout(r, 5));
-    await expect(
-      runScanNowLifecycle(deps(scan, Promise.resolve("SIGINT" as NodeJS.Signals))),
-    ).resolves.toBe(130);
+  // 130/143 mean "the signal is what ended the run" — i.e. the scan was still
+  // in flight when the drain timed out. A never-settling scan forces that path.
+  it("returns 130 when SIGINT fires and the scan does not finish before the drain times out", async () => {
+    const code = await runScanNowLifecycle(
+      deps(new Promise<void>(() => {}), Promise.resolve("SIGINT" as NodeJS.Signals), 20),
+    );
+    expect(code).toBe(130);
   });
 
-  it("exits 143 on SIGTERM", async () => {
-    const scan = new Promise<void>((r) => setTimeout(r, 5));
-    await expect(
-      runScanNowLifecycle(deps(scan, Promise.resolve("SIGTERM" as NodeJS.Signals))),
-    ).resolves.toBe(143);
+  it("returns 143 when SIGTERM fires and the scan does not finish before the drain times out", async () => {
+    const code = await runScanNowLifecycle(
+      deps(new Promise<void>(() => {}), Promise.resolve("SIGTERM" as NodeJS.Signals), 20),
+    );
+    expect(code).toBe(143);
   });
 
-  it("lets an in-flight scan finish during the drain", async () => {
+  // A signal that arrives while the scan is nearly done: the drain lets it
+  // finish, and because it finished the real outcome (0) is reported, NOT the
+  // signal code. Reporting 130 here would push an automation runner to retry a
+  // scan that already succeeded (and may already be uploaded) — a duplicate.
+  it("returns 0 when a signal arrives but the scan finishes cleanly during the drain", async () => {
     let done = false;
     const scan = new Promise<void>((r) =>
       setTimeout(() => {
@@ -246,22 +252,17 @@ describe("runScanNowLifecycle", () => {
       deps(scan, Promise.resolve("SIGINT" as NodeJS.Signals), 500),
     );
     expect(done).toBe(true); // drained, not aborted
-    expect(code).toBe(130); // signal still authoritative
+    expect(code).toBe(0); // real outcome, not the signal code
   });
 
-  it("exits on the signal code when the drain times out", async () => {
-    const code = await runScanNowLifecycle(
-      deps(new Promise<void>(() => {}), Promise.resolve("SIGTERM" as NodeJS.Signals), 20),
-    );
-    expect(code).toBe(143);
-  });
-
-  // The bug this guards: a scan that fails AFTER a signal must not turn 130 into 1,
-  // and must not surface as an unhandled rejection.
-  it("keeps the signal exit code when the scan fails during the drain", async () => {
+  // The flip side: a scan that FAILS during the drain reports its real failure
+  // (1), not the signal code — a failure must not be hidden behind 130/143.
+  // It must also not surface as an unhandled rejection (scanSettled is mapped
+  // to a value, so awaiting it after the drain cannot throw).
+  it("returns 1 when the scan fails during the drain", async () => {
     const scan = new Promise<void>((_, reject) => setTimeout(() => reject(new Error("late")), 10));
     await expect(
       runScanNowLifecycle(deps(scan, Promise.resolve("SIGINT" as NodeJS.Signals), 500)),
-    ).resolves.toBe(130);
+    ).resolves.toBe(1);
   });
 });
