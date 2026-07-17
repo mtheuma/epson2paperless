@@ -30,7 +30,7 @@ What you get:
 | **ET-4800**           | ✅ Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS                                                                                   |
 | **ET-15000**          | 🟡 Experimental | Flatbed verified; ADF simplex untested                                                                                        |
 | **XP-7100**           | ✅ Verified     |                                                                                                                               |
-| **FF-680W**           | 🟡 Experimental | ADF-only; 200/300 DPI verified, other DPIs untested                                                                           |
+| **FF-680W**           | 🟡 Experimental | Requires [pairing](#ff-680w-pairing); ADF-only; 200/300 DPI verified                                                          |
 
 ✅ **Verified**: every capability the hardware has is confirmed working on real hardware by someone.
 
