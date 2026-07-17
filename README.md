@@ -32,8 +32,9 @@ What you get:
 | **XP-7100**           | ✅ Verified     |                                                                                                                               |
 | **FF-680W**           | 🟡 Experimental | ADF-only; 200/300 DPI verified, other DPIs untested                                                                           |
 
-- ✅ **Verified**: every capability the hardware has is confirmed working on real hardware by someone.
-- 🟡 **Experimental**: something is still untested; the Notes say what.
+✅ **Verified**: every capability the hardware has is confirmed working on real hardware by someone.
+
+🟡 **Experimental**: something is still untested; the Notes say what.
 
 Compatibility reports are welcome whether your model works or doesn't. [Open an issue](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) using the compatibility template.
 
