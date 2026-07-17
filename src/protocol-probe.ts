@@ -1,6 +1,7 @@
 import net from "node:net";
 import tls from "node:tls";
 import { createLogger } from "./logger.js";
+import { IS_HEADER_SIZE } from "./protocol.js";
 
 const log = createLogger("protocol-probe");
 
@@ -174,16 +175,22 @@ function probePlainWelcome(host: string, port: number, timeoutMs: number): Promi
       });
     });
 
+    // Bytes needed before the discriminator at payload[1] is readable: the
+    // IS header, plus payload[0] and payload[1].
+    const MIN_CLASSIFIABLE_BYTES = IS_HEADER_SIZE + 2;
+
     socket.on("data", (chunk: Buffer) => {
+      if (settled) return;
       recvChunks.push(chunk);
       recvBytes += chunk.length;
-      // Need 12 bytes (IS header) + 2 payload bytes to read the
-      // family-discriminator at payload[1] (frame offset 13).
-      if (recvBytes < 14) return;
+      // The welcome can arrive split across TCP segments — this family
+      // demonstrably fragments IS frames — so accumulate until the
+      // discriminator is readable rather than assuming one chunk.
+      if (recvBytes < MIN_CLASSIFIABLE_BYTES) return;
       const head = recvChunks.length === 1 ? recvChunks[0] : Buffer.concat(recvChunks, recvBytes);
       const isMagic = head[0] === 0x49 && head[1] === 0x53;
       const type = head.readUInt16BE(2);
-      const discriminator = head[13];
+      const discriminator = head[IS_HEADER_SIZE + 1];
 
       if (!isMagic || type !== 0x8000) {
         settle(null, () => {

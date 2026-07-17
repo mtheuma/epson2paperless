@@ -71,8 +71,12 @@ function tlsSilent(): tls.TLSSocket {
  */
 class FakeNetSocket extends EventEmitter {
   destroyed = false;
+  /** Every `data` chunk the probe was handed, for split-delivery assertions. */
+  emittedChunks: Buffer[] = [];
   private behavior:
     | { kind: "welcome"; bytes: Buffer }
+    /** Same frame, delivered as N separate `data` events (real TCP framing). */
+    | { kind: "welcome-split"; chunks: Buffer[] }
     | { kind: "no-reply" }
     | { kind: "error"; code: string };
 
@@ -92,7 +96,15 @@ class FakeNetSocket extends EventEmitter {
       }
       this.emit("connect");
       if (this.behavior.kind === "welcome") {
+        this.emittedChunks.push(this.behavior.bytes);
         this.emit("data", this.behavior.bytes);
+      } else if (this.behavior.kind === "welcome-split") {
+        // Separate ticks so each chunk is a distinct `data` event, as a
+        // segmented frame would arrive off the wire.
+        for (const chunk of this.behavior.chunks) {
+          this.emittedChunks.push(chunk);
+          this.emit("data", chunk);
+        }
       }
       // "no-reply" intentionally never sends data → caller times out
     });
@@ -337,6 +349,66 @@ describe("protocol-probe", () => {
       timeoutMs: 30,
     });
     expect(variant).toBe("esci");
+  });
+
+  it("reassembles a welcome split across TCP segments (wire-anchored, legacy)", async () => {
+    // The welcome is not guaranteed to arrive in one segment, and this family
+    // demonstrably fragments IS frames: the WF-3620 capture shows a single IS
+    // frame split as `49532100000c000000070000` + `01a0040000012c`. Split the
+    // real welcome so the first chunk stops short of the discriminator — the
+    // probe must accumulate rather than classify on the first chunk.
+    const full = Buffer.from(WF3620_REAL_WELCOME_HEX, "hex");
+    const first = full.subarray(0, 10); // 10 bytes: header incomplete
+    const rest = full.subarray(10); // remainder carries payload[1]
+    expect(first.length).toBeLessThan(14); // must not be classifiable alone
+
+    vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
+    mockNetConnect(new FakeNetSocket({ kind: "welcome-split", chunks: [first, rest] }));
+
+    const variant = await detectVariant({
+      printerIp: "10.0.0.15",
+      port: 1865,
+      override: "auto",
+      timeoutMs: 50,
+    });
+    expect(variant).toBe("esci");
+  });
+
+  it("reassembles a welcome split across TCP segments (wire-anchored, esci2-plain)", async () => {
+    const full = Buffer.from(ET2750_REAL_WELCOME_HEX, "hex");
+    // Split *inside* the discriminator's vicinity: 13 bytes leaves payload[1]
+    // as the sole byte of the second chunk — the tightest boundary case.
+    const first = full.subarray(0, 13);
+    const rest = full.subarray(13);
+
+    vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
+    mockNetConnect(new FakeNetSocket({ kind: "welcome-split", chunks: [first, rest] }));
+
+    const variant = await detectVariant({
+      printerIp: "10.0.0.16",
+      port: 1865,
+      override: "auto",
+      timeoutMs: 50,
+    });
+    expect(variant).toBe("esci2-plain");
+  });
+
+  it("classifies an unknown non-legacy discriminator as esci2-plain (open-ended by design)", async () => {
+    // The legacy marker is matched positively; everything else falls to
+    // esci2-plain. A future ESC/I-2-class device emitting some third value at
+    // payload[1] must still be accepted — this asymmetry is deliberate and
+    // documented, so pin it. Inverting the ternary to key on 0x04 would break
+    // this test and nothing else.
+    vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
+    mockNetConnect(new FakeNetSocket({ kind: "welcome", bytes: welcomeBytes(0x07) }));
+
+    const variant = await detectVariant({
+      printerIp: "10.0.0.17",
+      port: 1865,
+      override: "auto",
+      timeoutMs: 50,
+    });
+    expect(variant).toBe("esci2-plain");
   });
 
   it("rejects a non-welcome IS frame as inconclusive rather than classifying it", async () => {
