@@ -18,19 +18,21 @@ What you get:
 
 ## Compatible printers
 
-| Model                 | Status          | Notes                                                      |
-| --------------------- | --------------- | ---------------------------------------------------------- |
-| **ET-3950**           | ✅ Verified     |                                                            |
-| **ET-4950 / ET-4956** | ✅ Verified     |                                                            |
-| **WF-3620**           | ✅ Verified     | Plain TCP scanner, no TLS pinning                          |
-| **ET-2750**           | ✅ Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS      |
-| **ET-2810**           | ✅ Verified     | Flatbed-only hardware; no panel trigger — needs `scan:now` |
-| **ET-2950**           | 🟡 Experimental | Flatbed-only hardware                                      |
-| **ET-8500**           | 🟡 Experimental | Flatbed-only hardware                                      |
-| **ET-4800**           | ✅ Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS                |
-| **ET-15000**          | 🟡 Experimental | Flatbed verified; ADF simplex untested                     |
-| **XP-7100**           | ✅ Verified     |                                                            |
-| **FF-680W**           | 🟡 Experimental | ADF-only; 200/300 DPI verified, other DPIs untested        |
+| Model                 | Status          | Notes                                                                                                                         |
+| --------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **ET-3950**           | ✅ Verified     |                                                                                                                               |
+| **ET-4950 / ET-4956** | ✅ Verified     |                                                                                                                               |
+| **WF-3620**           | ✅ Verified     | Plain TCP scanner, no TLS pinning                                                                                             |
+| **ET-2750**           | ✅ Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS                                                                         |
+| **ET-2810**           | ✅ Verified     | Flatbed-only hardware; no panel trigger — needs `scan:now`                                                                    |
+| **ET-2950**           | 🟡 Experimental | Flatbed-only hardware; inferred dialect, no reporter retest yet ([#92](https://github.com/mtheuma/epson2paperless/issues/92)) |
+| **ET-8500**           | ✅ Verified     | Flatbed-only hardware                                                                                                         |
+| **ET-4800**           | ✅ Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS                                                                                   |
+| **ET-15000**          | 🟡 Experimental | Flatbed verified; ADF simplex untested                                                                                        |
+| **XP-7100**           | ✅ Verified     |                                                                                                                               |
+| **FF-680W**           | 🟡 Experimental | ADF-only; 200/300 DPI verified, other DPIs untested                                                                           |
+
+✅ **Verified** — every capability the hardware has is confirmed working on real hardware by someone. 🟡 **Experimental** — something is still untested; the Notes say what.
 
 Compatibility reports are welcome whether your model works or doesn't. [Open an issue](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) using the compatibility template.
 
@@ -83,7 +85,7 @@ first, bounded by `SHUTDOWN_TIMEOUT_MS`.
 There's no panel to pick the format, so `SCAN_FORMAT` (`jpg`/`pdf`, default `pdf`) and
 `SCAN_SIDES` (`simplex`/`duplex`, default `duplex`) decide. `scan:now` reads these and
 `PRINTER_IP` from the environment like the daemon and takes no command-line arguments, so
-set them however you set any env var. From a clone:
+set them however you set any env var. From source:
 
     PRINTER_IP=192.0.2.58 npm run scan:now                                    # defaults: pdf, duplex
     PRINTER_IP=192.0.2.58 SCAN_FORMAT=jpg SCAN_SIDES=simplex npm run scan:now
