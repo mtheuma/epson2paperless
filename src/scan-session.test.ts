@@ -854,6 +854,39 @@ describe("runScanSession (engine pump)", () => {
     if (!result.ok) {
       expect(result.reason.message).toMatch(/Validation failed in state WAITING/);
       expect(result.reason.message).toMatch(/0x2000/);
+      // The error must surface the offending payload (length + hex preview) so
+      // a debug log alone can diagnose an unexpected reply without a pcap.
+      expect(result.reason.message).toMatch(/len=1/);
+      expect(result.reason.message).toMatch(/0x15/);
+    }
+  });
+
+  it("caps the validate-failure payload preview and flags truncation", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("WAITING", 1_000);
+    g.state("WAITING", {
+      on: { 0x2000: { validate: () => false, next: "DONE" } },
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+    });
+
+    // 20-byte payload — preview caps at 16 bytes and appends an ellipsis.
+    const long = Buffer.alloc(20, 0xab);
+    setImmediate(() => transport.emit("data", buildIsPacket(0x2000, long)));
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.reason.message).toMatch(/len=20/);
+      expect(result.reason.message).toMatch(/…/);
     }
   });
 
