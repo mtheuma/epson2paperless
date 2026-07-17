@@ -2,9 +2,23 @@ import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { extract, buildTsharkArgs } from "./extract.js";
+import {
+  extract,
+  buildTsharkArgs,
+  __test__createImageChunkFolder as createImageChunkFolder,
+} from "./extract.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+function isFrame(type: number, payloadBytes: number, fill = 0xb0): Buffer {
+  const h = Buffer.alloc(12);
+  h[0] = 0x49;
+  h[1] = 0x53;
+  h.writeUInt16BE(type, 2);
+  h.writeUInt16BE(0x300c, 4);
+  h.writeUInt32BE(payloadBytes, 6);
+  return Buffer.concat([h, Buffer.alloc(payloadBytes, fill)]);
+}
 
 function tsharkAvailable(): boolean {
   const bin = process.env.TSHARK_PATH ?? "tshark";
@@ -84,5 +98,23 @@ describe("buildTsharkArgs display filter", () => {
     expect(filter).toContain("!tcp.analysis.retransmission");
     expect(filter).toContain("!tcp.analysis.fast_retransmission");
     expect(filter).toContain("!tcp.analysis.spurious_retransmission");
+  });
+});
+
+describe("createImageChunkFolder", () => {
+  it("folds a split-header image run and emits control frames, using chunkCount", () => {
+    const folder = createImageChunkFolder();
+    const img = isFrame(0xa200, 253063).toString("hex");
+    folder.feed({ dir: "p>h", ts: 0, hex: img.slice(0, 12) });
+    folder.feed({ dir: "p>h", ts: 0, hex: img.slice(12) });
+    folder.feed({ dir: "p>h", ts: 1, hex: isFrame(0xa000, 1, 0x06).toString("hex") }); // ACK ends the run
+    const out = folder.finish();
+    expect(out[0]).toMatchObject({
+      summary: "image-stream",
+      totalBytes: 253063,
+      chunkCount: 1,
+      chunkSize: 253063,
+    });
+    expect(out[1]).toMatchObject({ dir: "p>h", hex: expect.stringContaining("4953a000") });
   });
 });

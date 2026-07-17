@@ -389,38 +389,24 @@ describe("FS F unknown-byte handling", () => {
 
   it("rejects when the STATUS_2 FS F byte is not 0x01 or 0x81", async () => {
     const fixture = loadFixture(path.join(FIXTURES, "adf-single-page-jpeg.jsonl"));
-    // In the fixture, IS packets are split across two consecutive events:
-    //   - a 12-byte IS header event (type 0xa000, payloadSize 16)
-    //   - a 16-byte payload event immediately following
-    // STATUS_n replies are IS-0xa000 with a 16-byte payload.
-    // The sequence is: STATUS_1A (1st a000/16 header), STATUS_1B (2nd a000/16 header),
-    // then STATUS_2 (3rd a000/16 header).  We mutate the payload of the 3rd.
-    // Strategy: scan for a000/16 IS header events; on the 3rd, mark the NEXT event
-    // as the target and replace byte 0 with 0x00.
+    // Each p>h IS frame is a single complete event (12-byte header + payload).
+    // STATUS_n replies are IS-0xa000 with a 16-byte payload. The sequence is:
+    // STATUS_1A (1st a000/16 frame), STATUS_1B (2nd a000/16 frame), then
+    // STATUS_2 (3rd a000/16 frame). We mutate the payload's first byte (at
+    // offset IS_HEADER_SIZE within the combined frame) of the 3rd.
     let fsFHeaderCount = 0;
-    let mutateNextPayload = false;
     const mutated = fixture.map((event) => {
       if (event.dir !== "p>h" || !("hex" in event)) return event;
       const buf = Buffer.from(event.hex, "hex");
-      if (buf.length === IS_HEADER_SIZE) {
-        const type = buf.readUInt16BE(2);
-        const length = buf.readUInt32BE(6);
-        if (type === 0xa000 && length === 16) {
-          fsFHeaderCount++;
-          if (fsFHeaderCount === 3) {
-            // The 3rd a000/16 header is STATUS_2; mark next payload for mutation.
-            mutateNextPayload = true;
-          }
-        }
-        return event;
-      }
-      // 16-byte payload following the marked header — mutate byte 0 to 0x00.
-      if (mutateNextPayload && buf.length === 16) {
-        mutateNextPayload = false;
-        buf[0] = 0x00;
-        return { ...event, hex: buf.toString("hex") };
-      }
-      return event;
+      if (buf.length !== IS_HEADER_SIZE + 16) return event;
+      const type = buf.readUInt16BE(2);
+      const length = buf.readUInt32BE(6);
+      if (type !== 0xa000 || length !== 16) return event;
+      fsFHeaderCount++;
+      if (fsFHeaderCount !== 3) return event;
+      // The 3rd a000/16 frame is STATUS_2; mutate its payload byte 0 to 0x00.
+      buf[IS_HEADER_SIZE] = 0x00;
+      return { ...event, hex: buf.toString("hex") };
     });
 
     const fake = new FakeTcpSocket();

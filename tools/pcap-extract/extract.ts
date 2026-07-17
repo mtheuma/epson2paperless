@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { createIsFrameReader } from "../../src/is-frame-stream.js";
 
 export interface ExtractOptions {
   pcapPath: string;
@@ -30,7 +31,7 @@ export type FixtureEvent =
       dir: "p>h";
       ts: number;
       summary: "image-stream";
-      frameCount: number;
+      chunkCount: number;
       totalBytes: number;
       chunkSize: number;
     };
@@ -145,13 +146,15 @@ export function runTshark(
 
 /**
  * Streaming version of the image-chunk folder. Replace runs of IS-0xa200 image
- * chunks (and their TCP continuation frames) with a single summary record.
+ * chunks with a single summary record; other IS frames pass through verbatim.
  *
- * Large image payloads are typically split across many TCP frames. The first
- * frame of each IS chunk starts with the IS header "4953a200". Subsequent
- * frames in the same TCP stream carry raw continuation bytes with no IS
- * header. The folder accumulates run state across feed() calls; finish()
- * flushes any in-progress run and returns the full event list.
+ * Large image payloads are typically split across many TCP frames, and the
+ * printer occasionally packs more than one IS frame's bytes into a single TCP
+ * segment. Rather than re-implementing that reassembly with a hex-prefix /
+ * substring-scan heuristic (which can misfire on `49 53` bytes inside pixel
+ * payloads and undercounts headers split across TCP frames), the folder feeds
+ * `p>h` bytes through the shared `createIsFrameReader` — which walks frames by
+ * their declared length — and folds the resulting complete IS frames.
  */
 interface ImageChunkFolder {
   feed(e: { dir: "h>p" | "p>h"; ts: number; hex: string }): void;
@@ -160,23 +163,35 @@ interface ImageChunkFolder {
 
 function createImageChunkFolder(): ImageChunkFolder {
   const out: FixtureEvent[] = [];
-  let runStart: { ts: number; chunkSize: number } | null = null;
-  let runFrameCount = 0;
-  let runTotalBytes = 0;
+  const reader = createIsFrameReader();
+  let run: { ts: number; chunkSize: number; chunkCount: number; totalBytes: number } | null = null;
+  let ts = 0;
 
   const flushRun = (): void => {
-    if (!runStart) return;
+    if (!run) return;
     out.push({
       dir: "p>h",
-      ts: runStart.ts,
+      ts: run.ts,
       summary: "image-stream",
-      frameCount: runFrameCount,
-      totalBytes: runTotalBytes,
-      chunkSize: runStart.chunkSize,
+      chunkCount: run.chunkCount,
+      totalBytes: run.totalBytes,
+      chunkSize: run.chunkSize,
     });
-    runStart = null;
-    runFrameCount = 0;
-    runTotalBytes = 0;
+    run = null;
+  };
+
+  const onFrame = (f: { type: number; payload: Buffer; frame: Buffer }): void => {
+    if (f.type === 0xa200) {
+      const size = f.payload.length;
+      if (!run) run = { ts, chunkSize: size, chunkCount: 0, totalBytes: 0 };
+      run.chunkCount += 1;
+      run.totalBytes += size;
+    } else {
+      flushRun();
+      // Re-emit the complete IS frame verbatim — no header reconstruction, so no
+      // assumption about the offset-4 field.
+      out.push({ dir: "p>h", ts, hex: f.frame.toString("hex") });
+    }
   };
 
   return {
@@ -186,51 +201,18 @@ function createImageChunkFolder(): ImageChunkFolder {
         out.push(e);
         return;
       }
-      const isImageChunkHeader = e.hex.startsWith(IS_IMAGE_CHUNK_HEX);
-      // During an image-stream run, anything from the printer that does NOT
-      // start with the IS-0xa200 magic is a continuation frame — including raw
-      // pixel data that happens to begin with bytes 0x49 0x53 ("IS"). The
-      // earlier check on just `4953` was too permissive: pixel bytes coincide
-      // with that 2-byte prefix often enough on multi-MB streams to falsely
-      // terminate runs and inflate frame counts.
-      const isContinuation = runStart !== null && !e.hex.startsWith(IS_IMAGE_CHUNK_HEX);
-
-      if (isImageChunkHeader) {
-        // IS header bytes 6-9 (hex chars 12-20) are the payload size (BE uint32)
-        const payloadSize = parseInt(e.hex.slice(12, 20), 16);
-        if (!runStart) runStart = { ts: e.ts, chunkSize: payloadSize };
-        runFrameCount++;
-        runTotalBytes += payloadSize;
-        return;
-      }
-      if (isContinuation) {
-        // TCP continuation frame: may carry the tail of the current chunk AND
-        // the IS-0xa200 header(s) of subsequent chunks packed into the same TCP
-        // segment. Scan for embedded IS-0xa200 headers and accumulate only their
-        // declared payloadSize — adding raw frame bytes would double-count data
-        // already declared by the IS headers.
-        runFrameCount++;
-        let offset = 0;
-        while (true) {
-          const pos = e.hex.indexOf(IS_IMAGE_CHUNK_HEX, offset);
-          if (pos === -1) break;
-          const payloadHex = e.hex.slice(pos + 12, pos + 20);
-          if (payloadHex.length === 8) {
-            runTotalBytes += parseInt(payloadHex, 16);
-          }
-          offset = pos + IS_IMAGE_CHUNK_HEX.length;
-        }
-        return;
-      }
-      flushRun();
-      out.push(e);
+      ts = e.ts;
+      reader.feed(Buffer.from(e.hex, "hex"), onFrame);
     },
     finish() {
+      reader.finish(); // throws on a truncated p>h frame
       flushRun();
       return out;
     },
   };
 }
+
+export const __test__createImageChunkFolder = createImageChunkFolder;
 
 async function main(): Promise<void> {
   // Strip optional `--stream N` from positional args so the existing
