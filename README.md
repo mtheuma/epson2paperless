@@ -24,7 +24,7 @@ What you get:
 | **ET-4950 / ET-4956** | ✅ Verified     |                                                            |
 | **WF-3620**           | ✅ Verified     | Plain TCP scanner, no TLS pinning                          |
 | **ET-2750**           | ✅ Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS      |
-| **ET-2810**           | 🟡 Experimental | Flatbed-only hardware; no panel trigger — needs `scan:now` |
+| **ET-2810**           | ✅ Verified     | Flatbed-only hardware; no panel trigger — needs `scan:now` |
 | **ET-2950**           | 🟡 Experimental | Flatbed-only hardware                                      |
 | **ET-8500**           | 🟡 Experimental | Flatbed-only hardware                                      |
 | **ET-4800**           | ✅ Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS                |
