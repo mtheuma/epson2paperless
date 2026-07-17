@@ -36,7 +36,7 @@ async function main() {
         return;
       }
       log.info(
-        `PushScan received (duplex=${scan.duplex}, action=${scan.action}) — starting TLS scan session`,
+        `PushScan received (duplex=${scan.duplex}, action=${scan.action}) — starting scan session`,
       );
       setLastScanTime(new Date().toISOString());
 
