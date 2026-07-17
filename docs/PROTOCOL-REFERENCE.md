@@ -47,7 +47,7 @@ Implemented in `src/pushscan.ts`. `parsePushScanRequest` extracts the SOAP field
 
 ### Scan session: three transport variants on port 1865
 
-Three transport variants ride on TCP port 1865, decided per scan session by `src/protocol-probe.ts` (covered in detail in [Protocol probe](#protocol-probe-three-arms) below):
+Three transport variants ride on TCP port 1865, decided per scan session by `src/protocol-probe.ts` (covered in detail in [Protocol probe](#protocol-probe-two-arms) below):
 
 | Variant       | Transport    | Command set          | Hardware                                         |
 | ------------- | ------------ | -------------------- | ------------------------------------------------ |
@@ -293,19 +293,27 @@ The temp directory is removed in a `finally` block regardless of outcome.
 
 ---
 
-## Protocol probe (three arms)
+## Protocol probe (two arms)
 
-Three protocol variants ride on port 1865, decided per scan session by `src/protocol-probe.ts`:
+Three protocol variants ride on port 1865, decided per scan session by `src/protocol-probe.ts` with two arms — neither of which mutates printer state:
 
 1. **TLS handshake** against `1865`. Success → `esci2` (ET-4950 family + ET-2950). The probe socket is destroyed before the real scan begins.
-2. **Plain TCP connect**, await an unsolicited IS-`0x8000` welcome packet within the timeout, then disambiguate by the welcome's payload byte 1 (frame offset 13): WF-3620 emits `0x02` here on every committed WF-3620 fixture and is rejected; the `esci2-plain` printers (ET-2750, XP-7100, ET-4800, FF-680W) emit `0x04` and are accepted. Real fixture payloads are `01 02 00 00 00` (WF-3620) and `01 04 00 00 00` (esci2-plain). The ESC/I-2-over-TLS printers (ET-4950 family, ET-2950) also send a welcome immediately, but only inside the TLS tunnel — connecting to one of them over plain TCP yields no `0x8000` and the arm times out. Success → `esci2-plain`.
-3. **Plain TCP connect**, send `ESC @` (`1b 40`), await a 1-byte `0x06` ACK. Success → `esci` (WF-3620).
+2. **Plain TCP connect**, await an unsolicited IS-`0x8000` welcome packet within the timeout, then classify from the welcome's payload byte 1 (frame offset 13): `0x02` → `esci`, anything else → `esci2-plain`. The ESC/I-2-over-TLS printers (ET-4950 family, ET-2950) also send a welcome immediately, but only inside the TLS tunnel — connecting to one of them over plain TCP yields no `0x8000` and the arm times out (→ inconclusive).
 
-The byte-1 discriminator in arm 2 is the load-bearing piece: a real WF-3620 also sends an unsolicited `0x8000` welcome on plain TCP (a misconception in the original probe design said it stayed silent until prompted), so welcomes alone don't separate the two families. The check is encoded as a negative — accept any `0x8000` whose payload[1] is NOT the WF-3620 byte — because the WF-3620 anchor is well-supported (the byte is `0x02` across every committed WF-3620 fixture) while the ET-2750 anchor has only one capture, so a hypothetical future ET-2750-class device that emits a different byte at payload[1] would still be accepted.
+The byte-1 discriminator in arm 2 is the load-bearing piece: **both** generations send an unsolicited `0x8000` welcome on plain TCP (a misconception in the original probe design said the legacy family stayed silent until prompted), so a welcome's presence alone means only "plain TCP". Payload byte 1 is what separates the families, and it does so cleanly across every capture we have:
 
-If all three arms fail, the dispatcher resolves to `esci` so the legacy scanner's connect path can surface the underlying socket error in a meaningful way (rather than throwing a generic "no protocol matched" message).
+| payload[1] | Variant       | Models                                   |
+| ---------- | ------------- | ---------------------------------------- |
+| `0x02`     | `esci`        | WF-3620 (all committed fixtures), XP-620 |
+| `0x04`     | `esci2-plain` | ET-2750, XP-7100, ET-4800, FF-680W       |
 
-Only `esci2` (TLS) results are cached for the daemon's lifetime. The two non-TLS arms re-probe each scan because plain-TCP probes are cheap and a transient ECONNRESET — which can happen mid-handshake against a real ET-4950 too — shouldn't pin a misclassification.
+Real welcome payloads are `01 02 00 00 00` and `01 04 00 00 00`. The XP-620 (issue #124) emits a welcome byte-for-byte identical to the WF-3620's, which is the second independent model to corroborate the `0x02` anchor. What the byte _means_ is unknown — it is treated as an observed family marker, not a decoded field — so the non-`0x02` side stays open: a future ESC/I-2-class device emitting some third value at payload[1] is still classified `esci2-plain`.
+
+There is deliberately **no third arm** that sends a bare `ESC @` and awaits a 1-byte ACK. Real hardware only accepts IS-framed commands, and only after a lock: in both the WF-3620 and XP-620 captures every host write begins with the `IS` magic, and `ESC @` appears solely inside a `0x2000` passthru (`IS 2100` lock → `IS 2000` passthru → `1b40`). An unframed `ESC @` models an exchange that has never occurred on the wire, so such an arm could never classify a real printer — it would only add a wasted round-trip and a misleading error before the fallback answered `esci` anyway.
+
+If neither arm classifies, the dispatcher resolves to `esci` so the legacy scanner's connect path can surface the underlying socket error in a meaningful way (rather than throwing a generic "no protocol matched" message).
+
+Only `esci2` (TLS) results are cached for the daemon's lifetime. The plain-TCP arm re-probes each scan because it's cheap and a transient ECONNRESET — which can happen mid-handshake against a real ET-4950 too — shouldn't pin a misclassification.
 
 ## ESC/I-2 over plain TCP
 
@@ -354,18 +362,19 @@ above applies to it.
 
 The WF-3620 (and other 2014-era Epson printers using the same firmware
 generation) speaks **plain TCP on port 1865** with **ESC/I commands**
-inside the same IS framing the ET-4950 uses. It's selected by the third
-arm of the [protocol probe](#protocol-probe-three-arms): after TLS fails,
-the plain-TCP welcome's payload byte 1 identifies the device as
-WF-3620-shaped, then sending `ESC @` elicits the 1-byte legacy ACK.
+inside the same IS framing the ET-4950 uses. It's selected by the
+plain-TCP arm of the [protocol probe](#protocol-probe-two-arms): after TLS
+fails, the plain-TCP welcome's payload byte 1 (`0x02`) identifies the device
+as legacy-ESC/I-shaped.
 
 Key wire differences (full table in
 `.reference/wireshark-captures/wf-3620/protocol-decode.md`):
 
-- Init is `ESC @` (`1b 40`), not `FS Y`. The printer also emits an
+- Init is `ESC @` (`1b 40`), not `FS Y` — sent inside a `0x2000` passthru
+  after the lock, never as a bare write. The printer also emits an
   unsolicited IS-`0x8000` welcome on plain TCP (same as the ET-2750), so
   the auto-probe disambiguates by the welcome's payload byte 1 — see
-  [Protocol probe](#protocol-probe-three-arms).
+  [Protocol probe](#protocol-probe-two-arms).
 - Source select is sent as `ESC e <byte>` (0=flatbed, 1=ADF simplex,
   2=ADF duplex) before scan setup. The same byte is also written into
   byte 26 of the 64-byte FS W parameter block. Not encoded in PARA tokens

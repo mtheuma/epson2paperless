@@ -52,7 +52,7 @@ function tlsSilent(): tls.TLSSocket {
 }
 
 /**
- * Behaviourally-rich fake `net.Socket` for the plain-TCP probe arms.
+ * Behaviourally-rich fake `net.Socket` for the plain-TCP welcome probe.
  * Configurable to either:
  *   - emit a fabricated IS frame (welcome or other) once the consumer's
  *     `data` listener attaches, OR
@@ -60,15 +60,19 @@ function tlsSilent(): tls.TLSSocket {
  *   - silently never fire.
  *
  * Subclassing EventEmitter so `socket.on('data', cb)` / `.once('error', cb)`
- * etc. just work. The legacy probe also calls `socket.write` and reacts to
- * `"connect"` — both modeled below.
+ * etc. just work.
+ *
+ * Deliberately has no "replies with a bare ACK" mode. The probe never writes
+ * to the socket: real hardware only ever accepts IS-framed commands, and then
+ * only after a lock (verified in both the WF-3620 and XP-620 captures — every
+ * host write begins with the `IS` magic, and `ESC @` appears only inside a
+ * `0x2000` passthru). A fake that answers an unframed byte with a bare `0x06`
+ * would model an exchange that has never occurred on the wire.
  */
 class FakeNetSocket extends EventEmitter {
   destroyed = false;
-  writes: Buffer[] = [];
   private behavior:
     | { kind: "welcome"; bytes: Buffer }
-    | { kind: "ack"; bytes: Buffer }
     | { kind: "no-reply" }
     | { kind: "error"; code: string };
 
@@ -89,20 +93,9 @@ class FakeNetSocket extends EventEmitter {
       this.emit("connect");
       if (this.behavior.kind === "welcome") {
         this.emit("data", this.behavior.bytes);
-      } else if (this.behavior.kind === "ack") {
-        // Wait one more tick so the legacy probe's "send ESC @" fires
-        // before we deliver the ACK — closer to real wire ordering.
-        setImmediate(() =>
-          this.emit("data", this.behavior.kind === "ack" ? this.behavior.bytes : Buffer.alloc(0)),
-        );
       }
       // "no-reply" intentionally never sends data → caller times out
     });
-  }
-
-  override write(buf: Buffer): boolean {
-    this.writes.push(Buffer.from(buf));
-    return true;
   }
 
   destroy(): void {
@@ -137,10 +130,12 @@ function welcomeBytes(discriminator: number = 0x04): Buffer {
 const WF3620_REAL_WELCOME_HEX = "49538000300c0000000500000102000000";
 const ET2750_REAL_WELCOME_HEX = "49538000300c0000000500000104000000";
 
-/** Install a `net.connect` mock that hands out the given fakes in order. */
-function mockNetConnect(...fakes: FakeNetSocket[]): void {
+/** Install a `net.connect` mock that hands out the given fakes in order.
+ * Returns the spy so tests can assert how many plain-TCP connections the
+ * probe opened — the welcome arm should need exactly one. */
+function mockNetConnect(...fakes: FakeNetSocket[]) {
   let i = 0;
-  vi.spyOn(net, "connect").mockImplementation((..._args: unknown[]) => {
+  return vi.spyOn(net, "connect").mockImplementation((..._args: unknown[]) => {
     const fake = fakes[i++] ?? fakes[fakes.length - 1];
     fake.fireConnectAndBehavior();
     return fake as unknown as net.Socket;
@@ -206,15 +201,15 @@ describe("protocol-probe", () => {
     expect(variant).toBe("esci2-plain");
   });
 
-  it("returns esci when TLS fails and plain-TCP welcome carries the WF-3620 discriminator (synthetic frame)", async () => {
-    // Regression guard: a real WF-3620 emits an unsolicited 0x8000 welcome
-    // on plain TCP (every wf-3620 fixture under tools/pcap-extract/captures/
-    // begins with one). The plain-esci2 arm must reject it on the
-    // payload[1] discriminator and fall through to the legacy ESC @ probe.
+  it("returns esci when TLS fails and plain-TCP welcome carries the legacy discriminator (synthetic frame)", async () => {
+    // Regression guard: a real WF-3620 / XP-620 emits an unsolicited 0x8000
+    // welcome on plain TCP (every wf-3620 fixture under
+    // tools/pcap-extract/captures/ begins with one). The welcome arm must
+    // classify it as legacy ESC/I directly from the payload[1] discriminator
+    // — positive evidence, no follow-up probe.
     vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
-    mockNetConnect(
-      new FakeNetSocket({ kind: "welcome", bytes: welcomeBytes(0x02) }), // WF-3620 shape
-      new FakeNetSocket({ kind: "ack", bytes: Buffer.from([0x06]) }), // legacy probe ACKs
+    const netSpy = mockNetConnect(
+      new FakeNetSocket({ kind: "welcome", bytes: welcomeBytes(0x02) }), // legacy shape
     );
 
     const variant = await detectVariant({
@@ -224,6 +219,8 @@ describe("protocol-probe", () => {
       timeoutMs: 50,
     });
     expect(variant).toBe("esci");
+    // The welcome is sufficient — no second plain-TCP connection is opened.
+    expect(netSpy).toHaveBeenCalledTimes(1);
   });
 
   it("returns esci when fed the actual WF-3620 fixture welcome bytes (wire-anchored regression)", async () => {
@@ -231,13 +228,15 @@ describe("protocol-probe", () => {
     // WF-3620 pcap-extract fixture into the probe. If `welcomeBytes()` ever
     // drifts off by a byte (or the probe reads the wrong offset), this
     // test fails because synthetic and real shapes diverge.
+    //
+    // The XP-620 (issue #124) emits this byte-for-byte identical welcome, so
+    // this also pins its classification.
     vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
-    mockNetConnect(
+    const netSpy = mockNetConnect(
       new FakeNetSocket({
         kind: "welcome",
         bytes: Buffer.from(WF3620_REAL_WELCOME_HEX, "hex"),
       }),
-      new FakeNetSocket({ kind: "ack", bytes: Buffer.from([0x06]) }),
     );
 
     const variant = await detectVariant({
@@ -247,6 +246,7 @@ describe("protocol-probe", () => {
       timeoutMs: 50,
     });
     expect(variant).toBe("esci");
+    expect(netSpy).toHaveBeenCalledTimes(1);
   });
 
   it("returns esci2-plain when fed the actual ET-2750 fixture welcome bytes (wire-anchored regression)", async () => {
@@ -267,12 +267,13 @@ describe("protocol-probe", () => {
     expect(variant).toBe("esci2-plain");
   });
 
-  it("returns esci when TLS fails, plain-TCP gives no welcome, and ESC @ ACKs", async () => {
+  it("returns esci when TLS fails and plain-TCP gives no welcome (inconclusive → fallback)", async () => {
+    // A printer that neither speaks TLS nor announces itself leaves both arms
+    // inconclusive. We still answer `esci` so the legacy scanner's connect
+    // path runs and surfaces the real socket error — but only one plain-TCP
+    // connection is attempted; there is no follow-up probe to fall through to.
     vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
-    mockNetConnect(
-      new FakeNetSocket({ kind: "no-reply" }), // plain-esci2 probe times out
-      new FakeNetSocket({ kind: "ack", bytes: Buffer.from([0x06]) }), // legacy probe ACKs
-    );
+    const netSpy = mockNetConnect(new FakeNetSocket({ kind: "no-reply" }));
 
     const variant = await detectVariant({
       printerIp: "10.0.0.3",
@@ -281,19 +282,72 @@ describe("protocol-probe", () => {
       timeoutMs: 50,
     });
     expect(variant).toBe("esci");
+    expect(netSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not log the all-probes-failed error when the welcome classifies as legacy", async () => {
+    // The point of classifying from the welcome: a WF-3620 / XP-620 is
+    // *positively* identified, so `auto` must not emit the alarming
+    // "All probes failed" error on a printer it recognised correctly.
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
+    mockNetConnect(
+      new FakeNetSocket({
+        kind: "welcome",
+        bytes: Buffer.from(WF3620_REAL_WELCOME_HEX, "hex"),
+      }),
+    );
+
+    const variant = await detectVariant({
+      printerIp: "10.0.0.13",
+      port: 1865,
+      override: "auto",
+      timeoutMs: 50,
+    });
+    expect(variant).toBe("esci");
+    expect(errSpy).not.toHaveBeenCalled();
+  });
+
+  it("still logs the all-probes-failed error when nothing classifies", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.spyOn(tls, "connect").mockReturnValue(tlsError("ECONNREFUSED"));
+    mockNetConnect(new FakeNetSocket({ kind: "error", code: "ECONNREFUSED" }));
+
+    const variant = await detectVariant({
+      printerIp: "10.0.0.14",
+      port: 1865,
+      override: "auto",
+      timeoutMs: 30,
+    });
+    expect(variant).toBe("esci");
+    expect(errSpy).toHaveBeenCalledTimes(1);
+    expect(String(errSpy.mock.calls[0]?.[0])).toMatch(/All probes failed/);
   });
 
   it("returns esci as the safe fallback when every probe fails", async () => {
     // No probe classifies — detectVariant resolves to esci (the legacy
     // scanner's connect path will then surface the actual socket error).
     vi.spyOn(tls, "connect").mockReturnValue(tlsSilent());
-    mockNetConnect(
-      new FakeNetSocket({ kind: "no-reply" }),
-      new FakeNetSocket({ kind: "no-reply" }),
-    );
+    mockNetConnect(new FakeNetSocket({ kind: "no-reply" }));
 
     const variant = await detectVariant({
       printerIp: "10.0.0.5",
+      port: 1865,
+      override: "auto",
+      timeoutMs: 30,
+    });
+    expect(variant).toBe("esci");
+  });
+
+  it("rejects a non-welcome IS frame as inconclusive rather than classifying it", async () => {
+    // Anything that isn't a 0x8000 welcome carries no family evidence.
+    vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
+    const notAWelcome = welcomeBytes(0x04);
+    notAWelcome.writeUInt16BE(0xa000, 2); // wrong IS type
+    mockNetConnect(new FakeNetSocket({ kind: "welcome", bytes: notAWelcome }));
+
+    const variant = await detectVariant({
+      printerIp: "10.0.0.12",
       port: 1865,
       override: "auto",
       timeoutMs: 30,
@@ -331,18 +385,16 @@ describe("protocol-probe", () => {
     });
     expect(a).toBe("esci2-plain");
     expect(b).toBe("esci2-plain");
-    // Probe ran on both calls (1 net.connect per probe arm × 2 arms × 2 calls = 4)
-    // but net.connect was called more than once for sure — the cache wasn't hit.
+    // The welcome arm opens one connection per call, so a cache hit would
+    // show up as a single net.connect across both calls.
     expect(netSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it("does NOT cache esci results (transient ECONNRESET could mislead)", async () => {
     const tlsSpy = vi.spyOn(tls, "connect").mockReturnValue(tlsError("ECONNRESET"));
     mockNetConnect(
-      new FakeNetSocket({ kind: "no-reply" }),
-      new FakeNetSocket({ kind: "ack", bytes: Buffer.from([0x06]) }),
-      new FakeNetSocket({ kind: "no-reply" }),
-      new FakeNetSocket({ kind: "ack", bytes: Buffer.from([0x06]) }),
+      new FakeNetSocket({ kind: "welcome", bytes: welcomeBytes(0x02) }),
+      new FakeNetSocket({ kind: "welcome", bytes: welcomeBytes(0x02) }),
     );
 
     const a = await detectVariant({
