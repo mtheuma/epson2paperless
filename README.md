@@ -211,7 +211,7 @@ Rare edge case. Restart the service with `Ctrl-C` and relaunch.
 **Output folder fills with duplicates named `scan_..._1.jpg`.**
 Normal. If two scans land in the same second, the service appends `_1`, `_2` to avoid overwriting.
 
-### FF-680W pairing
+## FF-680W pairing
 
 The FF-680W stores a paired host name on the scanner. The `ClientName` advertised by `epson2paperless` must match that stored value exactly, so the scanner's paired name should be the same as `SCAN_DEST_NAME`. If you have run the commercial Epson software, it will likely have set this value to the hostname of the computer running that software.
 
