@@ -12,7 +12,7 @@ export function loadFixture(path: string): FixtureEvent[] {
     .map((l) => JSON.parse(l) as FixtureEvent);
 }
 
-const MAX_CHUNK_SIZE = 65536;
+const MAX_CHUNK_SIZE = 262144; // 256 KiB — covers XP-620's 253,063
 const FILL_BUFFER = Buffer.alloc(MAX_CHUNK_SIZE, 0xb0);
 
 /**
@@ -67,3 +67,5 @@ function* synthesiseImageStream(totalBytes: number, chunkSize: number): Generato
     remaining -= size;
   }
 }
+
+export const __test__synthesiseImageStream = synthesiseImageStream;
