@@ -101,11 +101,11 @@ the scan is written inside the container and lost on exit.
 The printer serves one scan at a time, so don't trigger `scan:now` while a panel scan (or
 another `scan:now`) is already running.
 
-The host trigger is validated end-to-end on the ET-4956. Other models are untested over
-this path: it may work, and reports are welcome either way. The FF-680W is expected to
-fail, because its panel flow does job preparation that a host-triggered scan skips. On ADF
-models without duplex hardware (ET-4800, ET-15000), set `SCAN_SIDES=simplex` — a duplex
-request is refused rather than sent to the printer.
+The host trigger is validated end-to-end on the ET-2810 and ET-4956. Other models are
+untested over this path: it may work, and reports are welcome either way. The FF-680W is
+expected to fail, because its panel flow does job preparation that a host-triggered scan
+skips. On ADF models without duplex hardware (ET-4800, ET-15000), set `SCAN_SIDES=simplex`
+— a duplex request is refused rather than sent to the printer.
 
 ## Use it
 

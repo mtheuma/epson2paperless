@@ -163,9 +163,14 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
     // from the ET-4800; gamma is inherited from it too (et4800-stock) rather
     // than guessed flat, because that is the combination the reporter actually
     // exercised on hardware (issue #132, PID 118A, FW FB 1.00): they patched
-    // this entry in at runtime and got a valid flatbed PDF out. Gamma is not
-    // advertised in CAPA, so it stays unpinned until a test-page scan or Frida
-    // capture confirms the tone curve.
+    // this entry in at runtime and got a valid flatbed PDF out.
+    //
+    // Gamma is not advertised in CAPA, so the inherited curve was a guess until
+    // the reporter scanned the compatibility test page (#132). Measured off that
+    // scan: the nominal-64 grey patch returns luma 67 — et4800-stock's ~38 black
+    // floor never bites, so no shadow crushing — and paper white returns a clean
+    // 255 with no colour cast. Good enough to ship as-is; a Frida capture would
+    // still pin the exact curve rather than confirm it behaves.
     //
     // NOTE: the ET-2810 never triggers a scan on its own — its two-button combo
     // is a USB-host scan and it registers no network Scan-to-Computer
