@@ -7,7 +7,7 @@ import { PDFDocument } from "pdf-lib";
 import { runEsciScan, appendImageChunk } from "./scanner.js";
 import { parseIsPacket, buildIsPacket, IS_HEADER_SIZE } from "../protocol.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
-import { loadFixture, driveFixture } from "./test-support/replay.js";
+import { loadFixture, driveFixture, concatHostBytes } from "./test-support/replay.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(__dirname, "..", "..", "tools", "pcap-extract", "captures", "wf-3620");
@@ -163,6 +163,11 @@ describe("scanner-esci", () => {
         fake.asFactory(),
       );
       await driveFixture(fixture, fake, sessionPromise);
+
+      // Shield: the scanner reproduced the captured host transcript exactly.
+      expect(Buffer.concat(fake.writes).toString("hex")).toBe(
+        concatHostBytes(fixture).toString("hex"),
+      );
 
       // Detection assertion — captured via the onSourceDetected hook.
       expect(detectedSource).toBe(expectedDetectedSource);
