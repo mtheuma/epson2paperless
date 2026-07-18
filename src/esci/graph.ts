@@ -59,6 +59,8 @@ const log = createLogger("scanner-esci");
  * here is ESC/I-protocol-specific.
  */
 export interface EsciCtx {
+  /** Resolved per-model dialect record; see src/esci/dialects/. */
+  entry: import("./dialects/entry.js").LegacyDialectEntry;
   duplex: boolean;
   forcedSource: Source | null;
   /** Set in STATUS_2 from the FS F byte (or ctx.forcedSource). */

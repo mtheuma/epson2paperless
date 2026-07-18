@@ -8,6 +8,8 @@ import { runEsciScan, appendImageChunk } from "./scanner.js";
 import { parseIsPacket, buildIsPacket, IS_HEADER_SIZE } from "../protocol.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
 import { loadFixture, driveFixture, concatHostBytes } from "./test-support/replay.js";
+import { WF3620_ENTRY } from "./dialects/wf3620.js";
+import { XP620_ENTRY } from "./dialects/xp620.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(__dirname, "..", "..", "tools", "pcap-extract", "captures", "wf-3620");
@@ -152,6 +154,7 @@ describe("scanner-esci", () => {
           port: 1865,
           outputDir,
           tempDir,
+          entry: WF3620_ENTRY,
           duplex,
           forcedSource: null, // pure detection — no override
           format,
@@ -249,6 +252,7 @@ describe("scanner-esci", () => {
         port: 1865,
         outputDir,
         tempDir,
+        entry: WF3620_ENTRY,
         duplex: false,
         forcedSource: "adf-simplex",
         format: "jpg",
@@ -338,6 +342,7 @@ describe("runEsciScan failure-mode matrix", () => {
         port: 1865,
         outputDir,
         tempDir,
+        entry: WF3620_ENTRY,
         duplex: false,
         forcedSource: "adf-simplex",
         format: "jpg",
@@ -358,6 +363,7 @@ describe("runEsciScan failure-mode matrix", () => {
         port: 1865,
         outputDir,
         tempDir,
+        entry: WF3620_ENTRY,
         duplex: false,
         forcedSource: "adf-simplex",
         format: "jpg",
@@ -371,6 +377,25 @@ describe("runEsciScan failure-mode matrix", () => {
     // (Raw garbage that doesn't form a valid IS header would just buffer until timeout.)
     fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
     await expect(scanPromise).rejects.toThrow(/Unexpected packet type 0xa000 in state WELCOME/);
+  });
+
+  it("rejects a non-flatbed ESCI_FORCE_SOURCE against a fixed-flatbed entry", async () => {
+    await expect(
+      runEsciScan(
+        {
+          printerIp: "1.2.3.4",
+          port: 1865,
+          outputDir,
+          tempDir,
+          duplex: false,
+          forcedSource: "adf-simplex",
+          format: "jpg",
+          jpegQuality: 90,
+          entry: XP620_ENTRY,
+        },
+        new FakeTcpSocket().asFactory(),
+      ),
+    ).rejects.toThrow(/ESCI_FORCE_SOURCE.*flatbed|does not support/i);
   });
 });
 
@@ -421,6 +446,7 @@ describe("FS F unknown-byte handling", () => {
         port: 1865,
         outputDir,
         tempDir,
+        entry: WF3620_ENTRY,
         duplex: false,
         forcedSource: null,
         format: "jpg",
