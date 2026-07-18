@@ -478,8 +478,24 @@ g.state("WINDOW_CMD", {
   },
 });
 
-// WINDOW_DATA: ACK for the FS W block → STATUS_PRESCAN, send FS F.
-awaitReply(g, "WINDOW_DATA", ESCI_REPLY, isAck, "STATUS_PRESCAN", sendFsF());
+// WINDOW_DATA: ACK for the FS W block → prestart branch (entry.prestart).
+// WF (status-then-start): STATUS_PRESCAN, send FS F. XP (start-direct):
+// skip the FS F prescan status round-trip and go straight to START,
+// sending FS G directly — matches the captured XP-620 driver behaviour.
+g.state(
+  "WINDOW_DATA",
+  decision<EsciCtx>((ctx, packet) => {
+    const typeGuard = expectIsType(packet, ESCI_REPLY, "WINDOW_DATA");
+    if (typeGuard) return typeGuard;
+    if (!isAck(packet.payload)) {
+      return { error: new Error("WINDOW_DATA: expected FS W block ack") };
+    }
+    if (ctx.entry.prestart === "status-then-start") {
+      return { next: "STATUS_PRESCAN", send: sendFsF() };
+    }
+    return { next: "START", send: passthru(buildFsG(), 14) }; // start-direct (XP-620)
+  }),
+);
 
 // STATUS_PRESCAN: 16-byte FS F → START, send FS G.
 awaitReply(g, "STATUS_PRESCAN", ESCI_REPLY, length16, "START", passthru(buildFsG(), 14));
