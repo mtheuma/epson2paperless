@@ -82,14 +82,15 @@ export async function runEsciScan(
     throw new Error(`Failed to create session temp dir under ${tempBase}: ${msg}`);
   }
 
-  // Fixed-flatbed dialects (e.g. XP-620) have no ADF — reject an incompatible
-  // ESCI_FORCE_SOURCE up front rather than letting the wire session desync
-  // partway through the flatbed-only command sequence.
+  // Reject an ESCI_FORCE_SOURCE the dialect can't actually service up front
+  // (e.g. XP-620 has no ADF) rather than letting the wire session desync
+  // partway through a command sequence the printer doesn't support.
   const fixedFlatbed = session.entry.sourcePolicy === "fixed-flatbed";
-  if (fixedFlatbed && session.forcedSource && session.forcedSource !== "flatbed") {
+  if (session.forcedSource && !session.entry.supportedSources.includes(session.forcedSource)) {
+    const supported = session.entry.supportedSources.join(", ");
     throw new Error(
       `ESCI_FORCE_SOURCE=${session.forcedSource} is not supported by ${session.entry.name} ` +
-        `(flatbed-only). Unset ESCI_FORCE_SOURCE or set it to flatbed.`,
+        `(supports: ${supported}). Unset ESCI_FORCE_SOURCE or set it to one of the supported sources.`,
     );
   }
 
