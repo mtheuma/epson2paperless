@@ -17,7 +17,6 @@ import {
 import {
   buildLockPacket,
   buildUnlockPacket,
-  buildPassthruPacket,
   buildIsPacket,
   buildPurereadPacket,
 } from "../protocol.js";
@@ -48,6 +47,7 @@ import { buildFsY } from "../commands-fs.js";
 import { expectIsType, expectLength } from "../graph-helpers.js";
 import { encodeRawGbrToJpeg } from "./raw-to-jpeg.js";
 import { createLogger } from "../logger.js";
+import { passthru } from "./dialects/send.js";
 
 const log = createLogger("scanner-esci");
 
@@ -119,10 +119,6 @@ const GAMMA_CHANNEL_COUNT = 3;
 
 function isAck(payload: Buffer): boolean {
   return payload.length === 1 && payload[0] === ACK_BYTE;
-}
-
-function passthru(cmd: Buffer, replySize: number): Buffer {
-  return buildPassthruPacket(cmd, replySize);
 }
 
 const sendEscZ = (): Buffer => passthru(buildEscZ(), 1);
@@ -808,15 +804,7 @@ awaitReply(
   "XP_TEARDOWN_SRC_ACK1",
   sendEscEPlusByte(0x00),
 ); // ESC e + 0x00
-awaitReply(g, "XP_TEARDOWN_SRC_ACK1", ESCI_REPLY, isAck, "XP_TEARDOWN_SRC_ACK2");
-awaitReply(
-  g,
-  "XP_TEARDOWN_SRC_ACK2",
-  ESCI_REPLY,
-  isAck,
-  "XP_TEARDOWN_PAREN",
-  passthru(buildEscCleanup(), 1),
-); // ESC )
+escEThenAck(g, "XP_TEARDOWN_SRC", "XP_TEARDOWN_PAREN", passthru(buildEscCleanup(), 1)); // ESC )
 awaitReply(g, "XP_TEARDOWN_PAREN", ESCI_REPLY, length1, "DONE"); // ESC ) reply → done; TCP closes
 
 // =============================================================================
@@ -824,7 +812,10 @@ awaitReply(g, "XP_TEARDOWN_PAREN", ESCI_REPLY, length1, "DONE"); // ESC ) reply 
 // these recovers via the engine's post-scan-save fallback (v0.3.0 §3.3)
 // provided at least one page has flushed. POST_STATUS is intentionally NOT
 // in this list (treated as part of image-acquisition close — a failure
-// there can signal a real transfer-end protocol error).
+// there can signal a real transfer-end protocol error). XP_TEARDOWN_INIT
+// IS included: the XP teardown chain runs after the page is already
+// flushed to disk, so it's pure re-init/park hygiene, not a transfer-end
+// signal — unlike POST_STATUS's FS F, which can still carry one.
 // =============================================================================
 
 g.cleanupStates([
