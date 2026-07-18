@@ -13,6 +13,7 @@ import type { Source, Format } from "./commands.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
 import { withRawSocketCleanClose } from "./transport.js";
 import type { PostProcessProfile } from "../postprocess/index.js";
+import type { LegacyDialectEntry } from "./dialects/entry.js";
 
 export { appendImageChunk } from "./graph.js";
 
@@ -22,6 +23,8 @@ export interface LegacyScanSession {
   outputDir: string;
   /** Base directory for per-session temp spill; "" means `os.tmpdir()` at runtime. */
   tempDir: string;
+  /** Resolved per-model dialect record; see src/esci/dialects/. */
+  entry: LegacyDialectEntry;
   /** Panel-side Sides selection (true → 2-Sided). Source detected from FS F. */
   duplex: boolean;
   /** Override for FS F autodetection — set via ESCI_FORCE_SOURCE env var. */
@@ -79,18 +82,31 @@ export async function runEsciScan(
     throw new Error(`Failed to create session temp dir under ${tempBase}: ${msg}`);
   }
 
+  // Fixed-flatbed dialects (e.g. XP-620) have no ADF — reject an incompatible
+  // ESCI_FORCE_SOURCE up front rather than letting the wire session desync
+  // partway through the flatbed-only command sequence.
+  const fixedFlatbed = session.entry.sourcePolicy === "fixed-flatbed";
+  if (fixedFlatbed && session.forcedSource && session.forcedSource !== "flatbed") {
+    throw new Error(
+      `ESCI_FORCE_SOURCE=${session.forcedSource} is not supported by ${session.entry.name} ` +
+        `(flatbed-only). Unset ESCI_FORCE_SOURCE or set it to flatbed.`,
+    );
+  }
+
   const result = await runScanSession<EsciCtx>({
     graph: esciGraph,
     initialCtx: {
+      entry: session.entry,
       duplex: session.duplex,
       forcedSource: session.forcedSource,
       // Safe default — STATUS_2 overwrites this from the FS F byte (or
-      // forcedSource) before any state downstream reads it. The
-      // `sourceDetected` flag below disambiguates "this default" from
-      // "STATUS_2 actually ran" so the shell only fires onSourceDetected
-      // on success paths.
-      source: session.forcedSource ?? "adf-simplex",
-      sourceDetected: false,
+      // forcedSource) before any state downstream reads it, UNLESS the
+      // entry is fixed-flatbed, in which case there's no FS F detection
+      // to run and the source is pinned outright. The `sourceDetected`
+      // flag below disambiguates "this default" from "STATUS_2 actually
+      // ran" so the shell only fires onSourceDetected on success paths.
+      source: fixedFlatbed ? "flatbed" : (session.forcedSource ?? "adf-simplex"),
+      sourceDetected: fixedFlatbed ? true : false,
       format: session.format,
       jpegQuality: session.jpegQuality,
       diagnoseProtocol: session.diagnoseProtocol ?? false,

@@ -6,6 +6,7 @@ import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import { detectVariant, type Variant } from "./protocol-probe.js";
 import { runEsci2Scan, runEsci2ScanOverPlain } from "./esci2/scanner.js";
 import { runEsciScan } from "./esci/scanner.js";
+import { WF3620_ENTRY } from "./esci/dialects/wf3620.js";
 import { runFf680wJobListCommit, runFf680wJobNumberCommit } from "./ff680w-job-control.js";
 import {
   resolveEffectiveAction,
@@ -213,6 +214,9 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     port: 1865,
     outputDir: args.config.outputDir,
     tempDir: args.config.tempDir,
+    // Pinned to WF-3620 for now — every legacy session today speaks the
+    // WF-3620 dialect. PID-based selection (resolveLegacyEntry) lands next.
+    entry: WF3620_ENTRY,
     duplex: args.duplex,
     forcedSource: args.config.esciForceSource ?? null,
     format: args.action,

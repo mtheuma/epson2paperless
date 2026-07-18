@@ -19,6 +19,7 @@ import { buildPushScanServerOptions, dispatchScanSession, resolveScanDispatch } 
 import { detectVariant } from "./protocol-probe.js";
 import { runEsci2Scan, runEsci2ScanOverPlain } from "./esci2/scanner.js";
 import { runEsciScan } from "./esci/scanner.js";
+import { WF3620_ENTRY } from "./esci/dialects/wf3620.js";
 import { runFf680wJobListCommit, runFf680wJobNumberCommit } from "./ff680w-job-control.js";
 import type { Config } from "./config.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
@@ -273,6 +274,7 @@ describe("dispatchScanSession", () => {
       port: 1865,
       outputDir: "/test-output",
       tempDir: "",
+      entry: WF3620_ENTRY,
       duplex: true,
       forcedSource: "adf-duplex",
       format: "pdf",
