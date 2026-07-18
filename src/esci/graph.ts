@@ -588,9 +588,9 @@ function makeFlushTransition(ctx: EsciCtx, preSend?: SendSpec<EsciCtx>): Transit
     encode: () => encodeRawGbrToJpeg(rawRgb, widthPx, heightPx, quality),
   };
   if (ctx.source === "flatbed") {
-    const trailing = sendFsF();
+    const trailing = ctx.entry.teardown.send();
     return {
-      next: "POST_STATUS",
+      next: ctx.entry.teardown.next,
       send: preSend !== undefined ? [preSend, trailing] : trailing,
       flushPage: flush,
     };
