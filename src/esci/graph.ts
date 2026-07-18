@@ -139,7 +139,7 @@ function sendEscEPlusByte(byte: number): SendSpec<EsciCtx>[] {
   return [passthru(buildEscE(), 1), passthru(Buffer.from([byte]), 1)];
 }
 
-/** ESC e + ctx-resolved source byte. Used in reset / cleanup paths. */
+/** ESC e + ctx-resolved source byte. Used in reset / PDF-setup paths. */
 const sendEscEPlusCtxSource: SendSpec<EsciCtx>[] = [
   passthru(buildEscE(), 1),
   (ctx: EsciCtx) => passthru(Buffer.from([SOURCE_BYTE[ctx.source]]), 1),
@@ -670,7 +670,9 @@ g.state(
 awaitReply(g, "POST_STATUS", ESCI_REPLY, length16, "CLEANUP_1", sendEscCleanup());
 
 // CLEANUP_1: 1-byte ESC ) reply (0x06 ACK or 0x80 NAK; both fine).
-//   ADF → re-set source via ESC e + source byte → ADF_CLEANUP_ACK1
+//   ADF → re-set source via ESC e + fixed 0x01 probe byte → ADF_CLEANUP_ACK1
+//     (the captured driver always sends 0x01 here, even on duplex scans —
+//     unlike the reset / PDF-setup paths, which send the real source byte)
 //   Flatbed → second ESC ) directly → CLEANUP_2
 g.state(
   "CLEANUP_1",
@@ -680,7 +682,7 @@ g.state(
     const lengthGuard = expectLength(packet.payload, 1, "CLEANUP_1", "ESC ) reply");
     if (lengthGuard) return lengthGuard;
     if (ctx.source !== "flatbed") {
-      return { next: "ADF_CLEANUP_ACK1", send: sendEscEPlusCtxSource };
+      return { next: "ADF_CLEANUP_ACK1", send: sendEscEPlusByte(PROBE_SOURCE_BYTE) };
     }
     return { next: "CLEANUP_2", send: sendEscCleanup() };
   }),
