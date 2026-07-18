@@ -63,6 +63,7 @@ describe("esciGraph WELCOME / LOCKING / INIT", () => {
 
   it("LOCKING errors on an unexpected packet type", () => {
     const state = esciGraph.states.LOCKING;
+    expect(state.kind).toBe("decision");
     if (state.kind === "decision") {
       const ctx = makeCtx();
       const result = state.decide(ctx, { type: ESCI_REPLY, payload: Buffer.from([0x06]) });
