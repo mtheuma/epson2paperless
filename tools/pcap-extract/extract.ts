@@ -37,9 +37,6 @@ export type FixtureEvent =
     };
 
 const TSHARK_DEFAULT = "tshark";
-const IS_HEADER_HEX_PREFIX = "4953";
-const IS_TYPE_A200_PREFIX = "a200";
-export const IS_IMAGE_CHUNK_HEX = IS_HEADER_HEX_PREFIX + IS_TYPE_A200_PREFIX;
 
 /**
  * Build the tshark argv used by `extract`. Factored out for unit testing —
