@@ -2,7 +2,7 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { runTshark } from "../pcap-extract/extract.js";
+import { capturePackets, reassembleSession, type StreamEvent } from "../pcap-extract/extract.js";
 import { createIsFrameReader } from "../../src/is-frame-stream.js";
 import { encodeRawGbrToJpeg } from "../../src/esci/raw-to-jpeg.js";
 import { setJpegOrientation } from "../../src/exif.js";
@@ -12,6 +12,26 @@ import { finalizeSession } from "../../src/output-tail.js";
 
 const VALID_SOURCES = ["flatbed", "adf-simplex", "adf-duplex"] as const satisfies readonly Source[];
 const VALID_FORMATS = ["jpg", "pdf"] as const satisfies readonly Format[];
+
+/**
+ * Concatenate the pixel bytes of every IS-0xa200 image chunk in the printer's
+ * reassembled byte stream. Walks frames with the shared framing-strict reader
+ * (declared lengths, never magic-scanning), so chunk headers split across
+ * event boundaries parse fine and a truncated stream is a hard error. Each
+ * 0xa200 payload prefixes its pixels with one status byte, which is dropped.
+ */
+export function collectImagePixels(events: StreamEvent[]): Buffer {
+  const reader = createIsFrameReader();
+  const buffers: Buffer[] = [];
+  for (const e of events) {
+    if (e.dir !== "p>h") continue;
+    reader.feed(e.payload, (f) => {
+      if (f.type === 0xa200) buffers.push(f.payload.subarray(1));
+    });
+  }
+  reader.finish();
+  return Buffer.concat(buffers);
+}
 
 interface RenderOptions {
   pcapPath: string;
@@ -27,58 +47,20 @@ interface RenderOptions {
 }
 
 export async function render(opts: RenderOptions): Promise<{ pageCount: number }> {
-  const tshark = process.env.TSHARK_PATH ?? "tshark";
-  // The three `!tcp.analysis.*_retransmission` clauses keep duplicated
-  // segments out of the hex stream — without them, retransmits get rendered
-  // as ghost pixel bytes and corrupt the page. Wireshark exposes regular,
-  // fast, and spurious retransmissions as separate boolean fields, so all
-  // three need explicit clauses. Mirrors the same constraint in pcap-extract.
-  // See https://www.wireshark.org/docs/dfref/t/tcp.html.
-  const streamFilter = opts.tcpStream !== undefined ? ` && tcp.stream==${opts.tcpStream}` : "";
-  const args = [
-    "-r",
-    opts.pcapPath,
-    "-Y",
-    `tcp.port==${opts.scanPort} && tcp.len>0 && ` +
-      `!tcp.analysis.retransmission && ` +
-      `!tcp.analysis.fast_retransmission && ` +
-      `!tcp.analysis.spurious_retransmission && ` +
-      `((ip.src==${opts.hostIp} && ip.dst==${opts.printerIp}) || ` +
-      `(ip.src==${opts.printerIp} && ip.dst==${opts.hostIp}))${streamFilter}`,
-    "-T",
-    "fields",
-    "-E",
-    "separator=|",
-    "-e",
-    "ip.src",
-    "-e",
-    "tcp.payload",
-  ];
-
   const geom =
     opts.widthPx && opts.heightPx
       ? { widthPx: opts.widthPx, heightPx: opts.heightPx }
       : geometry({ source: opts.source, format: opts.format });
   const pageSize = geom.widthPx * geom.heightPx * 3;
-  const buffers: Buffer[] = [];
-  const reader = createIsFrameReader();
 
-  await runTshark(tshark, args, (line) => {
-    const trimmed = line.trim();
-    if (!trimmed) return;
-    const [src, hex] = trimmed.split("|");
-    if (src !== opts.printerIp || !hex) return;
-    reader.feed(Buffer.from(hex, "hex"), (f) => {
-      // IS-0xa200 chunks prefix pixels with a 1-byte status; strip it before
-      // appending — everything else (acks, control frames) is ignored.
-      if (f.type === 0xa200) buffers.push(f.payload.subarray(1));
-    });
+  const packets = await capturePackets({
+    pcapPath: opts.pcapPath,
+    hostIp: opts.hostIp,
+    printerIp: opts.printerIp,
+    scanPort: opts.scanPort,
+    tcpStream: opts.tcpStream,
   });
-  // Throws on any leftover partial bytes — a truncated capture should fail
-  // loudly rather than silently render a short/garbled page.
-  reader.finish();
-
-  const allGbr = Buffer.concat(buffers);
+  const allGbr = collectImagePixels(reassembleSession(packets));
   const pageCount = Math.floor(allGbr.length / pageSize);
   if (pageCount === 0) {
     throw new Error(

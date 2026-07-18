@@ -5,8 +5,10 @@ import { fileURLToPath } from "node:url";
 import {
   extract,
   buildTsharkArgs,
+  reassembleSession,
   __test__createImageChunkFolder as createImageChunkFolder,
 } from "./extract.js";
+import type { RawPacket } from "./extract.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -53,20 +55,17 @@ describe("buildTsharkArgs display filter", () => {
     return args[idx + 1];
   }
 
-  it("excludes regular, fast, and spurious TCP retransmits so duplicate segments don't leak into the JSONL", () => {
-    // Wireshark exposes the three retransmit labels as separate boolean
-    // fields — a fast or spurious retransmit isn't guaranteed to also be
-    // tagged with the generic `tcp.analysis.retransmission` flag, so all
-    // three need explicit clauses for the filter to actually drop them.
+  it("does NOT exclude retransmission-flagged frames — on lossy captures a flagged frame can be the only copy of a byte range", () => {
+    // Deduplication happens seq-aware in reassembleSession instead; a
+    // display-filter exclusion silently drops necessary retransmits on
+    // captures with real packet loss (Wi-Fi captures like XP-620's).
     const filter = filterFor({
       pcapPath: "x.pcap",
       hostIp: "192.168.1.1",
       printerIp: "192.168.1.2",
       scanPort: 1865,
     });
-    expect(filter).toContain("!tcp.analysis.retransmission");
-    expect(filter).toContain("!tcp.analysis.fast_retransmission");
-    expect(filter).toContain("!tcp.analysis.spurious_retransmission");
+    expect(filter).not.toContain("tcp.analysis");
   });
 
   it("emits the full canonical filter without a tcp.stream constraint when tcpStream is omitted", () => {
@@ -78,9 +77,6 @@ describe("buildTsharkArgs display filter", () => {
     });
     expect(filter).toBe(
       "tcp.port==1865 && tcp.len>0 && " +
-        "!tcp.analysis.retransmission && " +
-        "!tcp.analysis.fast_retransmission && " +
-        "!tcp.analysis.spurious_retransmission && " +
         "((ip.src==192.168.1.1 && ip.dst==192.168.1.2) || " +
         "(ip.src==192.168.1.2 && ip.dst==192.168.1.1))",
     );
@@ -95,9 +91,84 @@ describe("buildTsharkArgs display filter", () => {
       tcpStream: 3,
     });
     expect(filter.endsWith("&& tcp.stream==3")).toBe(true);
-    expect(filter).toContain("!tcp.analysis.retransmission");
-    expect(filter).toContain("!tcp.analysis.fast_retransmission");
-    expect(filter).toContain("!tcp.analysis.spurious_retransmission");
+  });
+
+  it("extracts tcp.seq so reassembly can order and dedup segments", () => {
+    const args = buildTsharkArgs({
+      pcapPath: "x.pcap",
+      hostIp: "192.168.1.1",
+      printerIp: "192.168.1.2",
+      scanPort: 1865,
+    });
+    const fields = args.filter((_, i) => args[i - 1] === "-e");
+    expect(fields).toEqual(["frame.time_relative", "ip.src", "tcp.seq", "tcp.payload"]);
+  });
+});
+
+describe("reassembleSession", () => {
+  const pkt = (dir: "h>p" | "p>h", ts: number, seq: number, hex: string): RawPacket => ({
+    dir,
+    ts,
+    seq,
+    payload: Buffer.from(hex, "hex"),
+  });
+
+  it("drops a pure duplicate retransmission", () => {
+    const events = reassembleSession([
+      pkt("p>h", 0.0, 1, "aabbccdd"),
+      pkt("p>h", 0.5, 1, "aabbccdd"), // retransmit of already-captured bytes
+    ]);
+    expect(events).toHaveLength(1);
+    expect(events[0].payload.toString("hex")).toBe("aabbccdd");
+    expect(events[0].ts).toBe(0.0);
+  });
+
+  it("keeps a retransmitted segment that is the only captured copy of its byte range", () => {
+    // Original copy of seq 5..8 was lost before the capture point; the
+    // retransmit arrives AFTER the following segment. Seq order must win
+    // over capture order.
+    const events = reassembleSession([
+      pkt("p>h", 0.0, 1, "00010203"),
+      pkt("p>h", 0.2, 9, "08090a0b"),
+      pkt("p>h", 0.5, 5, "04050607"), // gap-filling retransmit, captured late
+    ]);
+    expect(events.map((e) => e.payload.toString("hex"))).toEqual([
+      "00010203",
+      "04050607",
+      "08090a0b",
+    ]);
+  });
+
+  it("trims a partial-overlap frame to just its new tail bytes", () => {
+    // TCP coalesced a resend with newly-available data: same seq, longer
+    // frame. The overlapping prefix is already accepted; only the tail is new.
+    const first = "000102030405060708090a0b0c0d0e0f10111213"; // seq 100, 20 bytes
+    const second = first + "beef"; // seq 100, 22 bytes — 2 new trailing bytes
+    const events = reassembleSession([pkt("p>h", 0.0, 100, first), pkt("p>h", 0.1, 100, second)]);
+    expect(events.map((e) => e.payload.toString("hex"))).toEqual([first, "beef"]);
+    expect(events[1].ts).toBe(0.1);
+  });
+
+  it("throws on a gap no captured frame fills", () => {
+    expect(() =>
+      reassembleSession([pkt("p>h", 0.0, 1, "00010203"), pkt("p>h", 0.2, 9, "08090a0b")]),
+    ).toThrow(/p>h.*gap/);
+  });
+
+  it("merges directions with a stable two-pointer merge, never reordering a direction by timestamp", () => {
+    // p>h timestamps are not monotonic in seq order on real lossy captures
+    // (capture-side jitter). A combined ts sort would emit seq 5 before
+    // seq 1 here; the merge must preserve each direction's seq order.
+    const events = reassembleSession([
+      pkt("p>h", 1.0, 1, "aabbccdd"),
+      pkt("p>h", 0.9, 5, "eeff0011"), // later seq, earlier ts
+      pkt("h>p", 0.95, 1, "1b40"),
+    ]);
+    expect(events.map((e) => `${e.dir}:${e.payload.toString("hex")}`)).toEqual([
+      "h>p:1b40",
+      "p>h:aabbccdd",
+      "p>h:eeff0011",
+    ]);
   });
 });
 

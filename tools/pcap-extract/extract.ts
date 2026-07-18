@@ -43,18 +43,13 @@ const TSHARK_DEFAULT = "tshark";
  * the display filter is the only knob that needs regression coverage, and
  * we'd rather pin its exact string than spawn tshark in a unit test.
  *
- * The three `!tcp.analysis.*_retransmission` clauses exclude duplicate
- * segments that tshark classifies as retransmits. Without them, the
- * duplicates get extracted as ghost hex events and corrupt downstream
- * replay — the XP-7100 capture needed manual one-line surgery in
- * `xp-7100/jpg-adf-simplex.jsonl` to remove a duplicated segment before
- * its replay test would pass.
- *
- * Wireshark exposes regular, fast, and spurious retransmissions as
- * separate boolean fields — a fast or spurious retransmission isn't
- * necessarily tagged with the generic `tcp.analysis.retransmission` flag,
- * so all three need explicit clauses. See
- * https://www.wireshark.org/docs/dfref/t/tcp.html.
+ * The filter deliberately does NOT exclude `tcp.analysis.*_retransmission`
+ * frames. On captures with real packet loss (Wi-Fi captures like XP-620's
+ * and 4 of the 10 WF-3620 ones), a retransmission-flagged frame can be the
+ * ONLY captured copy of its byte range — excluding it silently drops bytes
+ * from the middle of the stream. Duplicates are instead discarded
+ * sequence-aware in `reassembleSession`, which also restores seq order for
+ * gap-filling retransmits that were captured out of order.
  */
 export function buildTsharkArgs(opts: ExtractOptions): string[] {
   const streamFilter = opts.tcpStream !== undefined ? ` && tcp.stream==${opts.tcpStream}` : "";
@@ -63,9 +58,6 @@ export function buildTsharkArgs(opts: ExtractOptions): string[] {
     opts.pcapPath,
     "-Y",
     `tcp.port==${opts.scanPort} && tcp.len>0 && ` +
-      `!tcp.analysis.retransmission && ` +
-      `!tcp.analysis.fast_retransmission && ` +
-      `!tcp.analysis.spurious_retransmission && ` +
       `((ip.src==${opts.hostIp} && ip.dst==${opts.printerIp}) || ` +
       `(ip.src==${opts.printerIp} && ip.dst==${opts.hostIp}))${streamFilter}`,
     "-T",
@@ -77,25 +69,107 @@ export function buildTsharkArgs(opts: ExtractOptions): string[] {
     "-e",
     "ip.src",
     "-e",
+    "tcp.seq",
+    "-e",
     "tcp.payload",
   ];
 }
 
-export async function extract(opts: ExtractOptions): Promise<FixtureEvent[]> {
+/** One captured TCP segment with payload, as reported by tshark. */
+export interface RawPacket {
+  dir: "h>p" | "p>h";
+  ts: number;
+  /** tshark's tcp.seq (relative by default; only differences are used). */
+  seq: number;
+  payload: Buffer;
+}
+
+export interface StreamEvent {
+  dir: "h>p" | "p>h";
+  ts: number;
+  payload: Buffer;
+}
+
+/**
+ * Sequence-aware TCP reassembly of one scan session's captured segments.
+ *
+ * Per direction, segments are stably sorted by `tcp.seq` and walked
+ * greedily, accepting only bytes that extend the stream contiguously:
+ * a segment ending at or before the accepted tail is a true duplicate and
+ * is dropped; a segment overlapping the tail but carrying new trailing
+ * bytes is trimmed to just that new tail (TCP can coalesce a resend with
+ * newly-available data — seen in the WF-3620 `adf-4-page-duplex-jpeg`
+ * capture); a segment starting past the tail means the capture is missing
+ * bytes entirely, which is a hard error. This also drops TCP keepalive
+ * garbage bytes (seq one below the tail), which the old display-filter
+ * approach let through.
+ *
+ * The two directions are then merged back into one chronological list with
+ * a stable two-pointer merge on timestamps — NOT a combined sort by ts.
+ * On real lossy captures the printer-side timestamps are not monotonic in
+ * seq order (capture-side jitter), so a ts sort would re-shuffle the
+ * already-correct seq-ordered stream and corrupt it again.
+ */
+export function reassembleSession(packets: RawPacket[]): StreamEvent[] {
+  const reassembleDirection = (dir: "h>p" | "p>h"): StreamEvent[] => {
+    const sorted = packets.filter((p) => p.dir === dir).sort((a, b) => a.seq - b.seq);
+    const out: StreamEvent[] = [];
+    let nextSeq: number | null = null;
+    for (const p of sorted) {
+      const end = p.seq + p.payload.length;
+      if (nextSeq === null) nextSeq = p.seq;
+      if (end <= nextSeq) continue; // duplicate of already-accepted bytes
+      if (p.seq > nextSeq) {
+        throw new Error(
+          `pcap-extract: ${dir} stream has a gap — expected seq ${nextSeq}, ` +
+            `next captured segment starts at ${p.seq} (${p.seq - nextSeq} bytes ` +
+            `missing from the capture)`,
+        );
+      }
+      out.push({ dir, ts: p.ts, payload: p.payload.subarray(nextSeq - p.seq) });
+      nextSeq = end;
+    }
+    return out;
+  };
+
+  const host = reassembleDirection("h>p");
+  const printer = reassembleDirection("p>h");
+  const merged: StreamEvent[] = [];
+  let h = 0;
+  let p = 0;
+  while (h < host.length && p < printer.length) {
+    merged.push(host[h].ts <= printer[p].ts ? host[h++] : printer[p++]);
+  }
+  while (h < host.length) merged.push(host[h++]);
+  while (p < printer.length) merged.push(printer[p++]);
+  return merged;
+}
+
+/** Run tshark over the capture and collect every payload-bearing segment. */
+export async function capturePackets(opts: ExtractOptions): Promise<RawPacket[]> {
   const tshark = opts.tsharkPath ?? process.env.TSHARK_PATH ?? TSHARK_DEFAULT;
-  const args = buildTsharkArgs(opts);
-  const folder = createImageChunkFolder();
-  await runTshark(tshark, args, (line) => {
+  const packets: RawPacket[] = [];
+  await runTshark(tshark, buildTsharkArgs(opts), (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
-    const [tsStr, src, hex] = trimmed.split("|");
+    const [tsStr, src, seqStr, hex] = trimmed.split("|");
     if (!hex) return;
-    folder.feed({
+    packets.push({
       dir: src === opts.hostIp ? "h>p" : "p>h",
       ts: parseFloat(tsStr ?? "0"),
-      hex,
+      seq: parseInt(seqStr ?? "0", 10),
+      payload: Buffer.from(hex, "hex"),
     });
   });
+  return packets;
+}
+
+export async function extract(opts: ExtractOptions): Promise<FixtureEvent[]> {
+  const packets = await capturePackets(opts);
+  const folder = createImageChunkFolder();
+  for (const e of reassembleSession(packets)) {
+    folder.feed({ dir: e.dir, ts: e.ts, hex: e.payload.toString("hex") });
+  }
   const events = folder.finish();
   const dirs = new Set(events.map((e) => e.dir));
   if (events.length > 0 && (!dirs.has("h>p") || !dirs.has("p>h"))) {
