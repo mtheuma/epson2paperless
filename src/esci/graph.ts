@@ -31,15 +31,11 @@ import {
   buildFsG,
   buildEscCleanup,
   buildPageEject,
-  buildFsWBlock,
-  buildStreamConfigPayload,
   parseFsGReply,
-  geometry,
   legacyDetectSource,
   SOURCE_BYTE,
   type Source,
   type Format,
-  type ScanGeometry,
 } from "./commands.js";
 // FS Y is the ET-4950 ESC/I-2 init's first command, now lifted to the
 // shared `commands-fs.ts` module. Used here only for the DIAGNOSE_PROTOCOL
@@ -47,7 +43,6 @@ import {
 // and ESC/I-2.
 import { buildFsY } from "../commands-fs.js";
 import { expectIsType, expectLength } from "../graph-helpers.js";
-import { GAMMA_LUT_R, GAMMA_LUT_G, GAMMA_LUT_B } from "./luts.js";
 import { encodeRawGbrToJpeg } from "./raw-to-jpeg.js";
 import { createLogger } from "../logger.js";
 
@@ -93,8 +88,8 @@ export interface EsciCtx {
    */
   imageBuffer: Buffer;
   imageBufferOffset: number;
-  /** Cached scan geometry (set in START alongside the imageBuffer allocation). */
-  geom: ScanGeometry | null;
+  /** Cached page geometry (set in START alongside the imageBuffer allocation). */
+  geom: { widthPx: number; heightPx: number } | null;
   /**
    * Trailing IS-0xa200 chunks stashed during the encode window; drained
    * on next IMG_RECEIVING entry. See PAGE_ENCODING_DRAIN. Issue #71.
@@ -113,11 +108,7 @@ const ACK_BYTE = 0x06;
 // matches the Windows driver and ensures the 0x81 busy cycle fires on flatbed.
 const PROBE_SOURCE_BYTE = 0x01;
 
-const GAMMA_CHANNELS = [
-  { tag: 0x52, lut: GAMMA_LUT_R },
-  { tag: 0x47, lut: GAMMA_LUT_G },
-  { tag: 0x42, lut: GAMMA_LUT_B },
-] as const;
+const GAMMA_CHANNEL_COUNT = 3;
 
 // =============================================================================
 // Helpers
@@ -442,8 +433,10 @@ g.state("GAMMA_CMD", {
       validate: isAck,
       next: "GAMMA_DATA",
       send: (ctx: EsciCtx) => {
-        const ch = GAMMA_CHANNELS[ctx.gammaChannelIdx];
-        return passthru(Buffer.concat([Buffer.from([ch.tag]), ch.lut]), 1);
+        const luts = [ctx.entry.gamma.r, ctx.entry.gamma.g, ctx.entry.gamma.b];
+        const tags = [0x52, 0x47, 0x42];
+        const idx = ctx.gammaChannelIdx;
+        return passthru(Buffer.concat([Buffer.from([tags[idx]]), luts[idx]]), 1);
       },
     },
   },
@@ -460,7 +453,7 @@ g.state(
         error: new Error(`GAMMA_DATA: expected gamma LUT ack (channel ${ctx.gammaChannelIdx})`),
       };
     }
-    if (ctx.gammaChannelIdx + 1 < GAMMA_CHANNELS.length) {
+    if (ctx.gammaChannelIdx + 1 < GAMMA_CHANNEL_COUNT) {
       ctx.gammaChannelIdx += 1;
       return { next: "GAMMA_CMD", send: sendEscZ() };
     }
@@ -480,7 +473,7 @@ g.state("WINDOW_CMD", {
       validate: isAck,
       next: "WINDOW_DATA",
       send: (ctx: EsciCtx) =>
-        passthru(buildFsWBlock({ source: ctx.source, format: ctx.format }), 1),
+        passthru(ctx.entry.fswBlock({ source: ctx.source, format: ctx.format }), 1),
     },
   },
 });
@@ -505,7 +498,7 @@ g.state(
     if (reply.chunkSize === 0) {
       return { next: "START_POLL", send: sendFsF() };
     }
-    const geom = geometry({ source: ctx.source, format: ctx.format });
+    const geom = ctx.entry.raster({ source: ctx.source, format: ctx.format });
     ctx.geom = geom;
     ctx.imageBuffer = Buffer.alloc(geom.widthPx * geom.heightPx * 3);
     ctx.imageBufferOffset = 0;
@@ -514,7 +507,7 @@ g.state(
     // PAGE_ENCODING_DRAIN. Without this, IMG_RECEIVING would sit on its
     // deferred queue until the engine timeout (#71). The IMG_RECEIVING
     // drain prelude stays as a backstop for fragmented arrivals.
-    const streamConfig = buildIsPacket(0x2200, buildStreamConfigPayload(reply, ctx.format));
+    const streamConfig = buildIsPacket(0x2200, ctx.entry.streamConfig(reply, ctx.format));
     if (drainDeferredIntoBuffer(ctx, null) === "overflowed") {
       // Bundle stream-config with the flush transition so the overflow
       // path still emits IS-0x2200 — every non-overflow START path
