@@ -51,9 +51,16 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
     },
   ],
   [
+    // The XP-4100 (FW 02.42.MB27M6) produces a byte-identical canonicalised
+    // CAPA reply and so shares this fingerprint — flatbed-only hardware like
+    // the ET-2750, live-validated by the reporter in issue #139 (flatbed PDF,
+    // panel and host trigger). Gamma is not advertised in CAPA, so the XP-4100
+    // inherits the ET-2750's captured near-identity curve; measured off the
+    // #139 compatibility-page scan, C0C0C0 returns ~195 against a nominal 192
+    // with no cast, so the inherited curve is faithful on that hardware too.
     "de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7",
     {
-      displayName: "ET-2750 (ESC/I-2 over plain TCP)",
+      displayName: "ET-2750 / XP-4100 (ESC/I-2 over plain TCP)",
       sourceDetection: "fixed-flatbed",
       initPollIterations: 2,
       fbExtents: { x0: 0, y0: 0, w: 2477, h: 3500 },
