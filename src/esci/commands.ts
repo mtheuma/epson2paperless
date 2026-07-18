@@ -215,3 +215,15 @@ export function legacyDetectSource(fsfByte: number, duplex: boolean): DetectSour
   if (fsfByte === 0x01) return { ok: true, source: duplex ? "adf-duplex" : "adf-simplex" };
   return { ok: false, byte: fsfByte };
 }
+
+export function buildEscI(): Buffer {
+  return Buffer.from([0x1b, 0x49]);
+}
+
+export function buildEscLowerI(): Buffer {
+  return Buffer.from([0x1b, 0x69]);
+}
+
+export function buildEscE2(): Buffer {
+  return Buffer.from([0x1b, 0xe2]);
+}
