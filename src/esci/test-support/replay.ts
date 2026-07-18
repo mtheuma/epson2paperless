@@ -69,3 +69,13 @@ function* synthesiseImageStream(totalBytes: number, chunkSize: number): Generato
 }
 
 export const __test__synthesiseImageStream = synthesiseImageStream;
+
+/** Concatenate the fixture's host->printer bytes in order — the exact wire
+ *  transcript the scanner is expected to reproduce. */
+export function concatHostBytes(fixture: FixtureEvent[]): Buffer {
+  return Buffer.concat(
+    fixture
+      .filter((e): e is Extract<FixtureEvent, { hex: string }> => e.dir === "h>p" && "hex" in e)
+      .map((e) => Buffer.from(e.hex, "hex")),
+  );
+}
