@@ -56,6 +56,11 @@ export function buildTsharkArgs(opts: ExtractOptions): string[] {
   return [
     "-r",
     opts.pcapPath,
+    // Reassembly sorts on tcp.seq, so pin the relative-seq preference rather
+    // than trusting the invoking user's Wireshark profile: absolute seqs from
+    // a random ISN can wrap 2^32 mid-stream and mis-sort.
+    "-o",
+    "tcp.relative_sequence_numbers:TRUE",
     "-Y",
     `tcp.port==${opts.scanPort} && tcp.len>0 && ` +
       `((ip.src==${opts.hostIp} && ip.dst==${opts.printerIp}) || ` +
@@ -68,6 +73,8 @@ export function buildTsharkArgs(opts: ExtractOptions): string[] {
     "frame.time_relative",
     "-e",
     "ip.src",
+    "-e",
+    "tcp.stream",
     "-e",
     "tcp.seq",
     "-e",
@@ -145,15 +152,35 @@ export function reassembleSession(packets: RawPacket[]): StreamEvent[] {
   return merged;
 }
 
+/**
+ * Guard against a pcap holding several TCP conversations on the scan port
+ * (e.g. a rejected TLS probe ahead of the real session). Per-stream relative
+ * seqs all start at 1, so letting two conversations into `reassembleSession`
+ * would silently discard real bytes as cross-stream "duplicates" — fail with
+ * a --stream hint instead.
+ */
+export function assertSingleConversation(streams: Iterable<number>, scanPort: number): void {
+  const distinct = [...streams].sort((a, b) => a - b);
+  if (distinct.length > 1) {
+    throw new Error(
+      `pcap-extract: capture holds ${distinct.length} TCP conversations on ` +
+        `tcp.port==${scanPort} (tcp.stream ${distinct.join(", ")}) — pass ` +
+        `--stream <N> to isolate the scan session`,
+    );
+  }
+}
+
 /** Run tshark over the capture and collect every payload-bearing segment. */
 export async function capturePackets(opts: ExtractOptions): Promise<RawPacket[]> {
   const tshark = opts.tsharkPath ?? process.env.TSHARK_PATH ?? TSHARK_DEFAULT;
   const packets: RawPacket[] = [];
+  const streams = new Set<number>();
   await runTshark(tshark, buildTsharkArgs(opts), (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
-    const [tsStr, src, seqStr, hex] = trimmed.split("|");
+    const [tsStr, src, streamStr, seqStr, hex] = trimmed.split("|");
     if (!hex) return;
+    streams.add(parseInt(streamStr ?? "0", 10));
     packets.push({
       dir: src === opts.hostIp ? "h>p" : "p>h",
       ts: parseFloat(tsStr ?? "0"),
@@ -161,6 +188,7 @@ export async function capturePackets(opts: ExtractOptions): Promise<RawPacket[]>
       payload: Buffer.from(hex, "hex"),
     });
   });
+  assertSingleConversation(streams, opts.scanPort);
   return packets;
 }
 

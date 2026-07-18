@@ -6,6 +6,7 @@ import {
   extract,
   buildTsharkArgs,
   reassembleSession,
+  assertSingleConversation,
   __test__createImageChunkFolder as createImageChunkFolder,
 } from "./extract.js";
 import type { RawPacket } from "./extract.js";
@@ -93,7 +94,7 @@ describe("buildTsharkArgs display filter", () => {
     expect(filter.endsWith("&& tcp.stream==3")).toBe(true);
   });
 
-  it("extracts tcp.seq so reassembly can order and dedup segments", () => {
+  it("extracts tcp.stream and tcp.seq so reassembly can detect conversations and order segments", () => {
     const args = buildTsharkArgs({
       pcapPath: "x.pcap",
       hostIp: "192.168.1.1",
@@ -101,7 +102,36 @@ describe("buildTsharkArgs display filter", () => {
       scanPort: 1865,
     });
     const fields = args.filter((_, i) => args[i - 1] === "-e");
-    expect(fields).toEqual(["frame.time_relative", "ip.src", "tcp.seq", "tcp.payload"]);
+    expect(fields).toEqual([
+      "frame.time_relative",
+      "ip.src",
+      "tcp.stream",
+      "tcp.seq",
+      "tcp.payload",
+    ]);
+  });
+
+  it("pins relative sequence numbers so a user profile with them disabled can't break the seq sort", () => {
+    const args = buildTsharkArgs({
+      pcapPath: "x.pcap",
+      hostIp: "192.168.1.1",
+      printerIp: "192.168.1.2",
+      scanPort: 1865,
+    });
+    const prefs = args.filter((_, i) => args[i - 1] === "-o");
+    expect(prefs).toContain("tcp.relative_sequence_numbers:TRUE");
+  });
+});
+
+describe("assertSingleConversation", () => {
+  it("throws a --stream hint naming the conversations when the capture holds more than one", () => {
+    expect(() => assertSingleConversation(new Set([9, 10]), 1865)).toThrow(
+      /2 TCP conversations.*9, 10.*--stream/s,
+    );
+  });
+
+  it("accepts a single conversation", () => {
+    expect(() => assertSingleConversation(new Set([10]), 1865)).not.toThrow();
   });
 });
 

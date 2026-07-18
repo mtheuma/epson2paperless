@@ -2,7 +2,7 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { capturePackets, reassembleSession, type StreamEvent } from "../pcap-extract/extract.js";
+import { capturePackets, reassembleSession, type RawPacket } from "../pcap-extract/extract.js";
 import { createIsFrameReader } from "../../src/is-frame-stream.js";
 import { encodeRawGbrToJpeg } from "../../src/esci/raw-to-jpeg.js";
 import { setJpegOrientation } from "../../src/exif.js";
@@ -14,17 +14,20 @@ const VALID_SOURCES = ["flatbed", "adf-simplex", "adf-duplex"] as const satisfie
 const VALID_FORMATS = ["jpg", "pdf"] as const satisfies readonly Format[];
 
 /**
- * Concatenate the pixel bytes of every IS-0xa200 image chunk in the printer's
- * reassembled byte stream. Walks frames with the shared framing-strict reader
+ * Reassemble the printer's byte stream from the captured segments and
+ * concatenate the pixel bytes of every IS-0xa200 image chunk in it. Only the
+ * p>h direction is reassembled — the host direction carries no pixels, and
+ * reassembling it too would make an unused host-side capture gap fatal to
+ * the render. Frames are walked with the shared framing-strict reader
  * (declared lengths, never magic-scanning), so chunk headers split across
- * event boundaries parse fine and a truncated stream is a hard error. Each
- * 0xa200 payload prefixes its pixels with one status byte, which is dropped.
+ * segment boundaries parse fine and a truncated stream is a hard error.
+ * Each 0xa200 payload prefixes its pixels with one status byte, dropped here.
  */
-export function collectImagePixels(events: StreamEvent[]): Buffer {
+export function collectImagePixels(packets: RawPacket[]): Buffer {
+  const events = reassembleSession(packets.filter((p) => p.dir === "p>h"));
   const reader = createIsFrameReader();
   const buffers: Buffer[] = [];
   for (const e of events) {
-    if (e.dir !== "p>h") continue;
     reader.feed(e.payload, (f) => {
       if (f.type === 0xa200) buffers.push(f.payload.subarray(1));
     });
@@ -60,7 +63,7 @@ export async function render(opts: RenderOptions): Promise<{ pageCount: number }
     scanPort: opts.scanPort,
     tcpStream: opts.tcpStream,
   });
-  const allGbr = collectImagePixels(reassembleSession(packets));
+  const allGbr = collectImagePixels(packets);
   const pageCount = Math.floor(allGbr.length / pageSize);
   if (pageCount === 0) {
     throw new Error(
