@@ -1,8 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { esciGraph, ESCI_TIMEOUT_MS, ESCI_REPLY, type EsciCtx } from "./graph.js";
+import { WF3620_ENTRY } from "./dialects/wf3620.js";
 
 function makeCtx(overrides: Partial<EsciCtx> = {}): EsciCtx {
   return {
+    entry: WF3620_ENTRY,
     duplex: false,
     forcedSource: null,
     source: "adf-simplex",
@@ -48,12 +50,24 @@ describe("esciGraph WELCOME / LOCKING / INIT", () => {
     }
   });
 
-  it("LOCKING advances to INIT on 0xa100 with an ESC @ passthru send", () => {
+  it("LOCKING advances per the dialect's setup branch on 0xa100", () => {
     const state = esciGraph.states.LOCKING;
-    expect(state.kind).toBe("static");
-    if (state.kind === "static") {
-      expect(state.on[0xa100]?.next).toBe("INIT");
-      expect(state.on[0xa100]?.send).toBeDefined();
+    expect(state.kind).toBe("decision");
+    if (state.kind === "decision") {
+      const ctx = makeCtx();
+      const result = state.decide(ctx, { type: 0xa100, payload: Buffer.from([]) });
+      expect("next" in result && result.next).toBe(ctx.entry.setup.next);
+      expect("send" in result && result.send).toBeDefined();
+    }
+  });
+
+  it("LOCKING errors on an unexpected packet type", () => {
+    const state = esciGraph.states.LOCKING;
+    if (state.kind === "decision") {
+      const ctx = makeCtx();
+      const result = state.decide(ctx, { type: ESCI_REPLY, payload: Buffer.from([0x06]) });
+      expect("error" in result).toBe(true);
+      if ("error" in result) expect(result.error.message).toMatch(/LOCKING/);
     }
   });
 

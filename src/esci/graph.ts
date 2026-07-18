@@ -221,8 +221,15 @@ const g = createGraph<EsciCtx>("WELCOME", ESCI_TIMEOUT_MS);
 // WELCOME: 0x8000 from printer → host sends LOCK → LOCKING.
 awaitReply(g, "WELCOME", 0x8000, () => true, "LOCKING", buildLockPacket());
 
-// LOCKING: 0xa100 lock-ack → send ESC @ → INIT.
-awaitReply(g, "LOCKING", 0xa100, () => true, "INIT", passthru(buildEscInit(), 1));
+// LOCKING: 0xa100 lock-ack → apply the dialect's setup branch (state + first send).
+g.state(
+  "LOCKING",
+  decision<EsciCtx>((ctx, packet) => {
+    const typeGuard = expectIsType(packet, 0xa100, "LOCKING");
+    if (typeGuard) return typeGuard;
+    return { next: ctx.entry.setup.next, send: ctx.entry.setup.send() };
+  }),
+);
 
 // INIT: ESC @ ack-or-NAK. ACK → IDENTITY (FS I); NAK + diagnoseProtocol →
 // DIAGNOSE_INIT_PROBE (FS Y); NAK + !diagnose → fail with the canonical
