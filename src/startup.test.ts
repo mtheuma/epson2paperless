@@ -183,7 +183,13 @@ describe("dispatchScanSession", () => {
   it("forwards the configured override + IP to detectVariant", async () => {
     detectVariantMock.mockResolvedValue("esci2");
     const config = makeConfig({ printerProtocol: "esci2", printerIp: "203.0.113.7" });
-    await dispatchScanSession({ config, duplex: false, action: "jpg", paperless: undefined });
+    await dispatchScanSession({
+      config,
+      duplex: false,
+      action: "jpg",
+      paperless: undefined,
+      productName: null,
+    });
 
     expect(detectVariantMock).toHaveBeenCalledTimes(1);
     expect(detectVariantMock).toHaveBeenCalledWith({
@@ -209,6 +215,7 @@ describe("dispatchScanSession", () => {
       duplex: true,
       action: "pdf",
       paperless: PAPERLESS_OPTS,
+      productName: null,
     });
 
     expect(runEsci2ScanMock).toHaveBeenCalledTimes(1);
@@ -238,6 +245,7 @@ describe("dispatchScanSession", () => {
       duplex: false,
       action: "jpg",
       paperless: PAPERLESS_OPTS,
+      productName: null,
     });
 
     expect(runEsci2ScanOverPlainMock).toHaveBeenCalledTimes(1);
@@ -264,6 +272,7 @@ describe("dispatchScanSession", () => {
       duplex: true,
       action: "pdf",
       paperless: PAPERLESS_OPTS,
+      productName: null,
     });
 
     expect(runEsciScanMock).toHaveBeenCalledTimes(1);
@@ -288,10 +297,32 @@ describe("dispatchScanSession", () => {
   it("variant=esci passes forcedSource=null when esciForceSource is unset", async () => {
     detectVariantMock.mockResolvedValue("esci");
     const config = makeConfig({ printerProtocol: "esci" });
-    await dispatchScanSession({ config, duplex: false, action: "jpg", paperless: undefined });
+    await dispatchScanSession({
+      config,
+      duplex: false,
+      action: "jpg",
+      paperless: undefined,
+      productName: null,
+    });
 
     const call = runEsciScanMock.mock.calls[0][0];
     expect(call.forcedSource).toBeNull();
+  });
+
+  it("variant=esci routes XP-620 PID to the xp620 dialect entry", async () => {
+    detectVariantMock.mockResolvedValue("esci");
+    const config = makeConfig({ printerProtocol: "esci" });
+    await dispatchScanSession({
+      config,
+      duplex: false,
+      action: "jpg",
+      paperless: undefined,
+      productName: "PID 08C8",
+    });
+
+    expect(runEsciScanMock).toHaveBeenCalledWith(
+      expect.objectContaining({ entry: expect.objectContaining({ name: "xp620" }) }),
+    );
   });
 
   it("propagates scanner rejection to the caller", async () => {
@@ -301,7 +332,13 @@ describe("dispatchScanSession", () => {
     const config = makeConfig({ printerProtocol: "esci2" });
 
     await expect(
-      dispatchScanSession({ config, duplex: false, action: "jpg", paperless: undefined }),
+      dispatchScanSession({
+        config,
+        duplex: false,
+        action: "jpg",
+        paperless: undefined,
+        productName: null,
+      }),
     ).rejects.toThrow("scan failed");
   });
 });
