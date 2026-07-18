@@ -57,6 +57,7 @@ async function main() {
         duplex: scan.duplex,
         action: scan.action,
         paperless: buildPaperlessOptions(config),
+        productName: info.productName,
       });
       void inflight.track(scanPromise);
       scanPromise.then(

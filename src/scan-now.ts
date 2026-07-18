@@ -32,6 +32,10 @@ async function main() {
     duplex,
     action,
     paperless: buildPaperlessOptions(config),
+    // No push-scan info to read a PID from — defaults to the WF-3620 dialect.
+    // XP-620 via `scan:now` is out of scope; run with a real panel-triggered
+    // path (daemon / one-shot) to get PID-based dialect selection.
+    productName: null,
   });
 
   const signalled = new Promise<NodeJS.Signals>((resolve) => {

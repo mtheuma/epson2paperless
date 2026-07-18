@@ -6,7 +6,7 @@ import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import { detectVariant, type Variant } from "./protocol-probe.js";
 import { runEsci2Scan, runEsci2ScanOverPlain } from "./esci2/scanner.js";
 import { runEsciScan } from "./esci/scanner.js";
-import { WF3620_ENTRY } from "./esci/dialects/wf3620.js";
+import { resolveLegacyEntry } from "./esci/dialects/registry.js";
 import { runFf680wJobListCommit, runFf680wJobNumberCommit } from "./ff680w-job-control.js";
 import {
   resolveEffectiveAction,
@@ -161,6 +161,7 @@ export interface DispatchArgs {
   duplex: boolean;
   action: "jpg" | "pdf";
   paperless: PaperlessUploadOptions | undefined;
+  productName: string | null;
 }
 
 export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
@@ -209,14 +210,13 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
   // Legacy. Source is autodetected from the FS F status byte (see esci/scanner.ts
   // STATUS_2). ESCI_FORCE_SOURCE overrides the autodetection for users hitting
   // edge cases the autodetect doesn't cover (yet).
+  const entry = resolveLegacyEntry(args.productName);
   return runEsciScan({
     printerIp: args.config.printerIp,
     port: 1865,
     outputDir: args.config.outputDir,
     tempDir: args.config.tempDir,
-    // Pinned to WF-3620 for now — every legacy session today speaks the
-    // WF-3620 dialect. PID-based selection (resolveLegacyEntry) lands next.
-    entry: WF3620_ENTRY,
+    entry,
     duplex: args.duplex,
     forcedSource: args.config.esciForceSource ?? null,
     format: args.action,
