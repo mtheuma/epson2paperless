@@ -19,6 +19,7 @@ import {
   buildUnlockPacket,
   buildPassthruPacket,
   buildIsPacket,
+  buildPurereadPacket,
 } from "../protocol.js";
 import {
   buildEscInit,
@@ -34,6 +35,8 @@ import {
   parseFsGReply,
   legacyDetectSource,
   SOURCE_BYTE,
+  buildEscLowerI,
+  buildEscE2,
   type Source,
   type Format,
 } from "./commands.js";
@@ -198,6 +201,42 @@ export function appendImageChunk(payload: Buffer, dest: Buffer, offset: number):
 const length1 = (p: Buffer): boolean => p.length === 1;
 const length16 = (p: Buffer): boolean => p.length === 16;
 const length80 = (p: Buffer): boolean => p.length === 80;
+const length19 = (p: Buffer): boolean => p.length === 19;
+const length40 = (p: Buffer): boolean => p.length === 40;
+
+// ESC 0xe2 reply may be 0x06 (ACK) or 0x15 (NAK); the driver proceeds regardless.
+const isAckOrNak = (p: Buffer): boolean => p.length === 1 && (p[0] === 0x06 || p[0] === 0x15);
+
+/**
+ * Two-phase identity META state (XP-620 only): 4-byte reply `02 02 <LE u16
+ * len>` → pure-read `len` bytes. Mirrors the ESC/I-2 `_META`/`_DATA`
+ * pattern in `src/esci2/graph.ts`. Strict: validates the STX prefix and
+ * pins the declared length to the model's known value (19 for ESC I, 40
+ * for ESC i — capture-derived; the replay transcript shield confirms them).
+ */
+function xpIdentMeta(name: string, next: string, expectedLen: number): void {
+  g.state(
+    name,
+    decision<EsciCtx>((_ctx, packet) => {
+      const typeGuard = expectIsType(packet, ESCI_REPLY, name);
+      if (typeGuard) return typeGuard;
+      const lenGuard = expectLength(packet.payload, 4, name, "identity META");
+      if (lenGuard) return lenGuard;
+      if (packet.payload[0] !== 0x02 || packet.payload[1] !== 0x02) {
+        return {
+          error: new Error(
+            `${name}: expected 02 02 STX, got ${packet.payload.subarray(0, 2).toString("hex")}`,
+          ),
+        };
+      }
+      const len = packet.payload.readUInt16LE(2);
+      if (len !== expectedLen) {
+        return { error: new Error(`${name}: expected identity length ${expectedLen}, got ${len}`) };
+      }
+      return { next, send: buildPurereadPacket(expectedLen) };
+    }),
+  );
+}
 
 // =============================================================================
 // Graph builder
@@ -268,6 +307,34 @@ g.state(
     };
   }),
 );
+
+// =============================================================================
+// XP-620 setup group (fixed-flatbed dialect). Reached from LOCKING with
+// ESC I already sent (reply size 4). ESC I and ESC i are two-phase reads
+// (STX META reply, then a pure-read of the declared length); FS I is the
+// usual single-phase 80-byte identity read. ESC 0xe2's reply may be ACK or
+// NAK — the captured driver proceeds regardless (isAckOrNak). Hands off to
+// the shared GAMMA_CMD state once the setup handshake completes.
+// =============================================================================
+
+xpIdentMeta("XP_IDENT_A_META", "XP_IDENT_A_DATA", 19);
+awaitReply(
+  g,
+  "XP_IDENT_A_DATA",
+  ESCI_REPLY,
+  length19,
+  "XP_IDENT_B_META",
+  passthru(buildEscLowerI(), 4),
+); // ESC i (reply 4)
+xpIdentMeta("XP_IDENT_B_META", "XP_IDENT_B_DATA", 40);
+awaitReply(g, "XP_IDENT_B_DATA", ESCI_REPLY, length40, "XP_IDENT_C", sendFsI()); // FS I (reply 80)
+awaitReply(g, "XP_IDENT_C", ESCI_REPLY, length80, "XP_STATUS_1", sendFsF());
+awaitReply(g, "XP_STATUS_1", ESCI_REPLY, length16, "XP_INIT", passthru(buildEscInit(), 1)); // ESC @
+awaitReply(g, "XP_INIT", ESCI_REPLY, isAck, "XP_E2", passthru(buildEscE2(), 1)); // ESC 0xe2
+awaitReply(g, "XP_E2", ESCI_REPLY, isAckOrNak, "XP_STATUS_2", sendFsF());
+awaitReply(g, "XP_STATUS_2", ESCI_REPLY, length16, "XP_PAREN", passthru(buildEscParen(), 1)); // ESC (
+awaitReply(g, "XP_PAREN", ESCI_REPLY, length1, "XP_STATUS_3", sendFsF());
+awaitReply(g, "XP_STATUS_3", ESCI_REPLY, length16, "GAMMA_CMD", sendEscZ());
 
 // =============================================================================
 // IDENTITY → STATUS_1A → STATUS_1B → SOURCE probe → STATUS_2 (decision)
@@ -726,6 +793,33 @@ g.state("UNLOCKING", {
 });
 
 // =============================================================================
+// XP-620 teardown group (fixed-flatbed dialect). Reached from
+// makeFlushTransition with ESC @ already sent. Reproduces
+// ESC @ → ESC e → 0x00 → ESC ) → close. The capture shows the session
+// closing without an unlock — resolve straight to the engine's terminal
+// DONE rather than adding an unlock the capture doesn't show.
+// =============================================================================
+
+awaitReply(
+  g,
+  "XP_TEARDOWN_INIT",
+  ESCI_REPLY,
+  isAck,
+  "XP_TEARDOWN_SRC_ACK1",
+  sendEscEPlusByte(0x00),
+); // ESC e + 0x00
+awaitReply(g, "XP_TEARDOWN_SRC_ACK1", ESCI_REPLY, isAck, "XP_TEARDOWN_SRC_ACK2");
+awaitReply(
+  g,
+  "XP_TEARDOWN_SRC_ACK2",
+  ESCI_REPLY,
+  isAck,
+  "XP_TEARDOWN_PAREN",
+  passthru(buildEscCleanup(), 1),
+); // ESC )
+awaitReply(g, "XP_TEARDOWN_PAREN", ESCI_REPLY, length1, "DONE"); // ESC ) reply → done; TCP closes
+
+// =============================================================================
 // Cleanup states — post-image-transfer panel hygiene. A failure in any of
 // these recovers via the engine's post-scan-save fallback (v0.3.0 §3.3)
 // provided at least one page has flushed. POST_STATUS is intentionally NOT
@@ -740,6 +834,10 @@ g.cleanupStates([
   "ADF_CLEANUP_STATUS",
   "CLEANUP_2",
   "UNLOCKING",
+  "XP_TEARDOWN_INIT",
+  "XP_TEARDOWN_SRC_ACK1",
+  "XP_TEARDOWN_SRC_ACK2",
+  "XP_TEARDOWN_PAREN",
 ]);
 
 // =============================================================================

@@ -10,18 +10,20 @@ import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
 import { loadFixture, driveFixture, concatHostBytes } from "./test-support/replay.js";
 import { WF3620_ENTRY } from "./dialects/wf3620.js";
 import { XP620_ENTRY } from "./dialects/xp620.js";
+import type { LegacyDialectEntry } from "./dialects/entry.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURES = path.join(__dirname, "..", "..", "tools", "pcap-extract", "captures", "wf-3620");
+const FIXTURES = path.join(__dirname, "..", "..", "tools", "pcap-extract", "captures");
 
 // ---------------------------------------------------------------------------
 // Per-fixture metadata driving the it.each replay matrix
 // ---------------------------------------------------------------------------
 
 interface FixtureSpec {
-  path: string; // basename in tools/pcap-extract/captures/wf-3620/
+  path: string; // relative to tools/pcap-extract/captures/
   format: "jpg" | "pdf";
   duplex: boolean; // panel-side Sides selection — drives ADF source
+  entry: LegacyDialectEntry;
   expectedDetectedSource: "adf-simplex" | "adf-duplex" | "flatbed";
   expectedFileCount: number;
   expectedBackPages: number[]; // 1-based page numbers; [] for non-duplex
@@ -31,87 +33,117 @@ interface FixtureSpec {
 const FIXTURE_SPECS: FixtureSpec[] = [
   // Pure-detection: no forcedSource — STATUS_2 reads FS F.
   {
-    path: "adf-single-page-jpeg.jsonl",
+    path: "wf-3620/adf-single-page-jpeg.jsonl",
     format: "jpg",
     duplex: false,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-simplex",
     expectedFileCount: 1,
     expectedBackPages: [],
   },
   {
-    path: "adf-single-page-pdf.jsonl",
+    path: "wf-3620/adf-single-page-pdf.jsonl",
     format: "pdf",
     duplex: false,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-simplex",
     expectedFileCount: 1,
     expectedBackPages: [],
   },
   {
-    path: "adf-3-page-simplex-jpeg.jsonl",
+    path: "wf-3620/adf-3-page-simplex-jpeg.jsonl",
     format: "jpg",
     duplex: false,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-simplex",
     expectedFileCount: 3,
     expectedBackPages: [],
   },
   {
-    path: "adf-3-page-simplex-pdf.jsonl",
+    path: "wf-3620/adf-3-page-simplex-pdf.jsonl",
     format: "pdf",
     duplex: false,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-simplex",
     expectedFileCount: 1,
     expectedBackPages: [],
     expectedPdfPageCount: 3,
   },
   {
-    path: "adf-2-page-jpeg.jsonl",
+    path: "wf-3620/adf-2-page-jpeg.jsonl",
     format: "jpg",
     duplex: true,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-duplex",
     expectedFileCount: 2,
     expectedBackPages: [2],
   },
   {
-    path: "adf-2-page-pdf.jsonl",
+    path: "wf-3620/adf-2-page-pdf.jsonl",
     format: "pdf",
     duplex: true,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-duplex",
     expectedFileCount: 1,
     expectedBackPages: [2],
     expectedPdfPageCount: 2,
   },
   {
-    path: "adf-4-page-duplex-jpeg.jsonl",
+    path: "wf-3620/adf-4-page-duplex-jpeg.jsonl",
     format: "jpg",
     duplex: true,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-duplex",
     expectedFileCount: 4,
     expectedBackPages: [2, 4],
   },
   {
-    path: "adf-4-page-duplex-pdf.jsonl",
+    path: "wf-3620/adf-4-page-duplex-pdf.jsonl",
     format: "pdf",
     duplex: true,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-duplex",
     expectedFileCount: 1,
     expectedBackPages: [2, 4],
     expectedPdfPageCount: 4,
   },
   {
-    path: "flatbed-single-page-jpeg.jsonl",
+    path: "wf-3620/flatbed-single-page-jpeg.jsonl",
     format: "jpg",
     duplex: false,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "flatbed",
     expectedFileCount: 1,
     expectedBackPages: [],
   },
   {
-    path: "flatbed-single-page-pdf.jsonl",
+    path: "wf-3620/flatbed-single-page-pdf.jsonl",
     format: "pdf",
     duplex: false,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "flatbed",
     expectedFileCount: 1,
     expectedBackPages: [],
+  },
+  {
+    path: "xp-620/flatbed.jsonl",
+    format: "jpg",
+    duplex: false,
+    entry: XP620_ENTRY,
+    expectedDetectedSource: "flatbed",
+    expectedFileCount: 1,
+    expectedBackPages: [],
+    expectedPdfPageCount: undefined,
+  },
+  {
+    path: "xp-620/flatbed.jsonl",
+    format: "pdf",
+    duplex: false,
+    entry: XP620_ENTRY,
+    expectedDetectedSource: "flatbed",
+    expectedFileCount: 1,
+    expectedBackPages: [],
+    expectedPdfPageCount: 1,
   },
 ];
 
@@ -139,6 +171,7 @@ describe("scanner-esci", () => {
       path: fixturePath,
       format,
       duplex,
+      entry,
       expectedDetectedSource,
       expectedFileCount,
       expectedBackPages,
@@ -154,7 +187,7 @@ describe("scanner-esci", () => {
           port: 1865,
           outputDir,
           tempDir,
-          entry: WF3620_ENTRY,
+          entry,
           duplex,
           forcedSource: null, // pure detection — no override
           format,
@@ -243,7 +276,7 @@ describe("scanner-esci", () => {
   // -------------------------------------------------------------------------
 
   it("adf-single-page-jpeg: emits the 0x0c 0x00 page-eject after the image stream", async () => {
-    const fixture = loadFixture(path.join(FIXTURES, "adf-single-page-jpeg.jsonl"));
+    const fixture = loadFixture(path.join(FIXTURES, "wf-3620/adf-single-page-jpeg.jsonl"));
     const fake = new FakeTcpSocket();
 
     const sessionPromise = runEsciScan(
@@ -418,7 +451,7 @@ describe("FS F unknown-byte handling", () => {
   });
 
   it("rejects when the STATUS_2 FS F byte is not 0x01 or 0x81", async () => {
-    const fixture = loadFixture(path.join(FIXTURES, "adf-single-page-jpeg.jsonl"));
+    const fixture = loadFixture(path.join(FIXTURES, "wf-3620/adf-single-page-jpeg.jsonl"));
     // Each p>h IS frame is a single complete event (12-byte header + payload).
     // STATUS_n replies are IS-0xa000 with a 16-byte payload. The sequence is:
     // STATUS_1A (1st a000/16 frame), STATUS_1B (2nd a000/16 frame), then
