@@ -18,6 +18,12 @@ TSHARK_PATH="/c/Program Files/Wireshark/tshark.exe" \
 conversations on `<port>` (e.g. an aborted SYN/RST or a rejected TLS probe
 ahead of the real session).
 
+Extraction is TCP-sequence-aware: per direction, segments are ordered by
+`tcp.seq`, duplicate retransmits are dropped, partial overlaps are trimmed
+to their new bytes, and a byte range missing from the capture entirely is a
+hard error. Retransmission-flagged frames are kept — on lossy (Wi-Fi)
+captures they can be the only copy of a byte range.
+
 ## Fixture format
 
 One JSON object per line. Most events are `{dir, ts, hex}`. Long runs of
