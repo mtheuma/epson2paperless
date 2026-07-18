@@ -2,8 +2,8 @@ import path from "node:path";
 import fs from "node:fs";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
-import { runTshark, IS_IMAGE_CHUNK_HEX } from "../pcap-extract/extract.js";
-import { IS_HEADER_SIZE } from "../../src/protocol.js";
+import { runTshark } from "../pcap-extract/extract.js";
+import { createIsFrameReader } from "../../src/is-frame-stream.js";
 import { encodeRawGbrToJpeg } from "../../src/esci/raw-to-jpeg.js";
 import { setJpegOrientation } from "../../src/exif.js";
 import { geometry, type Source, type Format } from "../../src/esci/commands.js";
@@ -12,8 +12,6 @@ import { finalizeSession } from "../../src/output-tail.js";
 
 const VALID_SOURCES = ["flatbed", "adf-simplex", "adf-duplex"] as const satisfies readonly Source[];
 const VALID_FORMATS = ["jpg", "pdf"] as const satisfies readonly Format[];
-const IS_HEADER_HEX_LEN = IS_HEADER_SIZE * 2;
-const PAYLOAD_SIZE_HEX_OFFSET = 12; // BE u32 at byte offset 6 → hex offset 12..20
 
 interface RenderOptions {
   pcapPath: string;
@@ -23,6 +21,9 @@ interface RenderOptions {
   hostIp: string;
   printerIp: string;
   scanPort: number;
+  tcpStream?: number;
+  widthPx?: number;
+  heightPx?: number;
 }
 
 export async function render(opts: RenderOptions): Promise<{ pageCount: number }> {
@@ -33,6 +34,7 @@ export async function render(opts: RenderOptions): Promise<{ pageCount: number }
   // fast, and spurious retransmissions as separate boolean fields, so all
   // three need explicit clauses. Mirrors the same constraint in pcap-extract.
   // See https://www.wireshark.org/docs/dfref/t/tcp.html.
+  const streamFilter = opts.tcpStream !== undefined ? ` && tcp.stream==${opts.tcpStream}` : "";
   const args = [
     "-r",
     opts.pcapPath,
@@ -42,7 +44,7 @@ export async function render(opts: RenderOptions): Promise<{ pageCount: number }
       `!tcp.analysis.fast_retransmission && ` +
       `!tcp.analysis.spurious_retransmission && ` +
       `((ip.src==${opts.hostIp} && ip.dst==${opts.printerIp}) || ` +
-      `(ip.src==${opts.printerIp} && ip.dst==${opts.hostIp}))`,
+      `(ip.src==${opts.printerIp} && ip.dst==${opts.hostIp}))${streamFilter}`,
     "-T",
     "fields",
     "-E",
@@ -53,50 +55,28 @@ export async function render(opts: RenderOptions): Promise<{ pageCount: number }
     "tcp.payload",
   ];
 
-  const geom = geometry({ source: opts.source, format: opts.format });
+  const geom =
+    opts.widthPx && opts.heightPx
+      ? { widthPx: opts.widthPx, heightPx: opts.heightPx }
+      : geometry({ source: opts.source, format: opts.format });
   const pageSize = geom.widthPx * geom.heightPx * 3;
   const buffers: Buffer[] = [];
-  let currentChunkRemaining = 0;
-  // IS-0xa200 chunks prefix pixels with a status byte; the marker may span TCP segments.
-  let pendingStatusByte = false;
+  const reader = createIsFrameReader();
 
   await runTshark(tshark, args, (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
     const [src, hex] = trimmed.split("|");
     if (src !== opts.printerIp || !hex) return;
-    let pos = 0;
-    while (pos < hex.length) {
-      if (currentChunkRemaining > 0) {
-        if (pendingStatusByte) {
-          if (pos + 2 > hex.length) break; // status byte split across segments — defer
-          pos += 2;
-          currentChunkRemaining -= 1;
-          pendingStatusByte = false;
-          if (currentChunkRemaining === 0) continue;
-        }
-        const availableBytes = (hex.length - pos) / 2;
-        const take = Math.min(availableBytes, currentChunkRemaining);
-        buffers.push(Buffer.from(hex.slice(pos, pos + take * 2), "hex"));
-        pos += take * 2;
-        currentChunkRemaining -= take;
-        continue;
-      }
-      // Sync loss check: anything other than the IS-0xa200 magic at the
-      // current cursor means we're past the image stream or have drifted.
-      // Stopping rather than skipping prevents silent pixel corruption from
-      // misaligned reads.
-      if (hex.slice(pos, pos + IS_IMAGE_CHUNK_HEX.length) !== IS_IMAGE_CHUNK_HEX) break;
-      if (pos + PAYLOAD_SIZE_HEX_OFFSET + 8 > hex.length) break; // truncated header
-      const size = parseInt(
-        hex.slice(pos + PAYLOAD_SIZE_HEX_OFFSET, pos + PAYLOAD_SIZE_HEX_OFFSET + 8),
-        16,
-      );
-      pos += IS_HEADER_HEX_LEN;
-      currentChunkRemaining = size;
-      pendingStatusByte = true;
-    }
+    reader.feed(Buffer.from(hex, "hex"), (f) => {
+      // IS-0xa200 chunks prefix pixels with a 1-byte status; strip it before
+      // appending — everything else (acks, control frames) is ignored.
+      if (f.type === 0xa200) buffers.push(f.payload.subarray(1));
+    });
   });
+  // Throws on any leftover partial bytes — a truncated capture should fail
+  // loudly rather than silently render a short/garbled page.
+  reader.finish();
 
   const allGbr = Buffer.concat(buffers);
   const pageCount = Math.floor(allGbr.length / pageSize);
@@ -153,13 +133,54 @@ function isFormat(f: string): f is Format {
   return (VALID_FORMATS as string[]).includes(f);
 }
 
+export interface RenderCliArgs {
+  pcapPath: string;
+  source: string;
+  format: string;
+  outputDir: string;
+  tcpStream?: number;
+  widthPx?: number;
+  heightPx?: number;
+}
+
+/**
+ * Parse `render.ts` CLI argv (post `node`/script name). Factored out from
+ * `main()` so the flag-parsing logic is unit-testable without spawning
+ * tshark. Positional args are `<pcap> <source> <format> <outputDir>`;
+ * `--stream`, `--width`, and `--height` are optional flags that can appear
+ * anywhere in argv.
+ */
+export function parseRenderArgs(argv: string[]): RenderCliArgs {
+  const positional: string[] = [];
+  let tcpStream: number | undefined;
+  let widthPx: number | undefined;
+  let heightPx: number | undefined;
+  for (let i = 0; i < argv.length; i++) {
+    const arg = argv[i];
+    if (arg === "--stream" && i + 1 < argv.length) {
+      tcpStream = parseInt(argv[++i], 10);
+    } else if (arg === "--width" && i + 1 < argv.length) {
+      widthPx = parseInt(argv[++i], 10);
+    } else if (arg === "--height" && i + 1 < argv.length) {
+      heightPx = parseInt(argv[++i], 10);
+    } else {
+      positional.push(arg);
+    }
+  }
+  const [pcapPath, source, format, outputDir] = positional;
+  return { pcapPath, source, format, outputDir, tcpStream, widthPx, heightPx };
+}
+
 async function main(): Promise<void> {
-  const [pcapPath, source, format, outputDir] = process.argv.slice(2);
+  const { pcapPath, source, format, outputDir, tcpStream, widthPx, heightPx } = parseRenderArgs(
+    process.argv.slice(2),
+  );
   if (!pcapPath || !source || !format || !outputDir) {
     console.error(
       "Usage: tsx tools/pcap-render/render.ts <pcap> <source> <format> <outputDir>\n" +
         "  source: flatbed | adf-simplex | adf-duplex\n" +
         "  format: jpg | pdf\n" +
+        "  Flags: --stream <tcpStream>  --width <px>  --height <px>\n" +
         "  Env: HOST_IP (default 192.168.188.140), PRINTER_IP (default 192.168.188.54),\n" +
         "       SCAN_PORT (default 1865), TSHARK_PATH (default tshark)",
     );
@@ -181,6 +202,9 @@ async function main(): Promise<void> {
     hostIp: process.env.HOST_IP ?? "192.168.188.140",
     printerIp: process.env.PRINTER_IP ?? "192.168.188.54",
     scanPort: parseInt(process.env.SCAN_PORT ?? "1865", 10),
+    tcpStream,
+    widthPx,
+    heightPx,
   });
   console.log(`Rendered ${pageCount} page(s) (${source}/${format}) to ${outputDir}`);
 }
