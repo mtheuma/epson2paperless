@@ -12,7 +12,7 @@ Printer (unicast)    →  Service (TCP port 2968)          Push-scan trigger
 Service              →  Printer (TCP port 1865)          Scan session
 ```
 
-Each channel is independent enough to be developed and tested separately. Inside the scan session, the same `IS` framing wraps either ESC/I-2 commands (ET-4950 family + ET-2950 over TLS; ET-2750 / XP-7100 / ET-4800 / ET-15000 / FF-680W over plain TCP) or legacy ESC/I commands (WF-3620 family, plain TCP). TLS is layered around it only for the ESC/I-2-over-TLS printers (the ET-4950 family and ET-2950 — a separate registry entry); everything else runs on plain TCP.
+Each channel is independent enough to be developed and tested separately. Inside the scan session, the same `IS` framing wraps either ESC/I-2 commands (ET-4950 family + ET-2950 over TLS; ET-2750 / XP-7100 / ET-4800 / ET-15000 / FF-680W over plain TCP) or legacy ESC/I commands (WF-3620 family and XP-620, plain TCP). TLS is layered around it only for the ESC/I-2-over-TLS printers (the ET-4950 family and ET-2950 — a separate registry entry); everything else runs on plain TCP.
 
 ### Discovery and keepalive (UDP multicast)
 
@@ -53,7 +53,7 @@ Three transport variants ride on TCP port 1865, decided per scan session by `src
 | ------------- | ------------ | -------------------- | ------------------------------------------------ |
 | `esci2-tls`   | TLS over TCP | ESC/I-2 over IS      | ET-4950 / ET-3950 / ET-4956 / ET-2950            |
 | `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750 / XP-7100 / ET-4800 / ET-15000 / FF-680W |
-| `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family                                   |
+| `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family / XP-620                          |
 
 The rest of this section walks the **canonical `esci2-tls` path** in depth, since it's the most mechanically complex (TLS on top, both command generations layered inside) and the foundation that the other two variants peel back from. The plain-TCP ESC/I-2 differences (ET-2750 / XP-7100 / ET-4800 / ET-15000 / FF-680W) live in [ESC/I-2 over plain TCP](#esci-2-over-plain-tcp), and the legacy ESC/I family (WF-3620) in [ESC/I variant](#esci-variant-wf-3620). Both are sibling sections, not appendices.
 
@@ -367,6 +367,15 @@ plain-TCP arm of the [protocol probe](#protocol-probe-two-arms): after TLS
 fails, the plain-TCP welcome's payload byte 1 (`0x02`) identifies the device
 as legacy-ESC/I-shaped.
 
+A second model, the **XP-620** (issue #124), speaks a structurally similar
+but distinct dialect of the same ESC/I command family — same `IS` framing,
+same probe classification (its welcome payload is byte-for-byte identical
+to the WF-3620's), but a different setup/teardown handshake and a
+flatbed-only fixed raster. Per-model differences between the two are
+resolved through a small dialect registry rather than branching logic
+scattered through the graph — see [Per-model dialects
+(LegacyDialectEntry)](#per-model-dialects-legacydialectentry) below.
+
 Key wire differences (full table in
 `.reference/wireshark-captures/wf-3620/protocol-decode.md`):
 
@@ -389,12 +398,113 @@ Key wire differences (full table in
   produces two cycles per sheet; the back side comes out 180°-rotated and
   the host applies EXIF Orientation=3 / `/Rotate 180` accordingly.
 
+The bullets above describe the WF-3620's wire shape specifically; XP-620
+differs in its setup/teardown handshake and scan-parameter data, covered
+next.
+
 The ESC/I state machine lives in `src/esci/scanner.ts`. Per-page raw
 pixel buffers are accumulated in memory (~104 MB at 600 DPI A4), encoded
 to JPEG via sharp, and handed off to `output-tail.ts`'s shared post-scan
 pipeline.
 
+### Per-model dialects (LegacyDialectEntry)
+
+The legacy ESC/I graph (`src/esci/graph.ts`) is shared by both models. It
+reads per-model decisions off a `LegacyDialectEntry` (`src/esci/dialects/entry.ts`):
+fixed raster geometry, gamma LUTs, the `FS W` parameter block, the
+`FS G`-following stream-config payload, a `sourcePolicy` (`"detect"` for
+WF-3620's `ESC e` + `FS F` probe vs. `"fixed-flatbed"` for XP-620, which has
+no ADF), and two `Branch<S>` records — `setup` and `teardown` — each a
+`{ next, send }` pair naming the graph state to jump to and the command to
+emit on entry.
+
+`src/esci/dialects/registry.ts`'s `resolveLegacyEntry(productName)` picks
+the entry. The push-scan SOAP's `ProductNameIn` field (parsed by
+`parsePushScanRequest` in `src/pushscan.ts`, threaded through
+`dispatchScanSession` in `src/startup.ts` as `productName`) is matched
+against `XP620_ENTRY`'s literal PID string `"PID 08C8"`; any other PID —
+or `null`, which is what the host-triggered `scan:now` CLI (`src/scan-now.ts`)
+always passes since there is no panel to read a `ProductNameIn` from —
+falls back to `WF3620_ENTRY`. In other words, XP-620 support is only
+reachable through a panel-triggered scan (daemon or `npm run scan`);
+`scan:now` stays WF-3620 regardless of the actual printer.
+
+Three branch points read `ctx.entry`:
+
+- **Setup** (`LOCKING`): once the lock-ack arrives, the graph jumps to
+  `ctx.entry.setup.next` and sends `ctx.entry.setup.send()`. WF-3620 sends
+  `ESC @` into `INIT`; XP-620 sends `ESC I` into `XP_IDENT_A_META`, the
+  first state of the two-phase identity read described below.
+- **Pre-start** (`WINDOW_DATA`): once the 64-byte `FS W` block is acked,
+  `ctx.entry.prestart` selects `"status-then-start"` (WF-3620: one more
+  `FS F` status round-trip before `FS G`) or `"start-direct"` (XP-620:
+  `FS G` sent immediately — the captured driver skips the prescan status
+  check).
+- **Teardown** (`makeFlushTransition`'s flatbed branch — ADF pages always
+  take the page-eject loop, which is dialect-independent): once the last
+  flatbed page's pixels have flushed, the graph jumps to
+  `ctx.entry.teardown.next` and sends `ctx.entry.teardown.send()`.
+  WF-3620 sends `FS F` into `POST_STATUS` (the ordinary cleanup cycle);
+  XP-620 sends `ESC @` into `XP_TEARDOWN_INIT`, its own teardown group.
+
+Per-entry fixed data lives on the entry rather than being derived
+per-request: `raster()` (page dimensions), `gamma` (R/G/B LUTs),
+`fswBlock()` (the 64-byte `FS W` block), and `streamConfig()` (the
+`FS G`-following `IS-0x2200` payload). WF-3620's versions compute these
+from the requested source/format (`geometry()`, `buildFsWBlock()`,
+`buildStreamConfigPayload()` in `src/esci/commands.ts`). XP-620's are
+fixed constants — the model only supports flatbed and only one mode
+(300 DPI A4, 2481×3507 px) has been captured — transcribed byte-for-byte
+from that capture into `src/esci/dialects/xp620-data.ts`.
+
+`runEsciScan` (`src/esci/scanner.ts`) guards the mismatch this fixed
+dialect creates: if `entry.sourcePolicy === "fixed-flatbed"` and
+`ESCI_FORCE_SOURCE` names anything other than `flatbed`, the scan fails
+immediately with a descriptive error instead of desyncing mid-session
+against hardware with no ADF to source from.
+
+### XP-620 setup and teardown
+
+XP-620's setup group (`src/esci/graph.ts`, states `XP_IDENT_A_META`
+through `GAMMA_CMD`) reproduces the captured driver's handshake:
+
+1. **`ESC I`** (`1b 49`) and **`ESC i`** (`1b 69`) — two-phase identity
+   reads, mirroring the ESC/I-2 `_META`/`_DATA` pattern: a 4-byte reply
+   (`02 02` + a little-endian `u16` length) followed by a pure-read of
+   that declared length. The lengths are pinned to the captured values —
+   19 bytes for `ESC I`, 40 for `ESC i` — and the graph fails fast if a
+   printer reports a different length.
+2. **`FS I`** — the usual single-phase 80-byte identity read, shared with
+   WF-3620 — followed by the first of three `FS F` status polls.
+3. **`ESC @`** — the standard init — then **`ESC 0xe2`** (`1b e2`), an
+   XP-620-only command with no WF-3620 equivalent. Its reply may be `0x06`
+   (ACK) or `0x15` (NAK); the captured driver proceeds identically either
+   way, so the graph treats both as success. A second `FS F` poll follows.
+4. **`ESC (`** and the third `FS F` poll round out the setup before the
+   shared gamma phase (three `ESC z` + 256-byte LUT cycles, identical in
+   shape to WF-3620's).
+
+`FS W` → `FS G` then starts the scan directly (no `FS F` prescan status
+round-trip — see `prestart: "start-direct"` above).
+
+After the image transfer, XP-620's teardown group (`XP_TEARDOWN_INIT`
+through `XP_TEARDOWN_PAREN`) is `ESC @` → `ESC e` + `0x00` → `ESC )`, then
+the session ends. Unlike WF-3620 — and unlike every other supported
+model — the capture shows no `0xa101` unlock ack: the printer closes the
+TCP connection right after the `ESC )` reply, so the graph resolves
+straight to the engine's terminal `DONE` state instead of routing through
+`UNLOCKING`.
+
+`src/esci/scanner.test.ts` replays the captured XP-620 flatbed session
+(`tools/pcap-extract/captures/xp-620/flatbed.jsonl`) byte-for-byte for
+both JPG and PDF output, alongside the WF-3620 fixtures.
+
 ### Source selection (ESC/I)
+
+This section describes WF-3620's `sourcePolicy: "detect"` behaviour.
+XP-620's `sourcePolicy: "fixed-flatbed"` skips it entirely: `runEsciScan`
+pins `ctx.source = "flatbed"` and `ctx.sourceDetected = true` before the
+graph runs, since the hardware has no ADF to detect.
 
 The PushScan SOAP carries `duplex` and `action` (Sides + Format) but no
 explicit ADF-vs-flatbed selector. The legacy graph probes with `ESC e 0x01`
@@ -407,14 +517,16 @@ and reads the following `FS F` status reply to detect the physical source:
 
 Setting `ESCI_FORCE_SOURCE=flatbed` (or `adf-simplex` / `adf-duplex`)
 overrides the detected value for edge cases whose status byte has not been
-captured yet.
+captured yet. XP-620 rejects any forced value other than `flatbed` at
+startup (see [Per-model dialects](#per-model-dialects-legacydialectentry)).
 
 ### Multi-page termination
 
-After every page-eject, the host polls `FS F`. The 16-byte status reply's
-byte 0 is the discriminator: `0x01` means the ADF still has paper (loop
-back through gamma/window/start for the next page); `0x81` means the ADF
-is empty (proceed to cleanup). This handles arbitrary page counts —
+ADF-only; XP-620 is flatbed-only and never enters this path. After every
+page-eject, the host polls `FS F`. The 16-byte status reply's byte 0 is
+the discriminator: `0x01` means the ADF still has paper (loop back
+through gamma/window/start for the next page); `0x81` means the ADF is
+empty (proceed to cleanup). This handles arbitrary page counts —
 3-sheet simplex, 4-sheet duplex, and 1-sheet duplex all share the same
 state-machine path.
 

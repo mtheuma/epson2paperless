@@ -23,6 +23,7 @@ What you get:
 | **ET-3950**           | ✅ Verified     |                                                                                                                               |
 | **ET-4950 / ET-4956** | ✅ Verified     |                                                                                                                               |
 | **WF-3620**           | ✅ Verified     | Plain TCP scanner, no TLS pinning                                                                                             |
+| **XP-620**            | 🟡 Experimental | Flatbed-only hardware                                                                                                         |
 | **ET-2750**           | ✅ Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS                                                                         |
 | **ET-2810**           | ✅ Verified     | Flatbed-only hardware; no panel trigger — needs `scan:now`                                                                    |
 | **ET-2950**           | 🟡 Experimental | Flatbed-only hardware; inferred dialect, no reporter retest yet ([#92](https://github.com/mtheuma/epson2paperless/issues/92)) |
@@ -126,7 +127,7 @@ skips. On ADF models without duplex hardware (ET-4800, ET-15000), set `SCAN_SIDE
 
 Configuration is via environment variables. Only `PRINTER_IP` is required.
 
-Each setting's **Scope** column shows which printers it affects: `All`, `Panel` (panel-driven models), `FF-680W`, `Legacy ESC/I` (WF-3620 family), or `ESC/I-2 TLS` (ET-4950 family). A setting outside a printer's path is simply ignored.
+Each setting's **Scope** column shows which printers it affects: `All`, `Panel` (panel-driven models), `FF-680W`, `Legacy ESC/I` (WF-3620 family, XP-620), or `ESC/I-2 TLS` (ET-4950 family). A setting outside a printer's path is simply ignored.
 
 | Variable                    | Scope               | Default          | What it does                                                                                                                                                                            |
 | --------------------------- | ------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
