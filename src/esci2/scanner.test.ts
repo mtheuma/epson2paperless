@@ -1297,3 +1297,129 @@ describe("runEsci2ScanOverPlain — FF-680W fixture replay", () => {
     expect(pages).toBe(1);
   }, 60_000);
 });
+
+const DS575W_FP = "90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b074";
+
+// The DS-575W's #ADFCRP flags field mixes SKEW/DFL1 (GUI-driven scan options
+// this service doesn't model, whose bytes/order vary per capture) with DPLX (the
+// duplex axis this service DOES model, from ctx.duplex). To compare a mono
+// fixture's captured PARA against the composed one we canonicalise the flags
+// field: keep DPLX so a simplex/duplex framing regression is still caught, and
+// drop the unmodeled SKEW/DFL1 tokens whose ordering the capture happened to
+// use. Everything downstream (#RSM/#RSS, #COL, gamma, CMX, extents, trailer) is
+// pinned as-is.
+function normalizeAdfCrpFlags(para: Buffer): Buffer {
+  const HEAD = Buffer.from("#ADFCRP ", "ascii");
+  const RSM = Buffer.from("#RSM", "ascii");
+  if (!para.subarray(0, HEAD.length).equals(HEAD)) {
+    throw new Error("normalizeAdfCrpFlags: PARA does not start with #ADFCRP");
+  }
+  const rsm = para.indexOf(RSM);
+  if (rsm < 0) throw new Error("normalizeAdfCrpFlags: no #RSM segment");
+  const flags = para.subarray(HEAD.length, rsm).toString("ascii");
+  const kept = flags.includes("DPLX") ? "DPLX" : "";
+  return Buffer.concat([
+    para.subarray(0, HEAD.length),
+    Buffer.from(kept, "ascii"),
+    para.subarray(rsm),
+  ]);
+}
+
+describe("runEsci2ScanOverPlain — DS-575W fixture replay", () => {
+  let outputDir: string;
+  let tempDir: string;
+
+  beforeEach(() => {
+    outputDir = mkdtempSync(path.join(os.tmpdir(), "ds575w-out-"));
+    tempDir = mkdtempSync(path.join(os.tmpdir(), "ds575w-tmp-"));
+  });
+
+  afterEach(() => {
+    rmSync(outputDir, { recursive: true, force: true });
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const FIX_DIR = path.join("tools", "pcap-extract", "captures", "ds-575w");
+
+  // Drive a full-session greyscale mono fixture to completion and return the JPG
+  // page count. Also pins the composed greyscale PARA against the captured one
+  // (flags-stripped): this is where the novel ds575w-mono gamma, #COLM008, the
+  // et2750-um08 CMX, and the DPI-scaled extents are byte-checked.
+  async function runMono(opts: {
+    fixtureFile: string;
+    duplex: boolean;
+    resolution: number;
+  }): Promise<number> {
+    const fixture = loadFixture(path.join(FIX_DIR, opts.fixtureFile));
+    const fake = new FakePlainSocket();
+    const sessionPromise = runEsci2ScanOverPlain(
+      {
+        printerIp: "192.168.11.202",
+        port: 1865,
+        destId: 0x02,
+        outputDir,
+        tempDir,
+        duplex: opts.duplex,
+        action: "jpg",
+        resolution: opts.resolution,
+        colorMode: "grayscale",
+      },
+      fake.asFactory(),
+    );
+    await driveFixture(fixture, fake, sessionPromise);
+
+    // PARA pin (flags-normalised — see normalizeAdfCrpFlags). The scanner emits
+    // our canonical-flags greyscale PARA; the capture used a different GUI flag
+    // ordering, so we keep the modeled DPLX token and drop the unmodeled
+    // SKEW/DFL1 before comparing.
+    const capturedPara = extractCapturedParaBody(fixture);
+    const scannerPara = extractScannerParaWrite(fake);
+    expect(normalizeAdfCrpFlags(scannerPara).equals(normalizeAdfCrpFlags(capturedPara))).toBe(true);
+
+    const source: ParaSpec["source"] = opts.duplex ? "adf-duplex" : "adf-simplex";
+    const recipePara = composePara(
+      makeParaSpec(REGISTRY.get(DS575W_FP)!, source, "jpg", opts.resolution, "grayscale"),
+    );
+    expect(normalizeAdfCrpFlags(recipePara).equals(normalizeAdfCrpFlags(capturedPara))).toBe(true);
+
+    const jpgs = readdirSync(outputDir).filter((f) => f.endsWith(".jpg"));
+    for (const f of jpgs) expect(f).toMatch(/^scan_\d{4}-\d{2}-\d{2}_\d{6}(_\d{2})?\.jpg$/);
+    return jpgs.length;
+  }
+
+  it("ADF simplex 400 DPI greyscale → one JPG page", async () => {
+    expect(
+      await runMono({
+        fixtureFile: "adf-simplex-400-mono-jpg.jsonl",
+        duplex: false,
+        resolution: 400,
+      }),
+    ).toBe(1);
+  }, 60_000);
+
+  it("ADF duplex 600 DPI greyscale → two JPG pages (front + back)", async () => {
+    expect(
+      await runMono({
+        fixtureFile: "adf-duplex-600-mono-jpg.jsonl",
+        duplex: true,
+        resolution: 600,
+      }),
+    ).toBe(2);
+  }, 60_000);
+
+  // Colour PARA byte-equivalence shield (strict). The colour capture's #ADFCRP
+  // flags (SKEWDFL1) match our canonical exactly, so the whole 996-byte body is
+  // compared with no carve-out. This pins the colour path: #COLC024, the RGB
+  // gamma (reused ff680w-adf class), the et2750-um08 CMX, and the 600-DPI
+  // extents. The capture has no init handshake (persistent connection), so it is
+  // an oracle only — extracted and compared, not driven.
+  it("colour simplex 600 DPI PARA matches composePara byte-for-byte", () => {
+    const oracle = loadFixture(path.join(FIX_DIR, "adf-simplex-600-color-jpg.oracle.jsonl"));
+    const capturedPara = extractCapturedParaBody(oracle);
+    const recipePara = composePara(
+      makeParaSpec(REGISTRY.get(DS575W_FP)!, "adf-simplex", "jpg", 600, "color"),
+    );
+    expect(recipePara.length).toBe(996);
+    expect(recipePara.equals(capturedPara)).toBe(true);
+  });
+});

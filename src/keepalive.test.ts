@@ -209,6 +209,10 @@ describe("createKeepaliveResponder", () => {
     return Buffer.concat([makeAnnouncement(seq), Buffer.from("\x08PID 016B\0", "latin1")]);
   }
 
+  function makeDs575wAnnouncement(seq: number): Buffer {
+    return Buffer.concat([makeAnnouncement(seq), Buffer.from("\x08PID 0169\0", "latin1")]);
+  }
+
   interface Harness {
     listener: dgram.Socket;
     announcer: dgram.Socket;
@@ -290,16 +294,18 @@ describe("createKeepaliveResponder", () => {
     h.teardown();
   });
 
-  it("uses v3 keepalive only for FF-680W announcements", async () => {
-    const h = await setupHarness({ burstCount: 1 });
-    await sendAnnouncement(h, makeFf680wAnnouncement(0x43));
-    await new Promise((r) => setTimeout(r, 40));
+  it("auto-selects v3 keepalive for DS-family announcements (FF-680W + DS-575W)", async () => {
+    for (const make of [makeFf680wAnnouncement, makeDs575wAnnouncement]) {
+      const h = await setupHarness({ burstCount: 1 });
+      await sendAnnouncement(h, make(0x43));
+      await new Promise((r) => setTimeout(r, 40));
 
-    expect(h.received).toHaveLength(1);
-    expect(h.received[0].subarray(20).toString("ascii")).toContain("(Ver=3.0)");
-    expect(h.received[0].subarray(20).toString("ascii")).toContain("(Group=0)");
+      expect(h.received).toHaveLength(1);
+      expect(h.received[0].subarray(20).toString("ascii")).toContain("(Ver=3.0)");
+      expect(h.received[0].subarray(20).toString("ascii")).toContain("(Group=0)");
 
-    h.teardown();
+      h.teardown();
+    }
   });
 
   it("sends the v2 fleet keepalive from the bound multicast socket (port preserved)", async () => {

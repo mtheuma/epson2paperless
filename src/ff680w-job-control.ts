@@ -82,7 +82,8 @@ async function runJobControl(
     const jobReply = await expectPacket(reader, 0xa300, `${label} reply`);
     if (jobReply.payload.length !== expectedReplyBytes) {
       throw new Error(
-        `${label} reply payload length ${jobReply.payload.length}, expected ${expectedReplyBytes}`,
+        `${label} reply payload length ${jobReply.payload.length}, expected ${expectedReplyBytes} ` +
+          `(payload=${jobReply.payload.toString("hex")})`,
       );
     }
 
@@ -168,7 +169,12 @@ async function expectPacket(
 ): Promise<IsPacket> {
   const packet = await reader.read(label);
   if (packet.type !== type) {
-    throw new Error(`${label}: expected IS 0x${hex(type)}, got 0x${hex(packet.type)}`);
+    // Include the reply payload so a rejected handshake is diagnosable from the
+    // debug log alone (no pcap needed) — matters for the button-only scanners we
+    // triage remotely without owning the hardware. See issue #128.
+    throw new Error(
+      `${label}: expected IS 0x${hex(type)}, got 0x${hex(packet.type)} (payload=${packet.payload.toString("hex")})`,
+    );
   }
   if (validate && !validate(packet)) {
     throw new Error(`${label}: invalid payload ${packet.payload.toString("hex")}`);

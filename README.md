@@ -32,7 +32,8 @@ What you get:
 | **ET-4800**           | ✅ Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS                                                                                   |
 | **ET-15000**          | 🟡 Experimental | Flatbed verified; ADF simplex untested                                                                                        |
 | **XP-7100**           | ✅ Verified     |                                                                                                                               |
-| **FF-680W**           | 🟡 Experimental | Requires [pairing](#ff-680w-pairing); ADF-only; 200/300 DPI verified                                                          |
+| **FF-680W**           | 🟡 Experimental | Requires [pairing](#button-only-scanner-pairing); ADF-only; 200/300 DPI verified                                              |
+| **DS-575W**           | 🟡 Experimental | Requires [pairing](#button-only-scanner-pairing); ADF-only; only duplex colour PDF @ 200 DPI hardware-verified                |
 
 ✅ **Verified**: every capability the hardware has is confirmed working on real hardware by someone.
 
@@ -128,37 +129,38 @@ skips. On ADF models without duplex hardware (ET-4800, ET-15000), set `SCAN_SIDE
 
 Configuration is via environment variables. Only `PRINTER_IP` is required.
 
-Each setting's **Scope** column shows which printers it affects: `All`, `Panel` (panel-driven models), `FF-680W`, `Legacy ESC/I` (WF-3620 family, XP-620), or `ESC/I-2 TLS` (ET-4950 family). A setting outside a printer's path is simply ignored.
+Each setting's **Scope** column shows which printers it affects: `All`, `Panel` (panel-driven models), `FF-680W`, `DS-575W`, `Legacy ESC/I` (WF-3620 family, XP-620), or `ESC/I-2 TLS` (ET-4950 family). A setting outside a printer's path is simply ignored.
 
-| Variable                    | Scope               | Default          | What it does                                                                                                                                                                            |
-| --------------------------- | ------------------- | ---------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PRINTER_IP`<br>✅ required | All                 | —                | The printer's IPv4 address.                                                                                                                                                             |
-| `SCAN_DEST_NAME`            | All                 | `Paperless`      | The label the printer shows on its panel. Give each instance a distinct name. On FF-680W, this must also match the scanner's paired host name; see [FF-680W pairing](#ff-680w-pairing). |
-| `OUTPUT_DIR`                | All                 | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                                                        |
-| `LOG_LEVEL`                 | All                 | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                                                    |
-| `LOG_FORMAT`                | All                 | `text`           | `text` (human-readable) or `json` (ndjson, one record per line, for `docker logs` + Loki / `jq`).                                                                                       |
-| `PREVIEW_ACTION`            | Panel               | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen.                                 |
-| `SCAN_FORMAT`               | FF-680W, `scan:now` | `pdf`            | Output format (`jpg` / `pdf`) when no panel choice reaches us: the FF-680W, and every host-triggered scan.                                                                              |
-| `SCAN_SIDES`                | FF-680W, `scan:now` | `duplex`         | `simplex` or `duplex` when no panel choice reaches us. The FF-680W has no panel Sides selector. Set `simplex` for host-triggered scans on ADF models without duplex hardware.           |
-| `SCAN_RESOLUTION`           | FF-680W             | `200`            | Scan DPI. One of `50,75,100,150,200,240,300,360,400,600`; `200`/`300` verified.                                                                                                         |
-| `PRINTER_PROTOCOL`          | All                 | `auto`           | `auto` (probe each session), `esci2` (force ESC/I-2 over TLS), `esci2-plain` (force ESC/I-2 over plain TCP), `esci` (force plain-TCP ESC/I).                                            |
-| `JPEG_QUALITY`              | All                 | `90`             | JPEG encoder quality 1–100 (host-encoded raw pixels). Also sets the re-encode quality when `POST_PROCESS=document`.                                                                     |
-| `POST_PROCESS`              | All                 | `none`           | `document` neutralizes the paper white-point (removes blue cast, show-through, ADF sensor lines) and re-encodes at `JPEG_QUALITY`; `none` leaves the printer's raw JPEG untouched.      |
-| `TEMP_DIR`                  | All                 | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                                                               |
-| `HEALTH_PORT`               | All                 | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                                                   |
+| Variable                    | Scope                        | Default          | What it does                                                                                                                                                                                                                                   |
+| --------------------------- | ---------------------------- | ---------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PRINTER_IP`<br>✅ required | All                          | —                | The printer's IPv4 address.                                                                                                                                                                                                                    |
+| `SCAN_DEST_NAME`            | All                          | `Paperless`      | The label the printer shows on its panel. Give each instance a distinct name. On button-only scanners (FF-680W, DS-575W) it must also match the scanner's stored paired name; see [Button-only scanner pairing](#button-only-scanner-pairing). |
+| `OUTPUT_DIR`                | All                          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                                                                                                               |
+| `LOG_LEVEL`                 | All                          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                                                                                                           |
+| `LOG_FORMAT`                | All                          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line, for `docker logs` + Loki / `jq`).                                                                                                                                              |
+| `PREVIEW_ACTION`            | Panel                        | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen.                                                                                        |
+| `SCAN_FORMAT`               | FF-680W, DS-575W, `scan:now` | `pdf`            | Output format (`jpg` / `pdf`) when no panel choice reaches us: button-only scanners, and every host-triggered scan.                                                                                                                            |
+| `SCAN_SIDES`                | FF-680W, DS-575W, `scan:now` | `duplex`         | `simplex` or `duplex` when no panel choice reaches us. Button-only scanners have no panel Sides selector. Set `simplex` for host-triggered scans on ADF models without duplex hardware.                                                        |
+| `SCAN_RESOLUTION`           | FF-680W, DS-575W             | `200`            | Scan DPI. One of `50,75,100,150,200,240,300,360,400,600`. FF-680W: `200`/`300` hardware-tested. DS-575W: `200` hardware-tested; `400`/`600` capture/replay-tested only.                                                                        |
+| `SCAN_COLOR_MODE`           | DS-575W                      | `color`          | `color` or `grayscale` (the DS-575W has no panel colour selector). Other models ignore it and scan in colour.                                                                                                                                  |
+| `PRINTER_PROTOCOL`          | All                          | `auto`           | `auto` (probe each session), `esci2` (force ESC/I-2 over TLS), `esci2-plain` (force ESC/I-2 over plain TCP), `esci` (force plain-TCP ESC/I).                                                                                                   |
+| `JPEG_QUALITY`              | All                          | `90`             | JPEG encoder quality 1–100 (host-encoded raw pixels). Also sets the re-encode quality when `POST_PROCESS=document`.                                                                                                                            |
+| `POST_PROCESS`              | All                          | `none`           | `document` neutralizes the paper white-point (removes blue cast, show-through, ADF sensor lines) and re-encodes at `JPEG_QUALITY`; `none` leaves the printer's raw JPEG untouched.                                                             |
+| `TEMP_DIR`                  | All                          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                                                                                                                      |
+| `HEALTH_PORT`               | All                          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                                                                                                          |
 
 <details>
 <summary>Advanced (leave as default unless you know why)</summary>
 
-| Variable                   | Scope        | Default | What it does                                                                                                                                                                                           |
-| -------------------------- | ------------ | ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `SCAN_DEST_ID`             | All          | `0x02`  | Keepalive "Scan to Computer" selector. `0x02` is the only working value; others stop the destination appearing. For multiple instances, vary `SCAN_DEST_NAME` instead.                                 |
-| `LANGUAGE`                 | All          | `en`    | 2-letter locale sent to the printer; no observed user-visible effect.                                                                                                                                  |
-| `ESCI_FORCE_SOURCE`        | Legacy ESC/I | —       | Diagnostic override when FS F source autodetection misfires. Set to `flatbed`, `adf-simplex`, or `adf-duplex` to bypass the wire-byte detection.                                                       |
-| `PRINTER_CERT_FINGERPRINT` | ESC/I-2 TLS  | —       | SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`); scans abort on mismatch. **Requires `PRINTER_PROTOCOL=esci2`** — `auto` can't pin reliably and the non-TLS variants have no cert.      |
-| `DIAGNOSE_PROTOCOL`        | Legacy ESC/I | `false` | Compatibility-report aid. On a legacy `ESC @` non-ACK, sends one extra `FS Y` probe and aborts with annotated `[diagnose]` log lines. Leave off in normal use.                                         |
-| `NETSCAN_VERSION`          | All          | `auto`  | Compatibility-triage aid. Forces the discovery keepalive wire format (`2.0` / `3.0`); `auto` picks it from the scanner's announced PID (`3.0` for FF-680W, else `2.0`). Leave on `auto` in normal use. |
-| `SHUTDOWN_TIMEOUT_MS`      | All          | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                                                                                              |
+| Variable                   | Scope        | Default | What it does                                                                                                                                                                                                           |
+| -------------------------- | ------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SCAN_DEST_ID`             | All          | `0x02`  | Keepalive "Scan to Computer" selector. `0x02` is the only working value; others stop the destination appearing. For multiple instances, vary `SCAN_DEST_NAME` instead.                                                 |
+| `LANGUAGE`                 | All          | `en`    | 2-letter locale sent to the printer; no observed user-visible effect.                                                                                                                                                  |
+| `ESCI_FORCE_SOURCE`        | Legacy ESC/I | —       | Diagnostic override when FS F source autodetection misfires. Set to `flatbed`, `adf-simplex`, or `adf-duplex` to bypass the wire-byte detection.                                                                       |
+| `PRINTER_CERT_FINGERPRINT` | ESC/I-2 TLS  | —       | SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`); scans abort on mismatch. **Requires `PRINTER_PROTOCOL=esci2`** — `auto` can't pin reliably and the non-TLS variants have no cert.                      |
+| `DIAGNOSE_PROTOCOL`        | Legacy ESC/I | `false` | Compatibility-report aid. On a legacy `ESC @` non-ACK, sends one extra `FS Y` probe and aborts with annotated `[diagnose]` log lines. Leave off in normal use.                                                         |
+| `NETSCAN_VERSION`          | All          | `auto`  | Compatibility-triage aid. Forces the discovery keepalive wire format (`2.0` / `3.0`); `auto` picks it from the scanner's announced PID (`3.0` for the FF-680W and DS-575W, else `2.0`). Leave on `auto` in normal use. |
+| `SHUTDOWN_TIMEOUT_MS`      | All          | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                                                                                                              |
 
 </details>
 
@@ -213,18 +215,21 @@ Rare edge case. Restart the service with `Ctrl-C` and relaunch.
 **Output folder fills with duplicates named `scan_..._1.jpg`.**
 Normal. If two scans land in the same second, the service appends `_1`, `_2` to avoid overwriting.
 
-## FF-680W pairing
+## Button-only scanner pairing
 
-The FF-680W stores a paired host name on the scanner. The `ClientName` advertised by `epson2paperless` must match that stored value exactly, so the scanner's paired name should be the same as `SCAN_DEST_NAME`. If you have run the commercial Epson software, it will likely have set this value to the hostname of the computer running that software.
+Button-only scanners — the **FF-680W** and **DS-575W** — have no panel to pick a destination from. The scanner stores a single paired host name and routes every button press to it, so the `ClientName` advertised by `epson2paperless` (i.e. `SCAN_DEST_NAME`) must match that stored name exactly. If it doesn't, the button press never reaches the service — you'll see healthy keepalives in the log but no scan.
 
-You can read the current paired name with SNMP:
+Read the current paired name with SNMP:
 
 ```bash
 snmpget -v1 -c epson <printer-ip> \
   1.3.6.1.4.1.1248.1.1.3.1.10.2.5.0
 ```
 
-Set it to the same value you use for `SCAN_DEST_NAME`:
+- **A name comes back** — common on the FF-680W if you've run Epson's software, which stores the PC's hostname. Either set `SCAN_DEST_NAME` to that value, or overwrite the stored name (below). Note the current value first if you may want to restore it.
+- **An empty string comes back** — common on the DS-575W, whose button is not paired to a network destination out of the box. You must set it before any button press will reach the service.
+
+Set the stored name to match `SCAN_DEST_NAME`:
 
 ```bash
 snmpset -v1 -c epson <printer-ip> \
@@ -232,7 +237,7 @@ snmpset -v1 -c epson <printer-ip> \
   s 'Paperless'
 ```
 
-For example, if you run with `SCAN_DEST_NAME=Paperless`, set the SNMP value to `Paperless` too.
+For example, with `SCAN_DEST_NAME=Paperless`, set the SNMP value to `Paperless` too. To undo, `snmpset` the original value back (or an empty string if it started empty).
 
 ## Further reading
 

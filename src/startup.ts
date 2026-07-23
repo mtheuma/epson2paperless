@@ -8,6 +8,7 @@ import { runEsci2Scan, runEsci2ScanOverPlain } from "./esci2/scanner.js";
 import { runEsciScan } from "./esci/scanner.js";
 import { resolveLegacyEntry } from "./esci/dialects/registry.js";
 import { runFf680wJobListCommit, runFf680wJobNumberCommit } from "./ff680w-job-control.js";
+import { PID_FF680W, PID_DS575W } from "./printer-ids.js";
 import {
   resolveEffectiveAction,
   type PushScanInfo,
@@ -108,22 +109,33 @@ export function buildPaperlessOptions(config: Config): PaperlessUploadOptions | 
   };
 }
 
-const FF680W_PRODUCT_NAME = "PID 016B";
+// Button-only scanners (no destination-picker panel) trigger scanning through a
+// JobList → dummy-job-commit → JobNumber handshake rather than a direct
+// PushScanIDIn. Both the FF-680W and its DS-575W sibling use this flow; the
+// job-control commands in ff680w-job-control.ts were reverse-engineered from the
+// FF-680W, and the DS-575W's JobList is structurally identical (verified on the
+// wire, issue #128). Mirrors V3_KEEPALIVE_PRODUCTS in keepalive.ts — separate
+// axis, shared membership today (see printer-ids.ts).
+const JOB_CONTROL_PRODUCTS = new Set([PID_FF680W, PID_DS575W]);
+
+function usesJobControl(productName: string | null): boolean {
+  return productName !== null && JOB_CONTROL_PRODUCTS.has(productName);
+}
 
 export function buildPushScanServerOptions(config: Config): PushScanServerOptions {
   return {
     beforeResponse: async ({ kind, info }) => {
-      if (info.productName !== FF680W_PRODUCT_NAME) return;
+      if (!usesJobControl(info.productName)) return;
 
       if (kind === "jobList") {
-        log.debug("FF-680W JobList received — committing dummy job over TCP/1865");
+        log.debug(`${info.productName} JobList received — committing dummy job over TCP/1865`);
         await runFf680wJobListCommit({ printerIp: config.printerIp });
         return;
       }
 
       if (kind === "pushScan" && info.jobNumber !== null && info.pushScanId === null) {
         log.debug(
-          `FF-680W JobNumberIn=${info.jobNumber} received — reading selected job over TCP/1865`,
+          `${info.productName} JobNumberIn=${info.jobNumber} received — reading selected job over TCP/1865`,
         );
         await runFf680wJobNumberCommit({ printerIp: config.printerIp });
       }
@@ -140,14 +152,10 @@ export function resolveScanDispatch(
     return { duplex: info.duplex, action: effective };
   }
 
-  if (
-    info.productName === FF680W_PRODUCT_NAME &&
-    info.jobNumber !== null &&
-    info.pushScanId === null
-  ) {
+  if (usesJobControl(info.productName) && info.jobNumber !== null && info.pushScanId === null) {
     const duplex = config.scanSides === "duplex";
     log.info(
-      `FF-680W JobNumberIn=${info.jobNumber} with no PushScanIDIn — ` +
+      `${info.productName} JobNumberIn=${info.jobNumber} with no PushScanIDIn — ` +
         `using SCAN_SIDES=${config.scanSides}, SCAN_FORMAT=${config.scanFormat}`,
     );
     return { duplex, action: config.scanFormat };
@@ -183,6 +191,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
       postProcess: args.config.postProcess,
       jpegQuality: args.config.jpegQuality,
       resolution: args.config.scanResolution,
+      colorMode: args.config.scanColorMode,
       paperless: args.paperless,
       printerCertFingerprint: args.config.printerCertFingerprint,
     });
@@ -204,6 +213,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
       postProcess: args.config.postProcess,
       jpegQuality: args.config.jpegQuality,
       resolution: args.config.scanResolution,
+      colorMode: args.config.scanColorMode,
       paperless: args.paperless,
     });
   }

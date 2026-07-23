@@ -78,10 +78,37 @@ describe("runJobControl error handling", () => {
     });
     setImmediate(() => fake.emit("data", welcome));
 
-    await expect(p).rejects.toThrow(/reply payload length/);
+    // The error carries the actual reply bytes so a rejected handshake is
+    // diagnosable from the debug log alone, without a pcap (issue #128).
+    await expect(p).rejects.toThrow(/reply payload length 4, expected 8 \(payload=00000000\)/);
     // Lock was acquired, so the error path must flush an UNLOCK (via end()).
     expect(fake.ends.some((b) => b.equals(buildUnlockPacket()))).toBe(true);
     expect(fake.destroyed).toBe(false);
+  });
+
+  it("reports the reply type and bytes when a packet has an unexpected IS type", async () => {
+    const welcome = buildIsPacket(0x8000, Buffer.from([0x01, 0x04, 0x00, 0x00, 0x00]));
+    const lockAck = buildIsPacket(0xa100, Buffer.from([0x06]));
+    // JOBR reply comes back as the wrong IS type — the failure mode we'd expect
+    // if the DS-575W doesn't accept the FF-680W-derived job-control commands.
+    const wrongTypeReply = buildIsPacket(0xa301, Buffer.from([0xde, 0xad, 0xbe, 0xef]));
+
+    const fake = new FakeJobSocket((data) => {
+      const t = isType(data);
+      if (t === 0x2100) return lockAck;
+      if (t === 0x2300) return wrongTypeReply;
+      return null;
+    });
+
+    const p = runFf680wJobNumberCommit({
+      printerIp: "192.0.2.9",
+      socketFactory: () => asSocket(fake),
+    });
+    setImmediate(() => fake.emit("data", welcome));
+
+    await expect(p).rejects.toThrow(
+      /JOBR reply: expected IS 0xa300, got 0xa301 \(payload=deadbeef\)/,
+    );
   });
 
   it("fails fast on a desynced stream (oversized declared IS payload)", async () => {

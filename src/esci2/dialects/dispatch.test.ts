@@ -95,7 +95,7 @@ describe("makeParaSpec", () => {
   it("projects FF-680W paraProfile", () => {
     const entry = REGISTRY.get(FF680W_FP)!;
     const spec = makeParaSpec(entry, "adf-duplex", "jpg");
-    expect(spec.profile).toBe("ff680w-adf");
+    expect(spec.profile).toBe("adf-crp");
   });
 });
 

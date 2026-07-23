@@ -2,12 +2,19 @@ import { readFileSync } from "node:fs";
 import { z } from "zod";
 
 // FF-680W CAPA-advertised resolutions (#RSMLIST). SCAN_RESOLUTION is validated
-// against this set. 200 and 300 are wire-verified by PARA capture; the rest rely
-// on the linear DPI-scaling formula in para-composer.ts. FF-680W only — other
-// models ignore SCAN_RESOLUTION and scan at their dialect's fixed resolution.
+// against this set and consumed by the adf-crp dialects (FF-680W and DS-575W —
+// their #RSM/#RSS/#ACQ fields scale with it). FF-680W 200/300 and DS-575W
+// 400/600 are wire-verified by PARA capture; the rest rely on the linear
+// DPI-scaling formula in para-composer.ts. Other models ignore SCAN_RESOLUTION
+// and scan at their dialect's fixed resolution.
 export const FF680W_RESOLUTIONS = [50, 75, 100, 150, 200, 240, 300, 360, 400, 600] as const;
 export const DEFAULT_SCAN_RESOLUTION = 200;
 export const DEFAULT_JPEG_QUALITY = 90;
+
+// SCAN_COLOR_MODE selects colour vs greyscale. Only greyscale-capable dialects
+// (currently the DS-575W) act on it; all other models ignore it and scan in
+// colour, so the default is "color".
+export const DEFAULT_SCAN_COLOR_MODE = "color" as const;
 
 // IPv4 dotted-quad — each octet bounded to 0-255 with no leading zeros on
 // multi-digit values. Leading zeros are rejected at this layer because
@@ -43,9 +50,10 @@ const configSchema = z
       .number()
       .int()
       .refine((v) => (FF680W_RESOLUTIONS as readonly number[]).includes(v), {
-        message: `SCAN_RESOLUTION must be one of the FF-680W advertised DPIs: ${FF680W_RESOLUTIONS.join(", ")}`,
+        message: `SCAN_RESOLUTION must be one of the advertised DPIs (FF-680W / DS-575W): ${FF680W_RESOLUTIONS.join(", ")}`,
       })
       .default(DEFAULT_SCAN_RESOLUTION),
+    scanColorMode: z.enum(["color", "grayscale"]).default(DEFAULT_SCAN_COLOR_MODE),
     esciForceSource: z.enum(["flatbed", "adf-simplex", "adf-duplex"]).optional(),
     printerProtocol: z.enum(["auto", "esci2", "esci2-plain", "esci"]).default("auto"),
     // Diagnostic-only. When true and the legacy `ESC @` init returns a non-ACK,
@@ -55,10 +63,11 @@ const configSchema = z
     // `ESC @`. Should remain false in normal operation.
     diagnoseProtocol: z.boolean().default(false),
     // Compatibility-triage aid. `auto` picks the NetScanMonitor keepalive wire
-    // format from the announced PID (3.0 for the FF-680W, 2.0 for everything
-    // else). Forcing `3.0` lets reporters with unrecognised button-only
-    // scanners (DS-series family) test v3 registration without a code change;
-    // v3 also switches the burst to an ephemeral source port (see keepalive.ts).
+    // format from the announced PID (3.0 for the FF-680W and DS-575W, 2.0 for
+    // everything else — see V3_KEEPALIVE_PRODUCTS in keepalive.ts). Forcing
+    // `3.0` lets reporters with other unrecognised button-only scanners (DS-series
+    // family) test v3 registration without a code change; v3 also switches the
+    // burst to an ephemeral source port (see keepalive.ts).
     netscanVersion: z.enum(["auto", "2.0", "3.0"]).default("auto"),
     tempDir: z.string().default(""),
     shutdownTimeoutMs: z.coerce.number().int().min(100).default(30000),
@@ -149,6 +158,7 @@ export function loadConfig(): Config {
     scanFormat: process.env.SCAN_FORMAT || undefined,
     scanSides: process.env.SCAN_SIDES || undefined,
     scanResolution: process.env.SCAN_RESOLUTION || undefined,
+    scanColorMode: process.env.SCAN_COLOR_MODE || undefined,
     tempDir: process.env.TEMP_DIR || undefined,
     shutdownTimeoutMs: process.env.SHUTDOWN_TIMEOUT_MS || undefined,
     paperlessUrl: process.env.PAPERLESS_URL || undefined,

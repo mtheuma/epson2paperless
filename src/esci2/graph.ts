@@ -69,9 +69,15 @@ export interface Esci2Ctx {
   action: "jpg" | "pdf";
   /**
    * Scan resolution in DPI, threaded from config.scanResolution. Only the
-   * ff680w-adf PARA profile consumes it; other dialects pin resolution.
+   * adf-crp PARA profile consumes it; other dialects pin resolution.
    */
   resolution: number;
+  /**
+   * Colour mode, threaded from config.scanColorMode. Only greyscale-capable
+   * adf-crp dialects (those with a monoGammaClass, e.g. DS-575W) consume it;
+   * all others ignore it and scan in colour.
+   */
+  colorMode: "color" | "grayscale";
 }
 
 export const ESCI2_TIMEOUT_MS = 30_000;
@@ -605,7 +611,9 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
   const paraSource: ParaSpec["source"] =
     ctx.source === "flatbed" ? "flatbed" : ctx.duplex ? "adf-duplex" : "adf-simplex";
   assertSourceSupported(ctx.entry!, paraSource);
-  const paraPayload = composePara(makeParaSpec(ctx.entry!, paraSource, ctx.action, ctx.resolution));
+  const paraPayload = composePara(
+    makeParaSpec(ctx.entry!, paraSource, ctx.action, ctx.resolution, ctx.colorMode),
+  );
   return [
     buildPassthruPacket(buildParaHeader(paraPayload.length), 0),
     buildPassthruPacket(paraPayload, ESCI2_REPLY_SIZE),

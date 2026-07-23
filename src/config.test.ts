@@ -19,6 +19,7 @@ describe("loadConfig", () => {
     delete process.env.SCAN_FORMAT;
     delete process.env.SCAN_SIDES;
     delete process.env.SCAN_RESOLUTION;
+    delete process.env.SCAN_COLOR_MODE;
     delete process.env.TEMP_DIR;
     delete process.env.SHUTDOWN_TIMEOUT_MS;
     delete process.env.PAPERLESS_URL;
@@ -212,6 +213,23 @@ describe("loadConfig", () => {
   it("rejects an out-of-range SCAN_RESOLUTION (1200)", () => {
     process.env.PRINTER_IP = "192.0.2.58";
     process.env.SCAN_RESOLUTION = "1200";
+    expect(() => loadConfig()).toThrow();
+  });
+
+  it("defaults SCAN_COLOR_MODE to color", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    expect(loadConfig().scanColorMode).toBe("color");
+  });
+
+  it("accepts SCAN_COLOR_MODE=grayscale", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.SCAN_COLOR_MODE = "grayscale";
+    expect(loadConfig().scanColorMode).toBe("grayscale");
+  });
+
+  it("rejects an invalid SCAN_COLOR_MODE", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.SCAN_COLOR_MODE = "mono";
     expect(() => loadConfig()).toThrow();
   });
 

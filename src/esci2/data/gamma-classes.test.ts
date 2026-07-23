@@ -68,6 +68,20 @@ describe("gamma-classes", () => {
     expect(g.subarray(536, 548).toString("ascii")).toBe("#GMTGRN h100");
   });
 
+  it("exposes ds575w-mono as a single 268-byte #GMTMONO segment", () => {
+    const g = GAMMA_CLASSES["ds575w-mono"];
+    expect(g.length).toBe(268);
+    expect(g.subarray(0, 12).toString("ascii")).toBe("#GMTMONOh100");
+    // Near-identity LUT with two captured anomalies pinned verbatim: 0x34 is
+    // duplicated and 0x8e is skipped. The 12-byte header precedes the 256-byte
+    // LUT, so LUT index i lives at byte 12 + i.
+    const lut = g.subarray(12);
+    expect(lut.length).toBe(256);
+    expect(lut[0x34]).toBe(0x34);
+    expect(lut[0x35]).toBe(0x34); // 0x34 duplicated
+    expect(lut.includes(0x8e)).toBe(false); // 0x8e skipped
+  });
+
   it("class names enumerate as a type", () => {
     const _names: GammaClassName[] = [
       "et4950-stock",
@@ -75,7 +89,8 @@ describe("gamma-classes", () => {
       "xp7100-pdf",
       "et4800-stock",
       "ff680w-adf",
+      "ds575w-mono",
     ];
-    expect(_names).toHaveLength(5);
+    expect(_names).toHaveLength(6);
   });
 });

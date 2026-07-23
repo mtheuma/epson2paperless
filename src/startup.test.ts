@@ -24,6 +24,7 @@ import { runFf680wJobListCommit, runFf680wJobNumberCommit } from "./ff680w-job-c
 import type { Config } from "./config.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import type { PushScanInfo } from "./pushscan.js";
+import { PID_FF680W, PID_DS575W } from "./printer-ids.js";
 
 const detectVariantMock = vi.mocked(detectVariant);
 const runEsci2ScanMock = vi.mocked(runEsci2Scan);
@@ -48,6 +49,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     scanFormat: "pdf",
     scanSides: "duplex",
     scanResolution: 200,
+    scanColorMode: "color",
     printerProtocol: "auto",
     diagnoseProtocol: false,
     tempDir: "",
@@ -66,10 +68,17 @@ const PAPERLESS_OPTS: PaperlessUploadOptions = {
 const FF680W_JOB_NUMBER_INFO: PushScanInfo = {
   pushScanId: null,
   jobNumber: "0",
-  productName: "PID 016B",
+  productName: PID_FF680W,
   ipAddress: "C0A80A08",
   duplex: false,
   action: "unknown",
+};
+
+// DS-575W (issue #128) is a button-only sibling of the FF-680W that drives the
+// same JobList → JobNumber job-control handshake, under its own PID 0169.
+const DS575W_JOB_NUMBER_INFO: PushScanInfo = {
+  ...FF680W_JOB_NUMBER_INFO,
+  productName: PID_DS575W,
 };
 
 describe("resolveScanDispatch", () => {
@@ -107,9 +116,19 @@ describe("resolveScanDispatch", () => {
     });
   });
 
-  it("refuses a JobNumberIn scan from a non-FF-680W product (no guessing)", () => {
-    // Only the FF-680W's job-number flow falls back to config defaults; any
-    // other product that sends JobNumberIn without a PushScanIDIn is ignored.
+  it("uses SCAN_FORMAT + SCAN_SIDES for the DS-575W job-number flow (PID 0169)", () => {
+    expect(
+      resolveScanDispatch(
+        DS575W_JOB_NUMBER_INFO,
+        makeConfig({ scanFormat: "pdf", scanSides: "duplex" }),
+      ),
+    ).toEqual({ duplex: true, action: "pdf" });
+  });
+
+  it("refuses a JobNumberIn scan from a non-job-control product (no guessing)", () => {
+    // Only the job-control scanners (FF-680W, DS-575W) fall back to config
+    // defaults; any other product that sends JobNumberIn without a PushScanIDIn
+    // is ignored.
     const otherInfo = { ...FF680W_JOB_NUMBER_INFO, productName: "PID 11D1" };
     expect(resolveScanDispatch(otherInfo, makeConfig())).toBeNull();
   });
@@ -155,7 +174,39 @@ describe("buildPushScanServerOptions", () => {
     expect(runFf680wJobListCommitMock).not.toHaveBeenCalled();
   });
 
-  it("does not run FF-680W job-control for other products", async () => {
+  it("runs the JOBR commit for the DS-575W JobNumberIn PushScan (PID 0169)", async () => {
+    const options = buildPushScanServerOptions(makeConfig({ printerIp: "203.0.113.23" }));
+
+    await options.beforeResponse?.({
+      kind: "pushScan",
+      headers: "",
+      body: "",
+      xuid: "8",
+      info: DS575W_JOB_NUMBER_INFO,
+      capabilities: [],
+    });
+
+    expect(runFf680wJobNumberCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.23" });
+    expect(runFf680wJobListCommitMock).not.toHaveBeenCalled();
+  });
+
+  it("runs the JOBW commit for the DS-575W JobList (PID 0169)", async () => {
+    const options = buildPushScanServerOptions(makeConfig({ printerIp: "203.0.113.22" }));
+
+    await options.beforeResponse?.({
+      kind: "jobList",
+      headers: "",
+      body: "",
+      xuid: "7",
+      info: { ...DS575W_JOB_NUMBER_INFO, jobNumber: null },
+      capabilities: ["OfficeFormat"],
+    });
+
+    expect(runFf680wJobListCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.22" });
+    expect(runFf680wJobNumberCommitMock).not.toHaveBeenCalled();
+  });
+
+  it("does not run job-control for other products", async () => {
     const options = buildPushScanServerOptions(makeConfig());
 
     await options.beforeResponse?.({
@@ -232,6 +283,7 @@ describe("dispatchScanSession", () => {
       postProcess: "none",
       jpegQuality: 90,
       resolution: 200,
+      colorMode: "color",
       paperless: PAPERLESS_OPTS,
       printerCertFingerprint: fp,
     });
@@ -257,6 +309,31 @@ describe("dispatchScanSession", () => {
     expect(call.duplex).toBe(false);
     expect(call.action).toBe("jpg");
     expect(call.resolution).toBe(200);
+    expect(call.colorMode).toBe("color");
+  });
+
+  it("forwards SCAN_COLOR_MODE=grayscale to both ESC/I-2 scanners", async () => {
+    // esci2-plain — the DS-575W's actual path.
+    detectVariantMock.mockResolvedValue("esci2-plain");
+    await dispatchScanSession({
+      config: makeConfig({ printerProtocol: "esci2-plain", scanColorMode: "grayscale" }),
+      duplex: false,
+      action: "pdf",
+      paperless: undefined,
+      productName: null,
+    });
+    expect(runEsci2ScanOverPlainMock.mock.calls[0][0].colorMode).toBe("grayscale");
+
+    // esci2 over TLS takes the same session shape.
+    detectVariantMock.mockResolvedValue("esci2");
+    await dispatchScanSession({
+      config: makeConfig({ printerProtocol: "esci2", scanColorMode: "grayscale" }),
+      duplex: false,
+      action: "pdf",
+      paperless: undefined,
+      productName: null,
+    });
+    expect(runEsci2ScanMock.mock.calls[0][0].colorMode).toBe("grayscale");
   });
 
   it("variant=esci routes to runEsciScan with forcedSource + jpegQuality + diagnoseProtocol", async () => {

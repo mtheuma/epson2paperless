@@ -9,7 +9,10 @@ export interface Extents {
   h: number;
 }
 
-export type ParaProfile = "standard" | "ff680w-adf";
+// The "adf-crp" profile drives the #ADFCRP-led PARA shared by the FF-680W and
+// its DS-575W sibling — byte-identical layout apart from resolution, ACQ
+// extents, colour mode, and the gamma/CMX class data (all registry-supplied).
+export type ParaProfile = "standard" | "adf-crp";
 
 export interface ParaSpec {
   source: "flatbed" | "adf-simplex" | "adf-duplex";
@@ -22,11 +25,27 @@ export interface ParaSpec {
   optionalSegments: { qit: boolean; cct: boolean };
   profile?: ParaProfile;
   /**
-   * Scan resolution in DPI. Consumed ONLY by the ff680w-adf profile (drives
+   * Scan resolution in DPI. Consumed ONLY by the adf-crp profile (drives
    * #RSM/#RSS and ACQ-extent scaling). The standard profile pins resolution in
-   * its fixed prefix and ignores this. Falls back to FF680W_BASE_DPI when unset.
+   * its fixed prefix and ignores this. Falls back to ADF_CRP_BASE_DPI when unset.
    */
   resolution?: number;
+  /**
+   * Colour mode. Consumed ONLY by the adf-crp profile: "grayscale" emits
+   * #COLM008 + the monoGammaClass LUT; "color" (the default) emits #COLC024 +
+   * the RGB gammaClass triplet. The FF-680W is colour-only and leaves this
+   * unset, reproducing its captured #COLC024 bytes exactly.
+   */
+  colorMode?: "color" | "grayscale";
+  /**
+   * Single-channel gamma LUT for grayscale scans on the adf-crp profile. Its
+   * presence is what makes a dialect greyscale-capable: grayscale is emitted
+   * only when colorMode is "grayscale" AND this is set. A dialect that leaves it
+   * unset stays colour (#COLC024) even under a global SCAN_COLOR_MODE=grayscale,
+   * the same way colour-only dialects ignore an unsupported setting. Ignored
+   * entirely in colour mode.
+   */
+  monoGammaClass?: GammaClassName;
 }
 
 const STANDARD_FIXED_PREFIX = Buffer.from(
@@ -38,14 +57,17 @@ const STANDARD_FIXED_PREFIX = Buffer.from(
   "ascii",
 );
 
-const FF680W_ADF_PREFIX_HEAD = "#ADFCRP SKEW";
-const FF680W_ADF_PREFIX_TAIL = "#COLC024" + "#FMTJPG " + "#JPGd090";
-// The registry's FF-680W adfExtents are captured at this DPI; both the RSM/RSS
-// resolution fields and the ACQ extents scale linearly off it. Only 200 and 300
-// are wire-verified — see .reference/wireshark-captures/ff-680w/SOURCE-NOTES.md.
-const FF680W_BASE_DPI = 200;
+const ADF_CRP_PREFIX_HEAD = "#ADFCRP SKEW";
+const ADF_CRP_PREFIX_TAIL = "#FMTJPG " + "#JPGd090";
+// The registry's adfExtents are captured at this DPI; both the RSM/RSS
+// resolution fields and the ACQ extents scale linearly off it. For the FF-680W
+// only 200 and 300 are wire-verified — see
+// .reference/wireshark-captures/ff-680w/SOURCE-NOTES.md. DS-575W adfExtents are
+// stored at the same 200-DPI reference (wire captures at 400 and 600 confirm the
+// linear scaling).
+const ADF_CRP_BASE_DPI = 200;
 
-const FF680W_ADF_TRAILER_BEFORE_ACQ = Buffer.from(
+const ADF_CRP_TRAILER_BEFORE_ACQ = Buffer.from(
   "#CRPi0000000" + "#DFAi0000000i0001550" + "#LAMOFF " + "#PAGd000",
   "ascii",
 );
@@ -94,6 +116,9 @@ function validate(spec: ParaSpec): void {
   const gPdf = GAMMA_CLASSES[spec.gammaClass.pdf];
   if (!gJpg) throw new Error(`composePara: unknown gammaClass.jpg=${spec.gammaClass.jpg}`);
   if (!gPdf) throw new Error(`composePara: unknown gammaClass.pdf=${spec.gammaClass.pdf}`);
+  if (spec.monoGammaClass !== undefined && !GAMMA_CLASSES[spec.monoGammaClass]) {
+    throw new Error(`composePara: unknown monoGammaClass=${spec.monoGammaClass}`);
+  }
   if (spec.cmxClass.jpg !== null && !CMX_CLASSES[spec.cmxClass.jpg]) {
     throw new Error(`composePara: unknown cmxClass.jpg=${spec.cmxClass.jpg}`);
   }
@@ -108,8 +133,8 @@ function validate(spec: ParaSpec): void {
 export function composePara(spec: ParaSpec): Buffer {
   validate(spec);
 
-  if (spec.profile === "ff680w-adf") {
-    return composeFf680wAdfPara(spec);
+  if (spec.profile === "adf-crp") {
+    return composeAdfCrpPara(spec);
   }
 
   return composeStandardPara(spec);
@@ -151,29 +176,39 @@ function composeStandardPara(spec: ParaSpec): Buffer {
   return Buffer.concat(parts);
 }
 
-function composeFf680wAdfPara(spec: ParaSpec): Buffer {
+function composeAdfCrpPara(spec: ParaSpec): Buffer {
   if (spec.adfExtents === null) {
-    throw new Error("composePara: profile=ff680w-adf requires non-null adfExtents");
+    throw new Error("composePara: profile=adf-crp requires non-null adfExtents");
   }
   const cmxName = spec.cmxClass[spec.action];
   if (cmxName === null) {
-    throw new Error("composePara: profile=ff680w-adf requires a CMX class");
+    throw new Error("composePara: profile=adf-crp requires a CMX class");
   }
-  const resolution = spec.resolution ?? FF680W_BASE_DPI;
+  const resolution = spec.resolution ?? ADF_CRP_BASE_DPI;
   const dplx = spec.source === "adf-duplex" ? "DPLX" : "";
 
+  // Colour mode selects the #COL code and gamma LUT. Greyscale needs the
+  // single-channel monoGammaClass; colour uses the RGB gammaClass triplet. A
+  // grayscale request only takes effect when the dialect supplies a
+  // monoGammaClass — colour-only dialects (FF-680W) ignore it and stay #COLC024,
+  // mirroring how resolution is ignored by dialects that don't consume it.
+  const grayscale = spec.colorMode === "grayscale" && spec.monoGammaClass !== undefined;
+  const colSegment = grayscale ? "#COLM008" : "#COLC024";
+  const gammaName = grayscale ? spec.monoGammaClass! : spec.gammaClass[spec.action];
+
   const prefix = Buffer.from(
-    FF680W_ADF_PREFIX_HEAD +
+    ADF_CRP_PREFIX_HEAD +
       dplx +
       "DFL1" +
       `#RSMi${pad7(resolution)}` +
       `#RSSi${pad7(resolution)}` +
-      FF680W_ADF_PREFIX_TAIL,
+      colSegment +
+      ADF_CRP_PREFIX_TAIL,
     "ascii",
   );
 
   // ACQ extents scale linearly with DPI from the 200-DPI registry reference.
-  const scale = resolution / FF680W_BASE_DPI;
+  const scale = resolution / ADF_CRP_BASE_DPI;
   const acq: Extents = {
     x0: spec.adfExtents.x0,
     y0: spec.adfExtents.y0,
@@ -184,9 +219,9 @@ function composeFf680wAdfPara(spec: ParaSpec): Buffer {
   return Buffer.concat([
     prefix,
     Buffer.from(`#GMM${spec.gmm}`, "ascii"),
-    GAMMA_CLASSES[spec.gammaClass[spec.action]],
+    GAMMA_CLASSES[gammaName],
     CMX_CLASSES[cmxName],
-    FF680W_ADF_TRAILER_BEFORE_ACQ,
+    ADF_CRP_TRAILER_BEFORE_ACQ,
     renderAcq(acq),
     TRAILING_BSZ,
   ]);
