@@ -336,6 +336,30 @@ describe("dispatchScanSession", () => {
     expect(runEsci2ScanMock.mock.calls[0][0].colorMode).toBe("grayscale");
   });
 
+  it("forwards SCAN_COLOR_MODE=auto: colorMode to ESC/I-2, autoColor to the legacy arm", async () => {
+    detectVariantMock.mockResolvedValue("esci2-plain");
+    await dispatchScanSession({
+      config: makeConfig({ printerProtocol: "esci2-plain", scanColorMode: "auto" }),
+      duplex: false,
+      action: "pdf",
+      paperless: undefined,
+      productName: null,
+    });
+    // The shell maps "auto" to a colour wire request + autoColor post-processing.
+    expect(runEsci2ScanOverPlainMock.mock.calls[0][0].colorMode).toBe("auto");
+
+    // Legacy has no colour-mode wire axis; only the post-processing flag arrives.
+    detectVariantMock.mockResolvedValue("esci");
+    await dispatchScanSession({
+      config: makeConfig({ printerProtocol: "esci", scanColorMode: "auto" }),
+      duplex: false,
+      action: "pdf",
+      paperless: undefined,
+      productName: null,
+    });
+    expect(runEsciScanMock.mock.calls[0][0].autoColor).toBe(true);
+  });
+
   it("variant=esci routes to runEsciScan with forcedSource + jpegQuality + diagnoseProtocol", async () => {
     detectVariantMock.mockResolvedValue("esci");
     const config = makeConfig({
