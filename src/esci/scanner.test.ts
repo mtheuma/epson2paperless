@@ -7,19 +7,23 @@ import { PDFDocument } from "pdf-lib";
 import { runEsciScan, appendImageChunk } from "./scanner.js";
 import { parseIsPacket, buildIsPacket, IS_HEADER_SIZE } from "../protocol.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
-import { loadFixture, driveFixture } from "./test-support/replay.js";
+import { loadFixture, driveFixture, concatHostBytes } from "./test-support/replay.js";
+import { WF3620_ENTRY } from "./dialects/wf3620.js";
+import { XP620_ENTRY } from "./dialects/xp620.js";
+import type { LegacyDialectEntry } from "./dialects/entry.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const FIXTURES = path.join(__dirname, "..", "..", "tools", "pcap-extract", "captures", "wf-3620");
+const FIXTURES = path.join(__dirname, "..", "..", "tools", "pcap-extract", "captures");
 
 // ---------------------------------------------------------------------------
 // Per-fixture metadata driving the it.each replay matrix
 // ---------------------------------------------------------------------------
 
 interface FixtureSpec {
-  path: string; // basename in tools/pcap-extract/captures/wf-3620/
+  path: string; // relative to tools/pcap-extract/captures/
   format: "jpg" | "pdf";
   duplex: boolean; // panel-side Sides selection — drives ADF source
+  entry: LegacyDialectEntry;
   expectedDetectedSource: "adf-simplex" | "adf-duplex" | "flatbed";
   expectedFileCount: number;
   expectedBackPages: number[]; // 1-based page numbers; [] for non-duplex
@@ -29,87 +33,117 @@ interface FixtureSpec {
 const FIXTURE_SPECS: FixtureSpec[] = [
   // Pure-detection: no forcedSource — STATUS_2 reads FS F.
   {
-    path: "adf-single-page-jpeg.jsonl",
+    path: "wf-3620/adf-single-page-jpeg.jsonl",
     format: "jpg",
     duplex: false,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-simplex",
     expectedFileCount: 1,
     expectedBackPages: [],
   },
   {
-    path: "adf-single-page-pdf.jsonl",
+    path: "wf-3620/adf-single-page-pdf.jsonl",
     format: "pdf",
     duplex: false,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-simplex",
     expectedFileCount: 1,
     expectedBackPages: [],
   },
   {
-    path: "adf-3-page-simplex-jpeg.jsonl",
+    path: "wf-3620/adf-3-page-simplex-jpeg.jsonl",
     format: "jpg",
     duplex: false,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-simplex",
     expectedFileCount: 3,
     expectedBackPages: [],
   },
   {
-    path: "adf-3-page-simplex-pdf.jsonl",
+    path: "wf-3620/adf-3-page-simplex-pdf.jsonl",
     format: "pdf",
     duplex: false,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-simplex",
     expectedFileCount: 1,
     expectedBackPages: [],
     expectedPdfPageCount: 3,
   },
   {
-    path: "adf-2-page-jpeg.jsonl",
+    path: "wf-3620/adf-2-page-jpeg.jsonl",
     format: "jpg",
     duplex: true,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-duplex",
     expectedFileCount: 2,
     expectedBackPages: [2],
   },
   {
-    path: "adf-2-page-pdf.jsonl",
+    path: "wf-3620/adf-2-page-pdf.jsonl",
     format: "pdf",
     duplex: true,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-duplex",
     expectedFileCount: 1,
     expectedBackPages: [2],
     expectedPdfPageCount: 2,
   },
   {
-    path: "adf-4-page-duplex-jpeg.jsonl",
+    path: "wf-3620/adf-4-page-duplex-jpeg.jsonl",
     format: "jpg",
     duplex: true,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-duplex",
     expectedFileCount: 4,
     expectedBackPages: [2, 4],
   },
   {
-    path: "adf-4-page-duplex-pdf.jsonl",
+    path: "wf-3620/adf-4-page-duplex-pdf.jsonl",
     format: "pdf",
     duplex: true,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-duplex",
     expectedFileCount: 1,
     expectedBackPages: [2, 4],
     expectedPdfPageCount: 4,
   },
   {
-    path: "flatbed-single-page-jpeg.jsonl",
+    path: "wf-3620/flatbed-single-page-jpeg.jsonl",
     format: "jpg",
     duplex: false,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "flatbed",
     expectedFileCount: 1,
     expectedBackPages: [],
   },
   {
-    path: "flatbed-single-page-pdf.jsonl",
+    path: "wf-3620/flatbed-single-page-pdf.jsonl",
     format: "pdf",
     duplex: false,
+    entry: WF3620_ENTRY,
     expectedDetectedSource: "flatbed",
     expectedFileCount: 1,
     expectedBackPages: [],
+  },
+  {
+    path: "xp-620/flatbed.jsonl",
+    format: "jpg",
+    duplex: false,
+    entry: XP620_ENTRY,
+    expectedDetectedSource: "flatbed",
+    expectedFileCount: 1,
+    expectedBackPages: [],
+    expectedPdfPageCount: undefined,
+  },
+  {
+    path: "xp-620/flatbed.jsonl",
+    format: "pdf",
+    duplex: false,
+    entry: XP620_ENTRY,
+    expectedDetectedSource: "flatbed",
+    expectedFileCount: 1,
+    expectedBackPages: [],
+    expectedPdfPageCount: 1,
   },
 ];
 
@@ -137,6 +171,7 @@ describe("scanner-esci", () => {
       path: fixturePath,
       format,
       duplex,
+      entry,
       expectedDetectedSource,
       expectedFileCount,
       expectedBackPages,
@@ -152,6 +187,7 @@ describe("scanner-esci", () => {
           port: 1865,
           outputDir,
           tempDir,
+          entry,
           duplex,
           forcedSource: null, // pure detection — no override
           format,
@@ -163,6 +199,11 @@ describe("scanner-esci", () => {
         fake.asFactory(),
       );
       await driveFixture(fixture, fake, sessionPromise);
+
+      // Shield: the scanner reproduced the captured host transcript exactly.
+      expect(Buffer.concat(fake.writes).toString("hex")).toBe(
+        concatHostBytes(fixture).toString("hex"),
+      );
 
       // Detection assertion — captured via the onSourceDetected hook.
       expect(detectedSource).toBe(expectedDetectedSource);
@@ -235,7 +276,7 @@ describe("scanner-esci", () => {
   // -------------------------------------------------------------------------
 
   it("adf-single-page-jpeg: emits the 0x0c 0x00 page-eject after the image stream", async () => {
-    const fixture = loadFixture(path.join(FIXTURES, "adf-single-page-jpeg.jsonl"));
+    const fixture = loadFixture(path.join(FIXTURES, "wf-3620/adf-single-page-jpeg.jsonl"));
     const fake = new FakeTcpSocket();
 
     const sessionPromise = runEsciScan(
@@ -244,6 +285,7 @@ describe("scanner-esci", () => {
         port: 1865,
         outputDir,
         tempDir,
+        entry: WF3620_ENTRY,
         duplex: false,
         forcedSource: "adf-simplex",
         format: "jpg",
@@ -333,6 +375,7 @@ describe("runEsciScan failure-mode matrix", () => {
         port: 1865,
         outputDir,
         tempDir,
+        entry: WF3620_ENTRY,
         duplex: false,
         forcedSource: "adf-simplex",
         format: "jpg",
@@ -353,6 +396,7 @@ describe("runEsciScan failure-mode matrix", () => {
         port: 1865,
         outputDir,
         tempDir,
+        entry: WF3620_ENTRY,
         duplex: false,
         forcedSource: "adf-simplex",
         format: "jpg",
@@ -366,6 +410,25 @@ describe("runEsciScan failure-mode matrix", () => {
     // (Raw garbage that doesn't form a valid IS header would just buffer until timeout.)
     fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
     await expect(scanPromise).rejects.toThrow(/Unexpected packet type 0xa000 in state WELCOME/);
+  });
+
+  it("rejects a non-flatbed ESCI_FORCE_SOURCE against a fixed-flatbed entry", async () => {
+    await expect(
+      runEsciScan(
+        {
+          printerIp: "1.2.3.4",
+          port: 1865,
+          outputDir,
+          tempDir,
+          duplex: false,
+          forcedSource: "adf-simplex",
+          format: "jpg",
+          jpegQuality: 90,
+          entry: XP620_ENTRY,
+        },
+        new FakeTcpSocket().asFactory(),
+      ),
+    ).rejects.toThrow(/ESCI_FORCE_SOURCE.*flatbed|does not support/i);
   });
 });
 
@@ -388,39 +451,25 @@ describe("FS F unknown-byte handling", () => {
   });
 
   it("rejects when the STATUS_2 FS F byte is not 0x01 or 0x81", async () => {
-    const fixture = loadFixture(path.join(FIXTURES, "adf-single-page-jpeg.jsonl"));
-    // In the fixture, IS packets are split across two consecutive events:
-    //   - a 12-byte IS header event (type 0xa000, payloadSize 16)
-    //   - a 16-byte payload event immediately following
-    // STATUS_n replies are IS-0xa000 with a 16-byte payload.
-    // The sequence is: STATUS_1A (1st a000/16 header), STATUS_1B (2nd a000/16 header),
-    // then STATUS_2 (3rd a000/16 header).  We mutate the payload of the 3rd.
-    // Strategy: scan for a000/16 IS header events; on the 3rd, mark the NEXT event
-    // as the target and replace byte 0 with 0x00.
+    const fixture = loadFixture(path.join(FIXTURES, "wf-3620/adf-single-page-jpeg.jsonl"));
+    // Each p>h IS frame is a single complete event (12-byte header + payload).
+    // STATUS_n replies are IS-0xa000 with a 16-byte payload. The sequence is:
+    // STATUS_1A (1st a000/16 frame), STATUS_1B (2nd a000/16 frame), then
+    // STATUS_2 (3rd a000/16 frame). We mutate the payload's first byte (at
+    // offset IS_HEADER_SIZE within the combined frame) of the 3rd.
     let fsFHeaderCount = 0;
-    let mutateNextPayload = false;
     const mutated = fixture.map((event) => {
       if (event.dir !== "p>h" || !("hex" in event)) return event;
       const buf = Buffer.from(event.hex, "hex");
-      if (buf.length === IS_HEADER_SIZE) {
-        const type = buf.readUInt16BE(2);
-        const length = buf.readUInt32BE(6);
-        if (type === 0xa000 && length === 16) {
-          fsFHeaderCount++;
-          if (fsFHeaderCount === 3) {
-            // The 3rd a000/16 header is STATUS_2; mark next payload for mutation.
-            mutateNextPayload = true;
-          }
-        }
-        return event;
-      }
-      // 16-byte payload following the marked header — mutate byte 0 to 0x00.
-      if (mutateNextPayload && buf.length === 16) {
-        mutateNextPayload = false;
-        buf[0] = 0x00;
-        return { ...event, hex: buf.toString("hex") };
-      }
-      return event;
+      if (buf.length !== IS_HEADER_SIZE + 16) return event;
+      const type = buf.readUInt16BE(2);
+      const length = buf.readUInt32BE(6);
+      if (type !== 0xa000 || length !== 16) return event;
+      fsFHeaderCount++;
+      if (fsFHeaderCount !== 3) return event;
+      // The 3rd a000/16 frame is STATUS_2; mutate its payload byte 0 to 0x00.
+      buf[IS_HEADER_SIZE] = 0x00;
+      return { ...event, hex: buf.toString("hex") };
     });
 
     const fake = new FakeTcpSocket();
@@ -430,6 +479,7 @@ describe("FS F unknown-byte handling", () => {
         port: 1865,
         outputDir,
         tempDir,
+        entry: WF3620_ENTRY,
         duplex: false,
         forcedSource: null,
         format: "jpg",

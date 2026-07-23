@@ -16,7 +16,7 @@ The first two channels are shared across supported models. The scan-session chan
 | ------------- | ------------ | -------------------- | ------------------------------------- |
 | `esci2-tls`   | TLS over TCP | ESC/I-2 over IS      | ET-4950 / ET-3950 / ET-4956 / ET-2950 |
 | `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750 / XP-7100 / ET-4800 / FF-680W |
-| `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family                        |
+| `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family / XP-620               |
 
 `esci2-tls` is internal shorthand for the TLS ESC/I-2 path. In configuration, this is selected with `PRINTER_PROTOCOL=esci2`.
 
@@ -86,7 +86,7 @@ connect -> welcome -> lock
   -> unlock -> finalize output
 ```
 
-The legacy ESC/I graph follows the same engine contract but uses a different command vocabulary: `ESC @`, `ESC e`, `FS W`, `FS G`, `FS F`, plus unsolicited `0xa200` image-stream chunks.
+The legacy ESC/I graph follows the same engine contract but uses a different command vocabulary: `ESC @`, `ESC e`, `FS W`, `FS G`, `FS F`, plus unsolicited `0xa200` image-stream chunks. Per-model differences (WF-3620 vs. the flatbed-only XP-620) are resolved through a small dialect registry (`src/esci/dialects/`) keyed on the push-scan PID, picked by `resolveLegacyEntry` — the legacy-path counterpart to the ESC/I-2 side's CAPA-fingerprint registry.
 
 The protocol graphs intentionally stay separate. They share the engine and output pipeline, but not command construction or state names; that keeps the ESC/I-2 and WF-3620 behaviors easy to reason about independently.
 
@@ -101,6 +101,7 @@ Some scanners report no panel selection at all. The FF-680W (an ADF-only photo s
 - ESC/I-2 ADF-capable printers use an INIT_POLL `STAT` length heuristic.
 - ET-2750 and ET-2950 are fixed flatbed.
 - WF-3620-class ESC/I printers probe with `ESC e` and inspect the following `FS F` status byte.
+- XP-620 is fixed flatbed, like ET-2750 and ET-2950, but on the legacy ESC/I side.
 
 For duplex ADF scans, back sides arrive physically rotated 180 degrees because of the feeder path. The scanner records back-page indices as pages complete. JPEG output receives a minimal EXIF Orientation=3 segment; PDF output sets `/Rotate = 180` on the affected pages. Neither path re-encodes pixels just to rotate them.
 
@@ -121,18 +122,18 @@ When `PAPERLESS_URL` and `PAPERLESS_TOKEN` are configured, completed output file
 
 ## Code layout
 
-| Area                  | Files                                                                                                                  |
-| --------------------- | ---------------------------------------------------------------------------------------------------------------------- |
-| Process entry points  | `src/index.ts`, `src/one-shot.ts`, `src/startup.ts`, `src/lifecycle.ts`                                                |
-| Discovery             | `src/keepalive.ts`, `src/network.ts`                                                                                   |
-| Push-scan trigger     | `src/pushscan.ts`                                                                                                      |
-| Protocol selection    | `src/protocol-probe.ts`                                                                                                |
-| Shared session engine | `src/scan-session.ts`, `src/protocol.ts`, `src/graph-helpers.ts`                                                       |
-| ESC/I-2 path          | `src/esci2/scanner.ts`, `src/esci2/graph.ts`, `src/esci2/commands.ts`, `src/esci2/transport.ts`, `src/esci2/dialects/` |
-| Legacy ESC/I path     | `src/esci/scanner.ts`, `src/esci/graph.ts`, `src/esci/commands.ts`, `src/esci/luts.ts`, `src/esci/raw-to-jpeg.ts`      |
-| Shared FS commands    | `src/commands-fs.ts`                                                                                                   |
-| Output pipeline       | `src/output.ts`, `src/output-tail.ts`, `src/exif.ts`, `src/pdf.ts`, `src/paperless-upload.ts`                          |
-| Health and logging    | `src/health.ts`, `src/logger.ts`                                                                                       |
+| Area                  | Files                                                                                                                                   |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| Process entry points  | `src/index.ts`, `src/one-shot.ts`, `src/startup.ts`, `src/lifecycle.ts`                                                                 |
+| Discovery             | `src/keepalive.ts`, `src/network.ts`                                                                                                    |
+| Push-scan trigger     | `src/pushscan.ts`                                                                                                                       |
+| Protocol selection    | `src/protocol-probe.ts`                                                                                                                 |
+| Shared session engine | `src/scan-session.ts`, `src/protocol.ts`, `src/graph-helpers.ts`                                                                        |
+| ESC/I-2 path          | `src/esci2/scanner.ts`, `src/esci2/graph.ts`, `src/esci2/commands.ts`, `src/esci2/transport.ts`, `src/esci2/dialects/`                  |
+| Legacy ESC/I path     | `src/esci/scanner.ts`, `src/esci/graph.ts`, `src/esci/commands.ts`, `src/esci/luts.ts`, `src/esci/raw-to-jpeg.ts`, `src/esci/dialects/` |
+| Shared FS commands    | `src/commands-fs.ts`                                                                                                                    |
+| Output pipeline       | `src/output.ts`, `src/output-tail.ts`, `src/exif.ts`, `src/pdf.ts`, `src/paperless-upload.ts`                                           |
+| Health and logging    | `src/health.ts`, `src/logger.ts`                                                                                                        |
 
 Test files mirror the modules they cover. The replay harnesses in `src/esci2/scanner.test.ts` and `src/esci/scanner.test.ts` are the most important protocol regression protection.
 

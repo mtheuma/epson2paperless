@@ -1,11 +1,11 @@
 # pcap-render
 
-Dev-only CLI that takes a real Wireshark `.pcap` of a WF-3620 scan session
-and runs the captured raw GBR pixel data through the project's image
+Dev-only CLI that takes a real Wireshark `.pcap` of a WF-3620/XP-620 scan
+session and runs the captured raw GBR pixel data through the project's image
 pipeline (`encodeRawGbrToJpeg` → `output-tail.finalizeSession`), producing
 viewable JPEGs / PDFs on disk.
 
-Used to eyeball real maltris captures end-to-end before merging WF-3620
+Used to eyeball real captures end-to-end before merging legacy ESC/I
 support — the replay tests in `src/esci/scanner.test.ts` use synthesised
 fill-byte data, which exercises wire-protocol correctness but doesn't
 verify that real pixel content round-trips correctly.
@@ -20,11 +20,16 @@ Not reachable from the runtime service. Not invoked by tests.
 
 ```
 TSHARK_PATH="/c/Program Files/Wireshark/tshark.exe" \
-  npm run pcap:render -- <pcap> <source> <format> <outputDir>
+  npm run pcap:render -- <pcap> <source> <format> <outputDir> \
+  [--stream N] [--width <px> --height <px>]
 ```
 
 - `<source>`: `flatbed` | `adf-simplex` | `adf-duplex`
 - `<format>`: `jpg` | `pdf`
+- `--stream N`: isolate one `tcp.stream` in dual-stream captures (same as
+  `pcap:extract`).
+- `--width <px> --height <px>`: override the geometry lookup for
+  fixed-geometry models like the XP-620.
 - IP and port defaults match the maltris captures (host 192.168.188.140,
   printer 192.168.188.54, port 1865); override with `HOST_IP`,
   `PRINTER_IP`, `SCAN_PORT` env vars for captures from other users.

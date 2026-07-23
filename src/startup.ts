@@ -6,6 +6,7 @@ import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import { detectVariant, type Variant } from "./protocol-probe.js";
 import { runEsci2Scan, runEsci2ScanOverPlain } from "./esci2/scanner.js";
 import { runEsciScan } from "./esci/scanner.js";
+import { resolveLegacyEntry } from "./esci/dialects/registry.js";
 import { runFf680wJobListCommit, runFf680wJobNumberCommit } from "./ff680w-job-control.js";
 import { PID_FF680W, PID_DS575W } from "./printer-ids.js";
 import {
@@ -168,6 +169,7 @@ export interface DispatchArgs {
   duplex: boolean;
   action: "jpg" | "pdf";
   paperless: PaperlessUploadOptions | undefined;
+  productName: string | null;
 }
 
 export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
@@ -186,6 +188,8 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
       tempDir: args.config.tempDir,
       duplex: args.duplex,
       action: args.action,
+      postProcess: args.config.postProcess,
+      jpegQuality: args.config.jpegQuality,
       resolution: args.config.scanResolution,
       colorMode: args.config.scanColorMode,
       paperless: args.paperless,
@@ -206,6 +210,8 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
       tempDir: args.config.tempDir,
       duplex: args.duplex,
       action: args.action,
+      postProcess: args.config.postProcess,
+      jpegQuality: args.config.jpegQuality,
       resolution: args.config.scanResolution,
       colorMode: args.config.scanColorMode,
       paperless: args.paperless,
@@ -214,15 +220,18 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
   // Legacy. Source is autodetected from the FS F status byte (see esci/scanner.ts
   // STATUS_2). ESCI_FORCE_SOURCE overrides the autodetection for users hitting
   // edge cases the autodetect doesn't cover (yet).
+  const entry = resolveLegacyEntry(args.productName);
   return runEsciScan({
     printerIp: args.config.printerIp,
     port: 1865,
     outputDir: args.config.outputDir,
     tempDir: args.config.tempDir,
+    entry,
     duplex: args.duplex,
     forcedSource: args.config.esciForceSource ?? null,
     format: args.action,
     jpegQuality: args.config.jpegQuality,
+    postProcess: args.config.postProcess,
     paperless: args.paperless,
     diagnoseProtocol: args.config.diagnoseProtocol,
   });

@@ -49,7 +49,7 @@ async function main() {
         return;
       }
       log.info(
-        `PushScan received (duplex=${scan.duplex}, action=${scan.action}) — starting TLS scan session`,
+        `PushScan received (duplex=${scan.duplex}, action=${scan.action}) — starting scan session`,
       );
 
       const scanPromise = dispatchScanSession({
@@ -57,6 +57,7 @@ async function main() {
         duplex: scan.duplex,
         action: scan.action,
         paperless: buildPaperlessOptions(config),
+        productName: info.productName,
       });
       void inflight.track(scanPromise);
       scanPromise.then(

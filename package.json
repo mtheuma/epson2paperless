@@ -1,6 +1,6 @@
 {
   "name": "epson2paperless",
-  "version": "0.5.1",
+  "version": "0.6.0",
   "description": "Epson Scan to Computer protocol emulator — delivers scans to Paperless-ngx",
   "main": "dist/index.js",
   "scripts": {
@@ -8,6 +8,7 @@
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
     "scan": "tsx src/one-shot.ts",
+    "scan:now": "tsx src/scan-now.ts",
     "printer-fingerprint": "tsx tools/printer-fingerprint.ts",
     "test-page:generate": "tsx tools/test-page/generate.ts",
     "oracle:baseline": "tsx tools/test-oracle/baseline-cli.ts",

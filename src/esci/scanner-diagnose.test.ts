@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { runEsciScan } from "./scanner.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
 import { buildIsPacket, parseIsPacket } from "../protocol.js";
+import { WF3620_ENTRY } from "./dialects/wf3620.js";
 
 // Welcome and lock-ack helpers — same shape as the WF-3620 fixtures.
 const welcome = buildIsPacket(0x8000, Buffer.alloc(0));
@@ -61,6 +62,7 @@ describe("scanner-esci DIAGNOSE_PROTOCOL probe", () => {
         port: 1865,
         outputDir: "/tmp",
         tempDir: "",
+        entry: WF3620_ENTRY,
         duplex: false,
         forcedSource: "flatbed",
         format: "pdf",
@@ -106,6 +108,7 @@ describe("scanner-esci DIAGNOSE_PROTOCOL probe", () => {
         port: 1865,
         outputDir: "/tmp",
         tempDir: "",
+        entry: WF3620_ENTRY,
         duplex: false,
         forcedSource: "flatbed",
         format: "pdf",
@@ -142,6 +145,7 @@ describe("scanner-esci DIAGNOSE_PROTOCOL probe", () => {
         port: 1865,
         outputDir: "/tmp",
         tempDir: "",
+        entry: WF3620_ENTRY,
         duplex: false,
         forcedSource: "flatbed",
         format: "pdf",

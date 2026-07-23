@@ -14,4 +14,8 @@ COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
 COPY --from=build /app/package.json ./
 USER node
-ENTRYPOINT ["node", "dist/index.js"]
+# ENTRYPOINT/CMD split rather than a single ENTRYPOINT: the CMD default
+# reproduces the daemon exactly (existing deploys are unaffected), while
+# `docker compose run <svc> dist/scan-now.js` can override the script.
+ENTRYPOINT ["node"]
+CMD ["dist/index.js"]

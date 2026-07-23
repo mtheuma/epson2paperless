@@ -12,7 +12,12 @@ import { resolveSessionTimestamp } from "../output.js";
 import { esci2Graph, type Esci2Ctx } from "./graph.js";
 import { withEsci2UnlockOnDestroy, withTlsErrorLabels } from "./transport.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
-import { DEFAULT_SCAN_RESOLUTION, DEFAULT_SCAN_COLOR_MODE } from "../config.js";
+import {
+  DEFAULT_SCAN_RESOLUTION,
+  DEFAULT_SCAN_COLOR_MODE,
+  DEFAULT_JPEG_QUALITY,
+} from "../config.js";
+import type { PostProcessProfile } from "../postprocess/index.js";
 
 export interface ScanSession {
   printerIp: string;
@@ -24,6 +29,8 @@ export interface ScanSession {
   duplex: boolean;
   /** Effective output format, already resolved against PREVIEW_ACTION. */
   action: "jpg" | "pdf";
+  postProcess?: PostProcessProfile;
+  jpegQuality?: number;
   /** Scan resolution in DPI (FF-680W only; default applied at config layer). */
   resolution?: number;
   /** Colour mode (greyscale-capable adf-crp dialects only; default at config layer). */
@@ -170,6 +177,9 @@ export async function runEsci2Scan(
     tempDir: session.tempDir,
     sessionTs: resolveSessionTimestamp(new Date(), session.outputDir),
     action: session.action,
+    postProcess: session.postProcess ?? "none",
+    jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
+    resolveToneCurve: (ctx) => ctx.entry?.toneCurve,
     paperless: session.paperless,
   });
   if (!result.ok) throw result.reason;
@@ -196,6 +206,9 @@ export async function runEsci2ScanOverPlain(
     tempDir: session.tempDir,
     sessionTs: resolveSessionTimestamp(new Date(), session.outputDir),
     action: session.action,
+    postProcess: session.postProcess ?? "none",
+    jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
+    resolveToneCurve: (ctx) => ctx.entry?.toneCurve,
     paperless: session.paperless,
   });
   if (!result.ok) throw result.reason;

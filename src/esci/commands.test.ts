@@ -32,6 +32,9 @@ import {
   buildEscCleanup,
   buildPageEject,
   buildEscZ,
+  buildEscI,
+  buildEscLowerI,
+  buildEscE2,
 } from "./commands.js";
 
 describe("esci-legacy command builders", () => {
@@ -65,6 +68,12 @@ describe("esci-legacy command builders", () => {
 
   it("ESC z (gamma load command, channel R) is 2 bytes 1b 7a", () => {
     expect(buildEscZ()).toEqual(Buffer.from([0x1b, 0x7a]));
+  });
+
+  it("XP-620 setup opcodes", () => {
+    expect([...buildEscI()]).toEqual([0x1b, 0x49]);
+    expect([...buildEscLowerI()]).toEqual([0x1b, 0x69]);
+    expect([...buildEscE2()]).toEqual([0x1b, 0xe2]);
   });
 });
 

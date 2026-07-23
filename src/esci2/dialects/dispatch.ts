@@ -43,6 +43,29 @@ export function applyEntrySourceOverride(
 }
 
 /**
+ * Rejects a PARA source the hardware can't do. Currently only guards
+ * adf-duplex against simplex-only ADFs.
+ *
+ * Called from buildParaSend after the source axis resolves — NOT at entry
+ * resolution. `stat-length` entries don't know their source until
+ * INIT_POLL_STAT, and `duplex=true` on a flatbed scan is inert and must stay
+ * that way (SCAN_SIDES defaults to "duplex", so flatbed-only models see it on
+ * every default host-triggered scan).
+ *
+ * Origin-independent: an adf-duplex PARA against a simplex-only ADF is wrong
+ * whether the panel or the host asked for it.
+ */
+export function assertSourceSupported(entry: RegistryEntry, source: ParaSpec["source"]): void {
+  if (source === "adf-duplex" && !entry.adfDuplex) {
+    throw new Error(
+      `${entry.displayName} has no duplex ADF — refusing to compose an adf-duplex PARA ` +
+        `the hardware never advertised. Set SCAN_SIDES=simplex for host-triggered scans, ` +
+        `or scan 1-sided from the panel.`,
+    );
+  }
+}
+
+/**
  * Pure projection of a registry entry + source/action axes onto a ParaSpec.
  * Called at PARA-build time after the source axis has been resolved (with
  * duplex folded in by the call site).

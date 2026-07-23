@@ -7,6 +7,7 @@ import { z } from "zod";
 // models ignore SCAN_RESOLUTION and scan at their dialect's fixed resolution.
 export const FF680W_RESOLUTIONS = [50, 75, 100, 150, 200, 240, 300, 360, 400, 600] as const;
 export const DEFAULT_SCAN_RESOLUTION = 200;
+export const DEFAULT_JPEG_QUALITY = 90;
 
 // SCAN_COLOR_MODE selects colour vs greyscale. Only greyscale-capable dialects
 // (currently the DS-575W) act on it; all other models ignore it and scan in
@@ -36,10 +37,11 @@ const configSchema = z
     logLevel: z.enum(["debug", "info", "warn", "error"]).default("info"),
     logFormat: z.enum(["text", "json"]).default("text"),
     language: z.string().length(2).default("en"),
-    jpegQuality: z.coerce.number().int().min(1).max(100).default(90),
+    jpegQuality: z.coerce.number().int().min(1).max(100).default(DEFAULT_JPEG_QUALITY),
     previewAction: z.enum(["reject", "jpg", "pdf"]).default("reject"),
-    // Panel-less fallbacks — consulted only when the printer doesn't report the
-    // setting at trigger time (the job-number flow; currently the FF-680W).
+    postProcess: z.enum(["none", "document"]).default("none"),
+    // Panel-less fallbacks — consulted whenever no panel choice reaches us:
+    // the FF-680W job-number flow, and every host-triggered scan (scan-now).
     scanFormat: z.enum(["jpg", "pdf"]).default("pdf"),
     scanSides: z.enum(["simplex", "duplex"]).default("duplex"),
     scanResolution: z.coerce
@@ -150,6 +152,7 @@ export function loadConfig(): Config {
     language: process.env.LANGUAGE || undefined,
     jpegQuality: process.env.JPEG_QUALITY || undefined,
     previewAction: process.env.PREVIEW_ACTION || undefined,
+    postProcess: process.env.POST_PROCESS || undefined,
     scanFormat: process.env.SCAN_FORMAT || undefined,
     scanSides: process.env.SCAN_SIDES || undefined,
     scanResolution: process.env.SCAN_RESOLUTION || undefined,

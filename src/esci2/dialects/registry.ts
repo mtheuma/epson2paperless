@@ -1,5 +1,6 @@
 // src/esci2/dialects/registry.ts
 import type { GammaClassName, CmxClassName, Extents, ParaProfile } from "../para-composer.js";
+import type { ToneCurveName } from "../../postprocess/tone-curves.js";
 
 export interface RegistryEntry {
   displayName: string;
@@ -7,6 +8,18 @@ export interface RegistryEntry {
   initPollIterations: number;
   fbExtents: Extents;
   adfExtents: Extents | null;
+  /**
+   * Whether the hardware's ADF can scan both sides. Read by
+   * assertSourceSupported at PARA-build time: composing an `adf-duplex` PARA
+   * for a simplex-only ADF sends the printer a segment its firmware never
+   * advertised. The panel used to make this unreachable by never offering
+   * 2-sided on such models; the host trigger (scan-now) can request it
+   * directly, because SCAN_SIDES defaults to "duplex".
+   *
+   * `false` for flatbed-only models, where it is unreachable but must still
+   * be stated.
+   */
+  adfDuplex: boolean;
   gmm: string;
   gammaClass: { jpg: GammaClassName; pdf: GammaClassName };
   cmxClass: { jpg: CmxClassName | null; pdf: CmxClassName | null };
@@ -19,6 +32,12 @@ export interface RegistryEntry {
    * ignore the setting and always scan in colour.
    */
   monoGammaClass?: GammaClassName;
+  /**
+   * Pinned perceptual tone curve for the `document` post-process profile
+   * (stage 2). Set only for printers with a captured raw→Epson oracle pair;
+   * omitted printers get the adaptive white-point clip only.
+   */
+  toneCurve?: ToneCurveName;
 }
 
 export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
@@ -30,20 +49,30 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       initPollIterations: 3,
       fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
       adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
+      adfDuplex: true,
       gmm: "UG10",
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: null, pdf: null },
       optionalSegments: { qit: true, cct: true },
+      toneCurve: "et4950-family",
     },
   ],
   [
+    // The XP-4100 (FW 02.42.MB27M6) produces a byte-identical canonicalised
+    // CAPA reply and so shares this fingerprint — flatbed-only hardware like
+    // the ET-2750, live-validated by the reporter in issue #139 (flatbed PDF,
+    // panel and host trigger). Gamma is not advertised in CAPA, so the XP-4100
+    // inherits the ET-2750's captured near-identity curve; measured off the
+    // #139 compatibility-page scan, C0C0C0 returns ~195 against a nominal 192
+    // with no cast, so the inherited curve is faithful on that hardware too.
     "de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7",
     {
-      displayName: "ET-2750 (ESC/I-2 over plain TCP)",
+      displayName: "ET-2750 / XP-4100 (ESC/I-2 over plain TCP)",
       sourceDetection: "fixed-flatbed",
       initPollIterations: 2,
       fbExtents: { x0: 0, y0: 0, w: 2477, h: 3500 },
       adfExtents: null,
+      adfDuplex: false, // no ADF
       gmm: "UG18",
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
@@ -58,6 +87,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       initPollIterations: 3,
       fbExtents: { x0: 0, y0: 0, w: 2550, h: 3300 },
       adfExtents: { x0: 0, y0: 0, w: 2550, h: 3300 },
+      adfDuplex: true,
       gmm: "UG18",
       gammaClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
       cmxClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
@@ -72,6 +102,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       initPollIterations: 3,
       fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
       adfExtents: null,
+      adfDuplex: false, // no ADF
       gmm: "UG10",
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: null, pdf: null },
@@ -86,6 +117,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       initPollIterations: 3, // same as ET-4950 family; fixtures trimmed to 3 cycles
       fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
       adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
+      adfDuplex: false, // ADF simplex
       gmm: "UG18",
       gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
@@ -106,6 +138,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       initPollIterations: 3,
       fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
       adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
+      adfDuplex: false, // ADF simplex
       gmm: "UG18",
       gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
@@ -127,6 +160,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       // required for standard flatbed-capable dialects.
       fbExtents: { x0: 0, y0: 0, w: 1700, h: 7200 },
       adfExtents: { x0: 0, y0: 0, w: 1700, h: 7200 },
+      adfDuplex: true,
       gmm: "UG18",
       gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
       cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
@@ -161,12 +195,49 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       // Not used by the fixed-ADF profile, but ParaSpec requires FB extents.
       fbExtents: { x0: 0, y0: 0, w: 1700, h: 3100 },
       adfExtents: { x0: 0, y0: 0, w: 1700, h: 3100 },
+      adfDuplex: true,
       gmm: "UG18",
       gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
       cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
       optionalSegments: { qit: false, cct: false },
       paraProfile: "adf-crp",
       monoGammaClass: "ds575w-mono",
+    },
+  ],
+  [
+    // ET-2810: entry-level A4 EcoTank. Flatbed-only (CAPA reports ADF: N /
+    // duplex: N), ESC/I-2 over plain TCP. CAPA advertises GMM "UG10UG18" and
+    // CMX "UNITUM08" with QIT/CCT absent, and its #FB AREA value "d850i0001170"
+    // is byte-identical to the ET-4800 — i.e. an ET-4800/ET-15000-shaped dialect
+    // that happens to have no ADF. Extents and CMX class are therefore reused
+    // from the ET-4800; gamma is inherited from it too (et4800-stock) rather
+    // than guessed flat, because that is the combination the reporter actually
+    // exercised on hardware (issue #132, PID 118A, FW FB 1.00): they patched
+    // this entry in at runtime and got a valid flatbed PDF out.
+    //
+    // Gamma is not advertised in CAPA, so the inherited curve was a guess until
+    // the reporter scanned the compatibility test page (#132). Measured off that
+    // scan: the nominal-64 grey patch returns luma 67 — et4800-stock's ~38 black
+    // floor never bites, so no shadow crushing — and paper white returns a clean
+    // 255 with no colour cast. Good enough to ship as-is; a Frida capture would
+    // still pin the exact curve rather than confirm it behaves.
+    //
+    // NOTE: the ET-2810 never triggers a scan on its own — its two-button combo
+    // is a USB-host scan and it registers no network Scan-to-Computer
+    // destination, so no beacon and no push-scan ever arrive. This entry is only
+    // reachable via a host-initiated scan trigger; it is inert without one.
+    "708704b6abb184cede037fcd9893ea81f69651fde28780cde0162dfa33a33f6e",
+    {
+      displayName: "ET-2810 (ESC/I-2 over plain TCP)",
+      sourceDetection: "fixed-flatbed",
+      initPollIterations: 3,
+      fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
+      adfExtents: null,
+      adfDuplex: false,
+      gmm: "UG18",
+      gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
+      cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
+      optionalSegments: { qit: false, cct: false },
     },
   ],
   [
@@ -196,6 +267,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       initPollIterations: 3,
       fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
       adfExtents: null,
+      adfDuplex: false, // no ADF
       gmm: "UG18",
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },

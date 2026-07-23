@@ -12,6 +12,8 @@ import { esciGraph, type EsciCtx } from "./graph.js";
 import type { Source, Format } from "./commands.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
 import { withRawSocketCleanClose } from "./transport.js";
+import type { PostProcessProfile } from "../postprocess/index.js";
+import type { LegacyDialectEntry } from "./dialects/entry.js";
 
 export { appendImageChunk } from "./graph.js";
 
@@ -21,12 +23,15 @@ export interface LegacyScanSession {
   outputDir: string;
   /** Base directory for per-session temp spill; "" means `os.tmpdir()` at runtime. */
   tempDir: string;
+  /** Resolved per-model dialect record; see src/esci/dialects/. */
+  entry: LegacyDialectEntry;
   /** Panel-side Sides selection (true → 2-Sided). Source detected from FS F. */
   duplex: boolean;
   /** Override for FS F autodetection — set via ESCI_FORCE_SOURCE env var. */
   forcedSource: Source | null;
   format: Format;
   jpegQuality: number;
+  postProcess?: PostProcessProfile;
   paperless?: PaperlessUploadOptions;
   /**
    * When true, a non-ACK reply to ESC @ triggers an additional FS Y probe
@@ -77,18 +82,32 @@ export async function runEsciScan(
     throw new Error(`Failed to create session temp dir under ${tempBase}: ${msg}`);
   }
 
+  // Reject an ESCI_FORCE_SOURCE the dialect can't actually service up front
+  // (e.g. XP-620 has no ADF) rather than letting the wire session desync
+  // partway through a command sequence the printer doesn't support.
+  const fixedFlatbed = session.entry.sourcePolicy === "fixed-flatbed";
+  if (session.forcedSource && !session.entry.supportedSources.includes(session.forcedSource)) {
+    const supported = session.entry.supportedSources.join(", ");
+    throw new Error(
+      `ESCI_FORCE_SOURCE=${session.forcedSource} is not supported by ${session.entry.name} ` +
+        `(supports: ${supported}). Unset ESCI_FORCE_SOURCE or set it to one of the supported sources.`,
+    );
+  }
+
   const result = await runScanSession<EsciCtx>({
     graph: esciGraph,
     initialCtx: {
+      entry: session.entry,
       duplex: session.duplex,
       forcedSource: session.forcedSource,
       // Safe default — STATUS_2 overwrites this from the FS F byte (or
-      // forcedSource) before any state downstream reads it. The
-      // `sourceDetected` flag below disambiguates "this default" from
-      // "STATUS_2 actually ran" so the shell only fires onSourceDetected
-      // on success paths.
-      source: session.forcedSource ?? "adf-simplex",
-      sourceDetected: false,
+      // forcedSource) before any state downstream reads it, UNLESS the
+      // entry is fixed-flatbed, in which case there's no FS F detection
+      // to run and the source is pinned outright. The `sourceDetected`
+      // flag below disambiguates "this default" from "STATUS_2 actually
+      // ran" so the shell only fires onSourceDetected on success paths.
+      source: fixedFlatbed ? "flatbed" : (session.forcedSource ?? "adf-simplex"),
+      sourceDetected: fixedFlatbed ? true : false,
       format: session.format,
       jpegQuality: session.jpegQuality,
       diagnoseProtocol: session.diagnoseProtocol ?? false,
@@ -106,6 +125,8 @@ export async function runEsciScan(
     sessionTs: resolveSessionTimestamp(new Date(), session.outputDir),
     action: session.format === "pdf" ? "pdf" : "jpg",
     paperless: session.paperless,
+    postProcess: session.postProcess ?? "none",
+    jpegQuality: session.jpegQuality,
   });
 
   // Fire the public onSourceDetected hook only on success paths AND only

@@ -17,8 +17,8 @@ import {
 import {
   buildLockPacket,
   buildUnlockPacket,
-  buildPassthruPacket,
   buildIsPacket,
+  buildPurereadPacket,
 } from "../protocol.js";
 import {
   buildEscInit,
@@ -31,15 +31,13 @@ import {
   buildFsG,
   buildEscCleanup,
   buildPageEject,
-  buildFsWBlock,
-  buildStreamConfigPayload,
   parseFsGReply,
-  geometry,
   legacyDetectSource,
   SOURCE_BYTE,
+  buildEscLowerI,
+  buildEscE2,
   type Source,
   type Format,
-  type ScanGeometry,
 } from "./commands.js";
 // FS Y is the ET-4950 ESC/I-2 init's first command, now lifted to the
 // shared `commands-fs.ts` module. Used here only for the DIAGNOSE_PROTOCOL
@@ -47,9 +45,9 @@ import {
 // and ESC/I-2.
 import { buildFsY } from "../commands-fs.js";
 import { expectIsType, expectLength } from "../graph-helpers.js";
-import { GAMMA_LUT_R, GAMMA_LUT_G, GAMMA_LUT_B } from "./luts.js";
 import { encodeRawGbrToJpeg } from "./raw-to-jpeg.js";
 import { createLogger } from "../logger.js";
+import { passthru } from "./dialects/send.js";
 
 const log = createLogger("scanner-esci");
 
@@ -59,6 +57,8 @@ const log = createLogger("scanner-esci");
  * here is ESC/I-protocol-specific.
  */
 export interface EsciCtx {
+  /** Resolved per-model dialect record; see src/esci/dialects/. */
+  entry: import("./dialects/entry.js").LegacyDialectEntry;
   duplex: boolean;
   forcedSource: Source | null;
   /** Set in STATUS_2 from the FS F byte (or ctx.forcedSource). */
@@ -91,8 +91,8 @@ export interface EsciCtx {
    */
   imageBuffer: Buffer;
   imageBufferOffset: number;
-  /** Cached scan geometry (set in START alongside the imageBuffer allocation). */
-  geom: ScanGeometry | null;
+  /** Cached page geometry (set in START alongside the imageBuffer allocation). */
+  geom: { widthPx: number; heightPx: number } | null;
   /**
    * Trailing IS-0xa200 chunks stashed during the encode window; drained
    * on next IMG_RECEIVING entry. See PAGE_ENCODING_DRAIN. Issue #71.
@@ -111,11 +111,7 @@ const ACK_BYTE = 0x06;
 // matches the Windows driver and ensures the 0x81 busy cycle fires on flatbed.
 const PROBE_SOURCE_BYTE = 0x01;
 
-const GAMMA_CHANNELS = [
-  { tag: 0x52, lut: GAMMA_LUT_R },
-  { tag: 0x47, lut: GAMMA_LUT_G },
-  { tag: 0x42, lut: GAMMA_LUT_B },
-] as const;
+const GAMMA_CHANNEL_COUNT = 3;
 
 // =============================================================================
 // Helpers
@@ -123,10 +119,6 @@ const GAMMA_CHANNELS = [
 
 function isAck(payload: Buffer): boolean {
   return payload.length === 1 && payload[0] === ACK_BYTE;
-}
-
-function passthru(cmd: Buffer, replySize: number): Buffer {
-  return buildPassthruPacket(cmd, replySize);
 }
 
 const sendEscZ = (): Buffer => passthru(buildEscZ(), 1);
@@ -139,7 +131,7 @@ function sendEscEPlusByte(byte: number): SendSpec<EsciCtx>[] {
   return [passthru(buildEscE(), 1), passthru(Buffer.from([byte]), 1)];
 }
 
-/** ESC e + ctx-resolved source byte. Used in reset / cleanup paths. */
+/** ESC e + ctx-resolved source byte. Used in reset / PDF-setup paths. */
 const sendEscEPlusCtxSource: SendSpec<EsciCtx>[] = [
   passthru(buildEscE(), 1),
   (ctx: EsciCtx) => passthru(Buffer.from([SOURCE_BYTE[ctx.source]]), 1),
@@ -205,6 +197,42 @@ export function appendImageChunk(payload: Buffer, dest: Buffer, offset: number):
 const length1 = (p: Buffer): boolean => p.length === 1;
 const length16 = (p: Buffer): boolean => p.length === 16;
 const length80 = (p: Buffer): boolean => p.length === 80;
+const length19 = (p: Buffer): boolean => p.length === 19;
+const length40 = (p: Buffer): boolean => p.length === 40;
+
+// ESC 0xe2 reply may be 0x06 (ACK) or 0x15 (NAK); the driver proceeds regardless.
+const isAckOrNak = (p: Buffer): boolean => p.length === 1 && (p[0] === 0x06 || p[0] === 0x15);
+
+/**
+ * Two-phase identity META state (XP-620 only): 4-byte reply `02 02 <LE u16
+ * len>` → pure-read `len` bytes. Mirrors the ESC/I-2 `_META`/`_DATA`
+ * pattern in `src/esci2/graph.ts`. Strict: validates the STX prefix and
+ * pins the declared length to the model's known value (19 for ESC I, 40
+ * for ESC i — capture-derived; the replay transcript shield confirms them).
+ */
+function xpIdentMeta(name: string, next: string, expectedLen: number): void {
+  g.state(
+    name,
+    decision<EsciCtx>((_ctx, packet) => {
+      const typeGuard = expectIsType(packet, ESCI_REPLY, name);
+      if (typeGuard) return typeGuard;
+      const lenGuard = expectLength(packet.payload, 4, name, "identity META");
+      if (lenGuard) return lenGuard;
+      if (packet.payload[0] !== 0x02 || packet.payload[1] !== 0x02) {
+        return {
+          error: new Error(
+            `${name}: expected 02 02 STX, got ${packet.payload.subarray(0, 2).toString("hex")}`,
+          ),
+        };
+      }
+      const len = packet.payload.readUInt16LE(2);
+      if (len !== expectedLen) {
+        return { error: new Error(`${name}: expected identity length ${expectedLen}, got ${len}`) };
+      }
+      return { next, send: buildPurereadPacket(expectedLen) };
+    }),
+  );
+}
 
 // =============================================================================
 // Graph builder
@@ -219,8 +247,15 @@ const g = createGraph<EsciCtx>("WELCOME", ESCI_TIMEOUT_MS);
 // WELCOME: 0x8000 from printer → host sends LOCK → LOCKING.
 awaitReply(g, "WELCOME", 0x8000, () => true, "LOCKING", buildLockPacket());
 
-// LOCKING: 0xa100 lock-ack → send ESC @ → INIT.
-awaitReply(g, "LOCKING", 0xa100, () => true, "INIT", passthru(buildEscInit(), 1));
+// LOCKING: 0xa100 lock-ack → apply the dialect's setup branch (state + first send).
+g.state(
+  "LOCKING",
+  decision<EsciCtx>((ctx, packet) => {
+    const typeGuard = expectIsType(packet, 0xa100, "LOCKING");
+    if (typeGuard) return typeGuard;
+    return { next: ctx.entry.setup.next, send: ctx.entry.setup.send() };
+  }),
+);
 
 // INIT: ESC @ ack-or-NAK. ACK → IDENTITY (FS I); NAK + diagnoseProtocol →
 // DIAGNOSE_INIT_PROBE (FS Y); NAK + !diagnose → fail with the canonical
@@ -268,6 +303,34 @@ g.state(
     };
   }),
 );
+
+// =============================================================================
+// XP-620 setup group (fixed-flatbed dialect). Reached from LOCKING with
+// ESC I already sent (reply size 4). ESC I and ESC i are two-phase reads
+// (STX META reply, then a pure-read of the declared length); FS I is the
+// usual single-phase 80-byte identity read. ESC 0xe2's reply may be ACK or
+// NAK — the captured driver proceeds regardless (isAckOrNak). Hands off to
+// the shared GAMMA_CMD state once the setup handshake completes.
+// =============================================================================
+
+xpIdentMeta("XP_IDENT_A_META", "XP_IDENT_A_DATA", 19);
+awaitReply(
+  g,
+  "XP_IDENT_A_DATA",
+  ESCI_REPLY,
+  length19,
+  "XP_IDENT_B_META",
+  passthru(buildEscLowerI(), 4),
+); // ESC i (reply 4)
+xpIdentMeta("XP_IDENT_B_META", "XP_IDENT_B_DATA", 40);
+awaitReply(g, "XP_IDENT_B_DATA", ESCI_REPLY, length40, "XP_IDENT_C", sendFsI()); // FS I (reply 80)
+awaitReply(g, "XP_IDENT_C", ESCI_REPLY, length80, "XP_STATUS_1", sendFsF());
+awaitReply(g, "XP_STATUS_1", ESCI_REPLY, length16, "XP_INIT", passthru(buildEscInit(), 1)); // ESC @
+awaitReply(g, "XP_INIT", ESCI_REPLY, isAck, "XP_E2", passthru(buildEscE2(), 1)); // ESC 0xe2
+awaitReply(g, "XP_E2", ESCI_REPLY, isAckOrNak, "XP_STATUS_2", sendFsF());
+awaitReply(g, "XP_STATUS_2", ESCI_REPLY, length16, "XP_PAREN", passthru(buildEscParen(), 1)); // ESC (
+awaitReply(g, "XP_PAREN", ESCI_REPLY, length1, "XP_STATUS_3", sendFsF());
+awaitReply(g, "XP_STATUS_3", ESCI_REPLY, length16, "GAMMA_CMD", sendEscZ());
 
 // =============================================================================
 // IDENTITY → STATUS_1A → STATUS_1B → SOURCE probe → STATUS_2 (decision)
@@ -433,8 +496,10 @@ g.state("GAMMA_CMD", {
       validate: isAck,
       next: "GAMMA_DATA",
       send: (ctx: EsciCtx) => {
-        const ch = GAMMA_CHANNELS[ctx.gammaChannelIdx];
-        return passthru(Buffer.concat([Buffer.from([ch.tag]), ch.lut]), 1);
+        const luts = [ctx.entry.gamma.r, ctx.entry.gamma.g, ctx.entry.gamma.b];
+        const tags = [0x52, 0x47, 0x42];
+        const idx = ctx.gammaChannelIdx;
+        return passthru(Buffer.concat([Buffer.from([tags[idx]]), luts[idx]]), 1);
       },
     },
   },
@@ -451,7 +516,7 @@ g.state(
         error: new Error(`GAMMA_DATA: expected gamma LUT ack (channel ${ctx.gammaChannelIdx})`),
       };
     }
-    if (ctx.gammaChannelIdx + 1 < GAMMA_CHANNELS.length) {
+    if (ctx.gammaChannelIdx + 1 < GAMMA_CHANNEL_COUNT) {
       ctx.gammaChannelIdx += 1;
       return { next: "GAMMA_CMD", send: sendEscZ() };
     }
@@ -471,13 +536,29 @@ g.state("WINDOW_CMD", {
       validate: isAck,
       next: "WINDOW_DATA",
       send: (ctx: EsciCtx) =>
-        passthru(buildFsWBlock({ source: ctx.source, format: ctx.format }), 1),
+        passthru(ctx.entry.fswBlock({ source: ctx.source, format: ctx.format }), 1),
     },
   },
 });
 
-// WINDOW_DATA: ACK for the FS W block → STATUS_PRESCAN, send FS F.
-awaitReply(g, "WINDOW_DATA", ESCI_REPLY, isAck, "STATUS_PRESCAN", sendFsF());
+// WINDOW_DATA: ACK for the FS W block → prestart branch (entry.prestart).
+// WF (status-then-start): STATUS_PRESCAN, send FS F. XP (start-direct):
+// skip the FS F prescan status round-trip and go straight to START,
+// sending FS G directly — matches the captured XP-620 driver behaviour.
+g.state(
+  "WINDOW_DATA",
+  decision<EsciCtx>((ctx, packet) => {
+    const typeGuard = expectIsType(packet, ESCI_REPLY, "WINDOW_DATA");
+    if (typeGuard) return typeGuard;
+    if (!isAck(packet.payload)) {
+      return { error: new Error("WINDOW_DATA: expected FS W block ack") };
+    }
+    if (ctx.entry.prestart === "status-then-start") {
+      return { next: "STATUS_PRESCAN", send: sendFsF() };
+    }
+    return { next: "START", send: passthru(buildFsG(), 14) }; // start-direct (XP-620)
+  }),
+);
 
 // STATUS_PRESCAN: 16-byte FS F → START, send FS G.
 awaitReply(g, "STATUS_PRESCAN", ESCI_REPLY, length16, "START", passthru(buildFsG(), 14));
@@ -496,7 +577,7 @@ g.state(
     if (reply.chunkSize === 0) {
       return { next: "START_POLL", send: sendFsF() };
     }
-    const geom = geometry({ source: ctx.source, format: ctx.format });
+    const geom = ctx.entry.raster({ source: ctx.source, format: ctx.format });
     ctx.geom = geom;
     ctx.imageBuffer = Buffer.alloc(geom.widthPx * geom.heightPx * 3);
     ctx.imageBufferOffset = 0;
@@ -505,7 +586,7 @@ g.state(
     // PAGE_ENCODING_DRAIN. Without this, IMG_RECEIVING would sit on its
     // deferred queue until the engine timeout (#71). The IMG_RECEIVING
     // drain prelude stays as a backstop for fragmented arrivals.
-    const streamConfig = buildIsPacket(0x2200, buildStreamConfigPayload(reply, ctx.format));
+    const streamConfig = buildIsPacket(0x2200, ctx.entry.streamConfig(reply, ctx.format));
     if (drainDeferredIntoBuffer(ctx, null) === "overflowed") {
       // Bundle stream-config with the flush transition so the overflow
       // path still emits IS-0x2200 — every non-overflow START path
@@ -570,9 +651,9 @@ function makeFlushTransition(ctx: EsciCtx, preSend?: SendSpec<EsciCtx>): Transit
     encode: () => encodeRawGbrToJpeg(rawRgb, widthPx, heightPx, quality),
   };
   if (ctx.source === "flatbed") {
-    const trailing = sendFsF();
+    const trailing = ctx.entry.teardown.send();
     return {
-      next: "POST_STATUS",
+      next: ctx.entry.teardown.next,
       send: preSend !== undefined ? [preSend, trailing] : trailing,
       flushPage: flush,
     };
@@ -670,7 +751,9 @@ g.state(
 awaitReply(g, "POST_STATUS", ESCI_REPLY, length16, "CLEANUP_1", sendEscCleanup());
 
 // CLEANUP_1: 1-byte ESC ) reply (0x06 ACK or 0x80 NAK; both fine).
-//   ADF → re-set source via ESC e + source byte → ADF_CLEANUP_ACK1
+//   ADF → re-set source via ESC e + fixed 0x01 probe byte → ADF_CLEANUP_ACK1
+//     (the captured driver always sends 0x01 here, even on duplex scans —
+//     unlike the reset / PDF-setup paths, which send the real source byte)
 //   Flatbed → second ESC ) directly → CLEANUP_2
 g.state(
   "CLEANUP_1",
@@ -680,7 +763,7 @@ g.state(
     const lengthGuard = expectLength(packet.payload, 1, "CLEANUP_1", "ESC ) reply");
     if (lengthGuard) return lengthGuard;
     if (ctx.source !== "flatbed") {
-      return { next: "ADF_CLEANUP_ACK1", send: sendEscEPlusCtxSource };
+      return { next: "ADF_CLEANUP_ACK1", send: sendEscEPlusByte(PROBE_SOURCE_BYTE) };
     }
     return { next: "CLEANUP_2", send: sendEscCleanup() };
   }),
@@ -706,11 +789,33 @@ g.state("UNLOCKING", {
 });
 
 // =============================================================================
+// XP-620 teardown group (fixed-flatbed dialect). Reached from
+// makeFlushTransition with ESC @ already sent. Reproduces
+// ESC @ → ESC e → 0x00 → ESC ) → close. The capture shows the session
+// closing without an unlock — resolve straight to the engine's terminal
+// DONE rather than adding an unlock the capture doesn't show.
+// =============================================================================
+
+awaitReply(
+  g,
+  "XP_TEARDOWN_INIT",
+  ESCI_REPLY,
+  isAck,
+  "XP_TEARDOWN_SRC_ACK1",
+  sendEscEPlusByte(0x00),
+); // ESC e + 0x00
+escEThenAck(g, "XP_TEARDOWN_SRC", "XP_TEARDOWN_PAREN", passthru(buildEscCleanup(), 1)); // ESC )
+awaitReply(g, "XP_TEARDOWN_PAREN", ESCI_REPLY, length1, "DONE"); // ESC ) reply → done; TCP closes
+
+// =============================================================================
 // Cleanup states — post-image-transfer panel hygiene. A failure in any of
 // these recovers via the engine's post-scan-save fallback (v0.3.0 §3.3)
 // provided at least one page has flushed. POST_STATUS is intentionally NOT
 // in this list (treated as part of image-acquisition close — a failure
-// there can signal a real transfer-end protocol error).
+// there can signal a real transfer-end protocol error). XP_TEARDOWN_INIT
+// IS included: the XP teardown chain runs after the page is already
+// flushed to disk, so it's pure re-init/park hygiene, not a transfer-end
+// signal — unlike POST_STATUS's FS F, which can still carry one.
 // =============================================================================
 
 g.cleanupStates([
@@ -720,6 +825,10 @@ g.cleanupStates([
   "ADF_CLEANUP_STATUS",
   "CLEANUP_2",
   "UNLOCKING",
+  "XP_TEARDOWN_INIT",
+  "XP_TEARDOWN_SRC_ACK1",
+  "XP_TEARDOWN_SRC_ACK2",
+  "XP_TEARDOWN_PAREN",
 ]);
 
 // =============================================================================

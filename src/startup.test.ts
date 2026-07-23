@@ -19,6 +19,7 @@ import { buildPushScanServerOptions, dispatchScanSession, resolveScanDispatch } 
 import { detectVariant } from "./protocol-probe.js";
 import { runEsci2Scan, runEsci2ScanOverPlain } from "./esci2/scanner.js";
 import { runEsciScan } from "./esci/scanner.js";
+import { WF3620_ENTRY } from "./esci/dialects/wf3620.js";
 import { runFf680wJobListCommit, runFf680wJobNumberCommit } from "./ff680w-job-control.js";
 import type { Config } from "./config.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
@@ -44,6 +45,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     language: "en",
     jpegQuality: 90,
     previewAction: "reject",
+    postProcess: "none",
     scanFormat: "pdf",
     scanSides: "duplex",
     scanResolution: 200,
@@ -231,7 +233,13 @@ describe("dispatchScanSession", () => {
   it("forwards the configured override + IP to detectVariant", async () => {
     detectVariantMock.mockResolvedValue("esci2");
     const config = makeConfig({ printerProtocol: "esci2", printerIp: "203.0.113.7" });
-    await dispatchScanSession({ config, duplex: false, action: "jpg", paperless: undefined });
+    await dispatchScanSession({
+      config,
+      duplex: false,
+      action: "jpg",
+      paperless: undefined,
+      productName: null,
+    });
 
     expect(detectVariantMock).toHaveBeenCalledTimes(1);
     expect(detectVariantMock).toHaveBeenCalledWith({
@@ -257,6 +265,7 @@ describe("dispatchScanSession", () => {
       duplex: true,
       action: "pdf",
       paperless: PAPERLESS_OPTS,
+      productName: null,
     });
 
     expect(runEsci2ScanMock).toHaveBeenCalledTimes(1);
@@ -270,6 +279,8 @@ describe("dispatchScanSession", () => {
       tempDir: "/tmp/scan",
       duplex: true,
       action: "pdf",
+      postProcess: "none",
+      jpegQuality: 90,
       resolution: 200,
       paperless: PAPERLESS_OPTS,
       printerCertFingerprint: fp,
@@ -284,6 +295,7 @@ describe("dispatchScanSession", () => {
       duplex: false,
       action: "jpg",
       paperless: PAPERLESS_OPTS,
+      productName: null,
     });
 
     expect(runEsci2ScanOverPlainMock).toHaveBeenCalledTimes(1);
@@ -310,6 +322,7 @@ describe("dispatchScanSession", () => {
       duplex: true,
       action: "pdf",
       paperless: PAPERLESS_OPTS,
+      productName: null,
     });
 
     expect(runEsciScanMock).toHaveBeenCalledTimes(1);
@@ -320,10 +333,12 @@ describe("dispatchScanSession", () => {
       port: 1865,
       outputDir: "/test-output",
       tempDir: "",
+      entry: WF3620_ENTRY,
       duplex: true,
       forcedSource: "adf-duplex",
       format: "pdf",
       jpegQuality: 75,
+      postProcess: "none",
       paperless: PAPERLESS_OPTS,
       diagnoseProtocol: true,
     });
@@ -332,10 +347,32 @@ describe("dispatchScanSession", () => {
   it("variant=esci passes forcedSource=null when esciForceSource is unset", async () => {
     detectVariantMock.mockResolvedValue("esci");
     const config = makeConfig({ printerProtocol: "esci" });
-    await dispatchScanSession({ config, duplex: false, action: "jpg", paperless: undefined });
+    await dispatchScanSession({
+      config,
+      duplex: false,
+      action: "jpg",
+      paperless: undefined,
+      productName: null,
+    });
 
     const call = runEsciScanMock.mock.calls[0][0];
     expect(call.forcedSource).toBeNull();
+  });
+
+  it("variant=esci routes XP-620 PID to the xp620 dialect entry", async () => {
+    detectVariantMock.mockResolvedValue("esci");
+    const config = makeConfig({ printerProtocol: "esci" });
+    await dispatchScanSession({
+      config,
+      duplex: false,
+      action: "jpg",
+      paperless: undefined,
+      productName: "PID 08C8",
+    });
+
+    expect(runEsciScanMock).toHaveBeenCalledWith(
+      expect.objectContaining({ entry: expect.objectContaining({ name: "xp620" }) }),
+    );
   });
 
   it("propagates scanner rejection to the caller", async () => {
@@ -345,7 +382,13 @@ describe("dispatchScanSession", () => {
     const config = makeConfig({ printerProtocol: "esci2" });
 
     await expect(
-      dispatchScanSession({ config, duplex: false, action: "jpg", paperless: undefined }),
+      dispatchScanSession({
+        config,
+        duplex: false,
+        action: "jpg",
+        paperless: undefined,
+        productName: null,
+      }),
     ).rejects.toThrow("scan failed");
   });
 });

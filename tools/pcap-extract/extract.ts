@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
+import { createIsFrameReader } from "../../src/is-frame-stream.js";
 
 export interface ExtractOptions {
   pcapPath: string;
@@ -30,44 +31,38 @@ export type FixtureEvent =
       dir: "p>h";
       ts: number;
       summary: "image-stream";
-      frameCount: number;
+      chunkCount: number;
       totalBytes: number;
       chunkSize: number;
     };
 
 const TSHARK_DEFAULT = "tshark";
-const IS_HEADER_HEX_PREFIX = "4953";
-const IS_TYPE_A200_PREFIX = "a200";
-export const IS_IMAGE_CHUNK_HEX = IS_HEADER_HEX_PREFIX + IS_TYPE_A200_PREFIX;
 
 /**
  * Build the tshark argv used by `extract`. Factored out for unit testing —
  * the display filter is the only knob that needs regression coverage, and
  * we'd rather pin its exact string than spawn tshark in a unit test.
  *
- * The three `!tcp.analysis.*_retransmission` clauses exclude duplicate
- * segments that tshark classifies as retransmits. Without them, the
- * duplicates get extracted as ghost hex events and corrupt downstream
- * replay — the XP-7100 capture needed manual one-line surgery in
- * `xp-7100/jpg-adf-simplex.jsonl` to remove a duplicated segment before
- * its replay test would pass.
- *
- * Wireshark exposes regular, fast, and spurious retransmissions as
- * separate boolean fields — a fast or spurious retransmission isn't
- * necessarily tagged with the generic `tcp.analysis.retransmission` flag,
- * so all three need explicit clauses. See
- * https://www.wireshark.org/docs/dfref/t/tcp.html.
+ * The filter deliberately does NOT exclude `tcp.analysis.*_retransmission`
+ * frames. On captures with real packet loss (Wi-Fi captures like XP-620's
+ * and 4 of the 10 WF-3620 ones), a retransmission-flagged frame can be the
+ * ONLY captured copy of its byte range — excluding it silently drops bytes
+ * from the middle of the stream. Duplicates are instead discarded
+ * sequence-aware in `reassembleSession`, which also restores seq order for
+ * gap-filling retransmits that were captured out of order.
  */
 export function buildTsharkArgs(opts: ExtractOptions): string[] {
   const streamFilter = opts.tcpStream !== undefined ? ` && tcp.stream==${opts.tcpStream}` : "";
   return [
     "-r",
     opts.pcapPath,
+    // Reassembly sorts on tcp.seq, so pin the relative-seq preference rather
+    // than trusting the invoking user's Wireshark profile: absolute seqs from
+    // a random ISN can wrap 2^32 mid-stream and mis-sort.
+    "-o",
+    "tcp.relative_sequence_numbers:TRUE",
     "-Y",
     `tcp.port==${opts.scanPort} && tcp.len>0 && ` +
-      `!tcp.analysis.retransmission && ` +
-      `!tcp.analysis.fast_retransmission && ` +
-      `!tcp.analysis.spurious_retransmission && ` +
       `((ip.src==${opts.hostIp} && ip.dst==${opts.printerIp}) || ` +
       `(ip.src==${opts.printerIp} && ip.dst==${opts.hostIp}))${streamFilter}`,
     "-T",
@@ -79,25 +74,130 @@ export function buildTsharkArgs(opts: ExtractOptions): string[] {
     "-e",
     "ip.src",
     "-e",
+    "tcp.stream",
+    "-e",
+    "tcp.seq",
+    "-e",
     "tcp.payload",
   ];
 }
 
-export async function extract(opts: ExtractOptions): Promise<FixtureEvent[]> {
+/** One captured TCP segment with payload, as reported by tshark. */
+export interface RawPacket {
+  dir: "h>p" | "p>h";
+  ts: number;
+  /** tshark's tcp.seq (relative by default; only differences are used). */
+  seq: number;
+  payload: Buffer;
+}
+
+export interface StreamEvent {
+  dir: "h>p" | "p>h";
+  ts: number;
+  payload: Buffer;
+}
+
+/**
+ * Sequence-aware TCP reassembly of one scan session's captured segments.
+ *
+ * Per direction, segments are stably sorted by `tcp.seq` and walked
+ * greedily, accepting only bytes that extend the stream contiguously:
+ * a segment ending at or before the accepted tail is a true duplicate and
+ * is dropped; a segment overlapping the tail but carrying new trailing
+ * bytes is trimmed to just that new tail (TCP can coalesce a resend with
+ * newly-available data — seen in the WF-3620 `adf-4-page-duplex-jpeg`
+ * capture); a segment starting past the tail means the capture is missing
+ * bytes entirely, which is a hard error. This also drops TCP keepalive
+ * garbage bytes (seq one below the tail), which the old display-filter
+ * approach let through.
+ *
+ * The two directions are then merged back into one chronological list with
+ * a stable two-pointer merge on timestamps — NOT a combined sort by ts.
+ * On real lossy captures the printer-side timestamps are not monotonic in
+ * seq order (capture-side jitter), so a ts sort would re-shuffle the
+ * already-correct seq-ordered stream and corrupt it again.
+ */
+export function reassembleSession(packets: RawPacket[]): StreamEvent[] {
+  const reassembleDirection = (dir: "h>p" | "p>h"): StreamEvent[] => {
+    const sorted = packets.filter((p) => p.dir === dir).sort((a, b) => a.seq - b.seq);
+    const out: StreamEvent[] = [];
+    let nextSeq: number | null = null;
+    for (const p of sorted) {
+      const end = p.seq + p.payload.length;
+      if (nextSeq === null) nextSeq = p.seq;
+      if (end <= nextSeq) continue; // duplicate of already-accepted bytes
+      if (p.seq > nextSeq) {
+        throw new Error(
+          `pcap-extract: ${dir} stream has a gap — expected seq ${nextSeq}, ` +
+            `next captured segment starts at ${p.seq} (${p.seq - nextSeq} bytes ` +
+            `missing from the capture)`,
+        );
+      }
+      out.push({ dir, ts: p.ts, payload: p.payload.subarray(nextSeq - p.seq) });
+      nextSeq = end;
+    }
+    return out;
+  };
+
+  const host = reassembleDirection("h>p");
+  const printer = reassembleDirection("p>h");
+  const merged: StreamEvent[] = [];
+  let h = 0;
+  let p = 0;
+  while (h < host.length && p < printer.length) {
+    merged.push(host[h].ts <= printer[p].ts ? host[h++] : printer[p++]);
+  }
+  while (h < host.length) merged.push(host[h++]);
+  while (p < printer.length) merged.push(printer[p++]);
+  return merged;
+}
+
+/**
+ * Guard against a pcap holding several TCP conversations on the scan port
+ * (e.g. a rejected TLS probe ahead of the real session). Per-stream relative
+ * seqs all start at 1, so letting two conversations into `reassembleSession`
+ * would silently discard real bytes as cross-stream "duplicates" — fail with
+ * a --stream hint instead.
+ */
+export function assertSingleConversation(streams: Iterable<number>, scanPort: number): void {
+  const distinct = [...streams].sort((a, b) => a - b);
+  if (distinct.length > 1) {
+    throw new Error(
+      `pcap-extract: capture holds ${distinct.length} TCP conversations on ` +
+        `tcp.port==${scanPort} (tcp.stream ${distinct.join(", ")}) — pass ` +
+        `--stream <N> to isolate the scan session`,
+    );
+  }
+}
+
+/** Run tshark over the capture and collect every payload-bearing segment. */
+export async function capturePackets(opts: ExtractOptions): Promise<RawPacket[]> {
   const tshark = opts.tsharkPath ?? process.env.TSHARK_PATH ?? TSHARK_DEFAULT;
-  const args = buildTsharkArgs(opts);
-  const folder = createImageChunkFolder();
-  await runTshark(tshark, args, (line) => {
+  const packets: RawPacket[] = [];
+  const streams = new Set<number>();
+  await runTshark(tshark, buildTsharkArgs(opts), (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
-    const [tsStr, src, hex] = trimmed.split("|");
+    const [tsStr, src, streamStr, seqStr, hex] = trimmed.split("|");
     if (!hex) return;
-    folder.feed({
+    streams.add(parseInt(streamStr ?? "0", 10));
+    packets.push({
       dir: src === opts.hostIp ? "h>p" : "p>h",
       ts: parseFloat(tsStr ?? "0"),
-      hex,
+      seq: parseInt(seqStr ?? "0", 10),
+      payload: Buffer.from(hex, "hex"),
     });
   });
+  assertSingleConversation(streams, opts.scanPort);
+  return packets;
+}
+
+export async function extract(opts: ExtractOptions): Promise<FixtureEvent[]> {
+  const packets = await capturePackets(opts);
+  const folder = createImageChunkFolder();
+  for (const e of reassembleSession(packets)) {
+    folder.feed({ dir: e.dir, ts: e.ts, hex: e.payload.toString("hex") });
+  }
   const events = folder.finish();
   const dirs = new Set(events.map((e) => e.dir));
   if (events.length > 0 && (!dirs.has("h>p") || !dirs.has("p>h"))) {
@@ -145,13 +245,15 @@ export function runTshark(
 
 /**
  * Streaming version of the image-chunk folder. Replace runs of IS-0xa200 image
- * chunks (and their TCP continuation frames) with a single summary record.
+ * chunks with a single summary record; other IS frames pass through verbatim.
  *
- * Large image payloads are typically split across many TCP frames. The first
- * frame of each IS chunk starts with the IS header "4953a200". Subsequent
- * frames in the same TCP stream carry raw continuation bytes with no IS
- * header. The folder accumulates run state across feed() calls; finish()
- * flushes any in-progress run and returns the full event list.
+ * Large image payloads are typically split across many TCP frames, and the
+ * printer occasionally packs more than one IS frame's bytes into a single TCP
+ * segment. Rather than re-implementing that reassembly with a hex-prefix /
+ * substring-scan heuristic (which can misfire on `49 53` bytes inside pixel
+ * payloads and undercounts headers split across TCP frames), the folder feeds
+ * `p>h` bytes through the shared `createIsFrameReader` — which walks frames by
+ * their declared length — and folds the resulting complete IS frames.
  */
 interface ImageChunkFolder {
   feed(e: { dir: "h>p" | "p>h"; ts: number; hex: string }): void;
@@ -160,23 +262,35 @@ interface ImageChunkFolder {
 
 function createImageChunkFolder(): ImageChunkFolder {
   const out: FixtureEvent[] = [];
-  let runStart: { ts: number; chunkSize: number } | null = null;
-  let runFrameCount = 0;
-  let runTotalBytes = 0;
+  const reader = createIsFrameReader();
+  let run: { ts: number; chunkSize: number; chunkCount: number; totalBytes: number } | null = null;
+  let ts = 0;
 
   const flushRun = (): void => {
-    if (!runStart) return;
+    if (!run) return;
     out.push({
       dir: "p>h",
-      ts: runStart.ts,
+      ts: run.ts,
       summary: "image-stream",
-      frameCount: runFrameCount,
-      totalBytes: runTotalBytes,
-      chunkSize: runStart.chunkSize,
+      chunkCount: run.chunkCount,
+      totalBytes: run.totalBytes,
+      chunkSize: run.chunkSize,
     });
-    runStart = null;
-    runFrameCount = 0;
-    runTotalBytes = 0;
+    run = null;
+  };
+
+  const onFrame = (f: { type: number; payload: Buffer; frame: Buffer }): void => {
+    if (f.type === 0xa200) {
+      const size = f.payload.length;
+      if (!run) run = { ts, chunkSize: size, chunkCount: 0, totalBytes: 0 };
+      run.chunkCount += 1;
+      run.totalBytes += size;
+    } else {
+      flushRun();
+      // Re-emit the complete IS frame verbatim — no header reconstruction, so no
+      // assumption about the offset-4 field.
+      out.push({ dir: "p>h", ts, hex: f.frame.toString("hex") });
+    }
   };
 
   return {
@@ -186,51 +300,18 @@ function createImageChunkFolder(): ImageChunkFolder {
         out.push(e);
         return;
       }
-      const isImageChunkHeader = e.hex.startsWith(IS_IMAGE_CHUNK_HEX);
-      // During an image-stream run, anything from the printer that does NOT
-      // start with the IS-0xa200 magic is a continuation frame — including raw
-      // pixel data that happens to begin with bytes 0x49 0x53 ("IS"). The
-      // earlier check on just `4953` was too permissive: pixel bytes coincide
-      // with that 2-byte prefix often enough on multi-MB streams to falsely
-      // terminate runs and inflate frame counts.
-      const isContinuation = runStart !== null && !e.hex.startsWith(IS_IMAGE_CHUNK_HEX);
-
-      if (isImageChunkHeader) {
-        // IS header bytes 6-9 (hex chars 12-20) are the payload size (BE uint32)
-        const payloadSize = parseInt(e.hex.slice(12, 20), 16);
-        if (!runStart) runStart = { ts: e.ts, chunkSize: payloadSize };
-        runFrameCount++;
-        runTotalBytes += payloadSize;
-        return;
-      }
-      if (isContinuation) {
-        // TCP continuation frame: may carry the tail of the current chunk AND
-        // the IS-0xa200 header(s) of subsequent chunks packed into the same TCP
-        // segment. Scan for embedded IS-0xa200 headers and accumulate only their
-        // declared payloadSize — adding raw frame bytes would double-count data
-        // already declared by the IS headers.
-        runFrameCount++;
-        let offset = 0;
-        while (true) {
-          const pos = e.hex.indexOf(IS_IMAGE_CHUNK_HEX, offset);
-          if (pos === -1) break;
-          const payloadHex = e.hex.slice(pos + 12, pos + 20);
-          if (payloadHex.length === 8) {
-            runTotalBytes += parseInt(payloadHex, 16);
-          }
-          offset = pos + IS_IMAGE_CHUNK_HEX.length;
-        }
-        return;
-      }
-      flushRun();
-      out.push(e);
+      ts = e.ts;
+      reader.feed(Buffer.from(e.hex, "hex"), onFrame);
     },
     finish() {
+      reader.finish(); // throws on a truncated p>h frame
       flushRun();
       return out;
     },
   };
 }
+
+export const __test__createImageChunkFolder = createImageChunkFolder;
 
 async function main(): Promise<void> {
   // Strip optional `--stream N` from positional args so the existing

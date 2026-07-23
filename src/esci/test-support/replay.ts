@@ -12,7 +12,7 @@ export function loadFixture(path: string): FixtureEvent[] {
     .map((l) => JSON.parse(l) as FixtureEvent);
 }
 
-const MAX_CHUNK_SIZE = 65536;
+const MAX_CHUNK_SIZE = 262144; // 256 KiB — covers XP-620's 253,063
 const FILL_BUFFER = Buffer.alloc(MAX_CHUNK_SIZE, 0xb0);
 
 /**
@@ -66,4 +66,16 @@ function* synthesiseImageStream(totalBytes: number, chunkSize: number): Generato
     yield buildIsPacket(0xa200, FILL_BUFFER.subarray(0, size));
     remaining -= size;
   }
+}
+
+export const __test__synthesiseImageStream = synthesiseImageStream;
+
+/** Concatenate the fixture's host->printer bytes in order — the exact wire
+ *  transcript the scanner is expected to reproduce. */
+export function concatHostBytes(fixture: FixtureEvent[]): Buffer {
+  return Buffer.concat(
+    fixture
+      .filter((e): e is Extract<FixtureEvent, { hex: string }> => e.dir === "h>p" && "hex" in e)
+      .map((e) => Buffer.from(e.hex, "hex")),
+  );
 }

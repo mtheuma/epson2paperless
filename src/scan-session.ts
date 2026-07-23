@@ -7,6 +7,23 @@ import * as path from "node:path";
 import type * as tls from "node:tls";
 import { IS_HEADER_SIZE } from "./protocol.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
+import type { PostProcessProfile } from "./postprocess/index.js";
+import type { ToneCurveName } from "./postprocess/tone-curves.js";
+import { DEFAULT_JPEG_QUALITY } from "./config.js";
+
+/**
+ * Compact hex preview of a packet payload for diagnostics: length plus the
+ * first `max` bytes as a contiguous hex string, with a trailing `…` when the
+ * payload is longer. Lets a validation-failure error name the offending reply
+ * bytes so a debug log alone can diagnose an unexpected reply — e.g. an
+ * unknown printer answering FS Y with a non-`0x06` byte — without needing a
+ * pcap of the session.
+ */
+function payloadPreview(payload: Buffer, max = 16): string {
+  const head = payload.subarray(0, max).toString("hex");
+  const ellipsis = payload.length > max ? "…" : "";
+  return `payload len=${payload.length}, head=0x${head}${ellipsis}`;
+}
 
 // =============================================================================
 // Transport
@@ -308,6 +325,16 @@ export interface RunScanSessionOpts<Ctx> {
   tempDir: string;
   sessionTs: Date;
   action: "jpg" | "pdf";
+  postProcess?: PostProcessProfile;
+  jpegQuality?: number;
+  /**
+   * Resolves the pinned tone curve for the `document` profile from the final
+   * context — the dialect is only known mid-scan (ESC/I-2 sets it at INIT1),
+   * so the scanner shell supplies this callback and `runFinalize` reads it once
+   * the scan has resolved the entry. Omitted (or returning undefined) means the
+   * printer has no captured curve → white-point clip only.
+   */
+  resolveToneCurve?: (ctx: Ctx) => ToneCurveName | undefined;
   paperless?: PaperlessUploadOptions;
   /**
    * Test-only: allow reaching DONE without any flushPage having fired.
@@ -372,6 +399,9 @@ export async function runScanSession<Ctx>(
         action: opts.action,
         backPageIndices,
         paperless: opts.paperless,
+        postProcess: opts.postProcess ?? "none",
+        jpegQuality: opts.jpegQuality ?? DEFAULT_JPEG_QUALITY,
+        toneCurve: opts.resolveToneCurve?.(ctx),
       });
     }
 
@@ -735,7 +765,7 @@ export async function runScanSession<Ctx>(
           settle({
             ok: false,
             reason: new Error(
-              `Validation failed in state ${currentState} for packet type 0x${packet.type.toString(16).padStart(4, "0")}`,
+              `Validation failed in state ${currentState} for packet type 0x${packet.type.toString(16).padStart(4, "0")} (${payloadPreview(packet.payload)})`,
             ),
             finalCtx: ctx,
           });
