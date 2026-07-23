@@ -327,6 +327,8 @@ export interface RunScanSessionOpts<Ctx> {
   action: "jpg" | "pdf";
   postProcess?: PostProcessProfile;
   jpegQuality?: number;
+  /** SCAN_COLOR_MODE=auto: convert colourless pages to greyscale at finalize. */
+  autoColor?: boolean;
   /**
    * Resolves the pinned tone curve for the `document` profile from the final
    * context — the dialect is only known mid-scan (ESC/I-2 sets it at INIT1),
@@ -401,6 +403,7 @@ export async function runScanSession<Ctx>(
         paperless: opts.paperless,
         postProcess: opts.postProcess ?? "none",
         jpegQuality: opts.jpegQuality ?? DEFAULT_JPEG_QUALITY,
+        autoColor: opts.autoColor,
         toneCurve: opts.resolveToneCurve?.(ctx),
       });
     }

@@ -32,6 +32,8 @@ export interface LegacyScanSession {
   format: Format;
   jpegQuality: number;
   postProcess?: PostProcessProfile;
+  /** SCAN_COLOR_MODE=auto: convert colourless pages to greyscale at finalize. */
+  autoColor?: boolean;
   paperless?: PaperlessUploadOptions;
   /**
    * When true, a non-ACK reply to ESC @ triggers an additional FS Y probe
@@ -127,6 +129,7 @@ export async function runEsciScan(
     paperless: session.paperless,
     postProcess: session.postProcess ?? "none",
     jpegQuality: session.jpegQuality,
+    autoColor: session.autoColor,
   });
 
   // Fire the public onSourceDetected hook only on success paths AND only

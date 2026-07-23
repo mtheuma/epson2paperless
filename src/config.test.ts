@@ -227,6 +227,12 @@ describe("loadConfig", () => {
     expect(loadConfig().scanColorMode).toBe("grayscale");
   });
 
+  it("accepts SCAN_COLOR_MODE=auto", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.SCAN_COLOR_MODE = "auto";
+    expect(loadConfig().scanColorMode).toBe("auto");
+  });
+
   it("rejects an invalid SCAN_COLOR_MODE", () => {
     process.env.PRINTER_IP = "192.0.2.58";
     process.env.SCAN_COLOR_MODE = "mono";

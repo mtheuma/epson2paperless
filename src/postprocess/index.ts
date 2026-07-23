@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { correctDocumentImage } from "./document.js";
+import { isEffectivelyGrayscale, toGrayscaleJpeg } from "./auto-color.js";
 import { sortedPageFiles } from "../output.js";
 import type { ToneCurveName } from "./tone-curves.js";
 
@@ -14,6 +15,12 @@ export interface PostProcessOptions {
    * for printers without a captured curve — those get the white-point clip only.
    */
   toneCurve?: ToneCurveName;
+  /**
+   * SCAN_COLOR_MODE=auto: after the profile transform, pages with no
+   * meaningful colour content are re-encoded as single-channel greyscale.
+   * Runs independently of the profile (also with `none`).
+   */
+  autoColor?: boolean;
 }
 
 /**
@@ -44,7 +51,8 @@ interface MinimalLog {
  * in place, before promote/compose. Reads the original, transforms to a new
  * buffer, writes a sibling `.tmp`, and atomically renames it over the page —
  * so a failed re-encode never leaves a truncated page. On any per-page error,
- * the original is kept and the scan proceeds. No-op for `none`.
+ * the original is kept and the scan proceeds. No-op for `none` unless
+ * auto colour mode is on.
  */
 export async function postProcessTempPages(
   tempDir: string,
@@ -52,7 +60,7 @@ export async function postProcessTempPages(
   opts: PostProcessOptions,
   log: MinimalLog,
 ): Promise<void> {
-  if (profile === "none") return;
+  if (profile === "none" && !opts.autoColor) return;
   let pages: ReturnType<typeof sortedPageFiles>;
   try {
     pages = sortedPageFiles(fs.readdirSync(tempDir), "jpg");
@@ -66,7 +74,12 @@ export async function postProcessTempPages(
     const tmp = `${full}.tmp`;
     try {
       const original = await fs.promises.readFile(full);
-      const processed = await applyPostProcess(profile, original, opts);
+      let processed = await applyPostProcess(profile, original, opts);
+      if (opts.autoColor && (await isEffectivelyGrayscale(processed))) {
+        processed = await toGrayscaleJpeg(processed, opts.jpegQuality);
+        log.info(`auto colour mode: ${name} has no colour content — saved as greyscale`);
+      }
+      if (processed === original) continue; // pure no-op — keep the printer's bytes untouched
       await fs.promises.writeFile(tmp, processed);
       await fs.promises.rename(tmp, full); // atomic on the same filesystem
     } catch (err) {

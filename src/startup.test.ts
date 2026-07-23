@@ -366,6 +366,7 @@ describe("dispatchScanSession", () => {
       format: "pdf",
       jpegQuality: 75,
       postProcess: "none",
+      autoColor: false,
       paperless: PAPERLESS_OPTS,
       diagnoseProtocol: true,
     });

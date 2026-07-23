@@ -232,6 +232,9 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     format: args.action,
     jpegQuality: args.config.jpegQuality,
     postProcess: args.config.postProcess,
+    // The legacy wire has no colour-mode axis, but "auto"'s greyscale
+    // conversion is a post-processing step and applies here all the same.
+    autoColor: args.config.scanColorMode === "auto",
     paperless: args.paperless,
     diagnoseProtocol: args.config.diagnoseProtocol,
   });
