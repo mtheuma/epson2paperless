@@ -31,7 +31,7 @@ export interface ScanSession {
   action: "jpg" | "pdf";
   postProcess?: PostProcessProfile;
   jpegQuality?: number;
-  /** Scan resolution in DPI (FF-680W only; default applied at config layer). */
+  /** Scan resolution in DPI (adf-crp dialects: FF-680W, DS-575W; default applied at config layer). */
   resolution?: number;
   /** Colour mode (greyscale-capable adf-crp dialects only; default at config layer). */
   colorMode?: "color" | "grayscale";

@@ -2,9 +2,11 @@ import { readFileSync } from "node:fs";
 import { z } from "zod";
 
 // FF-680W CAPA-advertised resolutions (#RSMLIST). SCAN_RESOLUTION is validated
-// against this set. 200 and 300 are wire-verified by PARA capture; the rest rely
-// on the linear DPI-scaling formula in para-composer.ts. FF-680W only — other
-// models ignore SCAN_RESOLUTION and scan at their dialect's fixed resolution.
+// against this set and consumed by the adf-crp dialects (FF-680W and DS-575W —
+// their #RSM/#RSS/#ACQ fields scale with it). FF-680W 200/300 and DS-575W
+// 400/600 are wire-verified by PARA capture; the rest rely on the linear
+// DPI-scaling formula in para-composer.ts. Other models ignore SCAN_RESOLUTION
+// and scan at their dialect's fixed resolution.
 export const FF680W_RESOLUTIONS = [50, 75, 100, 150, 200, 240, 300, 360, 400, 600] as const;
 export const DEFAULT_SCAN_RESOLUTION = 200;
 export const DEFAULT_JPEG_QUALITY = 90;
@@ -48,7 +50,7 @@ const configSchema = z
       .number()
       .int()
       .refine((v) => (FF680W_RESOLUTIONS as readonly number[]).includes(v), {
-        message: `SCAN_RESOLUTION must be one of the FF-680W advertised DPIs: ${FF680W_RESOLUTIONS.join(", ")}`,
+        message: `SCAN_RESOLUTION must be one of the advertised DPIs (FF-680W / DS-575W): ${FF680W_RESOLUTIONS.join(", ")}`,
       })
       .default(DEFAULT_SCAN_RESOLUTION),
     scanColorMode: z.enum(["color", "grayscale"]).default(DEFAULT_SCAN_COLOR_MODE),

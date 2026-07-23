@@ -49,6 +49,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     scanFormat: "pdf",
     scanSides: "duplex",
     scanResolution: 200,
+    scanColorMode: "color",
     printerProtocol: "auto",
     diagnoseProtocol: false,
     tempDir: "",
@@ -282,6 +283,7 @@ describe("dispatchScanSession", () => {
       postProcess: "none",
       jpegQuality: 90,
       resolution: 200,
+      colorMode: "color",
       paperless: PAPERLESS_OPTS,
       printerCertFingerprint: fp,
     });
@@ -307,6 +309,31 @@ describe("dispatchScanSession", () => {
     expect(call.duplex).toBe(false);
     expect(call.action).toBe("jpg");
     expect(call.resolution).toBe(200);
+    expect(call.colorMode).toBe("color");
+  });
+
+  it("forwards SCAN_COLOR_MODE=grayscale to both ESC/I-2 scanners", async () => {
+    // esci2-plain — the DS-575W's actual path.
+    detectVariantMock.mockResolvedValue("esci2-plain");
+    await dispatchScanSession({
+      config: makeConfig({ printerProtocol: "esci2-plain", scanColorMode: "grayscale" }),
+      duplex: false,
+      action: "pdf",
+      paperless: undefined,
+      productName: null,
+    });
+    expect(runEsci2ScanOverPlainMock.mock.calls[0][0].colorMode).toBe("grayscale");
+
+    // esci2 over TLS takes the same session shape.
+    detectVariantMock.mockResolvedValue("esci2");
+    await dispatchScanSession({
+      config: makeConfig({ printerProtocol: "esci2", scanColorMode: "grayscale" }),
+      duplex: false,
+      action: "pdf",
+      paperless: undefined,
+      productName: null,
+    });
+    expect(runEsci2ScanMock.mock.calls[0][0].colorMode).toBe("grayscale");
   });
 
   it("variant=esci routes to runEsciScan with forcedSource + jpegQuality + diagnoseProtocol", async () => {

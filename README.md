@@ -18,22 +18,22 @@ What you get:
 
 ## Compatible printers
 
-| Model                 | Status          | Notes                                                                                                                         |
-| --------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| **ET-3950**           | ✅ Verified     |                                                                                                                               |
-| **ET-4950 / ET-4956** | ✅ Verified     |                                                                                                                               |
-| **WF-3620**           | ✅ Verified     | Plain TCP scanner, no TLS pinning                                                                                             |
-| **XP-620**            | 🟡 Experimental | Flatbed-only hardware                                                                                                         |
-| **ET-2750**           | ✅ Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS                                                                         |
-| **XP-4100**           | ✅ Verified     | Flatbed-only hardware; shares the ET-2750 dialect ([#139](https://github.com/mtheuma/epson2paperless/issues/139))             |
-| **ET-2810**           | ✅ Verified     | Flatbed-only hardware; no panel trigger — needs `scan:now`                                                                    |
-| **ET-2950**           | 🟡 Experimental | Flatbed-only hardware; inferred dialect, no reporter retest yet ([#92](https://github.com/mtheuma/epson2paperless/issues/92)) |
-| **ET-8500**           | ✅ Verified     | Flatbed-only hardware                                                                                                         |
-| **ET-4800**           | ✅ Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS                                                                                   |
-| **ET-15000**          | 🟡 Experimental | Flatbed verified; ADF simplex untested                                                                                        |
-| **XP-7100**           | ✅ Verified     |                                                                                                                               |
-| **FF-680W**           | 🟡 Experimental | Requires [pairing](#button-only-scanner-pairing); ADF-only; 200/300 DPI verified                                              |
-| **DS-575W**           | 🟡 Experimental | Requires [pairing](#button-only-scanner-pairing); ADF-only sheet-fed; colour + greyscale                                      |
+| Model                 | Status          | Notes                                                                                                                                                                      |
+| --------------------- | --------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **ET-3950**           | ✅ Verified     |                                                                                                                                                                            |
+| **ET-4950 / ET-4956** | ✅ Verified     |                                                                                                                                                                            |
+| **WF-3620**           | ✅ Verified     | Plain TCP scanner, no TLS pinning                                                                                                                                          |
+| **XP-620**            | 🟡 Experimental | Flatbed-only hardware                                                                                                                                                      |
+| **ET-2750**           | ✅ Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS                                                                                                                      |
+| **XP-4100**           | ✅ Verified     | Flatbed-only hardware; shares the ET-2750 dialect ([#139](https://github.com/mtheuma/epson2paperless/issues/139))                                                          |
+| **ET-2810**           | ✅ Verified     | Flatbed-only hardware; no panel trigger — needs `scan:now`                                                                                                                 |
+| **ET-2950**           | 🟡 Experimental | Flatbed-only hardware; inferred dialect, no reporter retest yet ([#92](https://github.com/mtheuma/epson2paperless/issues/92))                                              |
+| **ET-8500**           | ✅ Verified     | Flatbed-only hardware                                                                                                                                                      |
+| **ET-4800**           | ✅ Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS                                                                                                                                |
+| **ET-15000**          | 🟡 Experimental | Flatbed verified; ADF simplex untested                                                                                                                                     |
+| **XP-7100**           | ✅ Verified     |                                                                                                                                                                            |
+| **FF-680W**           | 🟡 Experimental | Requires [pairing](#button-only-scanner-pairing); ADF-only; 200/300 DPI verified                                                                                           |
+| **DS-575W**           | 🟡 Experimental | Requires [pairing](#button-only-scanner-pairing); ADF-only sheet-fed. Duplex colour PDF at 200 DPI verified on hardware; greyscale, JPG, and other DPIs replay-tested only |
 
 ✅ **Verified**: every capability the hardware has is confirmed working on real hardware by someone.
 
@@ -141,7 +141,7 @@ Each setting's **Scope** column shows which printers it affects: `All`, `Panel` 
 | `PREVIEW_ACTION`            | Panel                        | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen.                                                                                        |
 | `SCAN_FORMAT`               | FF-680W, DS-575W, `scan:now` | `pdf`            | Output format (`jpg` / `pdf`) when no panel choice reaches us: button-only scanners, and every host-triggered scan.                                                                                                                            |
 | `SCAN_SIDES`                | FF-680W, DS-575W, `scan:now` | `duplex`         | `simplex` or `duplex` when no panel choice reaches us. Button-only scanners have no panel Sides selector. Set `simplex` for host-triggered scans on ADF models without duplex hardware.                                                        |
-| `SCAN_RESOLUTION`           | FF-680W                      | `200`            | Scan DPI. One of `50,75,100,150,200,240,300,360,400,600`; `200`/`300` verified.                                                                                                                                                                |
+| `SCAN_RESOLUTION`           | FF-680W, DS-575W             | `200`            | Scan DPI. One of `50,75,100,150,200,240,300,360,400,600`. Verified: `200`/`300` (FF-680W), `200`/`400`/`600` (DS-575W).                                                                                                                        |
 | `SCAN_COLOR_MODE`           | DS-575W                      | `color`          | `color` or `grayscale` (the DS-575W has no panel colour selector). Other models ignore it and scan in colour.                                                                                                                                  |
 | `PRINTER_PROTOCOL`          | All                          | `auto`           | `auto` (probe each session), `esci2` (force ESC/I-2 over TLS), `esci2-plain` (force ESC/I-2 over plain TCP), `esci` (force plain-TCP ESC/I).                                                                                                   |
 | `JPEG_QUALITY`              | All                          | `90`             | JPEG encoder quality 1–100 (host-encoded raw pixels). Also sets the re-encode quality when `POST_PROCESS=document`.                                                                                                                            |
@@ -215,7 +215,7 @@ Rare edge case. Restart the service with `Ctrl-C` and relaunch.
 **Output folder fills with duplicates named `scan_..._1.jpg`.**
 Normal. If two scans land in the same second, the service appends `_1`, `_2` to avoid overwriting.
 
-### Button-only scanner pairing
+## Button-only scanner pairing
 
 Button-only scanners — the **FF-680W** and **DS-575W** — have no panel to pick a destination from. The scanner stores a single paired host name and routes every button press to it, so the `ClientName` advertised by `epson2paperless` (i.e. `SCAN_DEST_NAME`) must match that stored name exactly. If it doesn't, the button press never reaches the service — you'll see healthy keepalives in the log but no scan.
 
