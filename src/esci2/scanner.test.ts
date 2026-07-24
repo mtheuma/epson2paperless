@@ -1319,16 +1319,17 @@ function normalizeAdfCrpFlags(para: Buffer): Buffer {
   const rsm = para.indexOf(RSM);
   if (rsm < 0) throw new Error("normalizeAdfCrpFlags: no #RSM segment");
   let flags = para.subarray(HEAD.length, rsm).toString("ascii");
-  const hasDplx = flags.includes("DPLX");
-  for (const token of ["DPLX", "SKEW", "DFL1"]) flags = flags.replace(token, "");
-  if (flags !== "") {
+  for (const token of ["SKEW", "DFL1"]) flags = flags.replace(token, "");
+  // After stripping the unmodeled tokens, the only legitimate remainder is the
+  // modeled DPLX (or nothing) — anything else is a real divergence.
+  if (flags !== "" && flags !== "DPLX") {
     throw new Error(
       `normalizeAdfCrpFlags: unexpected residue in #ADFCRP flags field: ${JSON.stringify(flags)}`,
     );
   }
   return Buffer.concat([
     para.subarray(0, HEAD.length),
-    Buffer.from(hasDplx ? "DPLX" : "", "ascii"),
+    Buffer.from(flags, "ascii"),
     para.subarray(rsm),
   ]);
 }

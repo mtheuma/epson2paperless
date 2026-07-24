@@ -96,6 +96,13 @@ function validate(spec: ParaSpec): void {
   if ((spec.source === "adf-simplex" || spec.source === "adf-duplex") && spec.adfExtents === null) {
     throw new Error(`composePara: source=${spec.source} requires non-null adfExtents`);
   }
+  // The flatbed twin of the guard above. Lives here — before the profile
+  // dispatch — so it covers every profile: an ADF-only dialect (fbExtents:
+  // null) asked for a flatbed scan must fail fast regardless of which
+  // composer would have run.
+  if (spec.source === "flatbed" && spec.fbExtents === null) {
+    throw new Error("composePara: source=flatbed requires non-null fbExtents");
+  }
   const checkExtents = (name: string, e: Extents | null): void => {
     if (e === null) return;
     for (const k of ["x0", "y0", "w", "h"] as const) {
@@ -142,9 +149,6 @@ export function composePara(spec: ParaSpec): Buffer {
 }
 
 function composeStandardPara(spec: ParaSpec): Buffer {
-  if (spec.source === "flatbed" && spec.fbExtents === null) {
-    throw new Error("composePara: source=flatbed requires non-null fbExtents (ADF-only dialect?)");
-  }
   const parts: Buffer[] = [];
   // 1. Source segment.
   parts.push(renderSourceSegment(spec.source));
@@ -181,6 +185,14 @@ function composeStandardPara(spec: ParaSpec): Buffer {
 }
 
 function composeAdfCrpPara(spec: ParaSpec): Buffer {
+  // The adf-crp profile has no flatbed body at all — its source axis only
+  // selects the DPLX token. Reject flatbed outright rather than silently
+  // composing an ADF PARA for a flatbed request (validate() already blocks
+  // the null-fbExtents case; this catches a hypothetical adf-crp dialect
+  // that carries flatbed extents).
+  if (spec.source === "flatbed") {
+    throw new Error("composePara: profile=adf-crp has no flatbed source");
+  }
   if (spec.adfExtents === null) {
     throw new Error("composePara: profile=adf-crp requires non-null adfExtents");
   }
