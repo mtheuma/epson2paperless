@@ -74,7 +74,8 @@ export async function startPrinterDiscovery(config: Config): Promise<KeepaliveRe
       destId: config.scanDestId,
       language: config.language,
       // "auto" leaves version undefined so the responder picks per-announcement
-      // (3.0 for the FF-680W PID, 2.0 otherwise). An explicit NETSCAN_VERSION
+      // (3.0 for the V3_KEEPALIVE_PRODUCTS PIDs — FF-680W, DS-575W — 2.0
+      // otherwise). An explicit NETSCAN_VERSION
       // pins every burst to that wire format — compatibility-triage aid for
       // button-only scanners we don't recognise yet.
       version: config.netscanVersion === "auto" ? undefined : config.netscanVersion,
