@@ -27,6 +27,7 @@ What you get:
 | **ET-2750**           | ✅ Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS                                                                         |
 | **XP-4100**           | ✅ Verified     | Flatbed-only hardware; shares the ET-2750 dialect ([#139](https://github.com/mtheuma/epson2paperless/issues/139))             |
 | **ET-2810**           | ✅ Verified     | Flatbed-only hardware; no panel trigger — needs `scan:now`                                                                    |
+| **XP-3200**           | ✅ Verified     | Flatbed-only hardware; shares the ET-2810 dialect over TLS; verified via `scan:now`, panel trigger untested                   |
 | **ET-2950**           | 🟡 Experimental | Flatbed-only hardware; inferred dialect, no reporter retest yet ([#92](https://github.com/mtheuma/epson2paperless/issues/92)) |
 | **ET-8500**           | ✅ Verified     | Flatbed-only hardware                                                                                                         |
 | **ET-4800**           | ✅ Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS                                                                                   |
@@ -108,7 +109,7 @@ the scan is written inside the container and lost on exit.
 The printer serves one scan at a time, so don't trigger `scan:now` while a panel scan (or
 another `scan:now`) is already running.
 
-The host trigger is validated end-to-end on the ET-2810 and ET-4956. Other models are
+The host trigger is validated end-to-end on the ET-2810, XP-3200 and ET-4956. Other models are
 untested over this path: it may work, and reports are welcome either way. The FF-680W is
 expected to fail, because its panel flow does job preparation that a host-triggered scan
 skips. On ADF models without duplex hardware (ET-4800, ET-15000), set `SCAN_SIDES=simplex`
