@@ -249,11 +249,27 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
     //
     // NOTE: the ET-2810 never triggers a scan on its own — its two-button combo
     // is a USB-host scan and it registers no network Scan-to-Computer
-    // destination, so no beacon and no push-scan ever arrive. This entry is only
-    // reachable via a host-initiated scan trigger; it is inert without one.
+    // destination, so no beacon and no push-scan ever arrive. For the ET-2810
+    // this entry is only reachable via a host-initiated scan trigger.
+    //
+    // XP-3200 (Expression Home, flatbed-only): produces a byte-identical
+    // canonicalised CAPA reply and so shares this fingerprint — but presents
+    // over TLS, not plain TCP (the auto-probe's TLS arm wins), making this the
+    // second transport-agnostic entry after the ET-8500. Live-validated on a
+    // borrowed unit (2026-07): host-triggered flatbed PDF of the compatibility
+    // test page, dialect resolved and scan completed unmodified. Measured off
+    // that scan: greys are neutral (max channel spread 10, no cast), the
+    // nominal-64 grey returns ~74 so et4800-stock's black floor never bites,
+    // and geometry is clean (6.2px crosshair residual). Midtones read light
+    // (192 → ~242), but the reference print came from AirPrint on plain paper,
+    // so print-side lightness can't be separated from the curve; the inherited
+    // gamma clears the same no-cast / no-shadow-crush bar the ET-2810 shipped
+    // on. Unlike the ET-2810, the XP-3200 does offer panel "Scan to Computer";
+    // that flow is untested through this project (the validation environment
+    // was Android/Termux, where multicast discovery is unreliable).
     "708704b6abb184cede037fcd9893ea81f69651fde28780cde0162dfa33a33f6e",
     {
-      displayName: "ET-2810 (ESC/I-2 over plain TCP)",
+      displayName: "ET-2810 / XP-3200 (ESC/I-2)",
       sourceDetection: "fixed-flatbed",
       initPollIterations: 3,
       fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
