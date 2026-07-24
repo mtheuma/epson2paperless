@@ -4,14 +4,15 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { isEffectivelyGrayscale, toGrayscaleJpeg } from "./auto-color.js";
+import { correctDocumentImageAuto } from "./document.js";
 import { postProcessTempPages } from "./index.js";
 import { setJpegOrientation, readJpegOrientation } from "../exif.js";
 
 const W = 400;
 const H = 520;
 
-/** Neutral text-like page: white paper, dark grey "lines", mild neutral noise. */
-function neutralPagePixels(): Buffer {
+/** Neutral text-like page: white paper, grey "lines", mild neutral noise. */
+function neutralPagePixels(textValue = 40): Buffer {
   const buf = Buffer.alloc(W * H * 3);
   for (let y = 0; y < H; y++) {
     for (let x = 0; x < W; x++) {
@@ -20,7 +21,7 @@ function neutralPagePixels(): Buffer {
       // Deterministic per-pixel jitter stands in for scanner noise; equal on
       // all channels, so the page stays truly neutral.
       const jitter = ((x * 31 + y * 17) % 7) - 3;
-      const v = (isText ? 40 : 245) + jitter;
+      const v = (isText ? textValue : 245) + jitter;
       buf[i] = v;
       buf[i + 1] = v;
       buf[i + 2] = v;
@@ -102,10 +103,66 @@ describe("toGrayscaleJpeg", () => {
     expect(meta.format).toBe("jpeg");
   });
 
+  it("preserves the source DPI while staying single-channel", async () => {
+    const src = await sharp(neutralPagePixels(), { raw: { width: W, height: H, channels: 3 } })
+      .withMetadata({ density: 400 })
+      .jpeg({ quality: 90 })
+      .toBuffer();
+    expect((await sharp(src).metadata()).density).toBe(400);
+    const out = await toGrayscaleJpeg(src, 90);
+    const meta = await sharp(out).metadata();
+    expect(meta.channels).toBe(1); // withMetadata({density}) would force 3 — must stay 1
+    expect(meta.density).toBe(400);
+  });
+
   it("preserves the EXIF orientation of a duplex back page", async () => {
     const stamped = setJpegOrientation(await encode(neutralPagePixels()), 3);
     const out = await toGrayscaleJpeg(stamped, 90);
     expect(readJpegOrientation(out)).toBe(3);
+  });
+});
+
+describe("correctDocumentImageAuto", () => {
+  it("converts a neutral mid-grey page under a pinned tone curve (classifies pre-curve)", async () => {
+    // Text in the 128–148 band: the et4950-family tone curve maps those
+    // neutral inputs to chroma 25–30 — above the classifier's floor of 24 —
+    // so classifying AFTER the curve would keep every such page in colour.
+    // The verdict must run on the clip-stage pixels instead.
+    const src = await sharp(neutralPagePixels(138), { raw: { width: W, height: H, channels: 3 } })
+      .withMetadata({ density: 300 })
+      .jpeg({ quality: 90 })
+      .toBuffer();
+    const { jpeg, grayscale } = await correctDocumentImageAuto(src, 90, "et4950-family");
+    expect(grayscale).toBe(true);
+    const meta = await sharp(jpeg).metadata();
+    expect(meta.channels).toBe(1);
+    expect(meta.density).toBe(300); // document+auto single encode keeps DPI too
+  });
+
+  it("keeps a colour page three-channel with the tone curve applied", async () => {
+    const pixels = neutralPagePixels();
+    paintRect(pixels, 100, 100, 120, 80, [180, 120, 60]);
+    const src = await sharp(pixels, { raw: { width: W, height: H, channels: 3 } })
+      .withMetadata({ density: 300 })
+      .jpeg({ quality: 90 })
+      .toBuffer();
+    const { jpeg, grayscale } = await correctDocumentImageAuto(src, 90, "et4950-family");
+    expect(grayscale).toBe(false);
+    const meta = await sharp(jpeg).metadata();
+    expect(meta.channels).toBe(3);
+    expect(meta.density).toBe(300);
+  });
+
+  it("still converts when the low-paper guard trips (classifies the decoded pixels)", async () => {
+    // Full-bleed dark neutral page: guard trips (no near-white paper), but the
+    // page is still colourless — auto must classify the raw decode and convert.
+    const dark = Buffer.alloc(W * H * 3, 60);
+    const src = await sharp(dark, { raw: { width: W, height: H, channels: 3 } })
+      .jpeg({ quality: 90 })
+      .toBuffer();
+    const { jpeg, grayscale } = await correctDocumentImageAuto(src, 90, undefined);
+    expect(grayscale).toBe(true);
+    expect((await sharp(jpeg).metadata()).channels).toBe(1);
   });
 });
 

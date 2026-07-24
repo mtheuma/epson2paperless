@@ -62,6 +62,68 @@ export function setJpegOrientation(jpeg: Buffer, orientation: ExifOrientation): 
 }
 
 /**
+ * Sets the JFIF pixel density (dots-per-inch) of a JPEG, returning a new
+ * buffer. JFIF APP0 — not EXIF — is where DPI-honouring consumers (img2pdf /
+ * Paperless-ngx, printing pipelines) read physical size from, and stamping it
+ * after the encode is the only way to preserve a source's DPI on a
+ * single-channel output: sharp's `.withMetadata({ density })` attaches an
+ * sRGB ICC profile, which silently forces the encode back to three channels.
+ *
+ * If a JFIF APP0 segment exists its density fields are patched in place (on a
+ * copy); sharp's default mozjpeg output carries no APP0 at all, so when none
+ * is found a minimal 18-byte JFIF APP0 is inserted immediately after SOI.
+ * Call this BEFORE setJpegOrientation — the EXIF prepend shifts every later
+ * segment. Throws on a non-JPEG input.
+ */
+export function setJfifDensity(jpeg: Buffer, dpi: number): Buffer {
+  if (jpeg.length < 2 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) {
+    throw new Error("setJfifDensity: input does not start with JPEG SOI (FF D8)");
+  }
+  const density = Math.max(1, Math.min(65535, Math.round(dpi)));
+  let off = 2; // skip SOI
+  while (off + 4 <= jpeg.length) {
+    if (jpeg[off] !== 0xff) break;
+    const marker = jpeg[off + 1];
+    const segLen = jpeg.readUInt16BE(off + 2);
+    const body = off + 4;
+    // JFIF APP0 body: "JFIF\0"(5) + version(2) + units(1) + Xdensity(2)
+    // + Ydensity(2) + thumbnail dims(2) — 14 bytes minimum.
+    if (
+      marker === 0xe0 &&
+      segLen >= 16 &&
+      body + 12 <= jpeg.length &&
+      jpeg.toString("ascii", body, body + 5) === "JFIF\0"
+    ) {
+      const out = Buffer.from(jpeg);
+      out[body + 7] = 1; // units: dots per inch
+      out.writeUInt16BE(density, body + 8); // Xdensity
+      out.writeUInt16BE(density, body + 10); // Ydensity
+      return out;
+    }
+    if (marker === 0xda) break; // start of scan — no more metadata
+    if (segLen < 2) break; // malformed segment length — can't safely advance
+    off += 2 + segLen;
+  }
+  // No JFIF APP0 — insert a minimal one right after SOI.
+  // prettier-ignore
+  const app0 = Buffer.from([
+    0xff, 0xe0,                   // APP0 marker
+    0x00, 0x10,                   // segment length = 16 (excludes marker, includes self)
+    0x4a, 0x46, 0x49, 0x46, 0x00, // "JFIF\0"
+    0x01, 0x01,                   // JFIF version 1.01
+    0x01,                         // units: dots per inch
+    (density >> 8) & 0xff, density & 0xff, // Xdensity
+    (density >> 8) & 0xff, density & 0xff, // Ydensity
+    0x00, 0x00,                   // no thumbnail
+  ]);
+  const out = Buffer.allocUnsafe(jpeg.length + app0.length);
+  jpeg.copy(out, 0, 0, 2);
+  app0.copy(out, 2);
+  jpeg.copy(out, 2 + app0.length, 2);
+  return out;
+}
+
+/**
  * Reads the EXIF Orientation tag from a JPEG, or undefined if there's no
  * APP1/EXIF segment or no Orientation tag. Minimal TIFF parser — handles the
  * single-IFD layout that setJpegOrientation and camera firmware produce.

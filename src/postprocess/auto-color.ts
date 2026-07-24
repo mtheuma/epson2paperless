@@ -1,5 +1,5 @@
 import sharp from "sharp";
-import { readJpegOrientation, setJpegOrientation } from "../exif.js";
+import { readJpegOrientation, setJpegOrientation, setJfifDensity } from "../exif.js";
 
 // SCAN_COLOR_MODE=auto: the scan itself always runs in colour (the DS-575W's
 // own "Auto" does the same — Epson's software decides colour vs greyscale
@@ -15,28 +15,27 @@ import { readJpegOrientation, setJpegOrientation } from "../exif.js";
 //   - a low-fraction one for small-but-saturated marks (a highlighter swipe,
 //     a red signature) that cover too little area for the broad trigger.
 // Misclassification is asymmetric: calling a neutral page "colour" just keeps
-// bytes; calling a colour page "neutral" loses data — thresholds err toward
+// bytes, calling a colour page "neutral" loses data — thresholds err toward
 // keeping colour.
+//
+// Under POST_PROCESS=document the classification runs INSIDE the document
+// transform, on the white-point-clipped pixels but BEFORE any pinned tone
+// curve composes in (see document.ts): the clip amplifies real colour, while
+// a perceptual tone curve maps neutral mid-greys to slightly divergent RGB
+// (et4950-family peaks at chroma 30 for neutral inputs 128–148) and would
+// push every anti-aliased text edge over the floor.
 const CLASSIFY_LONG_EDGE = 360; // downsample bound before measuring
 const CHROMA_FLOOR = 24; // per-pixel chroma above JPEG noise on neutral scans
 const COLOR_FRACTION = 0.004; // broad trigger: fraction of pixels over CHROMA_FLOOR
 const STRONG_CHROMA_FLOOR = 64; // unmistakably colour, never produced by noise
 const STRONG_COLOR_FRACTION = 0.0005; // small-mark trigger fraction
 
-/**
- * True when the page carries no meaningful colour content — i.e. a greyscale
- * re-encode would lose nothing. Already-single-channel inputs are trivially
- * greyscale.
- */
-export async function isEffectivelyGrayscale(jpeg: Buffer): Promise<boolean> {
-  const { data, info } = await sharp(jpeg)
-    .resize(CLASSIFY_LONG_EDGE, CLASSIFY_LONG_EDGE, { fit: "inside", withoutEnlargement: true })
-    .toColourspace("srgb")
-    .removeAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
+/** The two-trigger chroma verdict over an already-downsampled raw buffer. */
+function verdictFromRaw(
+  data: Buffer,
+  info: { width: number; height: number; channels: number },
+): boolean {
   if (info.channels < 3) return true;
-
   const total = info.width * info.height;
   let colourful = 0;
   let stronglyColourful = 0;
@@ -52,17 +51,58 @@ export async function isEffectivelyGrayscale(jpeg: Buffer): Promise<boolean> {
 }
 
 /**
- * Re-encode a neutral page as a single-channel greyscale JPEG.
+ * True when the page carries no meaningful colour content — i.e. a greyscale
+ * re-encode would lose nothing. Already-single-channel inputs are trivially
+ * greyscale.
+ */
+export async function isEffectivelyGrayscale(jpeg: Buffer): Promise<boolean> {
+  const { data, info } = await sharp(jpeg)
+    .resize(CLASSIFY_LONG_EDGE, CLASSIFY_LONG_EDGE, { fit: "inside", withoutEnlargement: true })
+    .toColourspace("srgb")
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  return verdictFromRaw(data, info);
+}
+
+/**
+ * Same classification over an in-memory raw pixel buffer. Used by the
+ * document+auto path (document.ts), which holds decoded pixels mid-transform
+ * — classifying there skips a JPEG decode and, more importantly, lets the
+ * verdict run on the clip-stage pixels before the tone curve distorts chroma.
+ */
+export async function isRawEffectivelyGrayscale(
+  pixels: Buffer,
+  width: number,
+  height: number,
+  channels: number,
+): Promise<boolean> {
+  if (channels < 3) return true;
+  const rawChannels = channels === 4 ? 4 : 3;
+  const { data, info } = await sharp(pixels, { raw: { width, height, channels: rawChannels } })
+    .resize(CLASSIFY_LONG_EDGE, CLASSIFY_LONG_EDGE, { fit: "inside", withoutEnlargement: true })
+    .raw()
+    .toBuffer({ resolveWithObject: true });
+  return verdictFromRaw(data, info);
+}
+
+/**
+ * Re-encode a neutral page as a single-channel greyscale JPEG, preserving the
+ * source's DPI and EXIF orientation.
+ *
  * `.toColourspace("b-w")` is what actually yields one channel — sharp's
  * `.withMetadata()` would attach an sRGB ICC profile and silently force the
- * encode back to three. Sharp strips EXIF on the re-encode and never rotates
- * pixels without `.rotate()`, so a duplex back page's Orientation=3 tag is
- * read off the input and re-stamped on the output unchanged.
+ * encode back to three, so the source density is re-stamped into the fresh
+ * encode's JFIF APP0 instead (setJfifDensity), and the EXIF orientation tag
+ * (duplex back pages hold Orientation=3 at this point; pixels never rotate,
+ * so the tag stays correct) is re-stamped after it — density first, because
+ * the EXIF prepend shifts the JFIF segment.
  */
 export async function toGrayscaleJpeg(jpeg: Buffer, jpegQuality: number): Promise<Buffer> {
   const orientation = readJpegOrientation(jpeg);
-  const out = await sharp(jpeg).toColourspace("b-w").jpeg({ quality: jpegQuality }).toBuffer();
-  return orientation !== undefined && orientation !== 1
-    ? setJpegOrientation(out, orientation)
-    : out;
+  const { density } = await sharp(jpeg).metadata();
+  let out = await sharp(jpeg).toColourspace("b-w").jpeg({ quality: jpegQuality }).toBuffer();
+  if (density) out = setJfifDensity(out, density);
+  if (orientation !== undefined && orientation !== 1) out = setJpegOrientation(out, orientation);
+  return out;
 }

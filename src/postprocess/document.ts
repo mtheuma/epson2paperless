@@ -1,5 +1,7 @@
 import sharp from "sharp";
 import { TONE_CURVES, type ToneCurveName } from "./tone-curves.js";
+import { isRawEffectivelyGrayscale } from "./auto-color.js";
+import { setJfifDensity } from "../exif.js";
 
 // Tunable constants — starting values; refined against the oracle (Task 7).
 // clipPoint = paperWhite - CLIP_BELOW_PAPER (plateau to 255 above it);
@@ -60,6 +62,35 @@ function buildLut(paperWhite: number): Uint8Array {
   return lut;
 }
 
+/**
+ * Stage-1 clip LUTs anchored on the measured paper white-point, or null when
+ * the low-paper guard trips (paper too dim, or too little near-white present)
+ * — the tone curve's domain assumes a clipped input, so nothing is applied
+ * without stage 1.
+ */
+function computeClipLuts(
+  pixels: Buffer,
+  channels: number,
+): [Uint8Array, Uint8Array, Uint8Array] | null {
+  const paperWhite = estimatePaperWhite(pixels, channels);
+  const minWhite = Math.min(paperWhite[0], paperWhite[1], paperWhite[2]);
+
+  const nearThresh = minWhite - 15;
+  let nearWhite = 0;
+  let sampled = 0;
+  const step = channels * STRIDE;
+  for (let i = 0; i < pixels.length; i += step) {
+    sampled++;
+    if (pixels[i] >= nearThresh && pixels[i + 1] >= nearThresh && pixels[i + 2] >= nearThresh) {
+      nearWhite++;
+    }
+  }
+  if (minWhite < MIN_PAPER_WHITE || nearWhite / sampled < MIN_NEAR_WHITE_FRACTION) {
+    return null;
+  }
+  return [buildLut(paperWhite[0]), buildLut(paperWhite[1]), buildLut(paperWhite[2])];
+}
+
 /** Compose a pinned tone curve onto the adaptive clip LUT: final = tone∘clip. */
 function composeToneCurve(
   clip: [Uint8Array, Uint8Array, Uint8Array],
@@ -73,6 +104,22 @@ function composeToneCurve(
     out.push(composed);
   }
   return [out[0], out[1], out[2]];
+}
+
+/** Apply a per-channel LUT triplet to an RGB pixel buffer. */
+function applyLuts(pixels: Buffer, channels: number, lut: readonly Uint8Array[]): Buffer {
+  // allocUnsafe avoids copying pixels we're about to overwrite entirely; every
+  // byte of the 3-channel loop below is written, so no stale memory leaks
+  // through. Channels beyond RGB (shouldn't occur — caller normalizes to RGB
+  // via toColourspace/removeAlpha) would otherwise be silently dropped, so
+  // fall back to a full copy in that case to preserve them.
+  const out = channels === 3 ? Buffer.allocUnsafe(pixels.length) : Buffer.from(pixels);
+  for (let i = 0; i < pixels.length; i += channels) {
+    out[i] = lut[0][pixels[i]];
+    out[i + 1] = lut[1][pixels[i + 1]];
+    out[i + 2] = lut[2][pixels[i + 2]];
+  }
+  return out;
 }
 
 /**
@@ -90,49 +137,31 @@ export function correctDocumentPixels(
   channels: number,
   toneCurve?: ToneCurveName,
 ): CorrectionResult {
-  const paperWhite = estimatePaperWhite(pixels, channels);
-  const minWhite = Math.min(paperWhite[0], paperWhite[1], paperWhite[2]);
-
-  const nearThresh = minWhite - 15;
-  let nearWhite = 0;
-  let sampled = 0;
-  const step = channels * STRIDE;
-  for (let i = 0; i < pixels.length; i += step) {
-    sampled++;
-    if (pixels[i] >= nearThresh && pixels[i + 1] >= nearThresh && pixels[i + 2] >= nearThresh) {
-      nearWhite++;
-    }
-  }
-  if (minWhite < MIN_PAPER_WHITE || nearWhite / sampled < MIN_NEAR_WHITE_FRACTION) {
-    return { data: Buffer.from(pixels), applied: false };
-  }
-
-  const clip: [Uint8Array, Uint8Array, Uint8Array] = [
-    buildLut(paperWhite[0]),
-    buildLut(paperWhite[1]),
-    buildLut(paperWhite[2]),
-  ];
+  const clip = computeClipLuts(pixels, channels);
+  if (!clip) return { data: Buffer.from(pixels), applied: false };
   const lut = toneCurve ? composeToneCurve(clip, toneCurve) : clip;
-  // allocUnsafe avoids copying pixels we're about to overwrite entirely; every
-  // byte of the 3-channel loop below is written, so no stale memory leaks
-  // through. Channels beyond RGB (shouldn't occur — caller normalizes to RGB
-  // via toColourspace/removeAlpha) would otherwise be silently dropped, so
-  // fall back to a full copy in that case to preserve them.
-  const out = channels === 3 ? Buffer.allocUnsafe(pixels.length) : Buffer.from(pixels);
-  for (let i = 0; i < pixels.length; i += channels) {
-    out[i] = lut[0][pixels[i]];
-    out[i + 1] = lut[1][pixels[i + 1]];
-    out[i + 2] = lut[2][pixels[i + 2]];
-  }
-  return { data: out, applied: true };
+  return { data: applyLuts(pixels, channels, lut), applied: true };
 }
 
-/** Full page transform: decode → auto-orient → correct → re-encode. */
-export async function correctDocumentImage(
+/**
+ * Shared full-page transform behind correctDocumentImage and
+ * correctDocumentImageAuto: decode → auto-orient → clip [→ classify] [→ tone]
+ * → single re-encode (3-channel colour or 1-channel greyscale).
+ *
+ * With autoColor, the greyscale verdict runs on the CLIP-stage pixels, after
+ * stage 1 but before the tone curve: the clip amplifies real colour content
+ * (small saturated marks survive), while a pinned perceptual tone curve maps
+ * neutral mid-greys to slightly divergent RGB (chroma up to 30 on the
+ * et4950-family curve — above the classifier's floor) and would keep every
+ * anti-aliased text page in colour. When the guard trips, classification
+ * falls back to the decoded pixels.
+ */
+async function transformDocumentImage(
   jpeg: Buffer,
   jpegQuality: number,
-  toneCurve?: ToneCurveName,
-): Promise<Buffer> {
+  toneCurve: ToneCurveName | undefined,
+  autoColor: boolean,
+): Promise<{ jpeg: Buffer; grayscale: boolean }> {
   const [{ orientation, density }, { data, info }] = await Promise.all([
     sharp(jpeg).metadata(),
     sharp(jpeg)
@@ -142,18 +171,59 @@ export async function correctDocumentImage(
       .raw()
       .toBuffer({ resolveWithObject: true }),
   ]);
-  const { data: corrected, applied } = correctDocumentPixels(data, info.channels, toneCurve);
+
+  const clip = computeClipLuts(data, info.channels);
+  const applied = clip !== null;
+
+  let grayscale = false;
+  let corrected: Buffer;
+  if (autoColor) {
+    const clipped = clip ? applyLuts(data, info.channels, clip) : null;
+    grayscale = await isRawEffectivelyGrayscale(
+      clipped ?? data,
+      info.width,
+      info.height,
+      info.channels,
+    );
+    // tone∘clip applied in two passes equals the composed LUT of the
+    // non-auto path — the clip-stage buffer had to exist for classification.
+    corrected = clipped
+      ? toneCurve
+        ? applyLuts(clipped, info.channels, TONE_CURVES[toneCurve])
+        : clipped
+      : data;
+  } else {
+    corrected = clip
+      ? applyLuts(data, info.channels, toneCurve ? composeToneCurve(clip, toneCurve) : clip)
+      : data;
+  }
 
   // Skip the re-encode only when it would be a pure no-op: the LUT
   // correction didn't fire AND there's no EXIF orientation baked into the
   // pixels above by `.rotate()` — an orientation tag other than 1 means the
   // decode physically rotated the pixels, and that rotation must still reach
   // the output (e.g. a duplex back page) even when the paper-correction
-  // guard trips. Only when neither applies is the original buffer identical
-  // in substance to what a re-encode would produce, so return it untouched
-  // and skip the generational JPEG quality loss.
+  // guard trips — AND the page isn't being converted to greyscale. Only when
+  // none applies is the original buffer identical in substance to what a
+  // re-encode would produce, so return it untouched and skip the
+  // generational JPEG quality loss.
   const needsRotateBake = orientation !== undefined && orientation !== 1;
-  if (!applied && !needsRotateBake) return jpeg;
+  if (!applied && !needsRotateBake && !grayscale) return { jpeg, grayscale: false };
+
+  const rawInput = { raw: { width: info.width, height: info.height, channels: 3 as const } };
+  if (grayscale) {
+    // Single-channel encode. sharp's `.withMetadata({ density })` attaches an
+    // sRGB ICC profile that forces the output back to three channels, so the
+    // input's DPI is re-stamped into the fresh encode's JFIF APP0 instead.
+    // Orientation is already baked into the pixels by `.rotate()` above, and
+    // no EXIF is written, so the output reads as upright — correct.
+    let out = await sharp(corrected, rawInput)
+      .toColourspace("b-w")
+      .jpeg({ quality: jpegQuality })
+      .toBuffer();
+    if (density) out = setJfifDensity(out, density);
+    return { jpeg: out, grayscale: true };
+  }
 
   // Preserve the input's DPI on the re-encode. The raw pixel buffer we're
   // encoding from carries no metadata of its own (it's a fresh `sharp()`
@@ -163,7 +233,30 @@ export async function correctDocumentImage(
   // braces: the pixels above already had EXIF orientation baked in via
   // `.rotate()`, so writing anything other than "upright" here would rotate
   // the image a second time in EXIF-aware viewers.
-  let pipeline = sharp(corrected, { raw: { width: info.width, height: info.height, channels: 3 } });
+  let pipeline = sharp(corrected, rawInput);
   if (density) pipeline = pipeline.withMetadata({ density, orientation: 1 });
-  return pipeline.jpeg({ quality: jpegQuality }).toBuffer();
+  return { jpeg: await pipeline.jpeg({ quality: jpegQuality }).toBuffer(), grayscale: false };
+}
+
+/** Full page transform: decode → auto-orient → correct → re-encode. */
+export async function correctDocumentImage(
+  jpeg: Buffer,
+  jpegQuality: number,
+  toneCurve?: ToneCurveName,
+): Promise<Buffer> {
+  return (await transformDocumentImage(jpeg, jpegQuality, toneCurve, false)).jpeg;
+}
+
+/**
+ * Document transform with SCAN_COLOR_MODE=auto integrated: one decode, the
+ * greyscale verdict on the clip-stage pixels, and ONE encode — a neutral page
+ * comes out as a single-channel greyscale JPEG without the second compression
+ * generation (and second decode) that a separate conversion pass would cost.
+ */
+export async function correctDocumentImageAuto(
+  jpeg: Buffer,
+  jpegQuality: number,
+  toneCurve?: ToneCurveName,
+): Promise<{ jpeg: Buffer; grayscale: boolean }> {
+  return transformDocumentImage(jpeg, jpegQuality, toneCurve, true);
 }
