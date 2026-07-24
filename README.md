@@ -27,7 +27,7 @@ What you get:
 | **ET-2750**           | ✅ Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS                                                                         |
 | **XP-4100**           | ✅ Verified     | Flatbed-only hardware; shares the ET-2750 dialect ([#139](https://github.com/mtheuma/epson2paperless/issues/139))             |
 | **ET-2810**           | ✅ Verified     | Flatbed-only hardware; no panel trigger — needs `scan:now`                                                                    |
-| **XP-3200**           | ✅ Verified     | Flatbed-only hardware; shares the ET-2810 dialect over TLS; verified via `scan:now`, panel trigger untested                   |
+| **XP-3200**           | ✅ Verified     | Flatbed-only hardware; shares the ET-2810 dialect over TLS; panel lists the destination but errors "Invalid" — use `scan:now` |
 | **ET-2950**           | 🟡 Experimental | Flatbed-only hardware; inferred dialect, no reporter retest yet ([#92](https://github.com/mtheuma/epson2paperless/issues/92)) |
 | **ET-8500**           | ✅ Verified     | Flatbed-only hardware                                                                                                         |
 | **ET-4800**           | ✅ Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS                                                                                   |
