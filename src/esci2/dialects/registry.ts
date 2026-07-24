@@ -264,9 +264,20 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
     // (192 → ~242), but the reference print came from AirPrint on plain paper,
     // so print-side lightness can't be separated from the curve; the inherited
     // gamma clears the same no-cast / no-shadow-crush bar the ET-2810 shipped
-    // on. Unlike the ET-2810, the XP-3200 does offer panel "Scan to Computer";
-    // that flow is untested through this project (the validation environment
-    // was Android/Termux, where multicast discovery is unreliable).
+    // on.
+    //
+    // Panel flow (XP-3200, beacon PID 11AF): non-functional despite the
+    // registration itself working. The printer beacons 02 06, accepts the
+    // keepalive (v2.0 and forced v3.0 both), and lists the destination on the
+    // panel — but starting a scan fails instantly with "Invalid" while sending
+    // the host NOTHING: no push-scan TCP connection, no unicast UDP probe
+    // (verified with connection-level debug logging on both 2968 listeners,
+    // and inbound TCP to the host confirmed reachable from a third device).
+    // The rejection is decided printer-side, so the NetScanMonitor listing
+    // appears vestigial on this firmware generation; the real panel flow
+    // presumably needs a newer (ScanSmart-era) registration handshake that
+    // only a capture against a real Epson client could reveal. Until then the
+    // XP-3200 is host-trigger only, same operational story as the ET-2810.
     "708704b6abb184cede037fcd9893ea81f69651fde28780cde0162dfa33a33f6e",
     {
       displayName: "ET-2810 / XP-3200 (ESC/I-2)",
