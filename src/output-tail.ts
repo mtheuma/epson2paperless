@@ -18,6 +18,8 @@ export interface FinalizeSessionArgs {
   paperless: PaperlessUploadOptions | undefined;
   postProcess?: PostProcessProfile;
   jpegQuality?: number;
+  /** SCAN_COLOR_MODE=auto: convert colourless pages to greyscale before promote/compose. */
+  autoColor?: boolean;
   /** Pinned per-dialect tone curve for the `document` profile; omit for none. */
   toneCurve?: ToneCurveName;
 }
@@ -40,10 +42,16 @@ export async function finalizeSession(args: FinalizeSessionArgs): Promise<void> 
     paperless,
     postProcess = "none",
     jpegQuality = DEFAULT_JPEG_QUALITY,
+    autoColor = false,
     toneCurve,
   } = args;
   try {
-    await postProcessTempPages(sessionTempDir, postProcess, { jpegQuality, toneCurve }, log);
+    await postProcessTempPages(
+      sessionTempDir,
+      postProcess,
+      { jpegQuality, toneCurve, autoColor },
+      log,
+    );
     let savedPaths: string[];
     if (action === "jpg") {
       savedPaths = promoteTempPagesToOutput(sessionTempDir, outputDir, sessionTs, "jpg");

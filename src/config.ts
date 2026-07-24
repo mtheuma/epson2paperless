@@ -11,10 +11,29 @@ export const FF680W_RESOLUTIONS = [50, 75, 100, 150, 200, 240, 300, 360, 400, 60
 export const DEFAULT_SCAN_RESOLUTION = 200;
 export const DEFAULT_JPEG_QUALITY = 90;
 
-// SCAN_COLOR_MODE selects colour vs greyscale. Only greyscale-capable dialects
-// (currently the DS-575W) act on it; all other models ignore it and scan in
-// colour, so the default is "color".
+// SCAN_COLOR_MODE selects colour vs greyscale. "grayscale" changes the wire
+// request, and only greyscale-capable dialects (currently the DS-575W) act on
+// it; all other models ignore it and scan in colour, so the default is
+// "color". "auto" always scans in colour and decides per page in
+// post-processing (any model): pages with no colour content are saved as
+// greyscale, the rest stay colour.
 export const DEFAULT_SCAN_COLOR_MODE = "color" as const;
+
+/**
+ * The single definition of how SCAN_COLOR_MODE splits into its two orthogonal
+ * effects: what goes on the wire, and whether the greyscale post-processing
+ * pass runs. Every dispatch arm derives both from here — "auto" is a
+ * host-side concept and must never reach a PARA composer.
+ */
+export function resolveColorAxes(mode: "color" | "grayscale" | "auto" | undefined): {
+  wireColorMode: "color" | "grayscale";
+  autoColor: boolean;
+} {
+  return {
+    wireColorMode: mode === "grayscale" ? "grayscale" : "color",
+    autoColor: mode === "auto",
+  };
+}
 
 // IPv4 dotted-quad — each octet bounded to 0-255 with no leading zeros on
 // multi-digit values. Leading zeros are rejected at this layer because
@@ -53,7 +72,7 @@ const configSchema = z
         message: `SCAN_RESOLUTION must be one of the advertised DPIs (FF-680W / DS-575W): ${FF680W_RESOLUTIONS.join(", ")}`,
       })
       .default(DEFAULT_SCAN_RESOLUTION),
-    scanColorMode: z.enum(["color", "grayscale"]).default(DEFAULT_SCAN_COLOR_MODE),
+    scanColorMode: z.enum(["color", "grayscale", "auto"]).default(DEFAULT_SCAN_COLOR_MODE),
     esciForceSource: z.enum(["flatbed", "adf-simplex", "adf-duplex"]).optional(),
     printerProtocol: z.enum(["auto", "esci2", "esci2-plain", "esci"]).default("auto"),
     // Diagnostic-only. When true and the legacy `ESC @` init returns a non-ACK,

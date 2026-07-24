@@ -140,3 +140,58 @@ describe("readJpegOrientation", () => {
     expect(readJpegOrientation(buf)).toBe(3);
   });
 });
+
+describe("setJfifDensity", () => {
+  it("stamps the requested density onto a sharp-encoded JPEG (no APP0 in mozjpeg output)", async () => {
+    const src = await sharp({
+      create: { width: 8, height: 8, channels: 3, background: { r: 200, g: 200, b: 200 } },
+    })
+      .jpeg()
+      .toBuffer();
+    const { setJfifDensity } = await import("./exif.js");
+    const patched = setJfifDensity(src, 300);
+    expect(patched.length).toBe(src.length + 18); // minimal JFIF APP0 inserted after SOI
+    expect((await sharp(patched).metadata()).density).toBe(300);
+  });
+
+  it("patches the density fields in place when a JFIF APP0 already exists", async () => {
+    const src = await sharp({
+      create: { width: 8, height: 8, channels: 3, background: { r: 200, g: 200, b: 200 } },
+    })
+      .jpeg()
+      .toBuffer();
+    const { setJfifDensity } = await import("./exif.js");
+    const withApp0 = setJfifDensity(src, 150); // inserts APP0
+    const repatched = setJfifDensity(withApp0, 300); // must patch, not double-insert
+    expect(repatched.length).toBe(withApp0.length);
+    expect((await sharp(repatched).metadata()).density).toBe(300);
+  });
+
+  it("survives an EXIF APP1 being prepended afterwards (density then orientation order)", async () => {
+    const src = await sharp({
+      create: { width: 8, height: 8, channels: 3, background: { r: 200, g: 200, b: 200 } },
+    })
+      .jpeg()
+      .toBuffer();
+    const { setJfifDensity } = await import("./exif.js");
+    const stamped = setJpegOrientation(setJfifDensity(src, 600), 3);
+    expect(readJpegOrientation(stamped)).toBe(3);
+    expect((await sharp(stamped).metadata()).density).toBe(600);
+  });
+
+  it("inserts a JFIF APP0 after SOI when none is present", async () => {
+    const { setJfifDensity } = await import("./exif.js");
+    const noJfif = Buffer.from([0xff, 0xd8, 0xff, 0xd9]); // SOI + EOI, no APP0
+    const out = setJfifDensity(noJfif, 300);
+    expect(out.length).toBe(noJfif.length + 18);
+    expect(out.subarray(0, 2).toString("hex")).toBe("ffd8");
+    expect(out.toString("ascii", 6, 10)).toBe("JFIF");
+    expect(out.readUInt16BE(14)).toBe(300); // Xdensity
+    expect(out.readUInt16BE(16)).toBe(300); // Ydensity
+  });
+
+  it("throws on a non-JPEG input", async () => {
+    const { setJfifDensity } = await import("./exif.js");
+    expect(() => setJfifDensity(Buffer.from("not a jpeg"), 300)).toThrow(/SOI/);
+  });
+});

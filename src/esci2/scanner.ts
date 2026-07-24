@@ -12,11 +12,7 @@ import { resolveSessionTimestamp } from "../output.js";
 import { esci2Graph, type Esci2Ctx } from "./graph.js";
 import { withEsci2UnlockOnDestroy, withTlsErrorLabels } from "./transport.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
-import {
-  DEFAULT_SCAN_RESOLUTION,
-  DEFAULT_SCAN_COLOR_MODE,
-  DEFAULT_JPEG_QUALITY,
-} from "../config.js";
+import { DEFAULT_SCAN_RESOLUTION, DEFAULT_JPEG_QUALITY, resolveColorAxes } from "../config.js";
 import type { PostProcessProfile } from "../postprocess/index.js";
 
 export interface ScanSession {
@@ -33,8 +29,12 @@ export interface ScanSession {
   jpegQuality?: number;
   /** Scan resolution in DPI (adf-crp dialects: FF-680W, DS-575W; default applied at config layer). */
   resolution?: number;
-  /** Colour mode (greyscale-capable adf-crp dialects only; default at config layer). */
-  colorMode?: "color" | "grayscale";
+  /**
+   * Colour mode (default at config layer). "grayscale" changes the wire
+   * request (greyscale-capable adf-crp dialects only); "auto" scans in colour
+   * and converts colourless pages to greyscale in post-processing.
+   */
+  colorMode?: "color" | "grayscale" | "auto";
   paperless?: PaperlessUploadOptions;
   printerCertFingerprint?: string;
 }
@@ -80,7 +80,8 @@ function buildInitialCtx(session: ScanSession, transport: "tls" | "plain"): Esci
     transport,
     action: session.action,
     resolution: session.resolution ?? DEFAULT_SCAN_RESOLUTION,
-    colorMode: session.colorMode ?? DEFAULT_SCAN_COLOR_MODE,
+    // "auto" is a post-processing decision; on the wire it always scans colour.
+    colorMode: resolveColorAxes(session.colorMode).wireColorMode,
     initPollIteration: 0,
     imgChunkSize: 0,
     pageEndKind: "none",
@@ -179,6 +180,7 @@ export async function runEsci2Scan(
     action: session.action,
     postProcess: session.postProcess ?? "none",
     jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
+    autoColor: resolveColorAxes(session.colorMode).autoColor,
     resolveToneCurve: (ctx) => ctx.entry?.toneCurve,
     paperless: session.paperless,
   });
@@ -208,6 +210,7 @@ export async function runEsci2ScanOverPlain(
     action: session.action,
     postProcess: session.postProcess ?? "none",
     jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
+    autoColor: resolveColorAxes(session.colorMode).autoColor,
     resolveToneCurve: (ctx) => ctx.entry?.toneCurve,
     paperless: session.paperless,
   });

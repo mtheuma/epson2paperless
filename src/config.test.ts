@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { writeFileSync, mkdtempSync, rmSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
-import { loadConfig, isPaperlessEnabled, DEFAULT_JPEG_QUALITY } from "./config.js";
+import {
+  loadConfig,
+  isPaperlessEnabled,
+  resolveColorAxes,
+  DEFAULT_JPEG_QUALITY,
+} from "./config.js";
 import { buildPaperlessOptions } from "./startup.js";
 
 describe("loadConfig", () => {
@@ -225,6 +230,20 @@ describe("loadConfig", () => {
     process.env.PRINTER_IP = "192.0.2.58";
     process.env.SCAN_COLOR_MODE = "grayscale";
     expect(loadConfig().scanColorMode).toBe("grayscale");
+  });
+
+  it("accepts SCAN_COLOR_MODE=auto", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.SCAN_COLOR_MODE = "auto";
+    expect(loadConfig().scanColorMode).toBe("auto");
+  });
+
+  it("resolveColorAxes splits each mode into wire request + post-processing flag", () => {
+    expect(resolveColorAxes("color")).toEqual({ wireColorMode: "color", autoColor: false });
+    expect(resolveColorAxes("grayscale")).toEqual({ wireColorMode: "grayscale", autoColor: false });
+    // "auto" is host-side only: colour on the wire, conversion at finalize.
+    expect(resolveColorAxes("auto")).toEqual({ wireColorMode: "color", autoColor: true });
+    expect(resolveColorAxes(undefined)).toEqual({ wireColorMode: "color", autoColor: false });
   });
 
   it("rejects an invalid SCAN_COLOR_MODE", () => {
