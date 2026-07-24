@@ -75,6 +75,7 @@ The ESC/I-2 `PARA` payload is composed per-dialect: at INIT1 the graph hashes th
 
 - `main` is deployable and protected. There is no long-lived integration branch.
 - Branch off `main`, push, open a PR with `gh pr create --base main --head <branch>`. Merge once CI is green.
+- Never @-mention an issue reporter or contributor with a request for action (test a branch, re-run a scan, provide captures or logs) without the maintainer's explicit approval — asks to community members are the maintainer's to make. Mentioning them to reference an issue, a comment, or something they contributed is fine.
 - CI (`.github/workflows/test.yml`) runs `npm install` and then lint + format:check + test, on every push to `main` and every PR targeting `main`. Uses `npm install` (not `npm ci`) because the lockfile is generated on Windows and lacks Linux-only optional native deps — don't swap to `npm ci` without regenerating the lockfile on Linux.
 - A separate `.github/workflows/docker.yml` builds and publishes a multi-arch image to GHCR on pushes to `main` and on `v*` tags. `Dockerfile` + `compose.yaml` at the repo root are the deploy artifacts.
 - Server-side branch protection on `main`: PR required, CI status check required, linear history required.
