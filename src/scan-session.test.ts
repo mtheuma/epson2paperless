@@ -396,6 +396,51 @@ describe("runScanSession (engine pump)", () => {
     fs.rmSync(outputDir, { recursive: true, force: true });
   });
 
+  it("skips the back-page EXIF compensation when resolveBackPageRotated returns false", async () => {
+    // Single-pass dual-sensor hardware (DS-575W) delivers back sides upright;
+    // the 180° compensation would invert them (issue #128 follow-up).
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "DONE",
+          flushPage: {
+            side: "back",
+            encode: () => Promise.resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+          },
+        },
+      },
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+      resolveBackPageRotated: () => false,
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    const result = await promise;
+    expect(result.ok).toBe(true);
+
+    const outputs = fs.readdirSync(outputDir);
+    expect(outputs.length).toBe(1);
+    const bytes = fs.readFileSync(path.join(outputDir, outputs[0]));
+    // No EXIF APP1 prepended: the original SOI+EOI bytes are untouched.
+    expect(bytes.equals(Buffer.from([0xff, 0xd8, 0xff, 0xd9]))).toBe(true);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
   it("rejects with 'zero image chunks' when DONE is reached without any flushPage (production path)", async () => {
     const transport = new FakeTransport();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));

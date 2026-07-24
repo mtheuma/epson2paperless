@@ -182,6 +182,7 @@ export async function runEsci2Scan(
     jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
     autoColor: resolveColorAxes(session.colorMode).autoColor,
     resolveToneCurve: (ctx) => ctx.entry?.toneCurve,
+    resolveBackPageRotated: (ctx) => ctx.entry?.duplexBackRotated ?? true,
     paperless: session.paperless,
   });
   if (!result.ok) throw result.reason;
@@ -212,6 +213,7 @@ export async function runEsci2ScanOverPlain(
     jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
     autoColor: resolveColorAxes(session.colorMode).autoColor,
     resolveToneCurve: (ctx) => ctx.entry?.toneCurve,
+    resolveBackPageRotated: (ctx) => ctx.entry?.duplexBackRotated ?? true,
     paperless: session.paperless,
   });
   if (!result.ok) throw result.reason;

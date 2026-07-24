@@ -21,6 +21,16 @@ export interface RegistryEntry {
    * be stated.
    */
   adfDuplex: boolean;
+  /**
+   * Whether duplex back sides arrive physically rotated 180° and need the
+   * host-side compensation (EXIF Orientation=3 / PDF /Rotate 180). True for
+   * reversing-ADF hardware, which re-feeds the sheet; false for single-pass
+   * dual-sensor scanners, whose back sensor captures the side upright —
+   * confirmed on DS-575W hardware, where the compensation inverted back
+   * pages (issue #128 follow-up). Unreachable (but still stated, like
+   * adfDuplex) for simplex-ADF and flatbed-only models.
+   */
+  duplexBackRotated: boolean;
   gmm: string;
   gammaClass: { jpg: GammaClassName; pdf: GammaClassName };
   cmxClass: { jpg: CmxClassName | null; pdf: CmxClassName | null };
@@ -51,6 +61,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
       adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
       adfDuplex: true,
+      duplexBackRotated: true, // reversing ADF — backs arrive upside down
       gmm: "UG10",
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: null, pdf: null },
@@ -74,6 +85,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       fbExtents: { x0: 0, y0: 0, w: 2477, h: 3500 },
       adfExtents: null,
       adfDuplex: false, // no ADF
+      duplexBackRotated: false, // no ADF
       gmm: "UG18",
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
@@ -89,6 +101,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       fbExtents: { x0: 0, y0: 0, w: 2550, h: 3300 },
       adfExtents: { x0: 0, y0: 0, w: 2550, h: 3300 },
       adfDuplex: true,
+      duplexBackRotated: true, // reversing ADF — backs arrive upside down
       gmm: "UG18",
       gammaClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
       cmxClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
@@ -104,6 +117,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
       adfExtents: null,
       adfDuplex: false, // no ADF
+      duplexBackRotated: false, // no ADF
       gmm: "UG10",
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: null, pdf: null },
@@ -119,6 +133,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
       adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
       adfDuplex: false, // ADF simplex
+      duplexBackRotated: false, // ADF simplex — no back sides
       gmm: "UG18",
       gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
@@ -140,6 +155,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
       adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
       adfDuplex: false, // ADF simplex
+      duplexBackRotated: false, // ADF simplex — no back sides
       gmm: "UG18",
       gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
@@ -160,6 +176,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       fbExtents: null, // ADF-only hardware — no flatbed
       adfExtents: { x0: 0, y0: 0, w: 1700, h: 7200 },
       adfDuplex: true,
+      duplexBackRotated: true, // single-pass hardware, but the compensation has shipped unchallenged — flip on a hardware report
       gmm: "UG18",
       gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
       cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
@@ -194,6 +211,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       fbExtents: null, // ADF-only hardware — no flatbed
       adfExtents: { x0: 0, y0: 0, w: 1700, h: 3100 },
       adfDuplex: true,
+      duplexBackRotated: false, // single-pass dual sensor — backs arrive upright (hardware-confirmed, #128)
       gmm: "UG18",
       gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
       cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
@@ -232,6 +250,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
       adfExtents: null,
       adfDuplex: false,
+      duplexBackRotated: false, // no ADF
       gmm: "UG18",
       gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
@@ -266,6 +285,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
       adfExtents: null,
       adfDuplex: false, // no ADF
+      duplexBackRotated: false, // no ADF
       gmm: "UG18",
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
