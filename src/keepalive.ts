@@ -168,7 +168,17 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
 
         socket.on("message", (data: Buffer, rinfo: dgram.RemoteInfo) => {
           const announcement = parsePrinterAnnouncement(data);
-          if (!announcement) return; // not an 02 06 announcement — ignore
+          if (!announcement) {
+            // Not an 02 06 announcement. The socket is bound to 0.0.0.0:2968,
+            // so unicast probes land here too — some models may validate a
+            // destination with a different command type before scanning.
+            // Surface the bytes at debug instead of dropping them invisibly.
+            log.debug(
+              `Ignoring non-announcement UDP packet from ${rinfo.address}:${rinfo.port} — ` +
+                `${data.length} bytes: ${data.subarray(0, 64).toString("hex")}${data.length > 64 ? "…" : ""}`,
+            );
+            return;
+          }
 
           const seqHex = `0x${announcement.seq.toString(16).padStart(2, "0")}`;
 
