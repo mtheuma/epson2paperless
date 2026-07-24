@@ -352,6 +352,37 @@ describe("composePara — validation", () => {
     ).toThrow(/adf.*adfExtents/i);
   });
 
+  it("throws when flatbed source is requested but fbExtents is null (ADF-only dialect)", () => {
+    expect(() =>
+      composePara({
+        ...baselineSpec(),
+        source: "flatbed",
+        fbExtents: null,
+      }),
+    ).toThrow(/flatbed.*fbExtents/i);
+  });
+
+  it("throws on flatbed + null fbExtents for the adf-crp profile too (guard is pre-dispatch)", () => {
+    expect(() =>
+      composePara({
+        ...baselineSpec(),
+        profile: "adf-crp",
+        source: "flatbed",
+        fbExtents: null,
+      }),
+    ).toThrow(/flatbed.*fbExtents/i);
+  });
+
+  it("rejects flatbed source under the adf-crp profile even with fbExtents present", () => {
+    expect(() =>
+      composePara({
+        ...baselineSpec(),
+        profile: "adf-crp",
+        source: "flatbed",
+      }),
+    ).toThrow(/adf-crp.*flatbed/i);
+  });
+
   it("throws when any extent value is negative", () => {
     expect(() =>
       composePara({

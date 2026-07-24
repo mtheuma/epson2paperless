@@ -1305,9 +1305,11 @@ const DS575W_FP = "90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b
 // duplex axis this service DOES model, from ctx.duplex). To compare a mono
 // fixture's captured PARA against the composed one we canonicalise the flags
 // field: keep DPLX so a simplex/duplex framing regression is still caught, and
-// drop the unmodeled SKEW/DFL1 tokens whose ordering the capture happened to
-// use. Everything downstream (#RSM/#RSS, #COL, gamma, CMX, extents, trailer) is
-// pinned as-is.
+// strip exactly the known-unmodeled SKEW/DFL1 tokens whose ordering the capture
+// happened to use. Any OTHER residue in the flags field is a real divergence
+// (e.g. a colour-mode-conditional corruption of the prefix assembly) and fails
+// the comparison rather than being silently normalised away. Everything
+// downstream (#RSM/#RSS, #COL, gamma, CMX, extents, trailer) is pinned as-is.
 function normalizeAdfCrpFlags(para: Buffer): Buffer {
   const HEAD = Buffer.from("#ADFCRP ", "ascii");
   const RSM = Buffer.from("#RSM", "ascii");
@@ -1316,11 +1318,18 @@ function normalizeAdfCrpFlags(para: Buffer): Buffer {
   }
   const rsm = para.indexOf(RSM);
   if (rsm < 0) throw new Error("normalizeAdfCrpFlags: no #RSM segment");
-  const flags = para.subarray(HEAD.length, rsm).toString("ascii");
-  const kept = flags.includes("DPLX") ? "DPLX" : "";
+  let flags = para.subarray(HEAD.length, rsm).toString("ascii");
+  for (const token of ["SKEW", "DFL1"]) flags = flags.replace(token, "");
+  // After stripping the unmodeled tokens, the only legitimate remainder is the
+  // modeled DPLX (or nothing) — anything else is a real divergence.
+  if (flags !== "" && flags !== "DPLX") {
+    throw new Error(
+      `normalizeAdfCrpFlags: unexpected residue in #ADFCRP flags field: ${JSON.stringify(flags)}`,
+    );
+  }
   return Buffer.concat([
     para.subarray(0, HEAD.length),
-    Buffer.from(kept, "ascii"),
+    Buffer.from(flags, "ascii"),
     para.subarray(rsm),
   ]);
 }

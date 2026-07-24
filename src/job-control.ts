@@ -8,7 +8,7 @@ import {
 } from "./protocol.js";
 import { createLogger } from "./logger.js";
 
-const log = createLogger("ff680w-job");
+const log = createLogger("job-control");
 
 const DEFAULT_JOB_CONTROL_PORT = 1865;
 const DEFAULT_TIMEOUT_MS = 3000;
@@ -18,13 +18,13 @@ const JOB_LOCK_TIMEOUT_SECONDS = 30;
 // of blocking read() until the timeout.
 const MAX_JOB_REPLY_PAYLOAD = 65536;
 
-export type Ff680wJobSocketFactory = (host: string, port: number) => net.Socket;
+export type JobControlSocketFactory = (host: string, port: number) => net.Socket;
 
-export interface Ff680wJobControlOptions {
+export interface JobControlOptions {
   printerIp: string;
   port?: number;
   timeoutMs?: number;
-  socketFactory?: Ff680wJobSocketFactory;
+  socketFactory?: JobControlSocketFactory;
 }
 
 const JOBW_DUMMY_COMMAND = Buffer.from(
@@ -40,24 +40,24 @@ export function buildJobPacket(command: Buffer, replySize: number): Buffer {
   return buildIsPacket(0x2300, Buffer.concat([header, command]));
 }
 
-export function buildFf680wDummyJobWritePacket(): Buffer {
+export function buildDummyJobWritePacket(): Buffer {
   return buildJobPacket(JOBW_DUMMY_COMMAND, 0);
 }
 
-export function buildFf680wJobReadPacket(): Buffer {
+export function buildJobReadPacket(): Buffer {
   return buildJobPacket(JOBR_COMMAND, 8);
 }
 
-export async function runFf680wJobListCommit(opts: Ff680wJobControlOptions): Promise<void> {
-  await runJobControl(opts, buildFf680wDummyJobWritePacket(), 0, "JOBW");
+export async function runJobListCommit(opts: JobControlOptions): Promise<void> {
+  await runJobControl(opts, buildDummyJobWritePacket(), 0, "JOBW");
 }
 
-export async function runFf680wJobNumberCommit(opts: Ff680wJobControlOptions): Promise<Buffer> {
-  return runJobControl(opts, buildFf680wJobReadPacket(), 8, "JOBR");
+export async function runJobNumberCommit(opts: JobControlOptions): Promise<Buffer> {
+  return runJobControl(opts, buildJobReadPacket(), 8, "JOBR");
 }
 
 async function runJobControl(
-  opts: Ff680wJobControlOptions,
+  opts: JobControlOptions,
   jobPacket: Buffer,
   expectedReplyBytes: number,
   label: "JOBW" | "JOBR",

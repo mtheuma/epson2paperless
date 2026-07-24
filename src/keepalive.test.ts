@@ -1,3 +1,4 @@
+import { PID_FF680W, PID_DS575W } from "./printer-ids.js";
 import { describe, it, expect } from "vitest";
 import dgram from "node:dgram";
 import {
@@ -205,12 +206,10 @@ describe("createKeepaliveResponder", () => {
     return pkt;
   }
 
-  function makeFf680wAnnouncement(seq: number): Buffer {
-    return Buffer.concat([makeAnnouncement(seq), Buffer.from("\x08PID 016B\0", "latin1")]);
-  }
-
-  function makeDs575wAnnouncement(seq: number): Buffer {
-    return Buffer.concat([makeAnnouncement(seq), Buffer.from("\x08PID 0169\0", "latin1")]);
+  // PID-suffixed announcement, spelled with the same printer-ids constants the
+  // production Set membership keys on — no second copy of the PID strings.
+  function makePidAnnouncement(seq: number, pid: string): Buffer {
+    return Buffer.concat([makeAnnouncement(seq), Buffer.from(`\x08${pid}\0`, "latin1")]);
   }
 
   interface Harness {
@@ -294,16 +293,19 @@ describe("createKeepaliveResponder", () => {
     h.teardown();
   });
 
-  it("auto-selects v3 keepalive for DS-family announcements (FF-680W + DS-575W)", async () => {
-    for (const make of [makeFf680wAnnouncement, makeDs575wAnnouncement]) {
-      const h = await setupHarness({ burstCount: 1 });
-      await sendAnnouncement(h, make(0x43));
+  it.each([
+    ["FF-680W", PID_FF680W],
+    ["DS-575W", PID_DS575W],
+  ])("auto-selects v3 keepalive for a %s announcement", async (_model, pid) => {
+    const h = await setupHarness({ burstCount: 1 });
+    try {
+      await sendAnnouncement(h, makePidAnnouncement(0x43, pid));
       await new Promise((r) => setTimeout(r, 40));
 
       expect(h.received).toHaveLength(1);
       expect(h.received[0].subarray(20).toString("ascii")).toContain("(Ver=3.0)");
       expect(h.received[0].subarray(20).toString("ascii")).toContain("(Group=0)");
-
+    } finally {
       h.teardown();
     }
   });
@@ -323,7 +325,7 @@ describe("createKeepaliveResponder", () => {
 
   it("sends the FF-680W (v3) keepalive from the separate ephemeral sender socket", async () => {
     const h = await setupHarness({ burstCount: 2 });
-    await sendAnnouncement(h, makeFf680wAnnouncement(0x45));
+    await sendAnnouncement(h, makePidAnnouncement(0x45, PID_FF680W));
     await new Promise((r) => setTimeout(r, 60));
 
     expect(h.receivedFrom).toHaveLength(2);
@@ -358,7 +360,7 @@ describe("createKeepaliveResponder", () => {
       burstCount: 1,
       keepalive: { ...KEEPALIVE_OPTS, version: "2.0" },
     });
-    await sendAnnouncement(h, makeFf680wAnnouncement(0x47));
+    await sendAnnouncement(h, makePidAnnouncement(0x47, PID_FF680W));
     await new Promise((r) => setTimeout(r, 40));
 
     expect(h.received).toHaveLength(1);

@@ -7,7 +7,7 @@ import { detectVariant, type Variant } from "./protocol-probe.js";
 import { runEsci2Scan, runEsci2ScanOverPlain } from "./esci2/scanner.js";
 import { runEsciScan } from "./esci/scanner.js";
 import { resolveLegacyEntry } from "./esci/dialects/registry.js";
-import { runFf680wJobListCommit, runFf680wJobNumberCommit } from "./ff680w-job-control.js";
+import { runJobListCommit, runJobNumberCommit } from "./job-control.js";
 import { PID_FF680W, PID_DS575W } from "./printer-ids.js";
 import {
   resolveEffectiveAction,
@@ -113,7 +113,7 @@ export function buildPaperlessOptions(config: Config): PaperlessUploadOptions | 
 // Button-only scanners (no destination-picker panel) trigger scanning through a
 // JobList → dummy-job-commit → JobNumber handshake rather than a direct
 // PushScanIDIn. Both the FF-680W and its DS-575W sibling use this flow; the
-// job-control commands in ff680w-job-control.ts were reverse-engineered from the
+// job-control commands in job-control.ts were reverse-engineered from the
 // FF-680W, and the DS-575W's JobList is structurally identical (verified on the
 // wire, issue #128). Mirrors V3_KEEPALIVE_PRODUCTS in keepalive.ts — separate
 // axis, shared membership today (see printer-ids.ts).
@@ -130,7 +130,7 @@ export function buildPushScanServerOptions(config: Config): PushScanServerOption
 
       if (kind === "jobList") {
         log.debug(`${info.productName} JobList received — committing dummy job over TCP/1865`);
-        await runFf680wJobListCommit({ printerIp: config.printerIp });
+        await runJobListCommit({ printerIp: config.printerIp });
         return;
       }
 
@@ -138,7 +138,7 @@ export function buildPushScanServerOptions(config: Config): PushScanServerOption
         log.debug(
           `${info.productName} JobNumberIn=${info.jobNumber} received — reading selected job over TCP/1865`,
         );
-        await runFf680wJobNumberCommit({ printerIp: config.printerIp });
+        await runJobNumberCommit({ printerIp: config.printerIp });
       }
     },
   };

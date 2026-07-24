@@ -1,16 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { EventEmitter } from "node:events";
 import type { Socket } from "node:net";
-import {
-  buildFf680wDummyJobWritePacket,
-  buildFf680wJobReadPacket,
-  runFf680wJobNumberCommit,
-} from "./ff680w-job-control.js";
+import { buildDummyJobWritePacket, buildJobReadPacket, runJobNumberCommit } from "./job-control.js";
 import { buildIsPacket, buildUnlockPacket } from "./protocol.js";
 
 describe("FF-680W job-control packet builders", () => {
   it("builds the JobList dummy JOBW packet observed in the Mac trace", () => {
-    expect(buildFf680wDummyJobWritePacket().toString("hex")).toBe(
+    expect(buildDummyJobWritePacket().toString("hex")).toBe(
       "49532300000c0000003a00000000003200000000" +
         "4a4f425700000000000000000000000000000000011a18000000000a0000" +
         "440075006d006d00790003000000020000020100",
@@ -18,7 +14,7 @@ describe("FF-680W job-control packet builders", () => {
   });
 
   it("builds the JobNumber JOBR packet observed in the Mac trace", () => {
-    expect(buildFf680wJobReadPacket().toString("hex")).toBe(
+    expect(buildJobReadPacket().toString("hex")).toBe(
       "49532300000c0000000c000000000004000000084a4f4252",
     );
   });
@@ -72,7 +68,7 @@ describe("runJobControl error handling", () => {
       return null;
     });
 
-    const p = runFf680wJobNumberCommit({
+    const p = runJobNumberCommit({
       printerIp: "192.0.2.9",
       socketFactory: () => asSocket(fake),
     });
@@ -100,7 +96,7 @@ describe("runJobControl error handling", () => {
       return null;
     });
 
-    const p = runFf680wJobNumberCommit({
+    const p = runJobNumberCommit({
       printerIp: "192.0.2.9",
       socketFactory: () => asSocket(fake),
     });
@@ -118,7 +114,7 @@ describe("runJobControl error handling", () => {
     bogus.writeUInt32BE(0x00100000, 6); // 1 MB declared — far past the sanity cap
 
     const fake = new FakeJobSocket(() => null);
-    const p = runFf680wJobNumberCommit({
+    const p = runJobNumberCommit({
       printerIp: "192.0.2.9",
       socketFactory: () => asSocket(fake),
     });
