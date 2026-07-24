@@ -10,9 +10,9 @@ vi.mock("./esci2/scanner.js", () => ({
 vi.mock("./esci/scanner.js", () => ({
   runEsciScan: vi.fn(() => Promise.resolve()),
 }));
-vi.mock("./ff680w-job-control.js", () => ({
-  runFf680wJobListCommit: vi.fn(() => Promise.resolve()),
-  runFf680wJobNumberCommit: vi.fn(() => Promise.resolve(Buffer.from("0300020000020001", "hex"))),
+vi.mock("./job-control.js", () => ({
+  runJobListCommit: vi.fn(() => Promise.resolve()),
+  runJobNumberCommit: vi.fn(() => Promise.resolve(Buffer.from("0300020000020001", "hex"))),
 }));
 
 import { buildPushScanServerOptions, dispatchScanSession, resolveScanDispatch } from "./startup.js";
@@ -20,7 +20,7 @@ import { detectVariant } from "./protocol-probe.js";
 import { runEsci2Scan, runEsci2ScanOverPlain } from "./esci2/scanner.js";
 import { runEsciScan } from "./esci/scanner.js";
 import { WF3620_ENTRY } from "./esci/dialects/wf3620.js";
-import { runFf680wJobListCommit, runFf680wJobNumberCommit } from "./ff680w-job-control.js";
+import { runJobListCommit, runJobNumberCommit } from "./job-control.js";
 import type { Config } from "./config.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import type { PushScanInfo } from "./pushscan.js";
@@ -30,8 +30,8 @@ const detectVariantMock = vi.mocked(detectVariant);
 const runEsci2ScanMock = vi.mocked(runEsci2Scan);
 const runEsci2ScanOverPlainMock = vi.mocked(runEsci2ScanOverPlain);
 const runEsciScanMock = vi.mocked(runEsciScan);
-const runFf680wJobListCommitMock = vi.mocked(runFf680wJobListCommit);
-const runFf680wJobNumberCommitMock = vi.mocked(runFf680wJobNumberCommit);
+const runJobListCommitMock = vi.mocked(runJobListCommit);
+const runJobNumberCommitMock = vi.mocked(runJobNumberCommit);
 
 function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
@@ -136,10 +136,8 @@ describe("resolveScanDispatch", () => {
 
 describe("buildPushScanServerOptions", () => {
   beforeEach(() => {
-    runFf680wJobListCommitMock.mockReset().mockResolvedValue(undefined);
-    runFf680wJobNumberCommitMock
-      .mockReset()
-      .mockResolvedValue(Buffer.from("0300020000020001", "hex"));
+    runJobListCommitMock.mockReset().mockResolvedValue(undefined);
+    runJobNumberCommitMock.mockReset().mockResolvedValue(Buffer.from("0300020000020001", "hex"));
   });
 
   it("runs the FF-680W JOBW commit before replying to JobList", async () => {
@@ -154,8 +152,8 @@ describe("buildPushScanServerOptions", () => {
       capabilities: ["OfficeFormat"],
     });
 
-    expect(runFf680wJobListCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.20" });
-    expect(runFf680wJobNumberCommitMock).not.toHaveBeenCalled();
+    expect(runJobListCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.20" });
+    expect(runJobNumberCommitMock).not.toHaveBeenCalled();
   });
 
   it("runs the FF-680W JOBR commit before replying to JobNumberIn PushScan", async () => {
@@ -170,8 +168,8 @@ describe("buildPushScanServerOptions", () => {
       capabilities: [],
     });
 
-    expect(runFf680wJobNumberCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.21" });
-    expect(runFf680wJobListCommitMock).not.toHaveBeenCalled();
+    expect(runJobNumberCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.21" });
+    expect(runJobListCommitMock).not.toHaveBeenCalled();
   });
 
   it("runs the JOBR commit for the DS-575W JobNumberIn PushScan (PID 0169)", async () => {
@@ -186,8 +184,8 @@ describe("buildPushScanServerOptions", () => {
       capabilities: [],
     });
 
-    expect(runFf680wJobNumberCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.23" });
-    expect(runFf680wJobListCommitMock).not.toHaveBeenCalled();
+    expect(runJobNumberCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.23" });
+    expect(runJobListCommitMock).not.toHaveBeenCalled();
   });
 
   it("runs the JOBW commit for the DS-575W JobList (PID 0169)", async () => {
@@ -202,8 +200,8 @@ describe("buildPushScanServerOptions", () => {
       capabilities: ["OfficeFormat"],
     });
 
-    expect(runFf680wJobListCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.22" });
-    expect(runFf680wJobNumberCommitMock).not.toHaveBeenCalled();
+    expect(runJobListCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.22" });
+    expect(runJobNumberCommitMock).not.toHaveBeenCalled();
   });
 
   it("does not run job-control for other products", async () => {
@@ -218,8 +216,8 @@ describe("buildPushScanServerOptions", () => {
       capabilities: ["OfficeFormat"],
     });
 
-    expect(runFf680wJobListCommitMock).not.toHaveBeenCalled();
-    expect(runFf680wJobNumberCommitMock).not.toHaveBeenCalled();
+    expect(runJobListCommitMock).not.toHaveBeenCalled();
+    expect(runJobNumberCommitMock).not.toHaveBeenCalled();
   });
 });
 

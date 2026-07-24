@@ -352,6 +352,16 @@ describe("composePara — validation", () => {
     ).toThrow(/adf.*adfExtents/i);
   });
 
+  it("throws when flatbed source is requested but fbExtents is null (ADF-only dialect)", () => {
+    expect(() =>
+      composePara({
+        ...baselineSpec(),
+        source: "flatbed",
+        fbExtents: null,
+      }),
+    ).toThrow(/flatbed.*fbExtents/i);
+  });
+
   it("throws when any extent value is negative", () => {
     expect(() =>
       composePara({

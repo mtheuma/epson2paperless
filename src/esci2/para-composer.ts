@@ -17,7 +17,8 @@ export type ParaProfile = "standard" | "adf-crp";
 export interface ParaSpec {
   source: "flatbed" | "adf-simplex" | "adf-duplex";
   action: "jpg" | "pdf";
-  fbExtents: Extents;
+  /** Flatbed scan extents; null for ADF-only dialects, which never compose a flatbed PARA. */
+  fbExtents: Extents | null;
   adfExtents: Extents | null;
   gmm: string;
   gammaClass: { jpg: GammaClassName; pdf: GammaClassName };
@@ -141,6 +142,9 @@ export function composePara(spec: ParaSpec): Buffer {
 }
 
 function composeStandardPara(spec: ParaSpec): Buffer {
+  if (spec.source === "flatbed" && spec.fbExtents === null) {
+    throw new Error("composePara: source=flatbed requires non-null fbExtents (ADF-only dialect?)");
+  }
   const parts: Buffer[] = [];
   // 1. Source segment.
   parts.push(renderSourceSegment(spec.source));
@@ -168,7 +172,7 @@ function composeStandardPara(spec: ParaSpec): Buffer {
     parts.push(Buffer.from("#PAGd000", "ascii"));
   }
   // 9. ACQ extents (fb or adf, per source).
-  const acqExtents = spec.source === "flatbed" ? spec.fbExtents : spec.adfExtents!;
+  const acqExtents = spec.source === "flatbed" ? spec.fbExtents! : spec.adfExtents!;
   parts.push(renderAcq(acqExtents));
   // 10. BSZ trailing constant.
   parts.push(TRAILING_BSZ);

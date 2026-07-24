@@ -93,6 +93,7 @@ describe("REGISTRY", () => {
     const e = REGISTRY.get("5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd");
     expect(e).toBeDefined();
     expect(e!.sourceDetection).toBe("fixed-adf");
+    expect(e!.fbExtents).toBeNull(); // ADF-only hardware — no fabricated flatbed extents
     expect(e!.initPollIterations).toBe(8);
     expect(e!.gmm).toBe("UG18");
     expect(e!.gammaClass).toEqual({ jpg: "ff680w-adf", pdf: "ff680w-adf" });
@@ -107,6 +108,7 @@ describe("REGISTRY", () => {
     const e = REGISTRY.get("90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b074");
     expect(e).toBeDefined();
     expect(e!.sourceDetection).toBe("fixed-adf");
+    expect(e!.fbExtents).toBeNull(); // ADF-only hardware — no fabricated flatbed extents
     expect(e!.initPollIterations).toBe(12);
     expect(e!.gmm).toBe("UG18");
     expect(e!.gammaClass).toEqual({ jpg: "ff680w-adf", pdf: "ff680w-adf" });

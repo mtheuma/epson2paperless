@@ -7,7 +7,7 @@ import { z } from "zod";
 // 400/600 are wire-verified by PARA capture; the rest rely on the linear
 // DPI-scaling formula in para-composer.ts. Other models ignore SCAN_RESOLUTION
 // and scan at their dialect's fixed resolution.
-export const FF680W_RESOLUTIONS = [50, 75, 100, 150, 200, 240, 300, 360, 400, 600] as const;
+export const ADF_CRP_RESOLUTIONS = [50, 75, 100, 150, 200, 240, 300, 360, 400, 600] as const;
 export const DEFAULT_SCAN_RESOLUTION = 200;
 export const DEFAULT_JPEG_QUALITY = 90;
 
@@ -68,8 +68,8 @@ const configSchema = z
     scanResolution: z.coerce
       .number()
       .int()
-      .refine((v) => (FF680W_RESOLUTIONS as readonly number[]).includes(v), {
-        message: `SCAN_RESOLUTION must be one of the advertised DPIs (FF-680W / DS-575W): ${FF680W_RESOLUTIONS.join(", ")}`,
+      .refine((v) => (ADF_CRP_RESOLUTIONS as readonly number[]).includes(v), {
+        message: `SCAN_RESOLUTION must be one of the advertised DPIs (FF-680W / DS-575W): ${ADF_CRP_RESOLUTIONS.join(", ")}`,
       })
       .default(DEFAULT_SCAN_RESOLUTION),
     scanColorMode: z.enum(["color", "grayscale", "auto"]).default(DEFAULT_SCAN_COLOR_MODE),

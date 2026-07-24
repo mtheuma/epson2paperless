@@ -6,7 +6,8 @@ export interface RegistryEntry {
   displayName: string;
   sourceDetection: "stat-length" | "fixed-flatbed" | "fixed-adf";
   initPollIterations: number;
-  fbExtents: Extents;
+  /** Flatbed scan extents; null for ADF-only hardware (mirrors adfExtents' null for flatbed-only models). */
+  fbExtents: Extents | null;
   adfExtents: Extents | null;
   /**
    * Whether the hardware's ADF can scan both sides. Read by
@@ -156,9 +157,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       displayName: "FF-680W (ESC/I-2 over plain TCP)",
       sourceDetection: "fixed-adf",
       initPollIterations: 8,
-      // Not used by the fixed-ADF profile, but ParaSpec keeps FB extents
-      // required for standard flatbed-capable dialects.
-      fbExtents: { x0: 0, y0: 0, w: 1700, h: 7200 },
+      fbExtents: null, // ADF-only hardware — no flatbed
       adfExtents: { x0: 0, y0: 0, w: 1700, h: 7200 },
       adfDuplex: true,
       gmm: "UG18",
@@ -192,8 +191,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       displayName: "DS-575W (ESC/I-2 over plain TCP)",
       sourceDetection: "fixed-adf",
       initPollIterations: 12,
-      // Not used by the fixed-ADF profile, but ParaSpec requires FB extents.
-      fbExtents: { x0: 0, y0: 0, w: 1700, h: 3100 },
+      fbExtents: null, // ADF-only hardware — no flatbed
       adfExtents: { x0: 0, y0: 0, w: 1700, h: 3100 },
       adfDuplex: true,
       gmm: "UG18",
