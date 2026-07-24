@@ -1,4 +1,4 @@
-import { isPaperlessEnabled, type Config } from "./config.js";
+import { isPaperlessEnabled, resolveColorAxes, type Config } from "./config.js";
 import { createLogger } from "./logger.js";
 import { getLocalIpForTarget } from "./network.js";
 import { createKeepaliveResponder, type KeepaliveResponder } from "./keepalive.js";
@@ -221,6 +221,15 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
   // STATUS_2). ESCI_FORCE_SOURCE overrides the autodetection for users hitting
   // edge cases the autodetect doesn't cover (yet).
   const entry = resolveLegacyEntry(args.productName);
+  // The legacy ESC/I command set has no greyscale wire request at all — an
+  // explicit grayscale setting is about to be ignored, which must be visible
+  // in the log rather than read as a bug.
+  if (args.config.scanColorMode === "grayscale") {
+    log.warn(
+      "SCAN_COLOR_MODE=grayscale has no effect on the legacy ESC/I path — scanning in colour. " +
+        "SCAN_COLOR_MODE=auto converts colourless pages host-side instead.",
+    );
+  }
   return runEsciScan({
     printerIp: args.config.printerIp,
     port: 1865,
@@ -234,7 +243,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     postProcess: args.config.postProcess,
     // The legacy wire has no colour-mode axis, but "auto"'s greyscale
     // conversion is a post-processing step and applies here all the same.
-    autoColor: args.config.scanColorMode === "auto",
+    autoColor: resolveColorAxes(args.config.scanColorMode).autoColor,
     paperless: args.paperless,
     diagnoseProtocol: args.config.diagnoseProtocol,
   });

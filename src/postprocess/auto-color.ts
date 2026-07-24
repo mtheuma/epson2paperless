@@ -30,12 +30,36 @@ const COLOR_FRACTION = 0.004; // broad trigger: fraction of pixels over CHROMA_F
 const STRONG_CHROMA_FLOOR = 64; // unmistakably colour, never produced by noise
 const STRONG_COLOR_FRACTION = 0.0005; // small-mark trigger fraction
 
+/**
+ * Classification outcome plus the measured fractions behind it — surfaced in
+ * the debug log so a field report ("this page should have stayed colour")
+ * carries the exact numbers needed to tune the thresholds, without the
+ * reporter re-running anything.
+ */
+export interface ChromaVerdict {
+  grayscale: boolean;
+  /** Fraction of downsampled pixels with chroma above CHROMA_FLOOR. */
+  colourfulFraction: number;
+  /** Fraction of downsampled pixels with chroma above STRONG_CHROMA_FLOOR. */
+  strongFraction: number;
+}
+
+/** Render a verdict's measurements for the debug log. */
+export function describeVerdict(v: ChromaVerdict): string {
+  const pct = (f: number) => `${(f * 100).toFixed(2)}%`;
+  return (
+    `chroma>${CHROMA_FLOOR}: ${pct(v.colourfulFraction)} (colour at ${pct(COLOR_FRACTION)}), ` +
+    `chroma>${STRONG_CHROMA_FLOOR}: ${pct(v.strongFraction)} (colour at ${pct(STRONG_COLOR_FRACTION)}) ` +
+    `→ ${v.grayscale ? "greyscale" : "colour"}`
+  );
+}
+
 /** The two-trigger chroma verdict over an already-downsampled raw buffer. */
 function verdictFromRaw(
   data: Buffer,
   info: { width: number; height: number; channels: number },
-): boolean {
-  if (info.channels < 3) return true;
+): ChromaVerdict {
+  if (info.channels < 3) return { grayscale: true, colourfulFraction: 0, strongFraction: 0 };
   const total = info.width * info.height;
   let colourful = 0;
   let stronglyColourful = 0;
@@ -47,15 +71,21 @@ function verdictFromRaw(
     if (chroma > CHROMA_FLOOR) colourful++;
     if (chroma > STRONG_CHROMA_FLOOR) stronglyColourful++;
   }
-  return colourful / total < COLOR_FRACTION && stronglyColourful / total < STRONG_COLOR_FRACTION;
+  const colourfulFraction = colourful / total;
+  const strongFraction = stronglyColourful / total;
+  return {
+    grayscale: colourfulFraction < COLOR_FRACTION && strongFraction < STRONG_COLOR_FRACTION,
+    colourfulFraction,
+    strongFraction,
+  };
 }
 
 /**
- * True when the page carries no meaningful colour content — i.e. a greyscale
+ * Classify a JPEG page: no meaningful colour content means a greyscale
  * re-encode would lose nothing. Already-single-channel inputs are trivially
  * greyscale.
  */
-export async function isEffectivelyGrayscale(jpeg: Buffer): Promise<boolean> {
+export async function classifyJpeg(jpeg: Buffer): Promise<ChromaVerdict> {
   const { data, info } = await sharp(jpeg)
     .resize(CLASSIFY_LONG_EDGE, CLASSIFY_LONG_EDGE, { fit: "inside", withoutEnlargement: true })
     .toColourspace("srgb")
@@ -65,19 +95,24 @@ export async function isEffectivelyGrayscale(jpeg: Buffer): Promise<boolean> {
   return verdictFromRaw(data, info);
 }
 
+/** Boolean shorthand over classifyJpeg. */
+export async function isEffectivelyGrayscale(jpeg: Buffer): Promise<boolean> {
+  return (await classifyJpeg(jpeg)).grayscale;
+}
+
 /**
  * Same classification over an in-memory raw pixel buffer. Used by the
  * document+auto path (document.ts), which holds decoded pixels mid-transform
  * — classifying there skips a JPEG decode and, more importantly, lets the
  * verdict run on the clip-stage pixels before the tone curve distorts chroma.
  */
-export async function isRawEffectivelyGrayscale(
+export async function classifyRawPixels(
   pixels: Buffer,
   width: number,
   height: number,
   channels: number,
-): Promise<boolean> {
-  if (channels < 3) return true;
+): Promise<ChromaVerdict> {
+  if (channels < 3) return { grayscale: true, colourfulFraction: 0, strongFraction: 0 };
   const rawChannels = channels === 4 ? 4 : 3;
   const { data, info } = await sharp(pixels, { raw: { width, height, channels: rawChannels } })
     .resize(CLASSIFY_LONG_EDGE, CLASSIFY_LONG_EDGE, { fit: "inside", withoutEnlargement: true })

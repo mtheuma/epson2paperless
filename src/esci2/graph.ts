@@ -611,6 +611,17 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
   const paraSource: ParaSpec["source"] =
     ctx.source === "flatbed" ? "flatbed" : ctx.duplex ? "adf-duplex" : "adf-simplex";
   assertSourceSupported(ctx.entry!, paraSource);
+  // An explicit user setting about to be ignored must say so in the log —
+  // colour output under SCAN_COLOR_MODE=grayscale is otherwise
+  // indistinguishable from a bug in a remote-triage report. composePara
+  // applies grayscale only when the dialect carries a mono gamma LUT.
+  if (ctx.colorMode === "grayscale" && ctx.entry!.monoGammaClass === undefined) {
+    log.warn(
+      `SCAN_COLOR_MODE=grayscale has no effect on ${ctx.entry!.displayName} ` +
+        "(no greyscale wire support) — scanning in colour. " +
+        "SCAN_COLOR_MODE=auto converts colourless pages host-side instead.",
+    );
+  }
   const paraPayload = composePara(
     makeParaSpec(ctx.entry!, paraSource, ctx.action, ctx.resolution, ctx.colorMode),
   );

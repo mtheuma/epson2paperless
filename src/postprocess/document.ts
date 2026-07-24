@@ -1,6 +1,6 @@
 import sharp from "sharp";
 import { TONE_CURVES, type ToneCurveName } from "./tone-curves.js";
-import { isRawEffectivelyGrayscale } from "./auto-color.js";
+import { classifyRawPixels, type ChromaVerdict } from "./auto-color.js";
 import { setJfifDensity } from "../exif.js";
 
 // Tunable constants — starting values; refined against the oracle (Task 7).
@@ -161,7 +161,7 @@ async function transformDocumentImage(
   jpegQuality: number,
   toneCurve: ToneCurveName | undefined,
   autoColor: boolean,
-): Promise<{ jpeg: Buffer; grayscale: boolean }> {
+): Promise<{ jpeg: Buffer; grayscale: boolean; verdict?: ChromaVerdict }> {
   const [{ orientation, density }, { data, info }] = await Promise.all([
     sharp(jpeg).metadata(),
     sharp(jpeg)
@@ -176,15 +176,12 @@ async function transformDocumentImage(
   const applied = clip !== null;
 
   let grayscale = false;
+  let verdict: ChromaVerdict | undefined;
   let corrected: Buffer;
   if (autoColor) {
     const clipped = clip ? applyLuts(data, info.channels, clip) : null;
-    grayscale = await isRawEffectivelyGrayscale(
-      clipped ?? data,
-      info.width,
-      info.height,
-      info.channels,
-    );
+    verdict = await classifyRawPixels(clipped ?? data, info.width, info.height, info.channels);
+    grayscale = verdict.grayscale;
     // tone∘clip applied in two passes equals the composed LUT of the
     // non-auto path — the clip-stage buffer had to exist for classification.
     corrected = clipped
@@ -208,7 +205,7 @@ async function transformDocumentImage(
   // re-encode would produce, so return it untouched and skip the
   // generational JPEG quality loss.
   const needsRotateBake = orientation !== undefined && orientation !== 1;
-  if (!applied && !needsRotateBake && !grayscale) return { jpeg, grayscale: false };
+  if (!applied && !needsRotateBake && !grayscale) return { jpeg, grayscale: false, verdict };
 
   const rawInput = { raw: { width: info.width, height: info.height, channels: 3 as const } };
   if (grayscale) {
@@ -222,7 +219,7 @@ async function transformDocumentImage(
       .jpeg({ quality: jpegQuality })
       .toBuffer();
     if (density) out = setJfifDensity(out, density);
-    return { jpeg: out, grayscale: true };
+    return { jpeg: out, grayscale: true, verdict };
   }
 
   // Preserve the input's DPI on the re-encode. The raw pixel buffer we're
@@ -235,7 +232,11 @@ async function transformDocumentImage(
   // the image a second time in EXIF-aware viewers.
   let pipeline = sharp(corrected, rawInput);
   if (density) pipeline = pipeline.withMetadata({ density, orientation: 1 });
-  return { jpeg: await pipeline.jpeg({ quality: jpegQuality }).toBuffer(), grayscale: false };
+  return {
+    jpeg: await pipeline.jpeg({ quality: jpegQuality }).toBuffer(),
+    grayscale: false,
+    verdict,
+  };
 }
 
 /** Full page transform: decode → auto-orient → correct → re-encode. */
@@ -257,6 +258,6 @@ export async function correctDocumentImageAuto(
   jpeg: Buffer,
   jpegQuality: number,
   toneCurve?: ToneCurveName,
-): Promise<{ jpeg: Buffer; grayscale: boolean }> {
+): Promise<{ jpeg: Buffer; grayscale: boolean; verdict?: ChromaVerdict }> {
   return transformDocumentImage(jpeg, jpegQuality, toneCurve, true);
 }

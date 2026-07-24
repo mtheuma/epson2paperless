@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { correctDocumentImage, correctDocumentImageAuto } from "./document.js";
-import { isEffectivelyGrayscale, toGrayscaleJpeg } from "./auto-color.js";
+import { classifyJpeg, describeVerdict, toGrayscaleJpeg } from "./auto-color.js";
 import { sortedPageFiles } from "../output.js";
 import type { ToneCurveName } from "./tone-curves.js";
 
@@ -46,6 +46,8 @@ export async function applyPostProcess(
 interface MinimalLog {
   info: (m: string) => void;
   error: (m: string) => void;
+  /** Optional — per-page chroma measurements under auto colour mode. */
+  debug?: (m: string) => void;
 }
 
 /**
@@ -84,16 +86,19 @@ export async function postProcessTempPages(
         // document transform itself failed, so the outer catch keeping the
         // original page is the right fallback — there is no succeeded-then-
         // reverted intermediate stage to lose.
-        ({ jpeg: processed, grayscale: grayscaled } = await correctDocumentImageAuto(
-          original,
-          opts.jpegQuality,
-          opts.toneCurve,
-        ));
+        const r = await correctDocumentImageAuto(original, opts.jpegQuality, opts.toneCurve);
+        processed = r.jpeg;
+        grayscaled = r.grayscale;
+        if (r.verdict) log.debug?.(`auto colour mode: ${name} ${describeVerdict(r.verdict)}`);
       } else {
         processed = await applyPostProcess(profile, original, opts);
-        if (opts.autoColor && (await isEffectivelyGrayscale(processed))) {
-          processed = await toGrayscaleJpeg(processed, opts.jpegQuality);
-          grayscaled = true;
+        if (opts.autoColor) {
+          const verdict = await classifyJpeg(processed);
+          log.debug?.(`auto colour mode: ${name} ${describeVerdict(verdict)}`);
+          if (verdict.grayscale) {
+            processed = await toGrayscaleJpeg(processed, opts.jpegQuality);
+            grayscaled = true;
+          }
         }
       }
       if (grayscaled) {

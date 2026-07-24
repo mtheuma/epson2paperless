@@ -19,6 +19,22 @@ export const DEFAULT_JPEG_QUALITY = 90;
 // greyscale, the rest stay colour.
 export const DEFAULT_SCAN_COLOR_MODE = "color" as const;
 
+/**
+ * The single definition of how SCAN_COLOR_MODE splits into its two orthogonal
+ * effects: what goes on the wire, and whether the greyscale post-processing
+ * pass runs. Every dispatch arm derives both from here — "auto" is a
+ * host-side concept and must never reach a PARA composer.
+ */
+export function resolveColorAxes(mode: "color" | "grayscale" | "auto" | undefined): {
+  wireColorMode: "color" | "grayscale";
+  autoColor: boolean;
+} {
+  return {
+    wireColorMode: mode === "grayscale" ? "grayscale" : "color",
+    autoColor: mode === "auto",
+  };
+}
+
 // IPv4 dotted-quad — each octet bounded to 0-255 with no leading zeros on
 // multi-digit values. Leading zeros are rejected at this layer because
 // Node's `dgram.connect()` does NOT treat strings like `001.002.003.004`
