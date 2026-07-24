@@ -337,6 +337,16 @@ export interface RunScanSessionOpts<Ctx> {
    * printer has no captured curve → white-point clip only.
    */
   resolveToneCurve?: (ctx: Ctx) => ToneCurveName | undefined;
+  /**
+   * Whether duplex back pages need the 180° rotation compensation (EXIF
+   * Orientation=3 on the JPG path, /Rotate 180 on the PDF path). Reversing-ADF
+   * hardware re-feeds the sheet, so back sides arrive physically upside down —
+   * true, and the default when the callback is omitted. Single-pass
+   * dual-sensor scanners (DS-575W) deliver back sides upright, so compensating
+   * would invert them — false. Resolved from the ctx at flush time, like
+   * resolveToneCurve, because the dialect is only known mid-scan.
+   */
+  resolveBackPageRotated?: (ctx: Ctx) => boolean;
   paperless?: PaperlessUploadOptions;
   /**
    * Test-only: allow reaching DONE without any flushPage having fired.
@@ -377,6 +387,9 @@ export async function runScanSession<Ctx>(
   const recvChunks: Buffer[] = [];
   let recvBytes = 0;
   let pageIndex = 0;
+  // 1-based indices of back pages that need the 180-degree rotation
+  // compensation — NOT of all back pages: dialects whose hardware delivers
+  // backs upright (resolveBackPageRotated -> false) never record any.
   const backPageIndices: number[] = [];
   let sessionTempDir: string | null = null;
 
@@ -826,15 +839,19 @@ export async function runScanSession<Ctx>(
           const jpegBytes = await t.flushPage.encode();
           if (settled) return;
 
-          // Back-page index needed by both the JPG EXIF path and the PDF
-          // /Rotate=180 path in finalizeSession.
-          if (t.flushPage.side === "back") {
+          // Back-page rotation compensation is per-dialect: only hardware
+          // that physically flips back sides (reversing ADF) needs it. The
+          // index feeds both the JPG EXIF path and the PDF /Rotate=180 path
+          // in finalizeSession, so both are gated by the same resolution.
+          const rotateBackPage =
+            t.flushPage.side === "back" && (opts.resolveBackPageRotated?.(ctx) ?? true);
+          if (rotateBackPage) {
             backPageIndices.push(myPageIndex);
           }
 
           // EXIF action-gating (spec §3.5 step 5).
           let outputBytes = jpegBytes;
-          if (t.flushPage.side === "back" && opts.action === "jpg") {
+          if (rotateBackPage && opts.action === "jpg") {
             const { setJpegOrientation } = await import("./exif.js");
             if (settled) return;
             outputBytes = setJpegOrientation(jpegBytes, 3);

@@ -182,6 +182,10 @@ export async function runEsci2Scan(
     jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
     autoColor: resolveColorAxes(session.colorMode).autoColor,
     resolveToneCurve: (ctx) => ctx.entry?.toneCurve,
+    // entry is always resolved at INIT1 before any page can flush; a broken
+    // invariant must fail loudly here, not silently fall back to rotating —
+    // the wrong-guess direction is exactly the inverted-backs bug of #128.
+    resolveBackPageRotated: (ctx) => ctx.entry!.duplexBackRotated,
     paperless: session.paperless,
   });
   if (!result.ok) throw result.reason;
@@ -212,6 +216,10 @@ export async function runEsci2ScanOverPlain(
     jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
     autoColor: resolveColorAxes(session.colorMode).autoColor,
     resolveToneCurve: (ctx) => ctx.entry?.toneCurve,
+    // entry is always resolved at INIT1 before any page can flush; a broken
+    // invariant must fail loudly here, not silently fall back to rotating —
+    // the wrong-guess direction is exactly the inverted-backs bug of #128.
+    resolveBackPageRotated: (ctx) => ctx.entry!.duplexBackRotated,
     paperless: session.paperless,
   });
   if (!result.ok) throw result.reason;

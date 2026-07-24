@@ -8,6 +8,8 @@ import * as path from "node:path";
 import { createGraph, decision, runScanSession } from "./scan-session.js";
 import type { SessionTransport } from "./scan-session.js";
 import { buildIsPacket } from "./protocol.js";
+import sharp from "sharp";
+import { PDFDocument } from "pdf-lib";
 
 // Allow per-test spies on finalizeSession via vi.spyOn while keeping the
 // default implementation (other tests rely on the real promote-and-write
@@ -391,6 +393,104 @@ describe("runScanSession (engine pump)", () => {
     // Bytes 2-3 of the EXIF-injected output are FF E1 (APP1 marker).
     expect(bytes[2]).toBe(0xff);
     expect(bytes[3]).toBe(0xe1);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
+  it("composes an un-rotated PDF when resolveBackPageRotated returns false (action='pdf')", async () => {
+    // The PDF arm of the same gate: backPageIndices must stay empty so
+    // composePdfFromJpegs applies no /Rotate 180. Guards against a refactor
+    // that splits the indices gate from the EXIF gate (each arm has its own
+    // pin — see the EXIF sibling below).
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+    // A real (tiny) JPEG — pdf-lib must actually embed it.
+    const realJpeg = await sharp({
+      create: { width: 8, height: 8, channels: 3, background: { r: 200, g: 200, b: 200 } },
+    })
+      .jpeg()
+      .toBuffer();
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "DONE",
+          flushPage: {
+            side: "back",
+            encode: () => Promise.resolve(realJpeg),
+          },
+        },
+      },
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "pdf",
+      resolveBackPageRotated: () => false,
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    const result = await promise;
+    expect(result.ok).toBe(true);
+
+    const pdfs = fs.readdirSync(outputDir).filter((f) => f.endsWith(".pdf"));
+    expect(pdfs.length).toBe(1);
+    const doc = await PDFDocument.load(fs.readFileSync(path.join(outputDir, pdfs[0])));
+    expect(doc.getPageCount()).toBe(1);
+    expect(doc.getPage(0).getRotation().angle).toBe(0);
+
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
+  it("skips the back-page EXIF compensation when resolveBackPageRotated returns false", async () => {
+    // Single-pass dual-sensor hardware (DS-575W) delivers back sides upright;
+    // the 180° compensation would invert them (issue #128 follow-up).
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "DONE",
+          flushPage: {
+            side: "back",
+            encode: () => Promise.resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+          },
+        },
+      },
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+      resolveBackPageRotated: () => false,
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    const result = await promise;
+    expect(result.ok).toBe(true);
+
+    const outputs = fs.readdirSync(outputDir);
+    expect(outputs.length).toBe(1);
+    const bytes = fs.readFileSync(path.join(outputDir, outputs[0]));
+    // No EXIF APP1 prepended: the original SOI+EOI bytes are untouched.
+    expect(bytes.equals(Buffer.from([0xff, 0xd8, 0xff, 0xd9]))).toBe(true);
 
     fs.rmSync(tempDir, { recursive: true, force: true });
     fs.rmSync(outputDir, { recursive: true, force: true });

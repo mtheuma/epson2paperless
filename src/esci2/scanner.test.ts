@@ -14,6 +14,7 @@ import { readJsonl, trimStatCycles, replayCapture } from "./test-support/frida-r
 import { REGISTRY } from "./dialects/registry.js";
 import { makeParaSpec } from "./dialects/dispatch.js";
 import { composePara, type ParaSpec } from "./para-composer.js";
+import { readJpegOrientation } from "../exif.js";
 
 const XP7100_FP = "56d26c61896ca417807ac68d37775036fa1e702ee44c0beaa27d8a6ea9fa457e";
 
@@ -1392,7 +1393,15 @@ describe("runEsci2ScanOverPlain — DS-575W fixture replay", () => {
     expect(normalizeAdfCrpFlags(recipePara).equals(normalizeAdfCrpFlags(capturedPara))).toBe(true);
 
     const jpgs = readdirSync(outputDir).filter((f) => f.endsWith(".jpg"));
-    for (const f of jpgs) expect(f).toMatch(/^scan_\d{4}-\d{2}-\d{2}_\d{6}(_\d{2})?\.jpg$/);
+    for (const f of jpgs) {
+      expect(f).toMatch(/^scan_\d{4}-\d{2}-\d{2}_\d{6}(_\d{2})?\.jpg$/);
+      // DS-575W is single-pass dual-sensor hardware: back sides arrive
+      // upright, so NO page — front or back — may carry the EXIF
+      // Orientation=3 compensation (duplexBackRotated: false). EliSauder's
+      // hardware run showed the compensation inverting back pages (#128).
+      const orientation = readJpegOrientation(readFileSync(path.join(outputDir, f)));
+      expect(orientation, `${f} must not carry a rotation tag`).toBeUndefined();
+    }
     return jpgs.length;
   }
 

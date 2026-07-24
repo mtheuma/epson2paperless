@@ -103,7 +103,7 @@ Some scanners report no panel selection at all. The button-only, ADF-only models
 - WF-3620-class ESC/I printers probe with `ESC e` and inspect the following `FS F` status byte.
 - XP-620 is fixed flatbed, like ET-2750 and ET-2950, but on the legacy ESC/I side.
 
-For duplex ADF scans, back sides arrive physically rotated 180 degrees because of the feeder path. The scanner records back-page indices as pages complete. JPEG output receives a minimal EXIF Orientation=3 segment; PDF output sets `/Rotate = 180` on the affected pages. Neither path re-encodes pixels just to rotate them.
+For duplex ADF scans on reversing-ADF hardware, back sides arrive physically rotated 180 degrees because of the feeder path. The scanner records back-page indices as pages complete. JPEG output receives a minimal EXIF Orientation=3 segment; PDF output sets `/Rotate = 180` on the affected pages. Neither path re-encodes pixels just to rotate them. Single-pass dual-sensor scanners (the DS-575W) deliver back sides upright, so their registry entry opts out of the compensation (`duplexBackRotated: false`).
 
 For ESC/I-2 printers, the panel's JPG/PDF choice does not change the image stream: the printer sends JPEG data either way, and PDF composition happens on the host. For the WF-3620 legacy path, the panel format affects scan resolution, so JPG and PDF captures differ on the wire.
 

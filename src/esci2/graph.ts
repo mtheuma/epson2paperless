@@ -622,6 +622,16 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
         "SCAN_COLOR_MODE=auto converts colourless pages host-side instead.",
     );
   }
+  // An unverified back-rotation assumption must be visible in the log on the
+  // scans it affects, or no hardware report can ever correct it (#128 showed
+  // the DS-575W's sibling hardware delivers backs upright).
+  if (paraSource === "adf-duplex" && ctx.entry!.duplexBackRotationUnverified) {
+    log.warn(
+      `${ctx.entry!.displayName}: the duplex back-page rotation compensation is ` +
+        "unconfirmed on this single-pass hardware — if back sides come out " +
+        "upside down, please open an issue.",
+    );
+  }
   const paraPayload = composePara(
     makeParaSpec(ctx.entry!, paraSource, ctx.action, ctx.resolution, ctx.colorMode),
   );
