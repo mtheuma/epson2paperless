@@ -94,6 +94,9 @@ describe("REGISTRY", () => {
     expect(e).toBeDefined();
     expect(e!.sourceDetection).toBe("fixed-adf");
     expect(e!.fbExtents).toBeNull(); // ADF-only hardware — no fabricated flatbed extents
+    // Single-pass hardware whose back-rotation value is a shipped assumption:
+    // the marker drives the duplex-scan warn inviting a hardware report.
+    expect(e!.duplexBackRotationUnverified).toBe(true);
     expect(e!.initPollIterations).toBe(8);
     expect(e!.gmm).toBe("UG18");
     expect(e!.gammaClass).toEqual({ jpg: "ff680w-adf", pdf: "ff680w-adf" });
@@ -109,6 +112,7 @@ describe("REGISTRY", () => {
     expect(e).toBeDefined();
     expect(e!.sourceDetection).toBe("fixed-adf");
     expect(e!.fbExtents).toBeNull(); // ADF-only hardware — no fabricated flatbed extents
+    expect(e!.duplexBackRotationUnverified).toBeUndefined(); // hardware-confirmed in #128
     expect(e!.initPollIterations).toBe(12);
     expect(e!.gmm).toBe("UG18");
     expect(e!.gammaClass).toEqual({ jpg: "ff680w-adf", pdf: "ff680w-adf" });

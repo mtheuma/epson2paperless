@@ -387,6 +387,9 @@ export async function runScanSession<Ctx>(
   const recvChunks: Buffer[] = [];
   let recvBytes = 0;
   let pageIndex = 0;
+  // 1-based indices of back pages that need the 180-degree rotation
+  // compensation — NOT of all back pages: dialects whose hardware delivers
+  // backs upright (resolveBackPageRotated -> false) never record any.
   const backPageIndices: number[] = [];
   let sessionTempDir: string | null = null;
 
@@ -840,15 +843,15 @@ export async function runScanSession<Ctx>(
           // that physically flips back sides (reversing ADF) needs it. The
           // index feeds both the JPG EXIF path and the PDF /Rotate=180 path
           // in finalizeSession, so both are gated by the same resolution.
-          const backRotated =
+          const rotateBackPage =
             t.flushPage.side === "back" && (opts.resolveBackPageRotated?.(ctx) ?? true);
-          if (backRotated) {
+          if (rotateBackPage) {
             backPageIndices.push(myPageIndex);
           }
 
           // EXIF action-gating (spec §3.5 step 5).
           let outputBytes = jpegBytes;
-          if (backRotated && opts.action === "jpg") {
+          if (rotateBackPage && opts.action === "jpg") {
             const { setJpegOrientation } = await import("./exif.js");
             if (settled) return;
             outputBytes = setJpegOrientation(jpegBytes, 3);

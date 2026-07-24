@@ -31,6 +31,14 @@ export interface RegistryEntry {
    * adfDuplex) for simplex-ADF and flatbed-only models.
    */
   duplexBackRotated: boolean;
+  /**
+   * Set when duplexBackRotated is a shipped assumption with no capture or
+   * hardware confirmation behind it. buildParaSend warn-logs on duplex scans
+   * for such entries, inviting the hardware report the value is waiting for —
+   * without it the suspicion lives only in this file and can never be
+   * falsified from the field.
+   */
+  duplexBackRotationUnverified?: true;
   gmm: string;
   gammaClass: { jpg: GammaClassName; pdf: GammaClassName };
   cmxClass: { jpg: CmxClassName | null; pdf: CmxClassName | null };
@@ -177,6 +185,7 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       adfExtents: { x0: 0, y0: 0, w: 1700, h: 7200 },
       adfDuplex: true,
       duplexBackRotated: true, // single-pass hardware, but the compensation has shipped unchallenged — flip on a hardware report
+      duplexBackRotationUnverified: true,
       gmm: "UG18",
       gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
       cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },

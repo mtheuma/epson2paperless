@@ -14,6 +14,11 @@ export interface FinalizeSessionArgs {
   outputDir: string;
   sessionTs: Date;
   action: "jpg" | "pdf";
+  /**
+   * 1-based indices of back pages needing the 180° /Rotate compensation on
+   * the PDF path. Not "all back pages": dialects whose hardware delivers back
+   * sides upright (duplexBackRotated: false) record none here.
+   */
   backPageIndices: number[];
   paperless: PaperlessUploadOptions | undefined;
   postProcess?: PostProcessProfile;
