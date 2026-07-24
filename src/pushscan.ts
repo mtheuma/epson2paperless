@@ -217,6 +217,26 @@ export function createPushScanServer(
     let totalBytes = 0;
     let handled = false;
     const HEADER_TERMINATOR = Buffer.from("\r\n\r\n");
+    const peer = `${socket.remoteAddress}:${socket.remotePort}`;
+
+    log.debug(`Connection opened from ${peer}`);
+
+    // Nothing below logs until a complete header block + body has arrived, so
+    // a printer that connects and aborts (or sends a shape we never finish
+    // parsing) would otherwise vanish without a trace — exactly the case
+    // compatibility triage needs to see.
+    socket.on("close", () => {
+      if (handled) return;
+      const buffered = chunks.length === 0 ? Buffer.alloc(0) : Buffer.concat(chunks, totalBytes);
+      log.debug(
+        `Connection from ${peer} closed before a complete request arrived — ` +
+          `${totalBytes} bytes received${
+            totalBytes > 0
+              ? `: ${buffered.subarray(0, 256).toString("hex")}${totalBytes > 256 ? "…" : ""}`
+              : ""
+          }`,
+      );
+    });
 
     socket.on("data", (chunk: Buffer) => {
       chunks.push(chunk);
