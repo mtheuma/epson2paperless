@@ -15,12 +15,26 @@ import { measure } from "../test-oracle/oracle.js";
 // Local-only diagnostic for issue #146 (auto colour mode declining to convert
 // under POST_PROCESS=document).
 //
-// The hypothesis: the document profile's stage-1 clip builds an INDEPENDENT
-// knee per channel, each anchored on that channel's own paper white. When the
-// paper carries a cast the three knees sit at different positions, so NEUTRAL
-// greys inside the knee band come out with chroma injected — which the
-// auto-colour classifier (which since #143 runs on exactly these clip-stage
-// pixels) reads as "this page has colour" and declines to convert.
+// The document profile's stage-1 clip pushes neutral content over the
+// auto-colour classifier's chroma floor by two separate mechanisms, so the
+// classifier (which since #143 runs on exactly these clip-stage pixels) reads
+// the page as colour and declines to convert:
+//
+//   1. SLOPE AMPLIFICATION — the dominant one, and it needs no paper cast. The
+//      knee climbs ~70 levels across a 20-level input span, so ordinary sensor
+//      and JPEG chroma noise in the near-white band is multiplied by up to
+//      ~3.5x. Measured on EliSauder's DS-575W scans: a colour page went from
+//      0.180% to 1.687% over the floor, and a physically neutral back side
+//      reached 2.003%. A page that is ALREADY single-channel greyscale stays at
+//      0.000%, which is what proves the clip amplifies existing chroma rather
+//      than inventing it. See tools/scan-compare/README.md for the baseline.
+//   2. PER-CHANNEL DIVERGENCE — only when the paper carries a cast. Each
+//      channel's knee is anchored on its own paper white, so the three curves
+//      lift a neutral grey unevenly. Synthetic pages put this at 62 (mild cast)
+//      to 85 (strong cast), against a floor of 24.
+//
+// The ramp probe below measures (2) directly. For (1), and for whole-page
+// verdicts on real scans, use `npm run scan:compare -- <file> --document`.
 //
 // Point it at any scan:
 //   CLIP_DIAG_IMAGE=/path/to/scan.jpg npx vitest run src/postprocess/clip-chroma
