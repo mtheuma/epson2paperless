@@ -12,8 +12,8 @@ import { setJfifDensity } from "../exif.js";
 // C0C0C0 (~155) below the knee, upgrade to deriving the clip point from the
 // measured darkest-paper band (a low percentile among near-paper pixels).
 const PAPER_PERCENTILE = 0.95; // per-channel paper white-point estimate
-const CLIP_BELOW_PAPER = 50; // plateau: values >= paperWhite - this map to 255
-const KNEE_WIDTH = 20; // soft-knee width below the clip point (identity below it)
+export const CLIP_BELOW_PAPER = 50; // plateau: values >= paperWhite - this map to 255
+export const KNEE_WIDTH = 20; // soft-knee width below the clip point (identity below it)
 const MIN_PAPER_WHITE = 170; // low-paper guard: skip if the paper is this dim
 const MIN_NEAR_WHITE_FRACTION = 0.15; // skip if too little near-white paper is present
 const STRIDE = 4; // sample every Nth pixel for the paper-white + near-white estimates
@@ -23,7 +23,12 @@ export interface CorrectionResult {
   applied: boolean; // false when the low-paper guard skipped correction
 }
 
-function estimatePaperWhite(pixels: Buffer, channels: number): [number, number, number] {
+/**
+ * Exported alongside CLIP_BELOW_PAPER / KNEE_WIDTH so diagnostics can derive
+ * the knee band from the real values rather than restating them (and
+ * silently drifting when they are tuned). See clip-chroma.test.ts.
+ */
+export function estimatePaperWhite(pixels: Buffer, channels: number): [number, number, number] {
   const hist = [new Uint32Array(256), new Uint32Array(256), new Uint32Array(256)];
   const step = channels * STRIDE;
   let total = 0;
@@ -46,7 +51,7 @@ function estimatePaperWhite(pixels: Buffer, channels: number): [number, number, 
 }
 
 /** Per-channel LUT: identity below the knee, smoothstep up to a 255 plateau. */
-function buildLut(paperWhite: number): Uint8Array {
+export function buildLut(paperWhite: number): Uint8Array {
   const clipPoint = Math.max(1, paperWhite - CLIP_BELOW_PAPER);
   const kneeStart = Math.max(0, clipPoint - KNEE_WIDTH);
   const lut = new Uint8Array(256);
