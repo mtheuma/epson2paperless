@@ -3,8 +3,8 @@ import { describe, it, expect } from "vitest";
 import { REGISTRY } from "./registry.js";
 
 describe("REGISTRY", () => {
-  it("contains exactly ten known fingerprints", () => {
-    expect(REGISTRY.size).toBe(10);
+  it("contains exactly eleven known fingerprints", () => {
+    expect(REGISTRY.size).toBe(11);
   });
 
   it("includes ET-4950 family entry", () => {
@@ -78,6 +78,19 @@ describe("REGISTRY", () => {
 
   it("includes ET-8500 entry (flatbed-only, TLS; TLS-sibling gamma + ET-4800 CMX)", () => {
     const e = REGISTRY.get("05b5c7eaad217e9538883f3fffe9796464689a5d9006c5b3e3c3fd2c24e21467");
+    expect(e).toBeDefined();
+    expect(e!.sourceDetection).toBe("fixed-flatbed");
+    expect(e!.initPollIterations).toBe(3);
+    expect(e!.gmm).toBe("UG18");
+    expect(e!.gammaClass).toEqual({ jpg: "et4950-stock", pdf: "et4950-stock" });
+    expect(e!.cmxClass).toEqual({ jpg: "et4800-um08", pdf: "et4800-um08" });
+    expect(e!.optionalSegments).toEqual({ qit: true, cct: false });
+    expect(e!.fbExtents).toEqual({ x0: 0, y0: 0, w: 2481, h: 3506 });
+    expect(e!.adfExtents).toBeNull();
+  });
+
+  it("includes ET-7700 entry (flatbed-only; ET-8500-shaped, speculative from #145)", () => {
+    const e = REGISTRY.get("72319314b621fea0aab6cc16f4fd891534cec08f33ce80116a849f6f6e1e58d4");
     expect(e).toBeDefined();
     expect(e!.sourceDetection).toBe("fixed-flatbed");
     expect(e!.initPollIterations).toBe(3);
@@ -179,6 +192,8 @@ describe("REGISTRY", () => {
       "05b5c7eaad217e9538883f3fffe9796464689a5d9006c5b3e3c3fd2c24e21467": false,
       // ET-2810 — no ADF
       "708704b6abb184cede037fcd9893ea81f69651fde28780cde0162dfa33a33f6e": false,
+      // ET-7700 — no ADF
+      "72319314b621fea0aab6cc16f4fd891534cec08f33ce80116a849f6f6e1e58d4": false,
     };
     for (const [fp, want] of Object.entries(expected)) {
       expect(REGISTRY.get(fp)!.adfDuplex, `fingerprint ${fp}`).toBe(want);

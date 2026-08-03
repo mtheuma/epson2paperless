@@ -328,4 +328,34 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       optionalSegments: { qit: true, cct: false },
     },
   ],
+  [
+    // ET-7700: A4 EcoTank Photo. Flatbed-only (CAPA reports ADF: N / duplex: N),
+    // ESC/I-2 over plain TCP. Speculative from the issue #145 diagnostic
+    // (PID 112B, FW FB 1.31): its reported CAPA shape matches the ET-8500 —
+    // GMM "UG10UG18", CMX "UNITUM08", QIT present (PREFON OFF), CCT absent, and
+    // the #FB AREA value "d850i0001170" byte-identical to the ET-4800/ET-8500 —
+    // so every field is inherited from that sibling: A4 extents from the
+    // ET-4800 family, et4800-um08 CMX, and the near-identity et4950-stock gamma
+    // (same photo-scanner rationale as the ET-8500: gamma isn't advertised in
+    // CAPA, and a flat curve degrades mildly if wrong instead of crushing
+    // shadows). The fingerprint still differs from the ET-8500's somewhere in
+    // the full canonicalised segment list, so this is a separate entry rather
+    // than a shared one. Awaiting reporter validation of flatbed JPG + PDF
+    // (ideally against the compatibility test page, to sanity-measure the
+    // inherited gamma the way the ET-2810 and XP-3200 were).
+    "72319314b621fea0aab6cc16f4fd891534cec08f33ce80116a849f6f6e1e58d4",
+    {
+      displayName: "ET-7700 (ESC/I-2)",
+      sourceDetection: "fixed-flatbed",
+      initPollIterations: 3,
+      fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
+      adfExtents: null,
+      adfDuplex: false, // no ADF
+      duplexBackRotated: false, // no ADF
+      gmm: "UG18",
+      gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
+      cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
+      optionalSegments: { qit: true, cct: false },
+    },
+  ],
 ]);
