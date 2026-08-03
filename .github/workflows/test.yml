@@ -27,6 +27,12 @@ jobs:
         # this cross-OS drift; `npm ci` refuses.
         run: npm install --no-audit --no-fund
 
+      - name: Typecheck
+        # Vitest transpiles without typechecking and the Docker build is the
+        # only other place `tsc` runs, so without this step a type error
+        # surfaces post-merge as a failed image build.
+        run: npm run typecheck
+
       - name: Lint
         run: npm run lint
 

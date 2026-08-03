@@ -136,7 +136,10 @@ export async function classifyRawPixels(
 export async function toGrayscaleJpeg(jpeg: Buffer, jpegQuality: number): Promise<Buffer> {
   const orientation = readJpegOrientation(jpeg);
   const { density } = await sharp(jpeg).metadata();
-  let out = await sharp(jpeg).toColourspace("b-w").jpeg({ quality: jpegQuality }).toBuffer();
+  let out: Buffer = await sharp(jpeg)
+    .toColourspace("b-w")
+    .jpeg({ quality: jpegQuality })
+    .toBuffer();
   if (density) out = setJfifDensity(out, density);
   if (orientation !== undefined && orientation !== 1) out = setJpegOrientation(out, orientation);
   return out;
