@@ -219,7 +219,7 @@ async function transformDocumentImage(
     // input's DPI is re-stamped into the fresh encode's JFIF APP0 instead.
     // Orientation is already baked into the pixels by `.rotate()` above, and
     // no EXIF is written, so the output reads as upright — correct.
-    let out = await sharp(corrected, rawInput)
+    let out: Buffer = await sharp(corrected, rawInput)
       .toColourspace("b-w")
       .jpeg({ quality: jpegQuality })
       .toBuffer();
