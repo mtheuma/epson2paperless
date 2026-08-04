@@ -15,6 +15,7 @@ import { REGISTRY } from "./dialects/registry.js";
 import { makeParaSpec } from "./dialects/dispatch.js";
 import { composePara, type ParaSpec } from "./para-composer.js";
 import { readJpegOrientation } from "../exif.js";
+import sharp from "sharp";
 
 const XP7100_FP = "56d26c61896ca417807ac68d37775036fa1e702ee44c0beaa27d8a6ea9fa457e";
 
@@ -1049,7 +1050,12 @@ describe("runEsci2ScanOverPlain — XP-7100 fixture replay", () => {
 
   const XP_7100_FIXTURES = path.join("tools", "pcap-extract", "captures", "xp-7100");
 
-  async function runOne(opts: { fixtureFile: string; source: "flatbed" | "adf"; duplex: boolean }) {
+  async function runOne(opts: {
+    fixtureFile: string;
+    source: "flatbed" | "adf";
+    duplex: boolean;
+    colorMode?: "color" | "grayscale";
+  }) {
     const fixturePath = path.join(XP_7100_FIXTURES, opts.fixtureFile);
     const fixture = loadFixture(fixturePath);
     const fake = new FakePlainSocket();
@@ -1062,6 +1068,7 @@ describe("runEsci2ScanOverPlain — XP-7100 fixture replay", () => {
         tempDir,
         duplex: opts.duplex,
         action: "jpg",
+        colorMode: opts.colorMode,
       },
       fake.asFactory(),
     );
@@ -1109,6 +1116,22 @@ describe("runEsci2ScanOverPlain — XP-7100 fixture replay", () => {
       duplex: true,
     });
     expect(jpgs).toHaveLength(2); // duplex → front + back
+  }, 60_000);
+
+  it("flatbed JPG under SCAN_COLOR_MODE=grayscale: PARA unchanged, converted host-side", async () => {
+    // The XP-7100 has no greyscale wire support (no monoGammaClass), so
+    // grayscale must not touch the wire — runOne's PARA shield pins the
+    // scanner's bytes against the captured COLOUR session — and the page
+    // converts to single-channel greyscale at finalize instead.
+    const jpgs = await runOne({
+      fixtureFile: "jpg-flatbed.jsonl",
+      source: "flatbed",
+      duplex: false,
+      colorMode: "grayscale",
+    });
+    expect(jpgs).toHaveLength(1);
+    const meta = await sharp(path.join(outputDir, jpgs[0])).metadata();
+    expect(meta.channels).toBe(1);
   }, 60_000);
 });
 

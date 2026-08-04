@@ -5,7 +5,8 @@ import os from "node:os";
 import {
   loadConfig,
   isPaperlessEnabled,
-  resolveColorAxes,
+  resolveWireColorMode,
+  resolveGrayscaleConversion,
   DEFAULT_JPEG_QUALITY,
 } from "./config.js";
 import { buildPaperlessOptions } from "./startup.js";
@@ -238,12 +239,25 @@ describe("loadConfig", () => {
     expect(loadConfig().scanColorMode).toBe("auto");
   });
 
-  it("resolveColorAxes splits each mode into wire request + post-processing flag", () => {
-    expect(resolveColorAxes("color")).toEqual({ wireColorMode: "color", autoColor: false });
-    expect(resolveColorAxes("grayscale")).toEqual({ wireColorMode: "grayscale", autoColor: false });
+  it("resolveWireColorMode: only an explicit grayscale changes the wire request", () => {
+    expect(resolveWireColorMode("color")).toBe("color");
+    expect(resolveWireColorMode("grayscale")).toBe("grayscale");
     // "auto" is host-side only: colour on the wire, conversion at finalize.
-    expect(resolveColorAxes("auto")).toEqual({ wireColorMode: "color", autoColor: true });
-    expect(resolveColorAxes(undefined)).toEqual({ wireColorMode: "color", autoColor: false });
+    expect(resolveWireColorMode("auto")).toBe("color");
+    expect(resolveWireColorMode(undefined)).toBe("color");
+  });
+
+  it("resolveGrayscaleConversion: grayscale falls back to host-side conversion when the wire can't", () => {
+    // Wire honoured the greyscale request (dialect has a monoGammaClass) —
+    // pages arrive greyscale already, so converting again would be waste.
+    expect(resolveGrayscaleConversion("grayscale", true)).toBe("off");
+    // Wire scanned in colour — every page is converted host-side.
+    expect(resolveGrayscaleConversion("grayscale", false)).toBe("force");
+    // "auto" classifies per page regardless of wire capability.
+    expect(resolveGrayscaleConversion("auto", true)).toBe("auto");
+    expect(resolveGrayscaleConversion("auto", false)).toBe("auto");
+    expect(resolveGrayscaleConversion("color", false)).toBe("off");
+    expect(resolveGrayscaleConversion(undefined, false)).toBe("off");
   });
 
   it("rejects an invalid SCAN_COLOR_MODE", () => {

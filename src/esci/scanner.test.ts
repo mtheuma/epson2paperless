@@ -4,6 +4,7 @@ import path from "node:path";
 import os from "node:os";
 import { fileURLToPath } from "node:url";
 import { PDFDocument } from "pdf-lib";
+import sharp from "sharp";
 import { runEsciScan, appendImageChunk } from "./scanner.js";
 import { parseIsPacket, buildIsPacket, IS_HEADER_SIZE } from "../protocol.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
@@ -317,6 +318,43 @@ describe("scanner-esci", () => {
       pos += pkt.totalSize;
     }
     expect(foundEject).toBe(true);
+  }, 60_000);
+
+  // -------------------------------------------------------------------------
+  // SCAN_COLOR_MODE=grayscale — the legacy wire has no greyscale request, so
+  // the shared finalize converts every page host-side (grayscaleConversion
+  // "force" threaded in by the dispatcher).
+  // -------------------------------------------------------------------------
+
+  it("flatbed-single-page-jpeg with grayscaleConversion=force: output is single-channel", async () => {
+    const fixture = loadFixture(path.join(FIXTURES, "wf-3620/flatbed-single-page-jpeg.jsonl"));
+    const fake = new FakeTcpSocket();
+
+    const sessionPromise = runEsciScan(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        outputDir,
+        tempDir,
+        entry: WF3620_ENTRY,
+        duplex: false,
+        forcedSource: null,
+        format: "jpg",
+        jpegQuality: 90,
+        grayscaleConversion: "force",
+      },
+      fake.asFactory(),
+    );
+    await driveFixture(fixture, fake, sessionPromise);
+
+    // Wire shield: the greyscale setting must not change a single host byte.
+    expect(Buffer.concat(fake.writes).toString("hex")).toBe(
+      concatHostBytes(fixture).toString("hex"),
+    );
+
+    const files = readdirSync(outputDir);
+    expect(files).toHaveLength(1);
+    expect((await sharp(path.join(outputDir, files[0])).metadata()).channels).toBe(1);
   }, 60_000);
 });
 

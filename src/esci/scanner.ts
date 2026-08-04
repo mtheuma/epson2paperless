@@ -13,6 +13,7 @@ import type { Source, Format } from "./commands.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
 import { withRawSocketCleanClose } from "./transport.js";
 import type { PostProcessProfile } from "../postprocess/index.js";
+import type { GrayscaleConversion } from "../config.js";
 import type { LegacyDialectEntry } from "./dialects/entry.js";
 
 export { appendImageChunk } from "./graph.js";
@@ -32,8 +33,12 @@ export interface LegacyScanSession {
   format: Format;
   jpegQuality: number;
   postProcess?: PostProcessProfile;
-  /** SCAN_COLOR_MODE=auto: convert colourless pages to greyscale at finalize. */
-  autoColor?: boolean;
+  /**
+   * Finalize-time greyscale pass (default "off"). The legacy wire has no
+   * greyscale request, so the dispatcher resolves SCAN_COLOR_MODE=grayscale
+   * to "force" (convert every page) and =auto to "auto" (per-page verdict).
+   */
+  grayscaleConversion?: GrayscaleConversion;
   paperless?: PaperlessUploadOptions;
   /**
    * When true, a non-ACK reply to ESC @ triggers an additional FS Y probe
@@ -129,7 +134,9 @@ export async function runEsciScan(
     paperless: session.paperless,
     postProcess: session.postProcess ?? "none",
     jpegQuality: session.jpegQuality,
-    autoColor: session.autoColor,
+    // Known up front on this path (no dialect-dependent wire capability),
+    // but the engine resolves it from the ctx like the tone curve.
+    resolveGrayscaleConversion: () => session.grayscaleConversion ?? "off",
   });
 
   // Fire the public onSourceDetected hook only on success paths AND only

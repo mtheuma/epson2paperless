@@ -9,7 +9,7 @@ import { IS_HEADER_SIZE } from "./protocol.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import type { PostProcessProfile } from "./postprocess/index.js";
 import type { ToneCurveName } from "./postprocess/tone-curves.js";
-import { DEFAULT_JPEG_QUALITY } from "./config.js";
+import { DEFAULT_JPEG_QUALITY, type GrayscaleConversion } from "./config.js";
 
 /**
  * Compact hex preview of a packet payload for diagnostics: length plus the
@@ -327,8 +327,15 @@ export interface RunScanSessionOpts<Ctx> {
   action: "jpg" | "pdf";
   postProcess?: PostProcessProfile;
   jpegQuality?: number;
-  /** SCAN_COLOR_MODE=auto: convert colourless pages to greyscale at finalize. */
-  autoColor?: boolean;
+  /**
+   * Resolves the finalize-time greyscale pass ("off" / "auto" / "force") from
+   * the final context. A callback rather than a plain value because on the
+   * ESC/I-2 path the answer depends on the dialect (a model whose entry
+   * carries a monoGammaClass already delivered greyscale on the wire), and
+   * the dialect is only known mid-scan — same shape as resolveToneCurve.
+   * Omitted means "off".
+   */
+  resolveGrayscaleConversion?: (ctx: Ctx) => GrayscaleConversion;
   /**
    * Resolves the pinned tone curve for the `document` profile from the final
    * context — the dialect is only known mid-scan (ESC/I-2 sets it at INIT1),
@@ -416,7 +423,7 @@ export async function runScanSession<Ctx>(
         paperless: opts.paperless,
         postProcess: opts.postProcess ?? "none",
         jpegQuality: opts.jpegQuality ?? DEFAULT_JPEG_QUALITY,
-        autoColor: opts.autoColor,
+        grayscaleConversion: opts.resolveGrayscaleConversion?.(ctx),
         toneCurve: opts.resolveToneCurve?.(ctx),
       });
     }

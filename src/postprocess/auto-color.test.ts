@@ -177,7 +177,12 @@ describe("postProcessTempPages with autoColor", () => {
     fs.writeFileSync(path.join(dir, "page_01.jpg"), await encode(colourPixels));
     const colourBefore = fs.readFileSync(path.join(dir, "page_01.jpg"));
 
-    await postProcessTempPages(dir, "none", { jpegQuality: 90, autoColor: true }, noopLog);
+    await postProcessTempPages(
+      dir,
+      "none",
+      { jpegQuality: 90, grayscaleConversion: "auto" },
+      noopLog,
+    );
 
     const neutralMeta = await sharp(path.join(dir, "page_00.jpg")).metadata();
     expect(neutralMeta.channels).toBe(1);
@@ -189,7 +194,12 @@ describe("postProcessTempPages with autoColor", () => {
   it("composes with the document profile", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-auto-doc-"));
     fs.writeFileSync(path.join(dir, "page_00.jpg"), await encode(neutralPagePixels()));
-    await postProcessTempPages(dir, "document", { jpegQuality: 90, autoColor: true }, noopLog);
+    await postProcessTempPages(
+      dir,
+      "document",
+      { jpegQuality: 90, grayscaleConversion: "auto" },
+      noopLog,
+    );
     // metadata() reports the stored channel count; .raw() would re-expand a
     // 1-channel JPEG to 3 on decode and mask the conversion.
     expect((await sharp(path.join(dir, "page_00.jpg")).metadata()).channels).toBe(1);
@@ -206,6 +216,71 @@ describe("postProcessTempPages with autoColor", () => {
     const before = fs.readFileSync(path.join(dir, "page_00.jpg"));
     await postProcessTempPages(dir, "none", { jpegQuality: 90 }, noopLog);
     expect(fs.readFileSync(path.join(dir, "page_00.jpg")).equals(before)).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+});
+
+describe("postProcessTempPages with grayscaleConversion=force", () => {
+  // SCAN_COLOR_MODE=grayscale on a model without greyscale wire support:
+  // the scan ran in colour and EVERY page converts — the chroma verdict is
+  // bypassed, so even a page with real colour content comes out greyscale.
+  it("converts a colour page unconditionally under profile none", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-force-"));
+    const colourPixels = neutralPagePixels();
+    paintRect(colourPixels, 100, 100, 120, 80, [180, 120, 60]);
+    fs.writeFileSync(path.join(dir, "page_00.jpg"), await encode(colourPixels));
+
+    await postProcessTempPages(
+      dir,
+      "none",
+      { jpegQuality: 90, grayscaleConversion: "force" },
+      noopLog,
+    );
+
+    expect((await sharp(path.join(dir, "page_00.jpg")).metadata()).channels).toBe(1);
+    expect(fs.readdirSync(dir).some((f) => f.endsWith(".tmp"))).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("composes with the document profile (clip applied, single encode to one channel)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-force-doc-"));
+    const colourPixels = neutralPagePixels();
+    paintRect(colourPixels, 100, 100, 120, 80, [180, 120, 60]);
+    fs.writeFileSync(path.join(dir, "page_00.jpg"), await encode(colourPixels));
+
+    await postProcessTempPages(
+      dir,
+      "document",
+      { jpegQuality: 90, grayscaleConversion: "force" },
+      noopLog,
+    );
+
+    expect((await sharp(path.join(dir, "page_00.jpg")).metadata()).channels).toBe(1);
+    const { data } = await sharp(path.join(dir, "page_00.jpg"))
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    expect(data[0]).toBeGreaterThan(250); // white-point clip still applied first
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("preserves the source DPI through the forced conversion", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-force-dpi-"));
+    const src = await sharp(neutralPagePixels(), { raw: { width: W, height: H, channels: 3 } })
+      .withMetadata({ density: 300 })
+      .jpeg({ quality: 90 })
+      .toBuffer();
+    fs.writeFileSync(path.join(dir, "page_00.jpg"), src);
+
+    await postProcessTempPages(
+      dir,
+      "none",
+      { jpegQuality: 90, grayscaleConversion: "force" },
+      noopLog,
+    );
+
+    const meta = await sharp(path.join(dir, "page_00.jpg")).metadata();
+    expect(meta.channels).toBe(1);
+    expect(meta.density).toBe(300);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 });

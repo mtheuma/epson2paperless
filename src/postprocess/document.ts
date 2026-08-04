@@ -153,19 +153,21 @@ export function correctDocumentPixels(
  * correctDocumentImageAuto: decode → auto-orient → clip [→ classify] [→ tone]
  * → single re-encode (3-channel colour or 1-channel greyscale).
  *
- * With autoColor, the greyscale verdict runs on the CLIP-stage pixels, after
- * stage 1 but before the tone curve: the clip amplifies real colour content
- * (small saturated marks survive), while a pinned perceptual tone curve maps
- * neutral mid-greys to slightly divergent RGB (chroma up to 30 on the
- * et4950-family curve — above the classifier's floor) and would keep every
- * anti-aliased text page in colour. When the guard trips, classification
- * falls back to the decoded pixels.
+ * With conversion "auto", the greyscale verdict runs on the CLIP-stage
+ * pixels, after stage 1 but before the tone curve: the clip amplifies real
+ * colour content (small saturated marks survive), while a pinned perceptual
+ * tone curve maps neutral mid-greys to slightly divergent RGB (chroma up to
+ * 30 on the et4950-family curve — above the classifier's floor) and would
+ * keep every anti-aliased text page in colour. When the guard trips,
+ * classification falls back to the decoded pixels. Conversion "force"
+ * (SCAN_COLOR_MODE=grayscale without greyscale wire support) skips the
+ * verdict entirely — every page encodes single-channel.
  */
 async function transformDocumentImage(
   jpeg: Buffer,
   jpegQuality: number,
   toneCurve: ToneCurveName | undefined,
-  autoColor: boolean,
+  conversion: "off" | "auto" | "force",
 ): Promise<{ jpeg: Buffer; grayscale: boolean; verdict?: ChromaVerdict }> {
   const [{ orientation, density }, { data, info }] = await Promise.all([
     sharp(jpeg).metadata(),
@@ -180,10 +182,10 @@ async function transformDocumentImage(
   const clip = computeClipLuts(data, info.channels);
   const applied = clip !== null;
 
-  let grayscale = false;
+  let grayscale = conversion === "force";
   let verdict: ChromaVerdict | undefined;
   let corrected: Buffer;
-  if (autoColor) {
+  if (conversion === "auto") {
     const clipped = clip ? applyLuts(data, info.channels, clip) : null;
     verdict = await classifyRawPixels(clipped ?? data, info.width, info.height, info.channels);
     grayscale = verdict.grayscale;
@@ -250,19 +252,22 @@ export async function correctDocumentImage(
   jpegQuality: number,
   toneCurve?: ToneCurveName,
 ): Promise<Buffer> {
-  return (await transformDocumentImage(jpeg, jpegQuality, toneCurve, false)).jpeg;
+  return (await transformDocumentImage(jpeg, jpegQuality, toneCurve, "off")).jpeg;
 }
 
 /**
- * Document transform with SCAN_COLOR_MODE=auto integrated: one decode, the
- * greyscale verdict on the clip-stage pixels, and ONE encode — a neutral page
- * comes out as a single-channel greyscale JPEG without the second compression
- * generation (and second decode) that a separate conversion pass would cost.
+ * Document transform with greyscale conversion integrated: one decode, ONE
+ * encode — a converted page comes out as a single-channel greyscale JPEG
+ * without the second compression generation (and second decode) that a
+ * separate conversion pass would cost. "auto" (SCAN_COLOR_MODE=auto) runs the
+ * chroma verdict on the clip-stage pixels; "force" (SCAN_COLOR_MODE=grayscale
+ * without greyscale wire support) converts every page, no verdict.
  */
 export async function correctDocumentImageAuto(
   jpeg: Buffer,
   jpegQuality: number,
   toneCurve?: ToneCurveName,
+  conversion: "auto" | "force" = "auto",
 ): Promise<{ jpeg: Buffer; grayscale: boolean; verdict?: ChromaVerdict }> {
-  return transformDocumentImage(jpeg, jpegQuality, toneCurve, true);
+  return transformDocumentImage(jpeg, jpegQuality, toneCurve, conversion);
 }
