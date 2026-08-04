@@ -11,8 +11,14 @@ import {
 import { resolveSessionTimestamp } from "../output.js";
 import { esci2Graph, type Esci2Ctx } from "./graph.js";
 import { withEsci2UnlockOnDestroy, withTlsErrorLabels } from "./transport.js";
+import { supportsWireGrayscale } from "./dialects/registry.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
-import { DEFAULT_SCAN_RESOLUTION, DEFAULT_JPEG_QUALITY, resolveColorAxes } from "../config.js";
+import {
+  DEFAULT_SCAN_RESOLUTION,
+  DEFAULT_JPEG_QUALITY,
+  resolveWireColorMode,
+  resolveGrayscaleConversion,
+} from "../config.js";
 import type { PostProcessProfile } from "../postprocess/index.js";
 
 export interface ScanSession {
@@ -31,8 +37,9 @@ export interface ScanSession {
   resolution?: number;
   /**
    * Colour mode (default at config layer). "grayscale" changes the wire
-   * request (greyscale-capable adf-crp dialects only); "auto" scans in colour
-   * and converts colourless pages to greyscale in post-processing.
+   * request on greyscale-capable dialects (those with a monoGammaClass) and
+   * falls back to converting every page host-side on the rest; "auto" scans
+   * in colour and converts colourless pages to greyscale in post-processing.
    */
   colorMode?: "color" | "grayscale" | "auto";
   paperless?: PaperlessUploadOptions;
@@ -81,7 +88,7 @@ function buildInitialCtx(session: ScanSession, transport: "tls" | "plain"): Esci
     action: session.action,
     resolution: session.resolution ?? DEFAULT_SCAN_RESOLUTION,
     // "auto" is a post-processing decision; on the wire it always scans colour.
-    colorMode: resolveColorAxes(session.colorMode).wireColorMode,
+    colorMode: resolveWireColorMode(session.colorMode),
     initPollIteration: 0,
     imgChunkSize: 0,
     pageEndKind: "none",
@@ -162,6 +169,27 @@ function makePlainEsci2TransportFactory(
 }
 
 /**
+ * The finalize-time output-policy resolvers shared by both entry points —
+ * one definition so the TLS and plain transports cannot drift. All three are
+ * resolved from the ctx (not the session) because the dialect is only known
+ * once INIT1 has fingerprinted the CAPA reply.
+ */
+function makeOutputResolvers(session: ScanSession) {
+  return {
+    // A dialect that honoured a greyscale request on the wire needs no
+    // host-side pass; anywhere else SCAN_COLOR_MODE=grayscale falls back to
+    // converting every page at finalize.
+    resolveGrayscaleConversion: (ctx: Esci2Ctx) =>
+      resolveGrayscaleConversion(session.colorMode, supportsWireGrayscale(ctx.entry)),
+    resolveToneCurve: (ctx: Esci2Ctx) => ctx.entry?.toneCurve,
+    // entry is always resolved at INIT1 before any page can flush; a broken
+    // invariant must fail loudly here, not silently fall back to rotating —
+    // the wrong-guess direction is exactly the inverted-backs bug of #128.
+    resolveBackPageRotated: (ctx: Esci2Ctx) => ctx.entry!.duplexBackRotated,
+  };
+}
+
+/**
  * Run an ESC/I-2 scan over TLS (port 1865, ET-4950 family).
  */
 export async function runEsci2Scan(
@@ -180,12 +208,7 @@ export async function runEsci2Scan(
     action: session.action,
     postProcess: session.postProcess ?? "none",
     jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
-    autoColor: resolveColorAxes(session.colorMode).autoColor,
-    resolveToneCurve: (ctx) => ctx.entry?.toneCurve,
-    // entry is always resolved at INIT1 before any page can flush; a broken
-    // invariant must fail loudly here, not silently fall back to rotating —
-    // the wrong-guess direction is exactly the inverted-backs bug of #128.
-    resolveBackPageRotated: (ctx) => ctx.entry!.duplexBackRotated,
+    ...makeOutputResolvers(session),
     paperless: session.paperless,
   });
   if (!result.ok) throw result.reason;
@@ -214,12 +237,7 @@ export async function runEsci2ScanOverPlain(
     action: session.action,
     postProcess: session.postProcess ?? "none",
     jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
-    autoColor: resolveColorAxes(session.colorMode).autoColor,
-    resolveToneCurve: (ctx) => ctx.entry?.toneCurve,
-    // entry is always resolved at INIT1 before any page can flush; a broken
-    // invariant must fail loudly here, not silently fall back to rotating —
-    // the wrong-guess direction is exactly the inverted-backs bug of #128.
-    resolveBackPageRotated: (ctx) => ctx.entry!.duplexBackRotated,
+    ...makeOutputResolvers(session),
     paperless: session.paperless,
   });
   if (!result.ok) throw result.reason;

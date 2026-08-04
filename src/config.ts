@@ -11,28 +11,45 @@ export const ADF_CRP_RESOLUTIONS = [50, 75, 100, 150, 200, 240, 300, 360, 400, 6
 export const DEFAULT_SCAN_RESOLUTION = 200;
 export const DEFAULT_JPEG_QUALITY = 90;
 
-// SCAN_COLOR_MODE selects colour vs greyscale. "grayscale" changes the wire
-// request, and only greyscale-capable dialects (currently the DS-575W) act on
-// it; all other models ignore it and scan in colour, so the default is
-// "color". "auto" always scans in colour and decides per page in
-// post-processing (any model): pages with no colour content are saved as
-// greyscale, the rest stay colour.
+// SCAN_COLOR_MODE selects colour vs greyscale. "grayscale" guarantees
+// greyscale output on every model: greyscale-capable dialects (currently the
+// DS-575W) request it on the wire (1/3 the wire data); everything else scans
+// in colour and converts every page host-side at finalize. "auto" always
+// scans in colour and decides per page in post-processing (any model): pages
+// with no colour content are saved as greyscale, the rest stay colour.
 export const DEFAULT_SCAN_COLOR_MODE = "color" as const;
 
+/** How the finalize-time greyscale pass runs: not at all, per-page chroma verdict, or every page. */
+export type GrayscaleConversion = "off" | "auto" | "force";
+
 /**
- * The single definition of how SCAN_COLOR_MODE splits into its two orthogonal
- * effects: what goes on the wire, and whether the greyscale post-processing
- * pass runs. Every dispatch arm derives both from here — "auto" is a
- * host-side concept and must never reach a PARA composer.
+ * The wire half of SCAN_COLOR_MODE: what colour mode the scan session
+ * requests from the printer. "auto" is a host-side concept and must never
+ * reach a PARA composer — it always scans colour. An explicit "grayscale"
+ * request is still subject to the dialect's capability (composePara only
+ * honours it when the dialect carries a monoGammaClass).
  */
-export function resolveColorAxes(mode: "color" | "grayscale" | "auto" | undefined): {
-  wireColorMode: "color" | "grayscale";
-  autoColor: boolean;
-} {
-  return {
-    wireColorMode: mode === "grayscale" ? "grayscale" : "color",
-    autoColor: mode === "auto",
-  };
+export function resolveWireColorMode(
+  mode: "color" | "grayscale" | "auto" | undefined,
+): "color" | "grayscale" {
+  return mode === "grayscale" ? "grayscale" : "color";
+}
+
+/**
+ * The host half of SCAN_COLOR_MODE: how the finalize-time greyscale pass
+ * runs. `wireGrayscaleSupported` says whether the dialect honoured a
+ * greyscale wire request (ESC/I-2: entry has a monoGammaClass; legacy ESC/I:
+ * never) — when it did, pages arrive greyscale already and converting again
+ * would be waste; when it didn't, an explicit "grayscale" setting falls back
+ * to converting every page host-side.
+ */
+export function resolveGrayscaleConversion(
+  mode: "color" | "grayscale" | "auto" | undefined,
+  wireGrayscaleSupported: boolean,
+): GrayscaleConversion {
+  if (mode === "auto") return "auto";
+  if (mode === "grayscale" && !wireGrayscaleSupported) return "force";
+  return "off";
 }
 
 // IPv4 dotted-quad — each octet bounded to 0-255 with no leading zeros on

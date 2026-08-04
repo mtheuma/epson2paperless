@@ -332,9 +332,21 @@ describe("dispatchScanSession", () => {
       productName: null,
     });
     expect(runEsci2ScanMock.mock.calls[0][0].colorMode).toBe("grayscale");
+
+    // Legacy has no greyscale wire request at all — the dispatcher resolves
+    // grayscale to a forced host-side conversion at finalize.
+    detectVariantMock.mockResolvedValue("esci");
+    await dispatchScanSession({
+      config: makeConfig({ printerProtocol: "esci", scanColorMode: "grayscale" }),
+      duplex: false,
+      action: "pdf",
+      paperless: undefined,
+      productName: null,
+    });
+    expect(runEsciScanMock.mock.calls[0][0].grayscaleConversion).toBe("force");
   });
 
-  it("forwards SCAN_COLOR_MODE=auto: colorMode to ESC/I-2, autoColor to the legacy arm", async () => {
+  it("forwards SCAN_COLOR_MODE=auto: colorMode to ESC/I-2, grayscaleConversion to the legacy arm", async () => {
     detectVariantMock.mockResolvedValue("esci2-plain");
     await dispatchScanSession({
       config: makeConfig({ printerProtocol: "esci2-plain", scanColorMode: "auto" }),
@@ -343,10 +355,10 @@ describe("dispatchScanSession", () => {
       paperless: undefined,
       productName: null,
     });
-    // The shell maps "auto" to a colour wire request + autoColor post-processing.
+    // The shell maps "auto" to a colour wire request + per-page host-side conversion.
     expect(runEsci2ScanOverPlainMock.mock.calls[0][0].colorMode).toBe("auto");
 
-    // Legacy has no colour-mode wire axis; only the post-processing flag arrives.
+    // Legacy has no colour-mode wire axis; only the post-processing mode arrives.
     detectVariantMock.mockResolvedValue("esci");
     await dispatchScanSession({
       config: makeConfig({ printerProtocol: "esci", scanColorMode: "auto" }),
@@ -355,7 +367,7 @@ describe("dispatchScanSession", () => {
       paperless: undefined,
       productName: null,
     });
-    expect(runEsciScanMock.mock.calls[0][0].autoColor).toBe(true);
+    expect(runEsciScanMock.mock.calls[0][0].grayscaleConversion).toBe("auto");
   });
 
   it("variant=esci routes to runEsciScan with forcedSource + jpegQuality + diagnoseProtocol", async () => {
@@ -388,7 +400,7 @@ describe("dispatchScanSession", () => {
       format: "pdf",
       jpegQuality: 75,
       postProcess: "none",
-      autoColor: false,
+      grayscaleConversion: "off",
       paperless: PAPERLESS_OPTS,
       diagnoseProtocol: true,
     });

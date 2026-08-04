@@ -225,7 +225,7 @@ describe("output-tail", () => {
     expect(postProcessMock).toHaveBeenCalledWith(
       tempDir,
       "none",
-      { jpegQuality: DEFAULT_JPEG_QUALITY, toneCurve: undefined, autoColor: false },
+      { jpegQuality: DEFAULT_JPEG_QUALITY, toneCurve: undefined, grayscaleConversion: "off" },
       expect.anything(),
     );
   });

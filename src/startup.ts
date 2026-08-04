@@ -1,4 +1,4 @@
-import { isPaperlessEnabled, resolveColorAxes, type Config } from "./config.js";
+import { isPaperlessEnabled, resolveGrayscaleConversion, type Config } from "./config.js";
 import { createLogger } from "./logger.js";
 import { getLocalIpForTarget } from "./network.js";
 import { createKeepaliveResponder, type KeepaliveResponder } from "./keepalive.js";
@@ -222,13 +222,15 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
   // STATUS_2). ESCI_FORCE_SOURCE overrides the autodetection for users hitting
   // edge cases the autodetect doesn't cover (yet).
   const entry = resolveLegacyEntry(args.productName);
-  // The legacy ESC/I command set has no greyscale wire request at all — an
-  // explicit grayscale setting is about to be ignored, which must be visible
-  // in the log rather than read as a bug.
-  if (args.config.scanColorMode === "grayscale") {
-    log.warn(
-      "SCAN_COLOR_MODE=grayscale has no effect on the legacy ESC/I path — scanning in colour. " +
-        "SCAN_COLOR_MODE=auto converts colourless pages host-side instead.",
+  // The legacy ESC/I wire has no colour-mode axis at all, so greyscale is
+  // entirely a post-processing concern (wireGrayscaleSupported: false).
+  // Gate the announcement on the resolved value itself — not a re-derived
+  // condition — so the log can never drift from the behaviour it describes.
+  const grayscaleConversion = resolveGrayscaleConversion(args.config.scanColorMode, false);
+  if (grayscaleConversion === "force") {
+    log.info(
+      "SCAN_COLOR_MODE=grayscale: the legacy ESC/I wire has no greyscale request — " +
+        "scanning in colour and converting to greyscale host-side.",
     );
   }
   return runEsciScan({
@@ -242,9 +244,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     format: args.action,
     jpegQuality: args.config.jpegQuality,
     postProcess: args.config.postProcess,
-    // The legacy wire has no colour-mode axis, but "auto"'s greyscale
-    // conversion is a post-processing step and applies here all the same.
-    autoColor: resolveColorAxes(args.config.scanColorMode).autoColor,
+    grayscaleConversion,
     paperless: args.paperless,
     diagnoseProtocol: args.config.diagnoseProtocol,
   });

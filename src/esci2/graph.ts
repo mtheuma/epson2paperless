@@ -22,7 +22,7 @@ import {
   parseTokens,
 } from "./commands.js";
 import { ackByte, expectIsType } from "../graph-helpers.js";
-import type { RegistryEntry } from "./dialects/registry.js";
+import { supportsWireGrayscale, type RegistryEntry } from "./dialects/registry.js";
 import {
   lookupRegistryEntry,
   applyEntrySourceOverride,
@@ -74,8 +74,9 @@ export interface Esci2Ctx {
   resolution: number;
   /**
    * Colour mode, threaded from config.scanColorMode. Only greyscale-capable
-   * adf-crp dialects (those with a monoGammaClass, e.g. DS-575W) consume it;
-   * all others ignore it and scan in colour.
+   * dialects (those with a monoGammaClass, e.g. DS-575W) act on it on the
+   * wire; all others scan in colour and the scanner shell converts every
+   * page to greyscale host-side at finalize.
    */
   colorMode: "color" | "grayscale";
 }
@@ -611,15 +612,15 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
   const paraSource: ParaSpec["source"] =
     ctx.source === "flatbed" ? "flatbed" : ctx.duplex ? "adf-duplex" : "adf-simplex";
   assertSourceSupported(ctx.entry!, paraSource);
-  // An explicit user setting about to be ignored must say so in the log —
-  // colour output under SCAN_COLOR_MODE=grayscale is otherwise
-  // indistinguishable from a bug in a remote-triage report. composePara
-  // applies grayscale only when the dialect carries a mono gamma LUT.
-  if (ctx.colorMode === "grayscale" && ctx.entry!.monoGammaClass === undefined) {
-    log.warn(
-      `SCAN_COLOR_MODE=grayscale has no effect on ${ctx.entry!.displayName} ` +
-        "(no greyscale wire support) — scanning in colour. " +
-        "SCAN_COLOR_MODE=auto converts colourless pages host-side instead.",
+  // Where the wire can't honour grayscale, the scan runs in colour and every
+  // page converts to greyscale host-side at finalize (see the scanner
+  // shell's resolveGrayscaleConversion, keyed on the same predicate). Say
+  // so, or the colour wire traffic in a remote-triage debug log reads as
+  // the setting being ignored.
+  if (ctx.colorMode === "grayscale" && !supportsWireGrayscale(ctx.entry)) {
+    log.info(
+      `SCAN_COLOR_MODE=grayscale: ${ctx.entry!.displayName} has no greyscale ` +
+        "wire support — scanning in colour and converting to greyscale host-side.",
     );
   }
   // An unverified back-rotation assumption must be visible in the log on the

@@ -1,6 +1,6 @@
 // src/esci2/dialects/registry.test.ts
 import { describe, it, expect } from "vitest";
-import { REGISTRY } from "./registry.js";
+import { REGISTRY, supportsWireGrayscale } from "./registry.js";
 
 describe("REGISTRY", () => {
   it("contains exactly eleven known fingerprints", () => {
@@ -134,6 +134,29 @@ describe("REGISTRY", () => {
     expect(e!.paraProfile).toBe("adf-crp");
     expect(e!.adfExtents).toEqual({ x0: 0, y0: 0, w: 1700, h: 3100 });
     expect(e!.monoGammaClass).toBe("ds575w-mono");
+  });
+
+  it("supportsWireGrayscale matches composePara's gate (adf-crp + monoGammaClass)", () => {
+    // DS-575W: adf-crp profile with a mono LUT — the wire honours grayscale.
+    expect(
+      supportsWireGrayscale(
+        REGISTRY.get("90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b074"),
+      ),
+    ).toBe(true);
+    // FF-680W: adf-crp but colour-only (no mono LUT).
+    expect(
+      supportsWireGrayscale(
+        REGISTRY.get("5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd"),
+      ),
+    ).toBe(false);
+    // ET-4950 family: standard profile — composeStandardPara never reads
+    // colorMode, so even a (mistaken) monoGammaClass could not reach the wire.
+    expect(
+      supportsWireGrayscale(
+        REGISTRY.get("2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2"),
+      ),
+    ).toBe(false);
+    expect(supportsWireGrayscale(undefined)).toBe(false);
   });
 
   it("declares adfDuplex on every entry", () => {
