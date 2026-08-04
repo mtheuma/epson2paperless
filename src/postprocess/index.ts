@@ -123,7 +123,13 @@ export async function postProcessTempPages(
       await fs.promises.rename(tmp, full); // atomic on the same filesystem
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
-      log.error(`post-process failed for ${name}, keeping original: ${msg}`);
+      // Under "force" the kept original is a COLOUR page shipping against an
+      // explicit SCAN_COLOR_MODE=grayscale — the one signal the user gets.
+      const kept =
+        conversion === "force"
+          ? "keeping original in colour despite SCAN_COLOR_MODE=grayscale"
+          : "keeping original";
+      log.error(`post-process failed for ${name}, ${kept}: ${msg}`);
       try {
         await fs.promises.unlink(tmp);
       } catch {

@@ -222,11 +222,12 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
   // STATUS_2). ESCI_FORCE_SOURCE overrides the autodetection for users hitting
   // edge cases the autodetect doesn't cover (yet).
   const entry = resolveLegacyEntry(args.productName);
-  // The legacy ESC/I command set has no greyscale wire request at all —
-  // SCAN_COLOR_MODE=grayscale falls back to converting every page host-side
-  // at finalize. Say so, or the colour wire traffic in a debug log reads as
-  // the setting being ignored.
-  if (args.config.scanColorMode === "grayscale") {
+  // The legacy ESC/I wire has no colour-mode axis at all, so greyscale is
+  // entirely a post-processing concern (wireGrayscaleSupported: false).
+  // Gate the announcement on the resolved value itself — not a re-derived
+  // condition — so the log can never drift from the behaviour it describes.
+  const grayscaleConversion = resolveGrayscaleConversion(args.config.scanColorMode, false);
+  if (grayscaleConversion === "force") {
     log.info(
       "SCAN_COLOR_MODE=grayscale: the legacy ESC/I wire has no greyscale request — " +
         "scanning in colour and converting to greyscale host-side.",
@@ -243,9 +244,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     format: args.action,
     jpegQuality: args.config.jpegQuality,
     postProcess: args.config.postProcess,
-    // The legacy wire has no colour-mode axis; greyscale is entirely a
-    // post-processing concern here (wireGrayscaleSupported: false).
-    grayscaleConversion: resolveGrayscaleConversion(args.config.scanColorMode, false),
+    grayscaleConversion,
     paperless: args.paperless,
     diagnoseProtocol: args.config.diagnoseProtocol,
   });

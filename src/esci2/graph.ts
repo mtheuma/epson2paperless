@@ -22,7 +22,7 @@ import {
   parseTokens,
 } from "./commands.js";
 import { ackByte, expectIsType } from "../graph-helpers.js";
-import type { RegistryEntry } from "./dialects/registry.js";
+import { supportsWireGrayscale, type RegistryEntry } from "./dialects/registry.js";
 import {
   lookupRegistryEntry,
   applyEntrySourceOverride,
@@ -612,12 +612,12 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
   const paraSource: ParaSpec["source"] =
     ctx.source === "flatbed" ? "flatbed" : ctx.duplex ? "adf-duplex" : "adf-simplex";
   assertSourceSupported(ctx.entry!, paraSource);
-  // composePara applies grayscale on the wire only when the dialect carries
-  // a mono gamma LUT; everywhere else the scan runs in colour and every page
-  // converts to greyscale host-side at finalize (see the scanner shell's
-  // resolveGrayscaleConversion). Say so, or the colour wire traffic in a
-  // remote-triage debug log reads as the setting being ignored.
-  if (ctx.colorMode === "grayscale" && ctx.entry!.monoGammaClass === undefined) {
+  // Where the wire can't honour grayscale, the scan runs in colour and every
+  // page converts to greyscale host-side at finalize (see the scanner
+  // shell's resolveGrayscaleConversion, keyed on the same predicate). Say
+  // so, or the colour wire traffic in a remote-triage debug log reads as
+  // the setting being ignored.
+  if (ctx.colorMode === "grayscale" && !supportsWireGrayscale(ctx.entry)) {
     log.info(
       `SCAN_COLOR_MODE=grayscale: ${ctx.entry!.displayName} has no greyscale ` +
         "wire support — scanning in colour and converting to greyscale host-side.",

@@ -11,6 +11,7 @@ import {
 import { resolveSessionTimestamp } from "../output.js";
 import { esci2Graph, type Esci2Ctx } from "./graph.js";
 import { withEsci2UnlockOnDestroy, withTlsErrorLabels } from "./transport.js";
+import { supportsWireGrayscale } from "./dialects/registry.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
 import {
   DEFAULT_SCAN_RESOLUTION,
@@ -168,6 +169,27 @@ function makePlainEsci2TransportFactory(
 }
 
 /**
+ * The finalize-time output-policy resolvers shared by both entry points —
+ * one definition so the TLS and plain transports cannot drift. All three are
+ * resolved from the ctx (not the session) because the dialect is only known
+ * once INIT1 has fingerprinted the CAPA reply.
+ */
+function makeOutputResolvers(session: ScanSession) {
+  return {
+    // A dialect that honoured a greyscale request on the wire needs no
+    // host-side pass; anywhere else SCAN_COLOR_MODE=grayscale falls back to
+    // converting every page at finalize.
+    resolveGrayscaleConversion: (ctx: Esci2Ctx) =>
+      resolveGrayscaleConversion(session.colorMode, supportsWireGrayscale(ctx.entry)),
+    resolveToneCurve: (ctx: Esci2Ctx) => ctx.entry?.toneCurve,
+    // entry is always resolved at INIT1 before any page can flush; a broken
+    // invariant must fail loudly here, not silently fall back to rotating —
+    // the wrong-guess direction is exactly the inverted-backs bug of #128.
+    resolveBackPageRotated: (ctx: Esci2Ctx) => ctx.entry!.duplexBackRotated,
+  };
+}
+
+/**
  * Run an ESC/I-2 scan over TLS (port 1865, ET-4950 family).
  */
 export async function runEsci2Scan(
@@ -186,17 +208,7 @@ export async function runEsci2Scan(
     action: session.action,
     postProcess: session.postProcess ?? "none",
     jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
-    // A dialect with a monoGammaClass honoured a greyscale request on the
-    // wire; without one, SCAN_COLOR_MODE=grayscale falls back to converting
-    // every page host-side. Resolved from the ctx because the dialect is
-    // only known once INIT1 has fingerprinted the CAPA reply.
-    resolveGrayscaleConversion: (ctx) =>
-      resolveGrayscaleConversion(session.colorMode, ctx.entry?.monoGammaClass !== undefined),
-    resolveToneCurve: (ctx) => ctx.entry?.toneCurve,
-    // entry is always resolved at INIT1 before any page can flush; a broken
-    // invariant must fail loudly here, not silently fall back to rotating —
-    // the wrong-guess direction is exactly the inverted-backs bug of #128.
-    resolveBackPageRotated: (ctx) => ctx.entry!.duplexBackRotated,
+    ...makeOutputResolvers(session),
     paperless: session.paperless,
   });
   if (!result.ok) throw result.reason;
@@ -225,17 +237,7 @@ export async function runEsci2ScanOverPlain(
     action: session.action,
     postProcess: session.postProcess ?? "none",
     jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
-    // A dialect with a monoGammaClass honoured a greyscale request on the
-    // wire; without one, SCAN_COLOR_MODE=grayscale falls back to converting
-    // every page host-side. Resolved from the ctx because the dialect is
-    // only known once INIT1 has fingerprinted the CAPA reply.
-    resolveGrayscaleConversion: (ctx) =>
-      resolveGrayscaleConversion(session.colorMode, ctx.entry?.monoGammaClass !== undefined),
-    resolveToneCurve: (ctx) => ctx.entry?.toneCurve,
-    // entry is always resolved at INIT1 before any page can flush; a broken
-    // invariant must fail loudly here, not silently fall back to rotating —
-    // the wrong-guess direction is exactly the inverted-backs bug of #128.
-    resolveBackPageRotated: (ctx) => ctx.entry!.duplexBackRotated,
+    ...makeOutputResolvers(session),
     paperless: session.paperless,
   });
   if (!result.ok) throw result.reason;

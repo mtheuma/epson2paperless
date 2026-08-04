@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
 import { isEffectivelyGrayscale, toGrayscaleJpeg } from "./auto-color.js";
-import { correctDocumentImageAuto } from "./document.js";
+import { correctDocumentImage, correctDocumentImageAuto } from "./document.js";
 import { postProcessTempPages } from "./index.js";
 import { setJpegOrientation, readJpegOrientation } from "../exif.js";
 
@@ -57,10 +57,23 @@ function paintRect(
   }
 }
 
-async function encode(pixels: Buffer): Promise<Buffer> {
-  return sharp(pixels, { raw: { width: W, height: H, channels: 3 } })
-    .jpeg({ quality: 90 })
-    .toBuffer();
+/**
+ * The canonical colour page: neutral text page plus a photo-sized colour
+ * rectangle (~4.4% of the page). The rectangle's size and chroma are what
+ * keep the page above the classifier thresholds — every test that needs "a
+ * page the classifier calls colour" must use this one definition so a
+ * threshold retune only has one fixture to revisit.
+ */
+function colourPagePixels(): Buffer {
+  const buf = neutralPagePixels();
+  paintRect(buf, 100, 100, 120, 80, [180, 120, 60]);
+  return buf;
+}
+
+async function encode(pixels: Buffer, density?: number): Promise<Buffer> {
+  let pipeline = sharp(pixels, { raw: { width: W, height: H, channels: 3 } });
+  if (density) pipeline = pipeline.withMetadata({ density });
+  return pipeline.jpeg({ quality: 90 }).toBuffer();
 }
 
 describe("isEffectivelyGrayscale", () => {
@@ -73,9 +86,7 @@ describe("isEffectivelyGrayscale", () => {
   });
 
   it("classifies a page with a colour photo region as colour", async () => {
-    const buf = neutralPagePixels();
-    paintRect(buf, 100, 100, 120, 80, [180, 120, 60]); // ~4.4% of the page
-    expect(await isEffectivelyGrayscale(await encode(buf))).toBe(false);
+    expect(await isEffectivelyGrayscale(await encode(colourPagePixels()))).toBe(false);
   });
 
   it("catches a small saturated mark via the strong-chroma trigger", async () => {
@@ -104,10 +115,7 @@ describe("toGrayscaleJpeg", () => {
   });
 
   it("preserves the source DPI while staying single-channel", async () => {
-    const src = await sharp(neutralPagePixels(), { raw: { width: W, height: H, channels: 3 } })
-      .withMetadata({ density: 400 })
-      .jpeg({ quality: 90 })
-      .toBuffer();
+    const src = await encode(neutralPagePixels(), 400);
     expect((await sharp(src).metadata()).density).toBe(400);
     const out = await toGrayscaleJpeg(src, 90);
     const meta = await sharp(out).metadata();
@@ -128,10 +136,7 @@ describe("correctDocumentImageAuto", () => {
     // neutral inputs to chroma 25–30 — above the classifier's floor of 24 —
     // so classifying AFTER the curve would keep every such page in colour.
     // The verdict must run on the clip-stage pixels instead.
-    const src = await sharp(neutralPagePixels(138), { raw: { width: W, height: H, channels: 3 } })
-      .withMetadata({ density: 300 })
-      .jpeg({ quality: 90 })
-      .toBuffer();
+    const src = await encode(neutralPagePixels(138), 300);
     const { jpeg, grayscale } = await correctDocumentImageAuto(src, 90, "et4950-family");
     expect(grayscale).toBe(true);
     const meta = await sharp(jpeg).metadata();
@@ -140,12 +145,7 @@ describe("correctDocumentImageAuto", () => {
   });
 
   it("keeps a colour page three-channel with the tone curve applied", async () => {
-    const pixels = neutralPagePixels();
-    paintRect(pixels, 100, 100, 120, 80, [180, 120, 60]);
-    const src = await sharp(pixels, { raw: { width: W, height: H, channels: 3 } })
-      .withMetadata({ density: 300 })
-      .jpeg({ quality: 90 })
-      .toBuffer();
+    const src = await encode(colourPagePixels(), 300);
     const { jpeg, grayscale } = await correctDocumentImageAuto(src, 90, "et4950-family");
     expect(grayscale).toBe(false);
     const meta = await sharp(jpeg).metadata();
@@ -166,15 +166,32 @@ describe("correctDocumentImageAuto", () => {
   });
 });
 
+describe("correctDocumentImage with a single-channel source", () => {
+  it("keeps a 1-channel greyscale JPEG single-channel through the transform", async () => {
+    // DS-575W wire-greyscale pages arrive as 1-channel JPEGs; the document
+    // profile (with no conversion pass — resolveGrayscaleConversion returned
+    // "off" because the wire already honoured grayscale) must not promote
+    // them back to a 3-channel colour encode.
+    const src = await sharp(await encode(neutralPagePixels()))
+      .toColourspace("b-w")
+      .jpeg({ quality: 90 })
+      .toBuffer();
+    expect((await sharp(src).metadata()).channels).toBe(1);
+    const out = await correctDocumentImage(src, 90);
+    expect((await sharp(out).metadata()).channels).toBe(1);
+    // The white-point clip still ran (paper lifted to pure white).
+    const { data } = await sharp(out).raw().toBuffer({ resolveWithObject: true });
+    expect(data[0]).toBeGreaterThan(250);
+  });
+});
+
 const noopLog = { info: () => {}, error: () => {} };
 
-describe("postProcessTempPages with autoColor", () => {
+describe("postProcessTempPages with grayscaleConversion=auto", () => {
   it("converts a neutral page and keeps a colour page byte-identical under profile none", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-auto-"));
-    const colourPixels = neutralPagePixels();
-    paintRect(colourPixels, 100, 100, 120, 80, [180, 120, 60]);
     fs.writeFileSync(path.join(dir, "page_00.jpg"), await encode(neutralPagePixels()));
-    fs.writeFileSync(path.join(dir, "page_01.jpg"), await encode(colourPixels));
+    fs.writeFileSync(path.join(dir, "page_01.jpg"), await encode(colourPagePixels()));
     const colourBefore = fs.readFileSync(path.join(dir, "page_01.jpg"));
 
     await postProcessTempPages(
@@ -210,7 +227,7 @@ describe("postProcessTempPages with autoColor", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("autoColor off leaves everything untouched under profile none", async () => {
+  it("conversion off leaves everything untouched under profile none", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-auto-off-"));
     fs.writeFileSync(path.join(dir, "page_00.jpg"), await encode(neutralPagePixels()));
     const before = fs.readFileSync(path.join(dir, "page_00.jpg"));
@@ -226,9 +243,7 @@ describe("postProcessTempPages with grayscaleConversion=force", () => {
   // bypassed, so even a page with real colour content comes out greyscale.
   it("converts a colour page unconditionally under profile none", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-force-"));
-    const colourPixels = neutralPagePixels();
-    paintRect(colourPixels, 100, 100, 120, 80, [180, 120, 60]);
-    fs.writeFileSync(path.join(dir, "page_00.jpg"), await encode(colourPixels));
+    fs.writeFileSync(path.join(dir, "page_00.jpg"), await encode(colourPagePixels()));
 
     await postProcessTempPages(
       dir,
@@ -244,9 +259,7 @@ describe("postProcessTempPages with grayscaleConversion=force", () => {
 
   it("composes with the document profile (clip applied, single encode to one channel)", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-force-doc-"));
-    const colourPixels = neutralPagePixels();
-    paintRect(colourPixels, 100, 100, 120, 80, [180, 120, 60]);
-    fs.writeFileSync(path.join(dir, "page_00.jpg"), await encode(colourPixels));
+    fs.writeFileSync(path.join(dir, "page_00.jpg"), await encode(colourPagePixels()));
 
     await postProcessTempPages(
       dir,
@@ -263,13 +276,24 @@ describe("postProcessTempPages with grayscaleConversion=force", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
+  it("names the colour fallback when a page fails to convert", async () => {
+    // A page sharp can't decode is kept as-is (keep-original policy) — but
+    // under force that means a COLOUR page ships despite an explicit
+    // SCAN_COLOR_MODE=grayscale, so the error must say so.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-force-err-"));
+    fs.writeFileSync(path.join(dir, "page_00.jpg"), Buffer.from("not a jpeg"));
+    const errors: string[] = [];
+    const log = { info: () => {}, error: (m: string) => errors.push(m) };
+
+    await postProcessTempPages(dir, "none", { jpegQuality: 90, grayscaleConversion: "force" }, log);
+
+    expect(errors.some((m) => m.includes("SCAN_COLOR_MODE=grayscale"))).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("preserves the source DPI through the forced conversion", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-force-dpi-"));
-    const src = await sharp(neutralPagePixels(), { raw: { width: W, height: H, channels: 3 } })
-      .withMetadata({ density: 300 })
-      .jpeg({ quality: 90 })
-      .toBuffer();
-    fs.writeFileSync(path.join(dir, "page_00.jpg"), src);
+    fs.writeFileSync(path.join(dir, "page_00.jpg"), await encode(neutralPagePixels(), 300));
 
     await postProcessTempPages(
       dir,

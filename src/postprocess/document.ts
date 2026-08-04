@@ -2,6 +2,7 @@ import sharp from "sharp";
 import { TONE_CURVES, type ToneCurveName } from "./tone-curves.js";
 import { classifyRawPixels, type ChromaVerdict } from "./auto-color.js";
 import { setJfifDensity } from "../exif.js";
+import type { GrayscaleConversion } from "../config.js";
 
 // Tunable constants — starting values; refined against the oracle (Task 7).
 // clipPoint = paperWhite - CLIP_BELOW_PAPER (plateau to 255 above it);
@@ -167,9 +168,9 @@ async function transformDocumentImage(
   jpeg: Buffer,
   jpegQuality: number,
   toneCurve: ToneCurveName | undefined,
-  conversion: "off" | "auto" | "force",
+  conversion: GrayscaleConversion,
 ): Promise<{ jpeg: Buffer; grayscale: boolean; verdict?: ChromaVerdict }> {
-  const [{ orientation, density }, { data, info }] = await Promise.all([
+  const [{ orientation, density, channels: sourceChannels }, { data, info }] = await Promise.all([
     sharp(jpeg).metadata(),
     sharp(jpeg)
       .rotate() // bake in EXIF orientation (duplex back pages carry Orientation=3)
@@ -182,13 +183,17 @@ async function transformDocumentImage(
   const clip = computeClipLuts(data, info.channels);
   const applied = clip !== null;
 
-  let grayscale = conversion === "force";
+  // A source that is already single-channel (e.g. a DS-575W wire-greyscale
+  // page under conversion "off") must re-encode single-channel — the srgb
+  // promotion above exists for the per-channel LUT work, not the output.
+  const sourceGrayscale = sourceChannels === 1;
+  let grayscale = conversion === "force" || sourceGrayscale;
   let verdict: ChromaVerdict | undefined;
   let corrected: Buffer;
   if (conversion === "auto") {
     const clipped = clip ? applyLuts(data, info.channels, clip) : null;
     verdict = await classifyRawPixels(clipped ?? data, info.width, info.height, info.channels);
-    grayscale = verdict.grayscale;
+    grayscale = verdict.grayscale || sourceGrayscale;
     // tone∘clip applied in two passes equals the composed LUT of the
     // non-auto path — the clip-stage buffer had to exist for classification.
     corrected = clipped
@@ -207,12 +212,17 @@ async function transformDocumentImage(
   // pixels above by `.rotate()` — an orientation tag other than 1 means the
   // decode physically rotated the pixels, and that rotation must still reach
   // the output (e.g. a duplex back page) even when the paper-correction
-  // guard trips — AND the page isn't being converted to greyscale. Only when
-  // none applies is the original buffer identical in substance to what a
-  // re-encode would produce, so return it untouched and skip the
-  // generational JPEG quality loss.
+  // guard trips — AND the page doesn't need its channel count collapsed
+  // (an already-single-channel source needs no collapse, so a greyscale
+  // outcome alone doesn't force a re-encode). Only when none applies is the
+  // original buffer identical in substance to what a re-encode would
+  // produce, so return it untouched and skip the generational JPEG quality
+  // loss. `grayscale: false` on this path means "not converted" — the page
+  // ships byte-identical, whatever its channel count.
   const needsRotateBake = orientation !== undefined && orientation !== 1;
-  if (!applied && !needsRotateBake && !grayscale) return { jpeg, grayscale: false, verdict };
+  const needsChannelCollapse = grayscale && !sourceGrayscale;
+  if (!applied && !needsRotateBake && !needsChannelCollapse)
+    return { jpeg, grayscale: false, verdict };
 
   const rawInput = { raw: { width: info.width, height: info.height, channels: 3 as const } };
   if (grayscale) {
@@ -267,7 +277,7 @@ export async function correctDocumentImageAuto(
   jpeg: Buffer,
   jpegQuality: number,
   toneCurve?: ToneCurveName,
-  conversion: "auto" | "force" = "auto",
+  conversion: Exclude<GrayscaleConversion, "off"> = "auto",
 ): Promise<{ jpeg: Buffer; grayscale: boolean; verdict?: ChromaVerdict }> {
   return transformDocumentImage(jpeg, jpegQuality, toneCurve, conversion);
 }

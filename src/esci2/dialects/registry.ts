@@ -59,6 +59,20 @@ export interface RegistryEntry {
   toneCurve?: ToneCurveName;
 }
 
+/**
+ * Whether SCAN_COLOR_MODE=grayscale is honoured on the wire for this entry.
+ * The single definition of the capability — the graph's fallback log and the
+ * scanner shells' finalize resolution both consume it, keeping them aligned
+ * with composePara's gate: only the adf-crp composer reads colorMode
+ * (composeStandardPara hard-codes #COLC024), so monoGammaClass presence alone
+ * is not enough. A standard-profile entry mistakenly given a monoGammaClass
+ * therefore still resolves to host-side conversion instead of silently
+ * producing colour output under an explicit grayscale setting.
+ */
+export function supportsWireGrayscale(entry: RegistryEntry | undefined): boolean {
+  return entry?.paraProfile === "adf-crp" && entry.monoGammaClass !== undefined;
+}
+
 export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
   [
     "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2",
