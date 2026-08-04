@@ -18,24 +18,24 @@ What you get:
 
 ## Compatible printers
 
-| Model                 | Status          | Notes                                                                                                                         |
-| --------------------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| **ET-3950**           | ✅ Verified     |                                                                                                                               |
-| **ET-4950 / ET-4956** | ✅ Verified     |                                                                                                                               |
-| **WF-3620**           | ✅ Verified     | Plain TCP scanner, no TLS pinning                                                                                             |
-| **XP-620**            | 🟡 Experimental | Flatbed-only hardware                                                                                                         |
-| **ET-2750**           | ✅ Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS                                                                         |
-| **XP-4100**           | ✅ Verified     | Flatbed-only hardware; shares the ET-2750 dialect ([#139](https://github.com/mtheuma/epson2paperless/issues/139))             |
-| **ET-2810**           | ✅ Verified     | Flatbed-only hardware; no panel trigger — needs `scan:now`                                                                    |
-| **XP-3200**           | ✅ Verified     | Flatbed-only hardware; shares the ET-2810 dialect over TLS; panel lists the destination but errors "Invalid" — use `scan:now` |
-| **ET-2950**           | 🟡 Experimental | Flatbed-only hardware; inferred dialect, no reporter retest yet ([#92](https://github.com/mtheuma/epson2paperless/issues/92)) |
-| **ET-8500**           | ✅ Verified     | Flatbed-only hardware                                                                                                         |
-| **ET-7700**           | ✅ Verified     | Flatbed-only hardware                                                                                                         |
-| **ET-4800**           | ✅ Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS                                                                                   |
-| **ET-15000**          | 🟡 Experimental | Flatbed verified; ADF simplex untested                                                                                        |
-| **XP-7100**           | ✅ Verified     |                                                                                                                               |
-| **FF-680W**           | 🟡 Experimental | Requires [pairing](#button-only-scanner-pairing); ADF-only; 200/300 DPI verified                                              |
-| **DS-575W**           | 🟡 Experimental | Requires [pairing](#button-only-scanner-pairing); ADF-only; only duplex colour PDF @ 200 DPI hardware-verified                |
+| Model                 | Status               | Notes                                                                                                                         |
+| --------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| **DS-575W**           | 🟡&nbsp;Experimental | Requires [pairing](#button-only-scanner-pairing); ADF-only; only duplex colour PDF @ 200 DPI hardware-verified                |
+| **ET-2750**           | ✅&nbsp;Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS                                                                         |
+| **ET-2810**           | ✅&nbsp;Verified     | Flatbed-only hardware; no panel trigger — needs `scan:now`                                                                    |
+| **ET-2950**           | 🟡&nbsp;Experimental | Flatbed-only hardware; inferred dialect, no reporter retest yet ([#92](https://github.com/mtheuma/epson2paperless/issues/92)) |
+| **ET-3950**           | ✅&nbsp;Verified     |                                                                                                                               |
+| **ET-4800**           | ✅&nbsp;Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS                                                                                   |
+| **ET-4950 / ET-4956** | ✅&nbsp;Verified     |                                                                                                                               |
+| **ET-7700**           | ✅&nbsp;Verified     | Flatbed-only hardware                                                                                                         |
+| **ET-8500**           | ✅&nbsp;Verified     | Flatbed-only hardware                                                                                                         |
+| **ET-15000**          | 🟡&nbsp;Experimental | Flatbed verified; ADF simplex untested                                                                                        |
+| **FF-680W**           | 🟡&nbsp;Experimental | Requires [pairing](#button-only-scanner-pairing); ADF-only; 200/300 DPI verified                                              |
+| **WF-3620**           | ✅&nbsp;Verified     | Plain TCP scanner, no TLS pinning                                                                                             |
+| **XP-620**            | 🟡&nbsp;Experimental | Flatbed-only hardware                                                                                                         |
+| **XP-3200**           | ✅&nbsp;Verified     | Flatbed-only hardware; shares the ET-2810 dialect over TLS; panel lists the destination but errors "Invalid" — use `scan:now` |
+| **XP-4100**           | ✅&nbsp;Verified     | Flatbed-only hardware; shares the ET-2750 dialect ([#139](https://github.com/mtheuma/epson2paperless/issues/139))             |
+| **XP-7100**           | ✅&nbsp;Verified     |                                                                                                                               |
 
 ✅ **Verified**: every capability the hardware has is confirmed working on real hardware by someone.
 
