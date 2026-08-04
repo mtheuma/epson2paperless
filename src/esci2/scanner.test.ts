@@ -1202,6 +1202,71 @@ describe("runEsci2ScanOverPlain — ET-4800 fixture replay", () => {
   }, 60_000);
 });
 
+const ET7700_FP = "72319314b621fea0aab6cc16f4fd891534cec08f33ce80116a849f6f6e1e58d4";
+
+describe("runEsci2ScanOverPlain — ET-7700 fixture replay", () => {
+  let outputDir: string;
+  let tempDir: string;
+
+  beforeEach(() => {
+    outputDir = mkdtempSync(path.join(os.tmpdir(), "et7700-out-"));
+    tempDir = mkdtempSync(path.join(os.tmpdir(), "et7700-tmp-"));
+  });
+
+  afterEach(() => {
+    rmSync(outputDir, { recursive: true, force: true });
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  const FIX_DIR = path.join("tools", "pcap-extract", "captures", "et-7700");
+
+  // Fixtures capture epson2paperless itself (the PR #153 speculative dialect)
+  // scanning the reporter's ET-7700 — see the fixture dir README. The PARA
+  // shield therefore pins that the composer still emits the hardware-validated
+  // bytes, and the recipe cross-check ties them to the registry entry.
+  async function runOne(opts: { fixtureFile: string; action: "jpg" | "pdf" }) {
+    const fixture = loadFixture(path.join(FIX_DIR, opts.fixtureFile));
+    const fake = new FakePlainSocket();
+    const sessionPromise = runEsci2ScanOverPlain(
+      {
+        printerIp: "10.0.30.162",
+        port: 1865,
+        destId: 0x02,
+        outputDir,
+        tempDir,
+        duplex: false,
+        action: opts.action,
+      },
+      fake.asFactory(),
+    );
+    await driveFixture(fixture, fake, sessionPromise);
+
+    const capturedPara = extractCapturedParaBody(fixture);
+    const scannerPara = extractScannerParaWrite(fake);
+    expect(scannerPara.equals(capturedPara)).toBe(true);
+
+    // ET-7700 PARA is action-invariant (asserted in et-7700.test.ts), so both
+    // fixtures must match the composer's flatbed recipe byte-for-byte.
+    const recipePara = composePara(makeParaSpec(REGISTRY.get(ET7700_FP)!, "flatbed", opts.action));
+    expect(capturedPara.equals(recipePara)).toBe(true);
+
+    return readdirSync(outputDir);
+  }
+
+  it("flatbed JPG", async () => {
+    const files = await runOne({ fixtureFile: "flatbed-jpg.jsonl", action: "jpg" });
+    expect(files.filter((f) => f.endsWith(".jpg")).length).toBe(1);
+  }, 60_000);
+
+  it("flatbed PDF", async () => {
+    await runOne({ fixtureFile: "flatbed-pdf.jsonl", action: "pdf" });
+    await waitForPdf(outputDir);
+    const files = readdirSync(outputDir);
+    expect(files.filter((f) => f.endsWith(".jpg"))).toEqual([]); // temp dir cleaned, no stragglers
+    expect(files.filter((f) => f.endsWith(".pdf")).length).toBe(1);
+  }, 60_000);
+});
+
 const FF680W_FP = "5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd";
 
 describe("runEsci2ScanOverPlain — FF-680W fixture replay", () => {

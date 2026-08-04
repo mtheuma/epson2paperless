@@ -340,9 +340,18 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
     // CAPA, and a flat curve degrades mildly if wrong instead of crushing
     // shadows). The fingerprint still differs from the ET-8500's somewhere in
     // the full canonicalised segment list, so this is a separate entry rather
-    // than a shared one. Awaiting reporter validation of flatbed JPG + PDF
-    // (ideally against the compatibility test page, to sanity-measure the
-    // inherited gamma the way the ET-2810 and XP-3200 were).
+    // than a shared one.
+    //
+    // Hardware-validated by the reporter 2026-08-04 (panel-triggered flatbed
+    // JPG + PDF on :main), with Wireshark captures of both sessions: the
+    // captured PARA is byte-identical to composePara's output (pinned by the
+    // replay fixtures under tools/pcap-extract/captures/et-7700/). Inherited
+    // gamma measured off the reporter's compatibility-test-page scan: the
+    // nominal-64 grey returns 72/69/69 (no shadow crush), grey-patch channel
+    // spreads 3-11 (no cast), paper white 247/243/251 — clears the same bar
+    // the ET-2810 and XP-3200 shipped on. The exact Epson-driver curve remains
+    // unpinned (captures are of our own service), which matters only if a
+    // scan-quality report ever implicates the curve.
     "72319314b621fea0aab6cc16f4fd891534cec08f33ce80116a849f6f6e1e58d4",
     {
       displayName: "ET-7700 (ESC/I-2)",
