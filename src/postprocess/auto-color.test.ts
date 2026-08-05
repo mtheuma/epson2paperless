@@ -112,6 +112,61 @@ describe("isEffectivelyGrayscale", () => {
   });
 });
 
+/**
+ * Page-wide colour must survive classification. These pass today because the
+ * classifier measures the pixels as scanned, and they exist to keep it that
+ * way: an abandoned attempt to white-balance the classifier's input (issue
+ * #159) silently converted every one of them to greyscale, because any
+ * normalisation that estimates the paper white FROM THE PAGE maps a page-wide
+ * tint to white and collapses its chroma to zero.
+ *
+ * The lesson worth keeping is that scanner cast and paper tint are the same
+ * signal in a single image — a uniform chromatic background with darker
+ * content on it — so no per-page statistic separates them. Removing a cast
+ * therefore requires knowing the DEVICE's cast independently of the page.
+ * Anything that infers it per page will fail these cases.
+ */
+describe("page-wide colour is never converted away", () => {
+  function uniformPage(rgb: [number, number, number]): Buffer {
+    const buf = Buffer.alloc(W * H * 3);
+    for (let i = 0; i < buf.length; i += 3) {
+      buf[i] = rgb[0];
+      buf[i + 1] = rgb[1];
+      buf[i + 2] = rgb[2];
+    }
+    return buf;
+  }
+
+  /** Tinted stock with ordinary black text — the realistic form of the trap. */
+  function tintedPageWithText(rgb: [number, number, number]): Buffer {
+    const buf = uniformPage(rgb);
+    for (let y = 0; y < H; y++) {
+      if (y % 20 >= 2) continue;
+      for (let x = 40; x < W - 40; x++) {
+        const i = (y * W + x) * 3;
+        buf[i] = 30;
+        buf[i + 1] = 30;
+        buf[i + 2] = 30;
+      }
+    }
+    return buf;
+  }
+
+  const CASES: [string, Buffer][] = [
+    ["saturated red sheet", uniformPage([200, 40, 40])],
+    ["dark red sheet (spread 40)", uniformPage([60, 20, 20])],
+    ["pastel sheet (spread 30)", uniformPage([220, 200, 190])],
+    ["pastel stock with text", tintedPageWithText([220, 200, 190])],
+    ["cream card with text", tintedPageWithText([245, 232, 205])],
+  ];
+
+  for (const [label, pixels] of CASES) {
+    it(`keeps a ${label} in colour`, async () => {
+      expect(await isEffectivelyGrayscale(await encode(pixels))).toBe(false);
+    });
+  }
+});
+
 describe("thresholds against the measured ET-4956 corpus (#146)", () => {
   // Chroma fractions measured on real hardware after the document clip, with
   // `npm run scan:compare`. Source scans are private, so the measurements are
