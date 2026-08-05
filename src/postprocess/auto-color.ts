@@ -18,6 +18,27 @@ import { readJpegOrientation, setJpegOrientation, setJfifDensity } from "../exif
 // bytes, calling a colour page "neutral" loses data — thresholds err toward
 // keeping colour.
 //
+// COLOR_FRACTION was 0.004 until a six-page ET-4956 corpus showed that far too
+// high: a small pen mark measured 0.062% of pixels and was silently converted,
+// losing its colour (issue #146). Post-clip measurements from that corpus, which
+// the test below pins:
+//
+//   plain black-and-white text  0.005%  -> neutral
+//   small text                  0.013%  -> neutral   (the binding noise floor)
+//   pen mark                    0.062%  -> colour    (the reported failure)
+//   page with a colour logo     0.480%  -> colour
+//   cream stock, black content  1.015%  -> colour
+//   ordinary colour page       59.767%  -> colour
+//
+// 0.0003 sits between the 0.013% floor and the 0.062% mark with roughly 2.3x
+// either side. That margin is narrower than it looks safe for, and it is what
+// the evidence supports rather than a comfortable choice.
+//
+// Cream stock is deliberately on the "colour" side: its paper tint reads
+// 1.015% after the clip, well above any workable cut point, and Epson's own
+// software preserves that tint rather than neutralising it. Treating such
+// pages as colour is the intended behaviour, not a miss.
+//
 // Under POST_PROCESS=document the classification runs INSIDE the document
 // transform, on the white-point-clipped pixels but BEFORE any pinned tone
 // curve composes in (see document.ts): the clip amplifies real colour, while
@@ -26,9 +47,17 @@ import { readJpegOrientation, setJpegOrientation, setJfifDensity } from "../exif
 // push every anti-aliased text edge over the floor.
 const CLASSIFY_LONG_EDGE = 360; // downsample bound before measuring
 const CHROMA_FLOOR = 24; // per-pixel chroma above JPEG noise on neutral scans
-const COLOR_FRACTION = 0.004; // broad trigger: fraction of pixels over CHROMA_FLOOR
+export const COLOR_FRACTION = 0.0003; // broad trigger: fraction of pixels over CHROMA_FLOOR
 const STRONG_CHROMA_FLOOR = 64; // unmistakably colour, never produced by noise
-const STRONG_COLOR_FRACTION = 0.0005; // small-mark trigger fraction
+export const STRONG_COLOR_FRACTION = 0.0005; // small-mark trigger fraction
+
+/**
+ * The verdict rule, split out so the measured-corpus test can pin the rule and
+ * not just the constants. Neutral means BOTH triggers stay under their floors.
+ */
+export function isNeutralVerdict(colourfulFraction: number, strongFraction: number): boolean {
+  return colourfulFraction < COLOR_FRACTION && strongFraction < STRONG_COLOR_FRACTION;
+}
 
 /**
  * Classification outcome plus the measured fractions behind it — surfaced in
@@ -74,7 +103,7 @@ function verdictFromRaw(
   const colourfulFraction = colourful / total;
   const strongFraction = stronglyColourful / total;
   return {
-    grayscale: colourfulFraction < COLOR_FRACTION && strongFraction < STRONG_COLOR_FRACTION,
+    grayscale: isNeutralVerdict(colourfulFraction, strongFraction),
     colourfulFraction,
     strongFraction,
   };

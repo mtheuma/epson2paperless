@@ -3,7 +3,13 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import { isEffectivelyGrayscale, toGrayscaleJpeg } from "./auto-color.js";
+import {
+  isEffectivelyGrayscale,
+  toGrayscaleJpeg,
+  isNeutralVerdict,
+  COLOR_FRACTION,
+  STRONG_COLOR_FRACTION,
+} from "./auto-color.js";
 import { correctDocumentImage, correctDocumentImageAuto } from "./document.js";
 import { postProcessTempPages } from "./index.js";
 import { setJpegOrientation, readJpegOrientation } from "../exif.js";
@@ -103,6 +109,39 @@ describe("isEffectivelyGrayscale", () => {
       .jpeg()
       .toBuffer();
     expect(await isEffectivelyGrayscale(oneChannel)).toBe(true);
+  });
+});
+
+describe("thresholds against the measured ET-4956 corpus (#146)", () => {
+  // Chroma fractions measured on real hardware after the document clip, with
+  // `npm run scan:compare`. Source scans are private, so the measurements are
+  // pinned here instead: they are what the thresholds were chosen against, and
+  // a change that reclassifies any of these rows needs fresh evidence.
+  const CORPUS: { page: string; broad: number; strong: number; neutral: boolean }[] = [
+    { page: "plain black-and-white text", broad: 0.00005, strong: 0.00002, neutral: true },
+    { page: "small text (binding noise floor)", broad: 0.00013, strong: 0, neutral: true },
+    { page: "small coloured pen mark", broad: 0.00062, strong: 0.00001, neutral: false },
+    { page: "mostly-neutral page, colour logo", broad: 0.0048, strong: 0, neutral: false },
+    { page: "cream stock, black content", broad: 0.01015, strong: 0.00609, neutral: false },
+    { page: "ordinary colour page", broad: 0.59767, strong: 0.36077, neutral: false },
+  ];
+
+  for (const { page, broad, strong, neutral } of CORPUS) {
+    it(`classifies "${page}" as ${neutral ? "neutral" : "colour"}`, () => {
+      expect(isNeutralVerdict(broad, strong)).toBe(neutral);
+    });
+  }
+
+  it("keeps the cut point clear of both the noise floor and the faintest real mark", () => {
+    const floor = 0.00013; // highest broad reading among genuinely neutral pages
+    const faintest = 0.00062; // pen mark — the page #146 was reported for
+    expect(COLOR_FRACTION).toBeGreaterThan(floor);
+    expect(COLOR_FRACTION).toBeLessThan(faintest);
+  });
+
+  it("leaves the strong trigger able to catch a small saturated mark alone", () => {
+    // A mark too small for the broad trigger must still register via chroma>64.
+    expect(isNeutralVerdict(0, STRONG_COLOR_FRACTION * 1.1)).toBe(false);
   });
 });
 
