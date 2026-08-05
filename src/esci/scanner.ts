@@ -8,6 +8,7 @@ import {
   type SessionTransportFactory,
 } from "../scan-session.js";
 import { resolveSessionTimestamp } from "../output.js";
+import type { PaperWhite } from "../postprocess/auto-color.js";
 import { esciGraph, type EsciCtx } from "./graph.js";
 import type { Source, Format } from "./commands.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
@@ -32,6 +33,8 @@ export interface LegacyScanSession {
   forcedSource: Source | null;
   format: Format;
   jpegQuality: number;
+  /** SCAN_PAPER_WHITE — device cast reference for the auto-colour verdict. */
+  paperWhite?: PaperWhite;
   postProcess?: PostProcessProfile;
   /**
    * Finalize-time greyscale pass (default "off"). The legacy wire has no
@@ -134,6 +137,7 @@ export async function runEsciScan(
     paperless: session.paperless,
     postProcess: session.postProcess ?? "none",
     jpegQuality: session.jpegQuality,
+    paperWhite: session.paperWhite,
     // Known up front on this path (no dialect-dependent wire capability),
     // but the engine resolves it from the ctx like the tone curve.
     resolveGrayscaleConversion: () => session.grayscaleConversion ?? "off",

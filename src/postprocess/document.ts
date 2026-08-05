@@ -1,6 +1,6 @@
 import sharp from "sharp";
 import { TONE_CURVES, type ToneCurveName } from "./tone-curves.js";
-import { classifyRawPixels, type ChromaVerdict } from "./auto-color.js";
+import { classifyRawPixels, type ChromaVerdict, type PaperWhite } from "./auto-color.js";
 import { setJfifDensity } from "../exif.js";
 import type { GrayscaleConversion } from "../config.js";
 
@@ -169,6 +169,7 @@ async function transformDocumentImage(
   jpegQuality: number,
   toneCurve: ToneCurveName | undefined,
   conversion: GrayscaleConversion,
+  paperWhite?: PaperWhite,
 ): Promise<{ jpeg: Buffer; grayscale: boolean; verdict?: ChromaVerdict }> {
   const [{ orientation, density, channels: sourceChannels }, { data, info }] = await Promise.all([
     sharp(jpeg).metadata(),
@@ -192,7 +193,13 @@ async function transformDocumentImage(
   let corrected: Buffer;
   if (conversion === "auto") {
     const clipped = clip ? applyLuts(data, info.channels, clip) : null;
-    verdict = await classifyRawPixels(clipped ?? data, info.width, info.height, info.channels);
+    verdict = await classifyRawPixels(
+      clipped ?? data,
+      info.width,
+      info.height,
+      info.channels,
+      paperWhite,
+    );
     grayscale = verdict.grayscale || sourceGrayscale;
     // tone∘clip applied in two passes equals the composed LUT of the
     // non-auto path — the clip-stage buffer had to exist for classification.
@@ -278,6 +285,7 @@ export async function correctDocumentImageAuto(
   jpegQuality: number,
   toneCurve?: ToneCurveName,
   conversion: Exclude<GrayscaleConversion, "off"> = "auto",
+  paperWhite?: PaperWhite,
 ): Promise<{ jpeg: Buffer; grayscale: boolean; verdict?: ChromaVerdict }> {
-  return transformDocumentImage(jpeg, jpegQuality, toneCurve, conversion);
+  return transformDocumentImage(jpeg, jpegQuality, toneCurve, conversion, paperWhite);
 }

@@ -8,6 +8,7 @@ import {
   toGrayscaleJpeg,
   isNeutralVerdict,
   COLOR_FRACTION,
+  buildCastCorrection,
 } from "./auto-color.js";
 import { correctDocumentImage, correctDocumentImageAuto } from "./document.js";
 import { postProcessTempPages } from "./index.js";
@@ -239,6 +240,89 @@ describe("thresholds against the measured ET-4956 corpus (#146)", () => {
     const retiredStrongThreshold = 0.0005;
     expect(COLOR_FRACTION).toBeLessThan(retiredStrongThreshold);
     expect(isNeutralVerdict(retiredStrongThreshold)).toBe(false);
+  });
+});
+
+describe("SCAN_PAPER_WHITE cast correction (#159)", () => {
+  // How an ET-4956 renders plain white paper, per `npm run scan:calibrate`.
+  const ET4956: readonly [number, number, number] = [227, 232, 255];
+
+  /** A neutral page as that scanner produces it: blue high, red and green low. */
+  function castPagePixels(): Buffer {
+    const buf = neutralPagePixels();
+    for (let i = 0; i < buf.length; i += 3) {
+      buf[i] = Math.round(buf[i] * (227 / 255));
+      buf[i + 1] = Math.round(buf[i + 1] * (232 / 255));
+    }
+    return buf;
+  }
+
+  function uniformPage(rgb: [number, number, number]): Buffer {
+    const buf = Buffer.alloc(W * H * 3);
+    for (let i = 0; i < buf.length; i += 3) {
+      buf[i] = rgb[0];
+      buf[i + 1] = rgb[1];
+      buf[i + 2] = rgb[2];
+    }
+    return buf;
+  }
+
+  /** Tinted stock carrying ordinary black text. */
+  function tintedPageWithText(rgb: [number, number, number]): Buffer {
+    const buf = uniformPage(rgb);
+    for (let y = 0; y < H; y++) {
+      if (y % 20 >= 2) continue;
+      for (let x = 40; x < W - 40; x++) {
+        const i = (y * W + x) * 3;
+        buf[i] = 30;
+        buf[i + 1] = 30;
+        buf[i + 2] = 30;
+      }
+    }
+    return buf;
+  }
+
+  it("converts a neutral page that the scanner's cast made look colourful", async () => {
+    const page = await encode(castPagePixels());
+    expect(await isEffectivelyGrayscale(page)).toBe(false); // the #159 symptom
+    expect(await isEffectivelyGrayscale(page, ET4956)).toBe(true); // corrected
+  });
+
+  it("still keeps real colour on a cast page", async () => {
+    const buf = castPagePixels();
+    paintRect(buf, 100, 100, 120, 80, [180, 120, 60]);
+    expect(await isEffectivelyGrayscale(await encode(buf), ET4956)).toBe(false);
+  });
+
+  // The reason the reference is configured rather than measured from the page.
+  // A per-page estimate maps any page-wide tint to white and collapses its
+  // chroma; a fixed device reference cannot, because it does not depend on
+  // what the page contains. These must hold with the correction ACTIVE.
+  const PAGE_WIDE_COLOUR: [string, Buffer][] = [
+    ["saturated red sheet", uniformPage([200, 40, 40])],
+    ["dark red sheet", uniformPage([60, 20, 20])],
+    ["pastel sheet", uniformPage([220, 200, 190])],
+    ["pastel stock with text", tintedPageWithText([220, 200, 190])],
+    ["cream card with text", tintedPageWithText([245, 232, 205])],
+  ];
+  for (const [label, pixels] of PAGE_WIDE_COLOUR) {
+    it(`keeps a ${label} in colour with the correction active`, async () => {
+      expect(await isEffectivelyGrayscale(await encode(pixels), ET4956)).toBe(false);
+    });
+  }
+
+  it("is a no-op for a scanner that already renders white as neutral", () => {
+    for (const lut of buildCastCorrection([255, 255, 255])) {
+      for (let v = 0; v < 256; v++) expect(lut[v]).toBe(v);
+    }
+  });
+
+  it("maps the measured white to 255 on every channel, clamping not wrapping", () => {
+    const luts = buildCastCorrection(ET4956);
+    expect(luts[0][227]).toBe(255);
+    expect(luts[1][232]).toBe(255);
+    expect(luts[2][255]).toBe(255);
+    for (const lut of luts) expect(lut[255]).toBe(255);
   });
 });
 

@@ -5,6 +5,7 @@ import { composePdfFromJpegs } from "./pdf.js";
 import { uploadAllToPaperless, type PaperlessUploadOptions } from "./paperless-upload.js";
 import { postProcessTempPages, type PostProcessProfile } from "./postprocess/index.js";
 import type { ToneCurveName } from "./postprocess/tone-curves.js";
+import type { PaperWhite } from "./postprocess/auto-color.js";
 import { DEFAULT_JPEG_QUALITY, type GrayscaleConversion } from "./config.js";
 
 const log = createLogger("output-tail");
@@ -31,6 +32,8 @@ export interface FinalizeSessionArgs {
   grayscaleConversion?: GrayscaleConversion;
   /** Pinned per-dialect tone curve for the `document` profile; omit for none. */
   toneCurve?: ToneCurveName;
+  /** SCAN_PAPER_WHITE — device cast reference for the auto-colour verdict. */
+  paperWhite?: PaperWhite;
 }
 
 /**
@@ -53,12 +56,13 @@ export async function finalizeSession(args: FinalizeSessionArgs): Promise<void> 
     jpegQuality = DEFAULT_JPEG_QUALITY,
     grayscaleConversion = "off",
     toneCurve,
+    paperWhite,
   } = args;
   try {
     await postProcessTempPages(
       sessionTempDir,
       postProcess,
-      { jpegQuality, toneCurve, grayscaleConversion },
+      { jpegQuality, toneCurve, grayscaleConversion, paperWhite },
       log,
     );
     let savedPaths: string[];

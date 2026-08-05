@@ -118,6 +118,32 @@ const configSchema = z
       )
       .transform((s) => s.toUpperCase())
       .optional(),
+    // How this scanner renders plain white paper, measured once per device with
+    // `npm run scan:calibrate`. Used only by SCAN_COLOR_MODE=auto, to undo the
+    // device's colour cast before judging whether a page carries colour.
+    //
+    // It has to be told to us rather than measured per page: in one image a
+    // scanner's cast and a sheet's own tint are the same signal, so estimating
+    // the white point from the page being classified would divide out genuine
+    // paper colour and convert coloured stock to greyscale. Unset means no
+    // correction, which is safe but leaves auto colour mode ineffective on a
+    // scanner with a pronounced cast (see #159).
+    scanPaperWhite: z
+      .string()
+      .regex(
+        /^\d{1,3}:\d{1,3}:\d{1,3}$/,
+        "SCAN_PAPER_WHITE must be three colon-separated 0-255 values (R:G:B, e.g. 227:232:255)",
+      )
+      .transform((s) => s.split(":").map(Number) as [number, number, number])
+      .refine(
+        (rgb) => rgb.every((v) => v >= 0 && v <= 255),
+        "SCAN_PAPER_WHITE channels must each be 0-255",
+      )
+      .refine(
+        (rgb) => Math.max(...rgb) >= 128,
+        "SCAN_PAPER_WHITE looks too dark to be paper — measure a blank white sheet with `npm run scan:calibrate`",
+      )
+      .optional(),
   })
   .superRefine((cfg, ctx) => {
     // PRINTER_CERT_FINGERPRINT only makes sense on the TLS path. Reject
@@ -206,6 +232,7 @@ export function loadConfig(): Config {
         : process.env.PAPERLESS_DELETE_AFTER_UPLOAD === "true",
     esciForceSource: process.env.ESCI_FORCE_SOURCE || undefined,
     printerCertFingerprint: process.env.PRINTER_CERT_FINGERPRINT || undefined,
+    scanPaperWhite: process.env.SCAN_PAPER_WHITE || undefined,
     printerProtocol: process.env.PRINTER_PROTOCOL || undefined,
     diagnoseProtocol:
       process.env.DIAGNOSE_PROTOCOL === undefined

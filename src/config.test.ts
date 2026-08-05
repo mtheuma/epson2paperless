@@ -39,6 +39,40 @@ describe("loadConfig", () => {
     delete process.env.ESCI_FORCE_SOURCE;
     delete process.env.NETSCAN_VERSION;
     delete process.env.POST_PROCESS;
+    delete process.env.SCAN_PAPER_WHITE;
+  });
+
+  it("parses SCAN_PAPER_WHITE into a channel triplet", () => {
+    process.env.PRINTER_IP = "192.168.1.5";
+    process.env.SCAN_PAPER_WHITE = "227:232:255";
+    expect(loadConfig().scanPaperWhite).toEqual([227, 232, 255]);
+  });
+
+  it("leaves SCAN_PAPER_WHITE undefined when unset", () => {
+    process.env.PRINTER_IP = "192.168.1.5";
+    expect(loadConfig().scanPaperWhite).toBeUndefined();
+  });
+
+  it("rejects a malformed SCAN_PAPER_WHITE", () => {
+    process.env.PRINTER_IP = "192.168.1.5";
+    for (const bad of ["227,232,255", "227:232", "227:232:255:1", "ff:ee:dd", "227 232 255"]) {
+      process.env.SCAN_PAPER_WHITE = bad;
+      expect(() => loadConfig()).toThrow("SCAN_PAPER_WHITE");
+    }
+  });
+
+  it("rejects an out-of-range SCAN_PAPER_WHITE channel", () => {
+    process.env.PRINTER_IP = "192.168.1.5";
+    process.env.SCAN_PAPER_WHITE = "227:232:300";
+    expect(() => loadConfig()).toThrow("SCAN_PAPER_WHITE");
+  });
+
+  it("rejects a SCAN_PAPER_WHITE too dark to be paper", () => {
+    // Guards the likeliest misuse: measuring something other than a blank
+    // white sheet, which would apply a large and wrong correction.
+    process.env.PRINTER_IP = "192.168.1.5";
+    process.env.SCAN_PAPER_WHITE = "60:20:20";
+    expect(() => loadConfig()).toThrow("SCAN_PAPER_WHITE");
   });
 
   it("throws if PRINTER_IP is missing", () => {
