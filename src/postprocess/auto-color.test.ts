@@ -3,7 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import sharp from "sharp";
-import { isEffectivelyGrayscale, toGrayscaleJpeg } from "./auto-color.js";
+import {
+  isEffectivelyGrayscale,
+  toGrayscaleJpeg,
+  isNeutralVerdict,
+  COLOR_FRACTION,
+} from "./auto-color.js";
 import { correctDocumentImage, correctDocumentImageAuto } from "./document.js";
 import { postProcessTempPages } from "./index.js";
 import { setJpegOrientation, readJpegOrientation } from "../exif.js";
@@ -89,10 +94,11 @@ describe("isEffectivelyGrayscale", () => {
     expect(await isEffectivelyGrayscale(await encode(colourPagePixels()))).toBe(false);
   });
 
-  it("catches a small saturated mark via the strong-chroma trigger", async () => {
+  it("catches a small saturated mark", async () => {
     const buf = neutralPagePixels();
-    // A highlighter-sized swipe: ~0.35% of the page — under the broad 0.4%
-    // fraction, but saturated well past the strong floor.
+    // A highlighter-sized swipe covering ~0.35% of the page. This used to need
+    // the strong (chroma>64) trigger, since it fell under the old 0.4% broad
+    // fraction; at 0.03% the broad trigger catches it directly.
     paintRect(buf, 60, 250, 90, 8, [250, 235, 60]);
     expect(await isEffectivelyGrayscale(await encode(buf))).toBe(false);
   });
@@ -103,6 +109,48 @@ describe("isEffectivelyGrayscale", () => {
       .jpeg()
       .toBuffer();
     expect(await isEffectivelyGrayscale(oneChannel)).toBe(true);
+  });
+});
+
+describe("thresholds against the measured ET-4956 corpus (#146)", () => {
+  // Chroma fractions measured on real hardware after the document clip, with
+  // `npm run scan:compare`. Source scans are private, so the measurements are
+  // pinned here instead: they are what the thresholds were chosen against, and
+  // a change that reclassifies any of these rows needs fresh evidence.
+  const CORPUS: { page: string; broad: number; strong: number; neutral: boolean }[] = [
+    { page: "plain black-and-white text", broad: 0.00005, strong: 0.00002, neutral: true },
+    { page: "small text (binding noise floor)", broad: 0.00013, strong: 0, neutral: true },
+    { page: "small coloured pen mark", broad: 0.00062, strong: 0.00001, neutral: false },
+    { page: "mostly-neutral page, colour logo", broad: 0.0048, strong: 0, neutral: false },
+    { page: "cream stock, black content", broad: 0.01015, strong: 0.00609, neutral: false },
+    { page: "ordinary colour page", broad: 0.59767, strong: 0.36077, neutral: false },
+  ];
+
+  for (const { page, broad, strong, neutral } of CORPUS) {
+    it(`classifies "${page}" as ${neutral ? "neutral" : "colour"}`, () => {
+      expect(isNeutralVerdict(broad)).toBe(neutral);
+      // Sanity-check the corpus itself: chroma>64 implies chroma>24, so a row
+      // with strong above broad would be a transcription error, not a page.
+      expect(strong).toBeLessThanOrEqual(broad);
+    });
+  }
+
+  it("keeps the cut point clear of both the noise floor and the faintest real mark", () => {
+    const floor = 0.00013; // highest broad reading among genuinely neutral pages
+    const faintest = 0.00062; // pen mark — the page #146 was reported for
+    expect(COLOR_FRACTION).toBeGreaterThan(floor);
+    expect(COLOR_FRACTION).toBeLessThan(faintest);
+  });
+
+  it("subsumes the retired strong trigger", () => {
+    // The old rule also called a page colour at strongFraction >= 0.0005.
+    // Because strongFraction <= colourfulFraction always holds, any such page
+    // has broad >= 0.0005, which the broad trigger now catches on its own —
+    // so dropping the strong trigger removed no coverage. Guard the ordering
+    // that makes that argument true.
+    const retiredStrongThreshold = 0.0005;
+    expect(COLOR_FRACTION).toBeLessThan(retiredStrongThreshold);
+    expect(isNeutralVerdict(retiredStrongThreshold)).toBe(false);
   });
 });
 

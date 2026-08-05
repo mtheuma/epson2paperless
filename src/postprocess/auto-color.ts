@@ -9,14 +9,43 @@ import { readJpegOrientation, setJpegOrientation, setJfifDensity } from "../exif
 // Classification measures per-pixel chroma (max(R,G,B) - min(R,G,B)) on a
 // downsampled copy. Downsampling first is load-bearing: single-pixel colour
 // fringing on sharp text edges (chroma subsampling + sensor registration)
-// averages away, while real colour content survives. Two triggers mark a page
-// as colour:
-//   - a broad one for ordinary colour content (photos, logos, shading), and
-//   - a low-fraction one for small-but-saturated marks (a highlighter swipe,
-//     a red signature) that cover too little area for the broad trigger.
+// averages away, while real colour content survives. One trigger marks a page
+// as colour: the fraction of pixels whose chroma clears CHROMA_FLOOR.
 // Misclassification is asymmetric: calling a neutral page "colour" just keeps
-// bytes, calling a colour page "neutral" loses data — thresholds err toward
+// bytes, calling a colour page "neutral" loses data — the threshold errs toward
 // keeping colour.
+//
+// There used to be a second "strong" trigger at chroma>64 for small-but-
+// saturated marks that covered too little area for the broad one. It is gone
+// because it became unreachable, not because the case stopped mattering: every
+// chroma>64 pixel also clears 24, so strongFraction <= colourfulFraction always
+// holds, and once COLOR_FRACTION dropped to 0.0003 no page could satisfy
+// "broad under 0.0003 but strong over 0.0005". Nothing is lost — a page the old
+// strong trigger caught had broad >= strong >= 0.0005 > 0.0003, so the broad
+// trigger alone now catches everything it did and more. strongFraction is still
+// measured and logged: it distinguishes saturated content from a wide, weak
+// tint, which is what separated the cream page from the pen mark below.
+//
+// COLOR_FRACTION was 0.004 until a six-page ET-4956 corpus showed that far too
+// high: a small pen mark measured 0.062% of pixels and was silently converted,
+// losing its colour (issue #146). Post-clip measurements from that corpus, which
+// the test below pins:
+//
+//   plain black-and-white text  0.005%  -> neutral
+//   small text                  0.013%  -> neutral   (the binding noise floor)
+//   pen mark                    0.062%  -> colour    (the reported failure)
+//   page with a colour logo     0.480%  -> colour
+//   cream stock, black content  1.015%  -> colour
+//   ordinary colour page       59.767%  -> colour
+//
+// 0.0003 sits between the 0.013% floor and the 0.062% mark with roughly 2.3x
+// either side. That margin is narrower than it looks safe for, and it is what
+// the evidence supports rather than a comfortable choice.
+//
+// Cream stock is deliberately on the "colour" side: its paper tint reads
+// 1.015% after the clip, well above any workable cut point, and Epson's own
+// software preserves that tint rather than neutralising it. Treating such
+// pages as colour is the intended behaviour, not a miss.
 //
 // Under POST_PROCESS=document the classification runs INSIDE the document
 // transform, on the white-point-clipped pixels but BEFORE any pinned tone
@@ -26,9 +55,16 @@ import { readJpegOrientation, setJpegOrientation, setJfifDensity } from "../exif
 // push every anti-aliased text edge over the floor.
 const CLASSIFY_LONG_EDGE = 360; // downsample bound before measuring
 const CHROMA_FLOOR = 24; // per-pixel chroma above JPEG noise on neutral scans
-const COLOR_FRACTION = 0.004; // broad trigger: fraction of pixels over CHROMA_FLOOR
-const STRONG_CHROMA_FLOOR = 64; // unmistakably colour, never produced by noise
-const STRONG_COLOR_FRACTION = 0.0005; // small-mark trigger fraction
+export const COLOR_FRACTION = 0.0003; // broad trigger: fraction of pixels over CHROMA_FLOOR
+const STRONG_CHROMA_FLOOR = 64; // diagnostic only — saturated vs weak-and-wide
+
+/**
+ * The verdict rule, split out so the measured-corpus test can pin the rule and
+ * not just the constant.
+ */
+export function isNeutralVerdict(colourfulFraction: number): boolean {
+  return colourfulFraction < COLOR_FRACTION;
+}
 
 /**
  * Classification outcome plus the measured fractions behind it — surfaced in
@@ -40,7 +76,11 @@ export interface ChromaVerdict {
   grayscale: boolean;
   /** Fraction of downsampled pixels with chroma above CHROMA_FLOOR. */
   colourfulFraction: number;
-  /** Fraction of downsampled pixels with chroma above STRONG_CHROMA_FLOOR. */
+  /**
+   * Fraction of downsampled pixels with chroma above STRONG_CHROMA_FLOOR.
+   * Diagnostic only — it does not enter the verdict. Useful in a field report
+   * because it separates genuinely saturated content from a wide, weak tint.
+   */
   strongFraction: number;
 }
 
@@ -49,12 +89,12 @@ export function describeVerdict(v: ChromaVerdict): string {
   const pct = (f: number) => `${(f * 100).toFixed(2)}%`;
   return (
     `chroma>${CHROMA_FLOOR}: ${pct(v.colourfulFraction)} (colour at ${pct(COLOR_FRACTION)}), ` +
-    `chroma>${STRONG_CHROMA_FLOOR}: ${pct(v.strongFraction)} (colour at ${pct(STRONG_COLOR_FRACTION)}) ` +
+    `chroma>${STRONG_CHROMA_FLOOR}: ${pct(v.strongFraction)} (diagnostic) ` +
     `→ ${v.grayscale ? "greyscale" : "colour"}`
   );
 }
 
-/** The two-trigger chroma verdict over an already-downsampled raw buffer. */
+/** The chroma verdict over an already-downsampled raw buffer. */
 function verdictFromRaw(
   data: Buffer,
   info: { width: number; height: number; channels: number },
@@ -74,7 +114,7 @@ function verdictFromRaw(
   const colourfulFraction = colourful / total;
   const strongFraction = stronglyColourful / total;
   return {
-    grayscale: colourfulFraction < COLOR_FRACTION && strongFraction < STRONG_COLOR_FRACTION,
+    grayscale: isNeutralVerdict(colourfulFraction),
     colourfulFraction,
     strongFraction,
   };
