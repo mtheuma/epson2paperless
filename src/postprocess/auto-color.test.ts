@@ -8,7 +8,6 @@ import {
   toGrayscaleJpeg,
   isNeutralVerdict,
   COLOR_FRACTION,
-  STRONG_COLOR_FRACTION,
 } from "./auto-color.js";
 import { correctDocumentImage, correctDocumentImageAuto } from "./document.js";
 import { postProcessTempPages } from "./index.js";
@@ -95,10 +94,11 @@ describe("isEffectivelyGrayscale", () => {
     expect(await isEffectivelyGrayscale(await encode(colourPagePixels()))).toBe(false);
   });
 
-  it("catches a small saturated mark via the strong-chroma trigger", async () => {
+  it("catches a small saturated mark", async () => {
     const buf = neutralPagePixels();
-    // A highlighter-sized swipe: ~0.35% of the page — under the broad 0.4%
-    // fraction, but saturated well past the strong floor.
+    // A highlighter-sized swipe covering ~0.35% of the page. This used to need
+    // the strong (chroma>64) trigger, since it fell under the old 0.4% broad
+    // fraction; at 0.03% the broad trigger catches it directly.
     paintRect(buf, 60, 250, 90, 8, [250, 235, 60]);
     expect(await isEffectivelyGrayscale(await encode(buf))).toBe(false);
   });
@@ -128,7 +128,10 @@ describe("thresholds against the measured ET-4956 corpus (#146)", () => {
 
   for (const { page, broad, strong, neutral } of CORPUS) {
     it(`classifies "${page}" as ${neutral ? "neutral" : "colour"}`, () => {
-      expect(isNeutralVerdict(broad, strong)).toBe(neutral);
+      expect(isNeutralVerdict(broad)).toBe(neutral);
+      // Sanity-check the corpus itself: chroma>64 implies chroma>24, so a row
+      // with strong above broad would be a transcription error, not a page.
+      expect(strong).toBeLessThanOrEqual(broad);
     });
   }
 
@@ -139,9 +142,15 @@ describe("thresholds against the measured ET-4956 corpus (#146)", () => {
     expect(COLOR_FRACTION).toBeLessThan(faintest);
   });
 
-  it("leaves the strong trigger able to catch a small saturated mark alone", () => {
-    // A mark too small for the broad trigger must still register via chroma>64.
-    expect(isNeutralVerdict(0, STRONG_COLOR_FRACTION * 1.1)).toBe(false);
+  it("subsumes the retired strong trigger", () => {
+    // The old rule also called a page colour at strongFraction >= 0.0005.
+    // Because strongFraction <= colourfulFraction always holds, any such page
+    // has broad >= 0.0005, which the broad trigger now catches on its own —
+    // so dropping the strong trigger removed no coverage. Guard the ordering
+    // that makes that argument true.
+    const retiredStrongThreshold = 0.0005;
+    expect(COLOR_FRACTION).toBeLessThan(retiredStrongThreshold);
+    expect(isNeutralVerdict(retiredStrongThreshold)).toBe(false);
   });
 });
 
