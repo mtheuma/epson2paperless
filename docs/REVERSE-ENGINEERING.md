@@ -79,6 +79,18 @@ One significant debugging episode is worth understanding because its resolution 
 
 Investigation via paired Wireshark captures (one from the Epson driver, one from the service) identified the cause: the printer includes an `x-uid` counter in each push-scan POST request and expects to see that exact value echoed in the 200 OK response. The service had hardcoded `x-uid : 1` in its response. The printer resets its counter to `1` at power-on, so the first scan after a reboot succeeded (the counter happened to be `1`), but every subsequent scan failed as the counter advanced. The fix — parsing the `x-uid` from the incoming request and echoing it in the response — is in `buildPushScanResponse` in `src/pushscan.ts`.
 
+### Why the gamma table is pinned per dialect rather than queried
+
+Each ESC/I-2 registry entry carries a `gammaClass`: the 804-byte RGB tone-curve triplet (`#GMTRED` / `#GMTGRN` / `#GMTBLU`) that `composePara` puts in the PARA body. Those bytes are transcribed from a capture of that model, which raises an obvious question when adding a printer nobody has captured — can the printer just be asked what curve it wants?
+
+It can't. The ESC/I-2 request vocabulary has no query that returns recommended or default scan parameters. `RESA`, the one command whose name suggests it ("read parameter confirmation"), returns maintenance counters in the mode the drivers actually use it in — page counts, jam counts, buffer size — and our `esci2Graph` already sends it during INIT2 and discards the body. Gamma is host→printer data in every observed exchange; CAPA advertises only the mode-name list (`#GMM`, e.g. `UG10UG18`), never a curve.
+
+That is less of a limitation than it sounds, because the curve is not a per-model constant. Measured against a strict identity ramp, four of the six committed gamma classes are identity to within ±1 (that ±1 being rounding noise, which the replay tests pin and which must not be "fixed"). The two exceptions are a contrast stretch that clips shadows and saturates highlights — and one of them is the XP-7100, which also has an identity class from a different capture of the same printer. A value that takes two forms on one model isn't a property of the model.
+
+So a new dialect that has no capture of its own should inherit the near-identity `et4950-stock` class. That's the pass-through choice: it asks the printer for no tone shaping and leaves its default rendering alone, rather than approximating some unknown model-specific value.
+
+The ET-8500 and ET-7700 both took that inheritance when they were added from a diagnostic alone, and both were later validated on real hardware. The ET-7700's compatibility-test-page scan puts numbers on it: nominal-64 grey returned 72/69/69 with no shadow crush, grey-patch channel spreads of 3–11 and no cast. That is what a correctly inherited pass-through curve looks like, and it is the practical answer to the question this section opens with. Full working in `.reference/research/esci2-tone-curve-query.md` (local only).
+
 ### The byte-for-byte replay test
 
 `src/esci2/scanner.test.ts` is the regression shield for the ESC/I-2 path. It runs in two modes:
