@@ -113,20 +113,32 @@ describe("isEffectivelyGrayscale", () => {
 });
 
 /**
- * Page-wide colour must survive classification. These pass today because the
- * classifier measures the pixels as scanned, and they exist to keep it that
- * way: an abandoned attempt to white-balance the classifier's input (issue
- * #159) silently converted every one of them to greyscale, because any
- * normalisation that estimates the paper white FROM THE PAGE maps a page-wide
- * tint to white and collapses its chroma to zero.
+ * Page-wide colour must survive the AS-SCANNED classifier — the route taken
+ * under POST_PROCESS=none, where the delivered pixels still carry the tint, so
+ * converting to greyscale would destroy it.
  *
- * The lesson worth keeping is that scanner cast and paper tint are the same
- * signal in a single image — a uniform chromatic background with darker
- * content on it — so no per-page statistic separates them. Removing a cast
- * therefore requires knowing the DEVICE's cast independently of the page.
- * Anything that infers it per page will fail these cases.
+ * Deliberately scoped to that route. Under POST_PROCESS=document these same
+ * pages legitimately convert, because the clip has already flattened their
+ * paper to pure white (verified: 255/255/255, chroma 0) before classification
+ * runs. The tint is gone from the output by then, so converting costs nothing
+ * — the per-mode split #146 settled when it decided cream stock stays colour.
+ * The test below pins that difference so it reads as a decision.
+ *
+ * These pass today, and exist to keep it that way. An abandoned attempt to
+ * white-balance the classifier's input (issue #159) converted most of them,
+ * because a normalisation that estimates the paper white FROM THE PAGE maps a
+ * page-wide tint to white and collapses its chroma to zero. Its final revision
+ * did spare the saturated sheet, via a channel-spread guard — but that guard
+ * could not tell a 30-spread pastel from a 28-spread scanner cast, which is
+ * the whole difficulty.
+ *
+ * The lesson worth keeping: scanner cast and paper tint are the same signal in
+ * a single image — a uniform chromatic background with darker content on it —
+ * so no per-page statistic separates them. Removing a cast requires knowing the
+ * DEVICE's cast independently of the page. Anything that infers it per page
+ * will fail these cases.
  */
-describe("page-wide colour is never converted away", () => {
+describe("page-wide colour survives the as-scanned classifier", () => {
   function uniformPage(rgb: [number, number, number]): Buffer {
     const buf = Buffer.alloc(W * H * 3);
     for (let i = 0; i < buf.length; i += 3) {
@@ -165,6 +177,27 @@ describe("page-wide colour is never converted away", () => {
       expect(await isEffectivelyGrayscale(await encode(pixels))).toBe(false);
     });
   }
+
+  it("converts tinted stock under the document profile, by design", async () => {
+    // The counterpart to the cases above, pinned so the difference between the
+    // two profiles is a recorded decision rather than a surprise. Under
+    // `document` the clip flattens the paper to pure white BEFORE the verdict,
+    // so the tint is already absent from the delivered pixels and converting
+    // loses nothing. Under `none` the same page must stay colour, because
+    // there the tint survives into the output.
+    const page = await encode(tintedPageWithText([220, 200, 190]));
+
+    const cleaned = await correctDocumentImage(page, 90);
+    const { data } = await sharp(cleaned).raw().toBuffer({ resolveWithObject: true });
+    const paper = (10 * W + 200) * 3; // a paper pixel, clear of the text rows
+    expect(Math.max(data[paper], data[paper + 1], data[paper + 2])).toBe(255);
+    expect(Math.max(data[paper], data[paper + 1], data[paper + 2])).toBe(
+      Math.min(data[paper], data[paper + 1], data[paper + 2]),
+    ); // the clip left no tint behind
+
+    expect((await correctDocumentImageAuto(page, 90, undefined, "auto")).grayscale).toBe(true);
+    expect(await isEffectivelyGrayscale(page)).toBe(false); // but not as-scanned
+  });
 });
 
 describe("thresholds against the measured ET-4956 corpus (#146)", () => {
