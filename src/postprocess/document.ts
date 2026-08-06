@@ -1,6 +1,6 @@
 import sharp from "sharp";
 import { TONE_CURVES, type ToneCurveName } from "./tone-curves.js";
-import { classifyRawPixels, type ChromaVerdict, type PaperWhite } from "./auto-color.js";
+import { classifyRawPixels, type ChromaVerdict, type WhitePoint } from "./auto-color.js";
 import { setJfifDensity } from "../exif.js";
 import type { GrayscaleConversion } from "../config.js";
 
@@ -169,7 +169,7 @@ async function transformDocumentImage(
   jpegQuality: number,
   toneCurve: ToneCurveName | undefined,
   conversion: GrayscaleConversion,
-  paperWhite?: PaperWhite,
+  whitePoint?: WhitePoint,
 ): Promise<{ jpeg: Buffer; grayscale: boolean; verdict?: ChromaVerdict }> {
   const [{ orientation, density, channels: sourceChannels }, { data, info }] = await Promise.all([
     sharp(jpeg).metadata(),
@@ -198,7 +198,7 @@ async function transformDocumentImage(
       info.width,
       info.height,
       info.channels,
-      paperWhite,
+      whitePoint,
     );
     grayscale = verdict.grayscale || sourceGrayscale;
     // tone∘clip applied in two passes equals the composed LUT of the
@@ -285,7 +285,7 @@ export async function correctDocumentImageAuto(
   jpegQuality: number,
   toneCurve?: ToneCurveName,
   conversion: Exclude<GrayscaleConversion, "off"> = "auto",
-  paperWhite?: PaperWhite,
+  whitePoint?: WhitePoint,
 ): Promise<{ jpeg: Buffer; grayscale: boolean; verdict?: ChromaVerdict }> {
-  return transformDocumentImage(jpeg, jpegQuality, toneCurve, conversion, paperWhite);
+  return transformDocumentImage(jpeg, jpegQuality, toneCurve, conversion, whitePoint);
 }

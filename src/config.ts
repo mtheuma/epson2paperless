@@ -11,6 +11,13 @@ export const ADF_CRP_RESOLUTIONS = [50, 75, 100, 150, 200, 240, 300, 360, 400, 6
 export const DEFAULT_SCAN_RESOLUTION = 200;
 export const DEFAULT_JPEG_QUALITY = 90;
 
+/**
+ * Largest channel spread accepted for PRINTER_WHITE_POINT. Scanner casts
+ * measured so far span 6-28; cream stock reads about 74. See the refinement in
+ * the schema for why the distinction matters.
+ */
+export const MAX_DEVICE_CAST = 48;
+
 // SCAN_COLOR_MODE selects colour vs greyscale. "grayscale" guarantees
 // greyscale output on every model: greyscale-capable dialects (currently the
 // DS-575W) request it on the wire (1/3 the wire data); everything else scans
@@ -128,20 +135,30 @@ const configSchema = z
     // paper colour and convert coloured stock to greyscale. Unset means no
     // correction, which is safe but leaves auto colour mode ineffective on a
     // scanner with a pronounced cast (see #159).
-    scanPaperWhite: z
+    printerWhitePoint: z
       .string()
       .regex(
         /^\d{1,3}:\d{1,3}:\d{1,3}$/,
-        "SCAN_PAPER_WHITE must be three colon-separated 0-255 values (R:G:B, e.g. 227:232:255)",
+        "PRINTER_WHITE_POINT must be three colon-separated 0-255 values (R:G:B, e.g. 227:232:255)",
       )
       .transform((s) => s.split(":").map(Number) as [number, number, number])
       .refine(
         (rgb) => rgb.every((v) => v >= 0 && v <= 255),
-        "SCAN_PAPER_WHITE channels must each be 0-255",
+        "PRINTER_WHITE_POINT channels must each be 0-255",
       )
       .refine(
         (rgb) => Math.max(...rgb) >= 128,
-        "SCAN_PAPER_WHITE looks too dark to be paper — measure a blank white sheet with `npm run scan:calibrate`",
+        "PRINTER_WHITE_POINT looks too dark to be paper — measure a blank white sheet with `npm run scan:calibrate`",
+      )
+      // The likeliest misuse is measuring tinted stock instead of white paper.
+      // Cream reads around 247:224:173 — a spread of 74 — and would otherwise
+      // be accepted, over-correcting every later scan and pushing genuinely
+      // coloured pages toward greyscale. Real scanner casts are far smaller
+      // (6-28 across the models measured so far), so a ceiling separates the
+      // two comfortably without rejecting any plausible device.
+      .refine(
+        (rgb) => Math.max(...rgb) - Math.min(...rgb) <= MAX_DEVICE_CAST,
+        `PRINTER_WHITE_POINT is too strongly tinted to be a scanner's white point (channel spread over ${MAX_DEVICE_CAST}) — measure a plain WHITE sheet, not coloured or cream stock`,
       )
       .optional(),
   })
@@ -232,7 +249,7 @@ export function loadConfig(): Config {
         : process.env.PAPERLESS_DELETE_AFTER_UPLOAD === "true",
     esciForceSource: process.env.ESCI_FORCE_SOURCE || undefined,
     printerCertFingerprint: process.env.PRINTER_CERT_FINGERPRINT || undefined,
-    scanPaperWhite: process.env.SCAN_PAPER_WHITE || undefined,
+    printerWhitePoint: process.env.PRINTER_WHITE_POINT || undefined,
     printerProtocol: process.env.PRINTER_PROTOCOL || undefined,
     diagnoseProtocol:
       process.env.DIAGNOSE_PROTOCOL === undefined

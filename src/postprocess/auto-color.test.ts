@@ -243,7 +243,7 @@ describe("thresholds against the measured ET-4956 corpus (#146)", () => {
   });
 });
 
-describe("SCAN_PAPER_WHITE cast correction (#159)", () => {
+describe("PRINTER_WHITE_POINT cast correction (#159)", () => {
   // How an ET-4956 renders plain white paper, per `npm run scan:calibrate`.
   const ET4956: readonly [number, number, number] = [227, 232, 255];
 

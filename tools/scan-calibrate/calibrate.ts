@@ -1,5 +1,5 @@
 /**
- * Measure how a scanner renders plain white paper, for SCAN_PAPER_WHITE.
+ * Measure how a scanner renders plain white paper, for PRINTER_WHITE_POINT.
  *
  *   npm run scan:calibrate -- <scan-of-a-blank-white-sheet.jpg|pdf>
  *
@@ -20,6 +20,7 @@ import fs from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
 import { estimatePaperWhite } from "../../src/postprocess/document.js";
+import { MAX_DEVICE_CAST } from "../../src/config.js";
 
 /** Pull every embedded JPEG out of a PDF, as tools/scan-compare does. */
 function extractJpegs(buf: Buffer): Buffer[] {
@@ -110,8 +111,21 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (cast > MAX_DEVICE_CAST) {
+    console.log(`  ⚠  A channel spread of ${cast} is far larger than any scanner's own cast`);
+    console.log(
+      `     (${MAX_DEVICE_CAST} is the accepted ceiling). This sheet is almost certainly`,
+    );
+    console.log("     tinted — cream or coloured stock rather than plain white. Using it");
+    console.log("     would over-correct every later scan and push genuinely coloured");
+    console.log("     pages toward greyscale. Re-scan a plain WHITE sheet.");
+    console.log("");
+    process.exitCode = 1;
+    return;
+  }
+
   if (cast <= 4) {
-    console.log("  This scanner is already close to neutral, so SCAN_PAPER_WHITE would");
+    console.log("  This scanner is already close to neutral, so PRINTER_WHITE_POINT would");
     console.log("  change very little. Leaving it unset is fine.");
     console.log("");
     return;
@@ -119,7 +133,7 @@ async function main(): Promise<void> {
 
   console.log("  Add to your environment:");
   console.log("");
-  console.log(`      SCAN_PAPER_WHITE=${paperWhite.join(":")}`);
+  console.log(`      PRINTER_WHITE_POINT=${paperWhite.join(":")}`);
   console.log("");
   console.log("  It only affects SCAN_COLOR_MODE=auto, and only the colour-vs-greyscale");
   console.log("  decision — the pixels written to disk are unchanged.");

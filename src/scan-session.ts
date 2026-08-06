@@ -9,7 +9,7 @@ import { IS_HEADER_SIZE } from "./protocol.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import type { PostProcessProfile } from "./postprocess/index.js";
 import type { ToneCurveName } from "./postprocess/tone-curves.js";
-import type { PaperWhite } from "./postprocess/auto-color.js";
+import type { WhitePoint } from "./postprocess/auto-color.js";
 import { DEFAULT_JPEG_QUALITY, type GrayscaleConversion } from "./config.js";
 
 /**
@@ -328,8 +328,8 @@ export interface RunScanSessionOpts<Ctx> {
   action: "jpg" | "pdf";
   postProcess?: PostProcessProfile;
   jpegQuality?: number;
-  /** SCAN_PAPER_WHITE — device cast reference for the auto-colour verdict. */
-  paperWhite?: PaperWhite;
+  /** PRINTER_WHITE_POINT — device cast reference for the auto-colour verdict. */
+  whitePoint?: WhitePoint;
   /**
    * Resolves the finalize-time greyscale pass ("off" / "auto" / "force") from
    * the final context. A callback rather than a plain value because on the
@@ -428,7 +428,7 @@ export async function runScanSession<Ctx>(
         jpegQuality: opts.jpegQuality ?? DEFAULT_JPEG_QUALITY,
         grayscaleConversion: opts.resolveGrayscaleConversion?.(ctx),
         toneCurve: opts.resolveToneCurve?.(ctx),
-        paperWhite: opts.paperWhite,
+        whitePoint: opts.whitePoint,
       });
     }
 

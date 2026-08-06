@@ -9,7 +9,7 @@ import {
   type SessionTransportFactory,
 } from "../scan-session.js";
 import { resolveSessionTimestamp } from "../output.js";
-import type { PaperWhite } from "../postprocess/auto-color.js";
+import type { WhitePoint } from "../postprocess/auto-color.js";
 import { esci2Graph, type Esci2Ctx } from "./graph.js";
 import { withEsci2UnlockOnDestroy, withTlsErrorLabels } from "./transport.js";
 import { supportsWireGrayscale } from "./dialects/registry.js";
@@ -34,8 +34,8 @@ export interface ScanSession {
   action: "jpg" | "pdf";
   postProcess?: PostProcessProfile;
   jpegQuality?: number;
-  /** SCAN_PAPER_WHITE — device cast reference for the auto-colour verdict. */
-  paperWhite?: PaperWhite;
+  /** PRINTER_WHITE_POINT — device cast reference for the auto-colour verdict. */
+  whitePoint?: WhitePoint;
   /** Scan resolution in DPI (adf-crp dialects: FF-680W, DS-575W; default applied at config layer). */
   resolution?: number;
   /**
@@ -211,7 +211,7 @@ export async function runEsci2Scan(
     action: session.action,
     postProcess: session.postProcess ?? "none",
     jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
-    paperWhite: session.paperWhite,
+    whitePoint: session.whitePoint,
     ...makeOutputResolvers(session),
     paperless: session.paperless,
   });
@@ -241,7 +241,7 @@ export async function runEsci2ScanOverPlain(
     action: session.action,
     postProcess: session.postProcess ?? "none",
     jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
-    paperWhite: session.paperWhite,
+    whitePoint: session.whitePoint,
     ...makeOutputResolvers(session),
     paperless: session.paperless,
   });

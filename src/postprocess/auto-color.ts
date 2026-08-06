@@ -57,7 +57,7 @@ import { readJpegOrientation, setJpegOrientation, setJfifDensity } from "../exif
 // A scanner with a colour cast renders plain white paper as something other
 // than neutral — an ET-4956 reads it as roughly 227/232/255 — and that alone
 // puts most of a blank page over the chroma floor, which makes auto colour
-// mode useless there (#159). When SCAN_PAPER_WHITE names how the device
+// mode useless there (#159). When PRINTER_WHITE_POINT names how the device
 // renders white, the cast is divided out before measuring.
 //
 // The reference has to come from configuration, not from the page. In one
@@ -111,18 +111,20 @@ export function describeVerdict(v: ChromaVerdict): string {
 }
 
 /**
- * How this scanner renders plain white paper, as measured by
- * `npm run scan:calibrate`. Undefined disables the correction.
+ * What this scanner outputs when it looks at something white, as measured by
+ * `npm run scan:calibrate`. A property of the DEVICE, not of any page — do not
+ * confuse it with document.ts's per-page paper-white estimate, which drives the
+ * output clip and is a different thing entirely. Undefined disables correction.
  */
-export type PaperWhite = readonly [number, number, number];
+export type WhitePoint = readonly [number, number, number];
 
 /**
  * Per-channel LUTs undoing a known device cast: each channel is scaled so the
  * measured white maps to 255. Channels already at 255 are left alone, and the
  * result clamps rather than wraps.
  */
-export function buildCastCorrection(paperWhite: PaperWhite): Uint8Array[] {
-  return paperWhite.map((white) => {
+export function buildCastCorrection(whitePoint: WhitePoint): Uint8Array[] {
+  return whitePoint.map((white) => {
     const lut = new Uint8Array(256);
     const gain = 255 / Math.max(1, white);
     for (let v = 0; v < 256; v++) lut[v] = Math.min(255, Math.round(v * gain));
@@ -134,13 +136,13 @@ export function buildCastCorrection(paperWhite: PaperWhite): Uint8Array[] {
 function verdictFromRaw(
   data: Buffer,
   info: { width: number; height: number; channels: number },
-  paperWhite?: PaperWhite,
+  whitePoint?: WhitePoint,
 ): ChromaVerdict {
   if (info.channels < 3) return { grayscale: true, colourfulFraction: 0, strongFraction: 0 };
   const total = info.width * info.height;
   // Correcting in the measurement pass avoids materialising a second buffer —
   // the corrected pixels are never needed downstream, only their chroma.
-  const lut = paperWhite ? buildCastCorrection(paperWhite) : undefined;
+  const lut = whitePoint ? buildCastCorrection(whitePoint) : undefined;
   let colourful = 0;
   let stronglyColourful = 0;
   for (let i = 0; i < data.length; i += info.channels) {
@@ -165,22 +167,22 @@ function verdictFromRaw(
  * re-encode would lose nothing. Already-single-channel inputs are trivially
  * greyscale.
  */
-export async function classifyJpeg(jpeg: Buffer, paperWhite?: PaperWhite): Promise<ChromaVerdict> {
+export async function classifyJpeg(jpeg: Buffer, whitePoint?: WhitePoint): Promise<ChromaVerdict> {
   const { data, info } = await sharp(jpeg)
     .resize(CLASSIFY_LONG_EDGE, CLASSIFY_LONG_EDGE, { fit: "inside", withoutEnlargement: true })
     .toColourspace("srgb")
     .removeAlpha()
     .raw()
     .toBuffer({ resolveWithObject: true });
-  return verdictFromRaw(data, info, paperWhite);
+  return verdictFromRaw(data, info, whitePoint);
 }
 
 /** Boolean shorthand over classifyJpeg. */
 export async function isEffectivelyGrayscale(
   jpeg: Buffer,
-  paperWhite?: PaperWhite,
+  whitePoint?: WhitePoint,
 ): Promise<boolean> {
-  return (await classifyJpeg(jpeg, paperWhite)).grayscale;
+  return (await classifyJpeg(jpeg, whitePoint)).grayscale;
 }
 
 /**
@@ -194,7 +196,7 @@ export async function classifyRawPixels(
   width: number,
   height: number,
   channels: number,
-  paperWhite?: PaperWhite,
+  whitePoint?: WhitePoint,
 ): Promise<ChromaVerdict> {
   if (channels < 3) return { grayscale: true, colourfulFraction: 0, strongFraction: 0 };
   const rawChannels = channels === 4 ? 4 : 3;
@@ -202,7 +204,7 @@ export async function classifyRawPixels(
     .resize(CLASSIFY_LONG_EDGE, CLASSIFY_LONG_EDGE, { fit: "inside", withoutEnlargement: true })
     .raw()
     .toBuffer({ resolveWithObject: true });
-  return verdictFromRaw(data, info, paperWhite);
+  return verdictFromRaw(data, info, whitePoint);
 }
 
 /**
