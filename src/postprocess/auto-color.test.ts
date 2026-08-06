@@ -328,17 +328,36 @@ describe("PRINTER_WHITE_POINT cast correction (#159)", () => {
   });
 
   it("still corrects under document when the clip guard declines to run", async () => {
-    // A full-bleed dark page has too little near-white for the clip, so those
-    // pixels reach the classifier as scanned — the one document-path case
-    // where the device correction is still the right thing to apply.
-    const dark = Buffer.alloc(W * H * 3);
-    for (let i = 0; i < dark.length; i += 3) {
-      dark[i] = Math.round(60 * (227 / 255));
-      dark[i + 1] = Math.round(60 * (232 / 255));
-      dark[i + 2] = 60;
+    // The one document-path case where pixels reach the classifier as scanned.
+    //
+    // The fixture has to satisfy two things at once, and getting either wrong
+    // makes the test vacuous. It needs under 15% near-white so the clip guard
+    // trips, AND cast strong enough to clear the chroma floor unaided — the
+    // cast is 0.11*v, so only values above ~219 do that. A uniformly dark page
+    // meets the first and fails the second: at v=60 its chroma is 7, well
+    // under the floor, so it reads neutral either way and the assertion proves
+    // nothing. Hence a mostly mid-tone page with a bright minority.
+    const mixed = Buffer.alloc(W * H * 3);
+    const brightRows = Math.round(H * 0.1);
+    for (let y = 0; y < H; y++) {
+      const v = y < brightRows ? 240 : 140;
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 3;
+        mixed[i] = Math.round(v * (227 / 255));
+        mixed[i + 1] = Math.round(v * (232 / 255));
+        mixed[i + 2] = v;
+      }
     }
-    const r = await correctDocumentImageAuto(await encode(dark), 90, undefined, "auto", ET4956);
-    expect(r.grayscale).toBe(true);
+    const page = await encode(mixed);
+
+    // Premise: without the correction this page reads as colour, so the
+    // assertion below is about the correction and not about the fixture.
+    const uncorrected = await correctDocumentImageAuto(page, 90, undefined, "auto");
+    expect(uncorrected.grayscale).toBe(false);
+    expect(uncorrected.verdict?.colourfulFraction).toBeGreaterThan(COLOR_FRACTION);
+
+    const corrected = await correctDocumentImageAuto(page, 90, undefined, "auto", ET4956);
+    expect(corrected.grayscale).toBe(true);
   });
 
   it("is a no-op for a scanner that already renders white as neutral", () => {
