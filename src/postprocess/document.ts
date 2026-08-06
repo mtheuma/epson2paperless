@@ -193,12 +193,19 @@ async function transformDocumentImage(
   let corrected: Buffer;
   if (conversion === "auto") {
     const clipped = clip ? applyLuts(data, info.channels, clip) : null;
+    // The clip anchors each channel on the page's own paper white, which
+    // neutralises the device cast as a side effect — so clipped pixels are
+    // already balanced and applying PRINTER_WHITE_POINT on top would correct
+    // twice, injecting chroma into neutral mid-tones (~0.123*v on a cast of
+    // 28) and pushing plain pages back into colour. The white point is for
+    // pixels that arrive as scanned, which here means only the case where the
+    // clip guard declined to run.
     verdict = await classifyRawPixels(
       clipped ?? data,
       info.width,
       info.height,
       info.channels,
-      whitePoint,
+      clipped ? undefined : whitePoint,
     );
     grayscale = verdict.grayscale || sourceGrayscale;
     // tone∘clip applied in two passes equals the composed LUT of the

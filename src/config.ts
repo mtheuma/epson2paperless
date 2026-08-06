@@ -13,8 +13,8 @@ export const DEFAULT_JPEG_QUALITY = 90;
 
 /**
  * Largest channel spread accepted for PRINTER_WHITE_POINT. Scanner casts
- * measured so far span 6-28; cream stock reads about 74. See the refinement in
- * the schema for why the distinction matters.
+ * measured so far span 6-28; cream stock reads about 74. A coarse sanity check
+ * only — subtly tinted stock passes it. See the refinement in the schema.
  */
 export const MAX_DEVICE_CAST = 48;
 
@@ -150,12 +150,18 @@ const configSchema = z
         (rgb) => Math.max(...rgb) >= 128,
         "PRINTER_WHITE_POINT looks too dark to be paper — measure a blank white sheet with `npm run scan:calibrate`",
       )
-      // The likeliest misuse is measuring tinted stock instead of white paper.
-      // Cream reads around 247:224:173 — a spread of 74 — and would otherwise
-      // be accepted, over-correcting every later scan and pushing genuinely
-      // coloured pages toward greyscale. Real scanner casts are far smaller
-      // (6-28 across the models measured so far), so a ceiling separates the
-      // two comfortably without rejecting any plausible device.
+      // Catches the blatant end of the likeliest misuse: measuring tinted stock
+      // instead of white paper. Cream reads around 247:224:173 — a spread of 74
+      // — and would otherwise be accepted, over-correcting every later scan.
+      // Real scanner casts are far smaller (6-28 across the models measured so
+      // far), so the ceiling separates those without rejecting a plausible
+      // device.
+      //
+      // It is a coarse sanity check and NOT a guarantee the reference sheet was
+      // neutral: pastel stock at 220:200:190 has a spread of 30 and passes.
+      // That limitation is the same ambiguity the whole design rests on — a
+      // single image cannot certify its own white point — so the check can only
+      // reject the obviously wrong, never confirm the right.
       .refine(
         (rgb) => Math.max(...rgb) - Math.min(...rgb) <= MAX_DEVICE_CAST,
         `PRINTER_WHITE_POINT is too strongly tinted to be a scanner's white point (channel spread over ${MAX_DEVICE_CAST}) — measure a plain WHITE sheet, not coloured or cream stock`,

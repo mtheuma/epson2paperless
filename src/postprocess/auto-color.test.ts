@@ -311,6 +311,36 @@ describe("PRINTER_WHITE_POINT cast correction (#159)", () => {
     });
   }
 
+  // The document clip anchors on the page's own paper white, so it already
+  // neutralises the cast. Applying PRINTER_WHITE_POINT on top would correct
+  // twice and inject chroma into neutral mid-tones, undoing the very
+  // conversion the setting is meant to enable.
+  it("does not correct twice under the document profile", async () => {
+    const src = await encode(castPagePixels(), 300);
+    const without = await correctDocumentImageAuto(src, 90, undefined, "auto");
+    const with_ = await correctDocumentImageAuto(src, 90, undefined, "auto", ET4956);
+    expect(without.grayscale).toBe(true); // the clip alone already handles it
+    expect(with_.grayscale).toBe(true); // and the setting must not break that
+    expect(with_.verdict?.colourfulFraction).toBeCloseTo(
+      without.verdict?.colourfulFraction ?? 0,
+      5,
+    );
+  });
+
+  it("still corrects under document when the clip guard declines to run", async () => {
+    // A full-bleed dark page has too little near-white for the clip, so those
+    // pixels reach the classifier as scanned — the one document-path case
+    // where the device correction is still the right thing to apply.
+    const dark = Buffer.alloc(W * H * 3);
+    for (let i = 0; i < dark.length; i += 3) {
+      dark[i] = Math.round(60 * (227 / 255));
+      dark[i + 1] = Math.round(60 * (232 / 255));
+      dark[i + 2] = 60;
+    }
+    const r = await correctDocumentImageAuto(await encode(dark), 90, undefined, "auto", ET4956);
+    expect(r.grayscale).toBe(true);
+  });
+
   it("is a no-op for a scanner that already renders white as neutral", () => {
     for (const lut of buildCastCorrection([255, 255, 255])) {
       for (let v = 0; v < 256; v++) expect(lut[v]).toBe(v);

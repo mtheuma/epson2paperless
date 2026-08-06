@@ -67,13 +67,11 @@ async function main(): Promise<void> {
     return;
   }
 
-  const { data, info } = await sharp(pages[0])
-    .toColourspace("srgb")
-    .removeAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  if (info.channels < 3) {
+  // Channel count has to come from the SOURCE metadata: toColourspace("srgb")
+  // promotes a one-channel JPEG to three, so checking the decoded buffer would
+  // never see a greyscale input. document.ts reads it the same way.
+  const { channels: sourceChannels } = await sharp(pages[0]).metadata();
+  if (sourceChannels === 1) {
     console.error(
       "That scan is single-channel greyscale, so it carries no colour cast to measure.\n" +
         "Re-scan in colour (SCAN_COLOR_MODE unset or 'color').",
@@ -81,6 +79,12 @@ async function main(): Promise<void> {
     process.exitCode = 1;
     return;
   }
+
+  const { data, info } = await sharp(pages[0])
+    .toColourspace("srgb")
+    .removeAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true });
 
   const paperWhite = estimatePaperWhite(data, info.channels);
   const cast = Math.max(...paperWhite) - Math.min(...paperWhite);
@@ -137,6 +141,11 @@ async function main(): Promise<void> {
   console.log("");
   console.log("  It only affects SCAN_COLOR_MODE=auto, and only the colour-vs-greyscale");
   console.log("  decision — the pixels written to disk are unchanged.");
+  console.log("");
+  console.log("  This checks the sheet is not obviously tinted, but it cannot confirm it");
+  console.log("  was white: a subtly tinted sheet measures much like a scanner cast. If");
+  console.log("  auto mode starts converting pages you expected to stay colour, re-measure");
+  console.log("  from a sheet you are confident is plain white.");
   console.log("");
 }
 
