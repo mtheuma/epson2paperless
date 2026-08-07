@@ -39,6 +39,55 @@ describe("loadConfig", () => {
     delete process.env.ESCI_FORCE_SOURCE;
     delete process.env.NETSCAN_VERSION;
     delete process.env.POST_PROCESS;
+    delete process.env.PRINTER_WHITE_POINT;
+  });
+
+  it("parses PRINTER_WHITE_POINT into a channel triplet", () => {
+    process.env.PRINTER_IP = "192.168.1.5";
+    process.env.PRINTER_WHITE_POINT = "227:232:255";
+    expect(loadConfig().printerWhitePoint).toEqual([227, 232, 255]);
+  });
+
+  it("leaves PRINTER_WHITE_POINT undefined when unset", () => {
+    process.env.PRINTER_IP = "192.168.1.5";
+    expect(loadConfig().printerWhitePoint).toBeUndefined();
+  });
+
+  it("rejects a malformed PRINTER_WHITE_POINT", () => {
+    process.env.PRINTER_IP = "192.168.1.5";
+    for (const bad of ["227,232,255", "227:232", "227:232:255:1", "ff:ee:dd", "227 232 255"]) {
+      process.env.PRINTER_WHITE_POINT = bad;
+      expect(() => loadConfig()).toThrow("PRINTER_WHITE_POINT");
+    }
+  });
+
+  it("rejects an out-of-range PRINTER_WHITE_POINT channel", () => {
+    process.env.PRINTER_IP = "192.168.1.5";
+    process.env.PRINTER_WHITE_POINT = "227:232:300";
+    expect(() => loadConfig()).toThrow("PRINTER_WHITE_POINT");
+  });
+
+  it("rejects a PRINTER_WHITE_POINT measured from tinted stock", () => {
+    // The likeliest misuse: calibrating from cream paper rather than white,
+    // which would over-correct every later scan and push coloured pages
+    // toward greyscale. Cream measures roughly this.
+    process.env.PRINTER_IP = "192.168.1.5";
+    process.env.PRINTER_WHITE_POINT = "247:224:173";
+    expect(() => loadConfig()).toThrow("PRINTER_WHITE_POINT");
+  });
+
+  it("accepts a realistic scanner cast", () => {
+    process.env.PRINTER_IP = "192.168.1.5";
+    process.env.PRINTER_WHITE_POINT = "227:232:255"; // ET-4956, spread 28
+    expect(loadConfig().printerWhitePoint).toEqual([227, 232, 255]);
+  });
+
+  it("rejects a PRINTER_WHITE_POINT too dark to be paper", () => {
+    // Guards the likeliest misuse: measuring something other than a blank
+    // white sheet, which would apply a large and wrong correction.
+    process.env.PRINTER_IP = "192.168.1.5";
+    process.env.PRINTER_WHITE_POINT = "60:20:20";
+    expect(() => loadConfig()).toThrow("PRINTER_WHITE_POINT");
   });
 
   it("throws if PRINTER_IP is missing", () => {

@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { correctDocumentImage, correctDocumentImageAuto } from "./document.js";
-import { classifyJpeg, describeVerdict, toGrayscaleJpeg } from "./auto-color.js";
+import { classifyJpeg, describeVerdict, toGrayscaleJpeg, type WhitePoint } from "./auto-color.js";
 import { sortedPageFiles } from "../output.js";
 import type { ToneCurveName } from "./tone-curves.js";
 import type { GrayscaleConversion } from "../config.js";
@@ -26,6 +26,13 @@ export interface PostProcessOptions {
    * pixels); under `none` it runs as its own conversion pass.
    */
   grayscaleConversion?: GrayscaleConversion;
+  /**
+   * How this scanner renders white paper (PRINTER_WHITE_POINT). When set, the
+   * auto-colour verdict divides the device's cast out before measuring, so a
+   * cast scanner's blank pages are not all judged colour. Omitted means no
+   * correction. Never inferred from the page — see auto-color.ts.
+   */
+  whitePoint?: WhitePoint;
 }
 
 /**
@@ -95,6 +102,7 @@ export async function postProcessTempPages(
           opts.jpegQuality,
           opts.toneCurve,
           conversion,
+          opts.whitePoint,
         );
         processed = r.jpeg;
         grayscaled = r.grayscale;
@@ -105,7 +113,7 @@ export async function postProcessTempPages(
           processed = await toGrayscaleJpeg(processed, opts.jpegQuality);
           grayscaled = true;
         } else if (conversion === "auto") {
-          const verdict = await classifyJpeg(processed);
+          const verdict = await classifyJpeg(processed, opts.whitePoint);
           log.debug?.(`auto colour mode: ${name} ${describeVerdict(verdict)}`);
           if (verdict.grayscale) {
             processed = await toGrayscaleJpeg(processed, opts.jpegQuality);

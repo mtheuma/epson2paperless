@@ -1,6 +1,6 @@
 import sharp from "sharp";
 import { TONE_CURVES, type ToneCurveName } from "./tone-curves.js";
-import { classifyRawPixels, type ChromaVerdict } from "./auto-color.js";
+import { classifyRawPixels, type ChromaVerdict, type WhitePoint } from "./auto-color.js";
 import { setJfifDensity } from "../exif.js";
 import type { GrayscaleConversion } from "../config.js";
 
@@ -169,6 +169,7 @@ async function transformDocumentImage(
   jpegQuality: number,
   toneCurve: ToneCurveName | undefined,
   conversion: GrayscaleConversion,
+  whitePoint?: WhitePoint,
 ): Promise<{ jpeg: Buffer; grayscale: boolean; verdict?: ChromaVerdict }> {
   const [{ orientation, density, channels: sourceChannels }, { data, info }] = await Promise.all([
     sharp(jpeg).metadata(),
@@ -192,7 +193,20 @@ async function transformDocumentImage(
   let corrected: Buffer;
   if (conversion === "auto") {
     const clipped = clip ? applyLuts(data, info.channels, clip) : null;
-    verdict = await classifyRawPixels(clipped ?? data, info.width, info.height, info.channels);
+    // The clip anchors each channel on the page's own paper white, which
+    // neutralises the device cast as a side effect — so clipped pixels are
+    // already balanced and applying PRINTER_WHITE_POINT on top would correct
+    // twice, injecting chroma into neutral mid-tones (~0.123*v on a cast of
+    // 28) and pushing plain pages back into colour. The white point is for
+    // pixels that arrive as scanned, which here means only the case where the
+    // clip guard declined to run.
+    verdict = await classifyRawPixels(
+      clipped ?? data,
+      info.width,
+      info.height,
+      info.channels,
+      clipped ? undefined : whitePoint,
+    );
     grayscale = verdict.grayscale || sourceGrayscale;
     // tone∘clip applied in two passes equals the composed LUT of the
     // non-auto path — the clip-stage buffer had to exist for classification.
@@ -278,6 +292,7 @@ export async function correctDocumentImageAuto(
   jpegQuality: number,
   toneCurve?: ToneCurveName,
   conversion: Exclude<GrayscaleConversion, "off"> = "auto",
+  whitePoint?: WhitePoint,
 ): Promise<{ jpeg: Buffer; grayscale: boolean; verdict?: ChromaVerdict }> {
-  return transformDocumentImage(jpeg, jpegQuality, toneCurve, conversion);
+  return transformDocumentImage(jpeg, jpegQuality, toneCurve, conversion, whitePoint);
 }

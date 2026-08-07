@@ -18,6 +18,7 @@
     "pcap:extract": "tsx tools/pcap-extract/extract.ts",
     "pcap:render": "tsx tools/pcap-render/render.ts",
     "scan:compare": "tsx tools/scan-compare/compare.ts",
+    "scan:calibrate": "tsx tools/scan-calibrate/calibrate.ts",
     "lint": "eslint .",
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",

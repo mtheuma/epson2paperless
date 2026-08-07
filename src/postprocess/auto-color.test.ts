@@ -8,6 +8,7 @@ import {
   toGrayscaleJpeg,
   isNeutralVerdict,
   COLOR_FRACTION,
+  buildCastCorrection,
 } from "./auto-color.js";
 import { correctDocumentImage, correctDocumentImageAuto } from "./document.js";
 import { postProcessTempPages } from "./index.js";
@@ -239,6 +240,138 @@ describe("thresholds against the measured ET-4956 corpus (#146)", () => {
     const retiredStrongThreshold = 0.0005;
     expect(COLOR_FRACTION).toBeLessThan(retiredStrongThreshold);
     expect(isNeutralVerdict(retiredStrongThreshold)).toBe(false);
+  });
+});
+
+describe("PRINTER_WHITE_POINT cast correction (#159)", () => {
+  // How an ET-4956 renders plain white paper, per `npm run scan:calibrate`.
+  const ET4956: readonly [number, number, number] = [227, 232, 255];
+
+  /** A neutral page as that scanner produces it: blue high, red and green low. */
+  function castPagePixels(): Buffer {
+    const buf = neutralPagePixels();
+    for (let i = 0; i < buf.length; i += 3) {
+      buf[i] = Math.round(buf[i] * (227 / 255));
+      buf[i + 1] = Math.round(buf[i + 1] * (232 / 255));
+    }
+    return buf;
+  }
+
+  function uniformPage(rgb: [number, number, number]): Buffer {
+    const buf = Buffer.alloc(W * H * 3);
+    for (let i = 0; i < buf.length; i += 3) {
+      buf[i] = rgb[0];
+      buf[i + 1] = rgb[1];
+      buf[i + 2] = rgb[2];
+    }
+    return buf;
+  }
+
+  /** Tinted stock carrying ordinary black text. */
+  function tintedPageWithText(rgb: [number, number, number]): Buffer {
+    const buf = uniformPage(rgb);
+    for (let y = 0; y < H; y++) {
+      if (y % 20 >= 2) continue;
+      for (let x = 40; x < W - 40; x++) {
+        const i = (y * W + x) * 3;
+        buf[i] = 30;
+        buf[i + 1] = 30;
+        buf[i + 2] = 30;
+      }
+    }
+    return buf;
+  }
+
+  it("converts a neutral page that the scanner's cast made look colourful", async () => {
+    const page = await encode(castPagePixels());
+    expect(await isEffectivelyGrayscale(page)).toBe(false); // the #159 symptom
+    expect(await isEffectivelyGrayscale(page, ET4956)).toBe(true); // corrected
+  });
+
+  it("still keeps real colour on a cast page", async () => {
+    const buf = castPagePixels();
+    paintRect(buf, 100, 100, 120, 80, [180, 120, 60]);
+    expect(await isEffectivelyGrayscale(await encode(buf), ET4956)).toBe(false);
+  });
+
+  // The reason the reference is configured rather than measured from the page.
+  // A per-page estimate maps any page-wide tint to white and collapses its
+  // chroma; a fixed device reference cannot, because it does not depend on
+  // what the page contains. These must hold with the correction ACTIVE.
+  const PAGE_WIDE_COLOUR: [string, Buffer][] = [
+    ["saturated red sheet", uniformPage([200, 40, 40])],
+    ["dark red sheet", uniformPage([60, 20, 20])],
+    ["pastel sheet", uniformPage([220, 200, 190])],
+    ["pastel stock with text", tintedPageWithText([220, 200, 190])],
+    ["cream card with text", tintedPageWithText([245, 232, 205])],
+  ];
+  for (const [label, pixels] of PAGE_WIDE_COLOUR) {
+    it(`keeps a ${label} in colour with the correction active`, async () => {
+      expect(await isEffectivelyGrayscale(await encode(pixels), ET4956)).toBe(false);
+    });
+  }
+
+  // The document clip anchors on the page's own paper white, so it already
+  // neutralises the cast. Applying PRINTER_WHITE_POINT on top would correct
+  // twice and inject chroma into neutral mid-tones, undoing the very
+  // conversion the setting is meant to enable.
+  it("does not correct twice under the document profile", async () => {
+    const src = await encode(castPagePixels(), 300);
+    const without = await correctDocumentImageAuto(src, 90, undefined, "auto");
+    const with_ = await correctDocumentImageAuto(src, 90, undefined, "auto", ET4956);
+    expect(without.grayscale).toBe(true); // the clip alone already handles it
+    expect(with_.grayscale).toBe(true); // and the setting must not break that
+    expect(with_.verdict?.colourfulFraction).toBeCloseTo(
+      without.verdict?.colourfulFraction ?? 0,
+      5,
+    );
+  });
+
+  it("still corrects under document when the clip guard declines to run", async () => {
+    // The one document-path case where pixels reach the classifier as scanned.
+    //
+    // The fixture has to satisfy two things at once, and getting either wrong
+    // makes the test vacuous. It needs under 15% near-white so the clip guard
+    // trips, AND cast strong enough to clear the chroma floor unaided — the
+    // cast is 0.11*v, so only values above ~219 do that. A uniformly dark page
+    // meets the first and fails the second: at v=60 its chroma is 7, well
+    // under the floor, so it reads neutral either way and the assertion proves
+    // nothing. Hence a mostly mid-tone page with a bright minority.
+    const mixed = Buffer.alloc(W * H * 3);
+    const brightRows = Math.round(H * 0.1);
+    for (let y = 0; y < H; y++) {
+      const v = y < brightRows ? 240 : 140;
+      for (let x = 0; x < W; x++) {
+        const i = (y * W + x) * 3;
+        mixed[i] = Math.round(v * (227 / 255));
+        mixed[i + 1] = Math.round(v * (232 / 255));
+        mixed[i + 2] = v;
+      }
+    }
+    const page = await encode(mixed);
+
+    // Premise: without the correction this page reads as colour, so the
+    // assertion below is about the correction and not about the fixture.
+    const uncorrected = await correctDocumentImageAuto(page, 90, undefined, "auto");
+    expect(uncorrected.grayscale).toBe(false);
+    expect(uncorrected.verdict?.colourfulFraction).toBeGreaterThan(COLOR_FRACTION);
+
+    const corrected = await correctDocumentImageAuto(page, 90, undefined, "auto", ET4956);
+    expect(corrected.grayscale).toBe(true);
+  });
+
+  it("is a no-op for a scanner that already renders white as neutral", () => {
+    for (const lut of buildCastCorrection([255, 255, 255])) {
+      for (let v = 0; v < 256; v++) expect(lut[v]).toBe(v);
+    }
+  });
+
+  it("maps the measured white to 255 on every channel, clamping not wrapping", () => {
+    const luts = buildCastCorrection(ET4956);
+    expect(luts[0][227]).toBe(255);
+    expect(luts[1][232]).toBe(255);
+    expect(luts[2][255]).toBe(255);
+    for (const lut of luts) expect(lut[255]).toBe(255);
   });
 });
 
