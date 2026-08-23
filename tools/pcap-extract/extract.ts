@@ -6,11 +6,11 @@ import { createIsFrameReader } from "../../src/is-frame-stream.js";
 export interface ExtractOptions {
   pcapPath: string;
   /**
-   * Endpoint addresses, IPv4 or IPv6. Both must be the same family (enforced
-   * in `buildTsharkArgs`); it selects the tshark field name (`ip.*` vs
-   * `ipv6.*`). Scan sessions
-   * do reach the printer over IPv6 in the wild -- a Bonjour-discovered
-   * scanner can pick it with no user control over the choice (issue #166).
+   * Endpoint addresses, IPv4 or IPv6. Both must be the same family, enforced
+   * in `buildTsharkArgs`; the family selects the tshark field name (`ip.*` vs
+   * `ipv6.*`). Scan sessions do reach the printer over IPv6 in the wild: a
+   * Bonjour-discovered scanner can pick it with no user control over the
+   * choice (issue #166).
    */
   hostIp: string;
   printerIp: string;

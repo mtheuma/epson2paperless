@@ -1,8 +1,13 @@
 # ET-2550 replay fixture
 
-JSONL fixture used by `src/esci/scanner.test.ts` replay tests. Generated from a
-gitignored Wireshark capture in `.reference/wireshark-captures/et-2550/` via
+JSONL fixture for the legacy ESC/I replay tests, generated from a gitignored
+Wireshark capture in `.reference/wireshark-captures/et-2550/` via
 `npm run pcap:extract`. Contributed for issue #166.
+
+**Not yet wired into `src/esci/scanner.test.ts`.** It lands here ahead of the
+ET-2550 dialect entry, which is what will consume it; until then the model has
+no replay coverage. Update this note when the entry adds it to the fixture
+table.
 
 | Fixture         | Scenario                                      |
 | --------------- | --------------------------------------------- |
