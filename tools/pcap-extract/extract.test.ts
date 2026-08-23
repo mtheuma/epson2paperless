@@ -101,6 +101,21 @@ describe("buildTsharkArgs display filter", () => {
     );
   });
 
+  it("rejects a mixed-family endpoint pair instead of emitting a filter tshark will refuse", () => {
+    // Easy mistake: host IPv4 from ipconfig, printer address from its Bonjour
+    // advert (which carries IPv6). Without this guard the filter reaches tshark
+    // as `ip.src==<v4> && ip.dst==<v6>` and fails with a filter-grammar error
+    // that says nothing about the actual mistake.
+    expect(() =>
+      buildTsharkArgs({
+        pcapPath: "x.pcap",
+        hostIp: "192.168.178.38",
+        printerIp: "fe80::46d2:44ff:fe0f:1f58",
+        scanPort: 1865,
+      }),
+    ).toThrow(/same address family/i);
+  });
+
   it("appends `&& tcp.stream==N` when tcpStream is provided", () => {
     const filter = filterFor({
       pcapPath: "x.pcap",
