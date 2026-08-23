@@ -18,24 +18,25 @@ What you get:
 
 ## Compatible printers
 
-| Model                 | Status               | Notes                                                                                                                         |
-| --------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| **DS-575W**           | 🟡&nbsp;Experimental | Requires [pairing](#button-only-scanner-pairing); ADF-only; only duplex colour PDF @ 200 DPI hardware-verified                |
-| **ET-2750**           | ✅&nbsp;Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS                                                                         |
-| **ET-2810**           | ✅&nbsp;Verified     | Flatbed-only hardware; no panel trigger — needs `scan:now`                                                                    |
-| **ET-2950**           | 🟡&nbsp;Experimental | Flatbed-only hardware; inferred dialect, no reporter retest yet ([#92](https://github.com/mtheuma/epson2paperless/issues/92)) |
-| **ET-3950**           | ✅&nbsp;Verified     |                                                                                                                               |
-| **ET-4800**           | ✅&nbsp;Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS                                                                                   |
-| **ET-4950 / ET-4956** | ✅&nbsp;Verified     |                                                                                                                               |
-| **ET-7700**           | ✅&nbsp;Verified     | Flatbed-only hardware                                                                                                         |
-| **ET-8500**           | ✅&nbsp;Verified     | Flatbed-only hardware                                                                                                         |
-| **ET-15000**          | 🟡&nbsp;Experimental | Flatbed verified; ADF simplex untested                                                                                        |
-| **FF-680W**           | 🟡&nbsp;Experimental | Requires [pairing](#button-only-scanner-pairing); ADF-only; 200/300 DPI verified                                              |
-| **WF-3620**           | ✅&nbsp;Verified     | Plain TCP scanner, no TLS pinning                                                                                             |
-| **XP-620**            | 🟡&nbsp;Experimental | Flatbed-only hardware                                                                                                         |
-| **XP-3200**           | ✅&nbsp;Verified     | Flatbed-only hardware; shares the ET-2810 dialect over TLS; panel lists the destination but errors "Invalid" — use `scan:now` |
-| **XP-4100**           | ✅&nbsp;Verified     | Flatbed-only hardware; shares the ET-2750 dialect ([#139](https://github.com/mtheuma/epson2paperless/issues/139))             |
-| **XP-7100**           | ✅&nbsp;Verified     |                                                                                                                               |
+| Model                 | Status               | Notes                                                                                                                                          |
+| --------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| **DS-575W**           | 🟡&nbsp;Experimental | Requires [pairing](#button-only-scanner-pairing); ADF-only; only duplex colour PDF @ 200 DPI hardware-verified                                 |
+| **ET-2550**           | 🟡&nbsp;Experimental | Flatbed-only hardware; dialect from a reporter capture, no hardware retest yet ([#166](https://github.com/mtheuma/epson2paperless/issues/166)) |
+| **ET-2750**           | ✅&nbsp;Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS                                                                                          |
+| **ET-2810**           | ✅&nbsp;Verified     | Flatbed-only hardware; no panel trigger — needs `scan:now`                                                                                     |
+| **ET-2950**           | 🟡&nbsp;Experimental | Flatbed-only hardware; inferred dialect, no reporter retest yet ([#92](https://github.com/mtheuma/epson2paperless/issues/92))                  |
+| **ET-3950**           | ✅&nbsp;Verified     |                                                                                                                                                |
+| **ET-4800**           | ✅&nbsp;Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS                                                                                                    |
+| **ET-4950 / ET-4956** | ✅&nbsp;Verified     |                                                                                                                                                |
+| **ET-7700**           | ✅&nbsp;Verified     | Flatbed-only hardware                                                                                                                          |
+| **ET-8500**           | ✅&nbsp;Verified     | Flatbed-only hardware                                                                                                                          |
+| **ET-15000**          | 🟡&nbsp;Experimental | Flatbed verified; ADF simplex untested                                                                                                         |
+| **FF-680W**           | 🟡&nbsp;Experimental | Requires [pairing](#button-only-scanner-pairing); ADF-only; 200/300 DPI verified                                                               |
+| **WF-3620**           | ✅&nbsp;Verified     | Plain TCP scanner, no TLS pinning                                                                                                              |
+| **XP-620**            | 🟡&nbsp;Experimental | Flatbed-only hardware                                                                                                                          |
+| **XP-3200**           | ✅&nbsp;Verified     | Flatbed-only hardware; shares the ET-2810 dialect over TLS; panel lists the destination but errors "Invalid" — use `scan:now`                  |
+| **XP-4100**           | ✅&nbsp;Verified     | Flatbed-only hardware; shares the ET-2750 dialect ([#139](https://github.com/mtheuma/epson2paperless/issues/139))                              |
+| **XP-7100**           | ✅&nbsp;Verified     |                                                                                                                                                |
 
 ✅ **Verified**: every capability the hardware has is confirmed working on real hardware by someone.
 
@@ -131,7 +132,7 @@ skips. On ADF models without duplex hardware (ET-4800, ET-15000), set `SCAN_SIDE
 
 Configuration is via environment variables. Only `PRINTER_IP` is required.
 
-Each setting's **Scope** column shows which printers it affects: `All`, `Panel` (panel-driven models), `FF-680W`, `DS-575W`, `Legacy ESC/I` (WF-3620 family, XP-620), or `ESC/I-2 TLS` (ET-4950 family). A setting outside a printer's path is simply ignored.
+Each setting's **Scope** column shows which printers it affects: `All`, `Panel` (panel-driven models), `FF-680W`, `DS-575W`, `Legacy ESC/I` (WF-3620 family, XP-620, ET-2550), or `ESC/I-2 TLS` (ET-4950 family). A setting outside a printer's path is simply ignored.
 
 | Variable                    | Scope                        | Default          | What it does                                                                                                                                                                                                                                             |
 | --------------------------- | ---------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

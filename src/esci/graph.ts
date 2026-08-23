@@ -369,6 +369,12 @@ g.state(
     if (ctx.inInterPageLoop) {
       return { next: "ADF_IDENTITY_A", send: sendFsI() };
     }
+    // Flatbed-only dialects (ET-2550) have no source to select, and their
+    // driver issues no ESC e at all — sending one gets the parameter byte
+    // NAKed. Go straight to the status read the probe would have preceded.
+    if (ctx.entry.sourcePolicy === "fixed-flatbed") {
+      return { next: "STATUS_2", send: sendFsF() };
+    }
     return { next: "SOURCE_ACK1", send: sendEscEPlusByte(PROBE_SOURCE_BYTE) };
   }),
 );
@@ -389,6 +395,13 @@ g.state(
     if (typeGuard) return typeGuard;
     const lengthGuard = expectLength(packet.payload, 16, "STATUS_2", "status");
     if (lengthGuard) return lengthGuard;
+    // Fixed-flatbed: the shell already pinned ctx.source, and byte-0 detection
+    // must NOT run — the ET-2550 reports 0x01 here (never the WF-3620's 0x81),
+    // which legacyDetectSource would read as an ADF. Its driver runs the reset
+    // cycle unconditionally, so take that path directly.
+    if (ctx.entry.sourcePolicy === "fixed-flatbed") {
+      return { next: "RESET_PAREN", send: passthru(buildEscParen(), 1) };
+    }
     const statusByte = packet.payload[0];
     if (ctx.forcedSource) {
       ctx.source = ctx.forcedSource;
@@ -436,7 +449,21 @@ awaitReply(g, "ADF_STATUS_3", ESCI_REPLY, length16, "RESET_PAREN", passthru(buil
 awaitReply(g, "RESET_PAREN", ESCI_REPLY, length1, "RESET_INIT", passthru(buildEscInit(), 1));
 
 // RESET_INIT: ACK for ESC @ → RESET_SRC_ACK1, send ESC e + ctx.source byte.
-awaitReply(g, "RESET_INIT", ESCI_REPLY, isAck, "RESET_SRC_ACK1", sendEscEPlusCtxSource);
+// Fixed-flatbed skips that pair too (see STATUS_1B) and goes straight to FS F.
+g.state(
+  "RESET_INIT",
+  decision<EsciCtx>((ctx, packet) => {
+    const typeGuard = expectIsType(packet, ESCI_REPLY, "RESET_INIT");
+    if (typeGuard) return typeGuard;
+    if (!isAck(packet.payload)) {
+      return { error: new Error("RESET_INIT: expected ESC @ ack") };
+    }
+    if (ctx.entry.sourcePolicy === "fixed-flatbed") {
+      return { next: "STATUS_READY", send: sendFsF() };
+    }
+    return { next: "RESET_SRC_ACK1", send: sendEscEPlusCtxSource };
+  }),
+);
 
 // RESET_SRC_ACK1/ACK2 → STATUS_READY (with FS F).
 escEThenAck(g, "RESET_SRC", "STATUS_READY", sendFsF());
@@ -806,6 +833,11 @@ awaitReply(
 ); // ESC e + 0x00
 escEThenAck(g, "XP_TEARDOWN_SRC", "XP_TEARDOWN_PAREN", passthru(buildEscCleanup(), 1)); // ESC )
 awaitReply(g, "XP_TEARDOWN_PAREN", ESCI_REPLY, length1, "DONE"); // ESC ) reply → done; TCP closes
+
+// ET_TEARDOWN_PAREN: ET-2550 teardown is a bare `ESC )` (emitted by the entry's
+// teardown branch) whose 1-byte reply is 0x80, not an ACK. No unlock packet,
+// same as the XP-620.
+awaitReply(g, "ET_TEARDOWN_PAREN", ESCI_REPLY, length1, "DONE");
 
 // =============================================================================
 // Cleanup states — post-image-transfer panel hygiene. A failure in any of

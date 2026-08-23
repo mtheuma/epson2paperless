@@ -10,6 +10,7 @@ import { parseIsPacket, buildIsPacket, IS_HEADER_SIZE } from "../protocol.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
 import { loadFixture, driveFixture, concatHostBytes } from "./test-support/replay.js";
 import { WF3620_ENTRY } from "./dialects/wf3620.js";
+import { ET2550_ENTRY } from "./dialects/et2550.js";
 import { XP620_ENTRY } from "./dialects/xp620.js";
 import type { LegacyDialectEntry } from "./dialects/entry.js";
 
@@ -141,6 +142,26 @@ const FIXTURE_SPECS: FixtureSpec[] = [
     format: "pdf",
     duplex: false,
     entry: XP620_ENTRY,
+    expectedDetectedSource: "flatbed",
+    expectedFileCount: 1,
+    expectedBackPages: [],
+    expectedPdfPageCount: 1,
+  },
+  {
+    path: "et-2550/flatbed.jsonl",
+    format: "jpg",
+    duplex: false,
+    entry: ET2550_ENTRY,
+    expectedDetectedSource: "flatbed",
+    expectedFileCount: 1,
+    expectedBackPages: [],
+    expectedPdfPageCount: undefined,
+  },
+  {
+    path: "et-2550/flatbed.jsonl",
+    format: "pdf",
+    duplex: false,
+    entry: ET2550_ENTRY,
     expectedDetectedSource: "flatbed",
     expectedFileCount: 1,
     expectedBackPages: [],
