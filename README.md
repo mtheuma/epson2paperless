@@ -212,6 +212,12 @@ The printer broadcasts a discovery beacon roughly once a minute; wait at least 6
 - Check your firewall. UDP port `2968` needs to be allowed for multicast traffic from the printer.
 - Make sure Epson Event Manager isn't running on the same PC. It binds the same port. Other Epson software (drivers, ScanSmart) is fine.
 
+**Pressing Start shows "Scanning error" instantly, and no `[pushscan]` line appears in the log.**
+Discovery is working (keepalive lines in the log) but the printer's scan trigger isn't reaching the service. Two known causes:
+
+- A firewall on the host is blocking inbound **TCP** port `2968`. Discovery only needs UDP; the scan trigger arrives on TCP. Allow both.
+- "Scan to Computer" was declined during the printer's initial network setup. It can't be re-enabled from the settings menus afterwards. Reset the printer's network settings and accept the Scan to Computer prompt when setting it up again.
+
 **Service hangs after a scan.**
 Rare edge case. Restart the service with `Ctrl-C` and relaunch.
 
