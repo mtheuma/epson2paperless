@@ -5,6 +5,13 @@ import { createIsFrameReader } from "../../src/is-frame-stream.js";
 
 export interface ExtractOptions {
   pcapPath: string;
+  /**
+   * Endpoint addresses, IPv4 or IPv6. Both must be the same family, enforced
+   * in `buildTsharkArgs`; the family selects the tshark field name (`ip.*` vs
+   * `ipv6.*`). Scan sessions do reach the printer over IPv6 in the wild: a
+   * Bonjour-discovered scanner can pick it with no user control over the
+   * choice (issue #166).
+   */
   hostIp: string;
   printerIp: string;
   scanPort: number;
@@ -16,7 +23,7 @@ export interface ExtractOptions {
    * aborted SYN/RST followed by the real session); without this, both
    * streams' bytes interleave in the output and confuse the replay
    * driver. List the indices via
-   * `tshark -r <pcap> -Y "tcp.port==<port>" -T fields -e tcp.stream -e ip.src -e ip.dst | sort -u`
+   * `tshark -r <pcap> -Y "tcp.port==<port>" -T fields -e tcp.stream -e ip.src -e ip.dst -e ipv6.src -e ipv6.dst | sort -u`
    * (the `-z conv,tcp` summary table does NOT expose the stream index)
    * and pick the one whose endpoints are the host/printer IP pair you
    * captured. Wireshark's GUI also shows this as the `tcp.stream` field
@@ -39,6 +46,26 @@ export type FixtureEvent =
 const TSHARK_DEFAULT = "tshark";
 
 /**
+ * tshark field prefix for an address's family. A colon only ever appears in an
+ * IPv6 literal, and `ip.src==<v6 literal>` is a filter compile error rather
+ * than a silent miss, so the family has to pick the field name.
+ */
+function addressFieldPrefix(addr: string): "ip" | "ipv6" {
+  return addr.includes(":") ? "ipv6" : "ip";
+}
+
+/**
+ * Which side of the conversation a segment came from, keyed on the source port
+ * rather than the source address: the printer is whichever endpoint holds the
+ * scan port. Address comparison would be brittle for IPv6, where one address
+ * has several equally valid spellings (case, zero-compression) and tshark's
+ * canonical form need not match what the caller typed on the command line.
+ */
+export function directionFor(srcPort: number, scanPort: number): "h>p" | "p>h" {
+  return srcPort === scanPort ? "p>h" : "h>p";
+}
+
+/**
  * Build the tshark argv used by `extract`. Factored out for unit testing —
  * the display filter is the only knob that needs regression coverage, and
  * we'd rather pin its exact string than spawn tshark in a unit test.
@@ -53,6 +80,13 @@ const TSHARK_DEFAULT = "tshark";
  */
 export function buildTsharkArgs(opts: ExtractOptions): string[] {
   const streamFilter = opts.tcpStream !== undefined ? ` && tcp.stream==${opts.tcpStream}` : "";
+  const fam = addressFieldPrefix(opts.hostIp);
+  if (fam !== addressFieldPrefix(opts.printerIp)) {
+    throw new Error(
+      `pcap-extract: hostIp (${opts.hostIp}) and printerIp (${opts.printerIp}) must be the ` +
+        `same address family. A scan session runs over one family or the other, never a mix.`,
+    );
+  }
   return [
     "-r",
     opts.pcapPath,
@@ -63,8 +97,8 @@ export function buildTsharkArgs(opts: ExtractOptions): string[] {
     "tcp.relative_sequence_numbers:TRUE",
     "-Y",
     `tcp.port==${opts.scanPort} && tcp.len>0 && ` +
-      `((ip.src==${opts.hostIp} && ip.dst==${opts.printerIp}) || ` +
-      `(ip.src==${opts.printerIp} && ip.dst==${opts.hostIp}))${streamFilter}`,
+      `((${fam}.src==${opts.hostIp} && ${fam}.dst==${opts.printerIp}) || ` +
+      `(${fam}.src==${opts.printerIp} && ${fam}.dst==${opts.hostIp}))${streamFilter}`,
     "-T",
     "fields",
     "-E",
@@ -72,7 +106,7 @@ export function buildTsharkArgs(opts: ExtractOptions): string[] {
     "-e",
     "frame.time_relative",
     "-e",
-    "ip.src",
+    "tcp.srcport",
     "-e",
     "tcp.stream",
     "-e",
@@ -178,11 +212,11 @@ export async function capturePackets(opts: ExtractOptions): Promise<RawPacket[]>
   await runTshark(tshark, buildTsharkArgs(opts), (line) => {
     const trimmed = line.trim();
     if (!trimmed) return;
-    const [tsStr, src, streamStr, seqStr, hex] = trimmed.split("|");
+    const [tsStr, srcPortStr, streamStr, seqStr, hex] = trimmed.split("|");
     if (!hex) return;
     streams.add(parseInt(streamStr ?? "0", 10));
     packets.push({
-      dir: src === opts.hostIp ? "h>p" : "p>h",
+      dir: directionFor(parseInt(srcPortStr ?? "0", 10), opts.scanPort),
       ts: parseFloat(tsStr ?? "0"),
       seq: parseInt(seqStr ?? "0", 10),
       payload: Buffer.from(hex, "hex"),

@@ -9,6 +9,7 @@ export default tseslint.config(
       "dist/**",
       "node_modules/**",
       "coverage/**",
+      "test-output/**",
       ".reference/**",
       ".claude/**",
       ".superpowers/**",

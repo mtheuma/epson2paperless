@@ -7,6 +7,7 @@ import {
   buildTsharkArgs,
   reassembleSession,
   assertSingleConversation,
+  directionFor,
   __test__createImageChunkFolder as createImageChunkFolder,
 } from "./extract.js";
 import type { RawPacket } from "./extract.js";
@@ -83,6 +84,38 @@ describe("buildTsharkArgs display filter", () => {
     );
   });
 
+  it("builds an ipv6 filter when the endpoints are IPv6 — an ip.src clause cannot match an IPv6 packet", () => {
+    // Bonjour-discovered scanners can pick IPv6 with no user control over it
+    // (ET-2550, issue #166). `ip.src==<v6 literal>` is a tshark compile error,
+    // so the family has to select the field name.
+    const filter = filterFor({
+      pcapPath: "x.pcap",
+      hostIp: "fe80::14cb:1e02:3744:510e",
+      printerIp: "fe80::46d2:44ff:fe0f:1f58",
+      scanPort: 1865,
+    });
+    expect(filter).toBe(
+      "tcp.port==1865 && tcp.len>0 && " +
+        "((ipv6.src==fe80::14cb:1e02:3744:510e && ipv6.dst==fe80::46d2:44ff:fe0f:1f58) || " +
+        "(ipv6.src==fe80::46d2:44ff:fe0f:1f58 && ipv6.dst==fe80::14cb:1e02:3744:510e))",
+    );
+  });
+
+  it("rejects a mixed-family endpoint pair instead of emitting a filter tshark will refuse", () => {
+    // Easy mistake: host IPv4 from ipconfig, printer address from its Bonjour
+    // advert (which carries IPv6). Without this guard the filter reaches tshark
+    // as `ip.src==<v4> && ip.dst==<v6>` and fails with a filter-grammar error
+    // that says nothing about the actual mistake.
+    expect(() =>
+      buildTsharkArgs({
+        pcapPath: "x.pcap",
+        hostIp: "192.168.178.38",
+        printerIp: "fe80::46d2:44ff:fe0f:1f58",
+        scanPort: 1865,
+      }),
+    ).toThrow(/same address family/i);
+  });
+
   it("appends `&& tcp.stream==N` when tcpStream is provided", () => {
     const filter = filterFor({
       pcapPath: "x.pcap",
@@ -104,7 +137,7 @@ describe("buildTsharkArgs display filter", () => {
     const fields = args.filter((_, i) => args[i - 1] === "-e");
     expect(fields).toEqual([
       "frame.time_relative",
-      "ip.src",
+      "tcp.srcport",
       "tcp.stream",
       "tcp.seq",
       "tcp.payload",
@@ -217,5 +250,15 @@ describe("createImageChunkFolder", () => {
       chunkSize: 253063,
     });
     expect(out[1]).toMatchObject({ dir: "p>h", hex: expect.stringContaining("4953a000") });
+  });
+});
+
+describe("directionFor", () => {
+  it("treats the scan port as the printer side", () => {
+    expect(directionFor(1865, 1865)).toBe("p>h");
+  });
+
+  it("treats any other source port as the host side", () => {
+    expect(directionFor(57476, 1865)).toBe("h>p");
   });
 });
