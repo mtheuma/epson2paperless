@@ -848,6 +848,10 @@ awaitReply(g, "ET_TEARDOWN_PAREN", ESCI_REPLY, length1, "DONE");
 // IS included: the XP teardown chain runs after the page is already
 // flushed to disk, so it's pure re-init/park hygiene, not a transfer-end
 // signal — unlike POST_STATUS's FS F, which can still carry one.
+// ET_TEARDOWN_PAREN is included for the same reason, and matters more there:
+// the ET-2550's teardown reply lands ~10 s after its `ESC )`, and the capture
+// ends mid-connection, so we have never observed how that socket closes. A
+// drop in that window must not cost the user a page already on disk.
 // =============================================================================
 
 g.cleanupStates([
@@ -861,6 +865,7 @@ g.cleanupStates([
   "XP_TEARDOWN_SRC_ACK1",
   "XP_TEARDOWN_SRC_ACK2",
   "XP_TEARDOWN_PAREN",
+  "ET_TEARDOWN_PAREN",
 ]);
 
 // =============================================================================

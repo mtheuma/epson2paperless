@@ -16,7 +16,7 @@ The first two channels are shared across supported models. The scan-session chan
 | ------------- | ------------ | -------------------- | ----------------------------------------------- |
 | `esci2-tls`   | TLS over TCP | ESC/I-2 over IS      | ET-4950 / ET-3950 / ET-4956 / ET-2950           |
 | `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750 / XP-7100 / ET-4800 / FF-680W / DS-575W |
-| `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family / XP-620                         |
+| `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family / XP-620 / ET-2550               |
 
 `esci2-tls` is internal shorthand for the TLS ESC/I-2 path. In configuration, this is selected with `PRINTER_PROTOCOL=esci2`.
 
@@ -86,7 +86,7 @@ connect -> welcome -> lock
   -> unlock -> finalize output
 ```
 
-The legacy ESC/I graph follows the same engine contract but uses a different command vocabulary: `ESC @`, `ESC e`, `FS W`, `FS G`, `FS F`, plus unsolicited `0xa200` image-stream chunks. Per-model differences (WF-3620 vs. the flatbed-only XP-620) are resolved through a small dialect registry (`src/esci/dialects/`) keyed on the push-scan PID, picked by `resolveLegacyEntry` — the legacy-path counterpart to the ESC/I-2 side's CAPA-fingerprint registry.
+The legacy ESC/I graph follows the same engine contract but uses a different command vocabulary: `ESC @`, `ESC e`, `FS W`, `FS G`, `FS F`, plus unsolicited `0xa200` image-stream chunks. Per-model differences (WF-3620 vs. the flatbed-only XP-620 and ET-2550) are resolved through a small dialect registry (`src/esci/dialects/`) keyed on the push-scan PID (`PID 08C8` → XP-620, `PID 1106` → ET-2550, anything else → WF-3620), picked by `resolveLegacyEntry` — the legacy-path counterpart to the ESC/I-2 side's CAPA-fingerprint registry.
 
 The protocol graphs intentionally stay separate. They share the engine and output pipeline, but not command construction or state names; that keeps the ESC/I-2 and WF-3620 behaviors easy to reason about independently.
 
@@ -101,7 +101,7 @@ Some scanners report no panel selection at all. The button-only, ADF-only models
 - ESC/I-2 ADF-capable printers use an INIT_POLL `STAT` length heuristic.
 - ET-2750 and ET-2950 are fixed flatbed.
 - WF-3620-class ESC/I printers probe with `ESC e` and inspect the following `FS F` status byte.
-- XP-620 is fixed flatbed, like ET-2750 and ET-2950, but on the legacy ESC/I side.
+- XP-620 and ET-2550 are fixed flatbed, like ET-2750 and ET-2950, but on the legacy ESC/I side. A `fixed-flatbed` entry skips the `ESC e` probe entirely: those printers have no source to select and their drivers never send one, so probing gets the parameter byte NAKed. The XP-620 reaches the gamma phase through its own state group; the ET-2550 runs the WF-3620 flatbed path with both `ESC e` pairs skipped at `STATUS_1B`, `STATUS_2` and `RESET_INIT`.
 
 For duplex ADF scans on reversing-ADF hardware, back sides arrive physically rotated 180 degrees because of the feeder path. The scanner records back-page indices as pages complete. JPEG output receives a minimal EXIF Orientation=3 segment; PDF output sets `/Rotate = 180` on the affected pages. Neither path re-encodes pixels just to rotate them. Single-pass dual-sensor scanners (the DS-575W) deliver back sides upright, so their registry entry opts out of the compensation (`duplexBackRotated: false`).
 

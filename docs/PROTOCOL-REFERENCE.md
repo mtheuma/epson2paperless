@@ -12,7 +12,7 @@ Printer (unicast)    →  Service (TCP port 2968)          Push-scan trigger
 Service              →  Printer (TCP port 1865)          Scan session
 ```
 
-Each channel is independent enough to be developed and tested separately. Inside the scan session, the same `IS` framing wraps either ESC/I-2 commands (ET-4950 family + ET-2950 over TLS; ET-2750 / XP-7100 / ET-4800 / ET-15000 / FF-680W / DS-575W over plain TCP) or legacy ESC/I commands (WF-3620 family and XP-620, plain TCP). TLS is layered around it only for the ESC/I-2-over-TLS printers (the ET-4950 family and ET-2950 — a separate registry entry); everything else runs on plain TCP.
+Each channel is independent enough to be developed and tested separately. Inside the scan session, the same `IS` framing wraps either ESC/I-2 commands (ET-4950 family + ET-2950 over TLS; ET-2750 / XP-7100 / ET-4800 / ET-15000 / FF-680W / DS-575W over plain TCP) or legacy ESC/I commands (WF-3620 family, XP-620 and ET-2550, plain TCP). TLS is layered around it only for the ESC/I-2-over-TLS printers (the ET-4950 family and ET-2950 — a separate registry entry); everything else runs on plain TCP.
 
 ### Discovery and keepalive (UDP multicast)
 
@@ -53,7 +53,7 @@ Three transport variants ride on TCP port 1865, decided per scan session by `src
 | ------------- | ------------ | -------------------- | ---------------------------------------------------------- |
 | `esci2-tls`   | TLS over TCP | ESC/I-2 over IS      | ET-4950 / ET-3950 / ET-4956 / ET-2950                      |
 | `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750 / XP-7100 / ET-4800 / ET-15000 / FF-680W / DS-575W |
-| `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family / XP-620                                    |
+| `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family / XP-620 / ET-2550                          |
 
 The rest of this section walks the **canonical `esci2-tls` path** in depth, since it's the most mechanically complex (TLS on top, both command generations layered inside) and the foundation that the other two variants peel back from. The plain-TCP ESC/I-2 differences (ET-2750 / XP-7100 / ET-4800 / ET-15000 / FF-680W / DS-575W) live in [ESC/I-2 over plain TCP](#esci-2-over-plain-tcp), and the legacy ESC/I family (WF-3620) in [ESC/I variant](#esci-variant-wf-3620). Both are sibling sections, not appendices.
 
@@ -357,9 +357,28 @@ registry entry. Replay tests (`src/esci2/scanner.test.ts` and per-dialect files
 under `src/esci2/dialects/*.test.ts`) pin the composed output byte-for-byte
 against the captured fixture.
 
-Legacy ESC/I (WF-3620 family) uses a separate code path under `src/esci/` with
-a 64-byte `FS W` parameter block instead of the `PARA` command; none of the
-above applies to it.
+Legacy ESC/I (WF-3620 family, XP-620, ET-2550) uses a separate code path under
+`src/esci/` with a 64-byte `FS W` parameter block instead of the `PARA` command;
+none of the above applies to it. Its per-model data lives in
+`src/esci/dialects/`, resolved by push-scan PID rather than by fingerprint.
+
+A `fixed-flatbed` entry additionally suppresses the `ESC e` source probe. The
+ET-2550's captured sequence is the WF-3620 flatbed path with both `ESC e` +
+parameter pairs removed, so the shared states branch on `sourcePolicy` rather
+than the dialect getting its own state group:
+
+| State        | `detect` (WF-3620)                       | `fixed-flatbed` (ET-2550)   |
+| ------------ | ---------------------------------------- | --------------------------- |
+| `STATUS_1B`  | `ESC e` + `0x01` probe → `SOURCE_ACK1`   | `FS F` → `STATUS_2`         |
+| `STATUS_2`   | byte-0 detection; `0x81` → reset cycle   | reset cycle unconditionally |
+| `RESET_INIT` | `ESC e` + source byte → `RESET_SRC_ACK1` | `FS F` → `STATUS_READY`     |
+
+`STATUS_2` must skip detection rather than merely ignore its result: the ET-2550
+reports `0x01` there, never the WF-3620's `0x81`, and `legacyDetectSource` reads
+`0x01` as an ADF. Its teardown is a bare `ESC )` whose 1-byte reply is `0x80`
+rather than an ACK, with no unlock packet (as on the XP-620), and the state sits
+in `cleanupStates` so a connection drop during teardown still saves a page that
+has already flushed.
 
 ## ESC/I variant (WF-3620)
 
