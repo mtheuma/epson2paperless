@@ -389,13 +389,20 @@ plain-TCP arm of the [protocol probe](#protocol-probe-two-arms): after TLS
 fails, the plain-TCP welcome's payload byte 1 (`0x02`) identifies the device
 as legacy-ESC/I-shaped.
 
-A second model, the **XP-620** (issue #124), speaks a structurally similar
-but distinct dialect of the same ESC/I command family — same `IS` framing,
-same probe classification (its welcome payload is byte-for-byte identical
-to the WF-3620's), but a different setup/teardown handshake and a
-flatbed-only fixed raster. Per-model differences between the two are
-resolved through a small dialect registry rather than branching logic
-scattered through the graph — see [Per-model dialects
+Two further models speak structurally similar but distinct dialects of the same
+ESC/I command family — same `IS` framing, same probe classification (their
+welcome payloads are byte-for-byte identical to the WF-3620's), both
+flatbed-only with a fixed raster:
+
+- **XP-620** (issue #124) — a different setup and teardown handshake, run
+  through its own state group.
+- **ET-2550** (issue #166) — the WF-3620's own flatbed path with both `ESC e`
+  source-select pairs removed, since the driver never sends one on hardware
+  with no ADF. That omission is why the WF-3620 fallback NAKs at
+  `SOURCE_ACK2` for this model.
+
+Per-model differences are resolved through a small dialect registry rather than
+branching logic scattered through the graph — see [Per-model dialects
 (LegacyDialectEntry)](#per-model-dialects-legacydialectentry) below.
 
 Key wire differences (full table in
@@ -431,43 +438,57 @@ pipeline.
 
 ### Per-model dialects (LegacyDialectEntry)
 
-The legacy ESC/I graph (`src/esci/graph.ts`) is shared by both models. It
+The legacy ESC/I graph (`src/esci/graph.ts`) is shared by all three models. It
 reads per-model decisions off a `LegacyDialectEntry` (`src/esci/dialects/entry.ts`):
 fixed raster geometry, gamma LUTs, the `FS W` parameter block, the
 `FS G`-following stream-config payload, a `sourcePolicy` (`"detect"` for
-WF-3620's `ESC e` + `FS F` probe vs. `"fixed-flatbed"` for XP-620, which has
-no ADF), and two `Branch<S>` records — `setup` and `teardown` — each a
-`{ next, send }` pair naming the graph state to jump to and the command to
-emit on entry.
+WF-3620's `ESC e` + `FS F` probe vs. `"fixed-flatbed"` for the XP-620 and
+ET-2550, neither of which has an ADF), and two `Branch<S>` records — `setup`
+and `teardown` — each a `{ next, send }` pair naming the graph state to jump
+to and the command to emit on entry.
+
+`sourcePolicy` does double duty for the ET-2550: besides pinning the source, it
+suppresses the `ESC e` probe in the three shared states listed in [How
+printer-model differences are
+handled](#how-printer-model-differences-are-handled). The XP-620 never reaches
+those states — its setup branch jumps straight into its own group — so the two
+fixed-flatbed dialects arrive at the gamma phase by different routes.
 
 `src/esci/dialects/registry.ts`'s `resolveLegacyEntry(productName)` picks
 the entry. The push-scan SOAP's `ProductNameIn` field (parsed by
 `parsePushScanRequest` in `src/pushscan.ts`, threaded through
 `dispatchScanSession` in `src/startup.ts` as `productName`) is matched
-against `XP620_ENTRY`'s literal PID string `"PID 08C8"`; any other PID —
-or `null`, which is what the host-triggered `scan:now` CLI (`src/scan-now.ts`)
-always passes since there is no panel to read a `ProductNameIn` from —
-falls back to `WF3620_ENTRY`. In other words, XP-620 support is only
-reachable through a panel-triggered scan (daemon or `npm run scan`);
-`scan:now` stays WF-3620 regardless of the actual printer.
+against each PID-keyed entry's literal PID string — `"PID 08C8"` for
+`XP620_ENTRY`, `"PID 1106"` for `ET2550_ENTRY`. Any other PID — or `null`,
+which is what the host-triggered `scan:now` CLI (`src/scan-now.ts`) always
+passes since there is no panel to read a `ProductNameIn` from — falls back to
+`WF3620_ENTRY`. In other words, both PID-keyed dialects are only reachable
+through a panel-triggered scan (daemon or `npm run scan`); `scan:now` stays
+WF-3620 regardless of the actual printer.
 
 Three branch points read `ctx.entry`:
 
 - **Setup** (`LOCKING`): once the lock-ack arrives, the graph jumps to
-  `ctx.entry.setup.next` and sends `ctx.entry.setup.send()`. WF-3620 sends
-  `ESC @` into `INIT`; XP-620 sends `ESC I` into `XP_IDENT_A_META`, the
-  first state of the two-phase identity read described below.
+  `ctx.entry.setup.next` and sends `ctx.entry.setup.send()`. WF-3620 and
+  ET-2550 both send `ESC @` into `INIT`; XP-620 sends `ESC I` into
+  `XP_IDENT_A_META`, the first state of the two-phase identity read described
+  below.
 - **Pre-start** (`WINDOW_DATA`): once the 64-byte `FS W` block is acked,
   `ctx.entry.prestart` selects `"status-then-start"` (WF-3620: one more
-  `FS F` status round-trip before `FS G`) or `"start-direct"` (XP-620:
-  `FS G` sent immediately — the captured driver skips the prescan status
-  check).
+  `FS F` status round-trip before `FS G`) or `"start-direct"` (XP-620 and
+  ET-2550: `FS G` sent immediately — their captured drivers skip the prescan
+  status check).
 - **Teardown** (`makeFlushTransition`'s flatbed branch — ADF pages always
   take the page-eject loop, which is dialect-independent): once the last
   flatbed page's pixels have flushed, the graph jumps to
   `ctx.entry.teardown.next` and sends `ctx.entry.teardown.send()`.
   WF-3620 sends `FS F` into `POST_STATUS` (the ordinary cleanup cycle);
-  XP-620 sends `ESC @` into `XP_TEARDOWN_INIT`, its own teardown group.
+  XP-620 sends `ESC @` into `XP_TEARDOWN_INIT`, its own teardown group; the
+  ET-2550 sends a bare `ESC )` into `ET_TEARDOWN_PAREN`, whose 1-byte reply is
+  `0x80` rather than an ACK. Both dialect teardown states are in
+  `cleanupStates`, so a connection drop during teardown still finalizes a page
+  that has already flushed — `POST_STATUS` deliberately is not, since its
+  `FS F` can still carry a real transfer-end error.
 
 Per-entry fixed data lives on the entry rather than being derived
 per-request: `raster()` (page dimensions), `gamma` (R/G/B LUTs),
@@ -477,7 +498,11 @@ from the requested source/format (`geometry()`, `buildFsWBlock()`,
 `buildStreamConfigPayload()` in `src/esci/commands.ts`). XP-620's are
 fixed constants — the model only supports flatbed and only one mode
 (300 DPI A4, 2481×3507 px) has been captured — transcribed byte-for-byte
-from that capture into `src/esci/dialects/xp620-data.ts`.
+from that capture into `src/esci/dialects/xp620-data.ts`. ET-2550's are fixed
+for the same reason (300 DPI, 2550×3509 px full glass) in
+`src/esci/dialects/et2550-data.ts`, generated from the committed fixture rather
+than hand-transcribed. Its `FS W` block and stream config are byte-identical
+across the capture's JPG and PDF scans, so both are format-independent.
 
 `runEsciScan` (`src/esci/scanner.ts`) guards the mismatch this fixed
 dialect creates: if `entry.sourcePolicy === "fixed-flatbed"` and
@@ -511,11 +536,12 @@ round-trip — see `prestart: "start-direct"` above).
 
 After the image transfer, XP-620's teardown group (`XP_TEARDOWN_INIT`
 through `XP_TEARDOWN_PAREN`) is `ESC @` → `ESC e` + `0x00` → `ESC )`, then
-the session ends. Unlike WF-3620 — and unlike every other supported
-model — the capture shows no `0xa101` unlock ack: the printer closes the
-TCP connection right after the `ESC )` reply, so the graph resolves
-straight to the engine's terminal `DONE` state instead of routing through
-`UNLOCKING`.
+the session ends. Unlike WF-3620, the capture shows no `0xa101` unlock ack:
+the printer closes the TCP connection right after the `ESC )` reply, so the
+graph resolves straight to the engine's terminal `DONE` state instead of
+routing through `UNLOCKING`. The ET-2550 ends the same way (its teardown is
+just the `ESC )`), so the two legacy fixed-flatbed dialects share this trait
+against WF-3620's unlock.
 
 `src/esci/scanner.test.ts` replays the captured XP-620 flatbed session
 (`tools/pcap-extract/captures/xp-620/flatbed.jsonl`) byte-for-byte for
