@@ -10,6 +10,7 @@ import { parseIsPacket, buildIsPacket, IS_HEADER_SIZE } from "../protocol.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
 import { loadFixture, driveFixture, concatHostBytes } from "./test-support/replay.js";
 import { WF3620_ENTRY } from "./dialects/wf3620.js";
+import { ET2550_ENTRY } from "./dialects/et2550.js";
 import { XP620_ENTRY } from "./dialects/xp620.js";
 import type { LegacyDialectEntry } from "./dialects/entry.js";
 
@@ -141,6 +142,26 @@ const FIXTURE_SPECS: FixtureSpec[] = [
     format: "pdf",
     duplex: false,
     entry: XP620_ENTRY,
+    expectedDetectedSource: "flatbed",
+    expectedFileCount: 1,
+    expectedBackPages: [],
+    expectedPdfPageCount: 1,
+  },
+  {
+    path: "et-2550/flatbed.jsonl",
+    format: "jpg",
+    duplex: false,
+    entry: ET2550_ENTRY,
+    expectedDetectedSource: "flatbed",
+    expectedFileCount: 1,
+    expectedBackPages: [],
+    expectedPdfPageCount: undefined,
+  },
+  {
+    path: "et-2550/flatbed.jsonl",
+    format: "pdf",
+    duplex: false,
+    entry: ET2550_ENTRY,
     expectedDetectedSource: "flatbed",
     expectedFileCount: 1,
     expectedBackPages: [],
@@ -531,5 +552,46 @@ describe("FS F unknown-byte handling", () => {
     await expect(driveFixture(mutated, fake, sessionPromise)).rejects.toThrow(
       /Unrecognised FS F status 0x00/,
     );
+  });
+  it("ET-2550: a connection close during teardown still saves the already-flushed page", async () => {
+    // The teardown reply arrives ~10 s after the `ESC )` on real hardware, and
+    // the capture ends mid-connection so we have never observed the socket
+    // closing gracefully. A drop in that window is realistic -- and by then the
+    // page has already flushed, so it must not cost the user their scan.
+    const fixture = loadFixture(path.join(FIXTURES, "et-2550/flatbed.jsonl"));
+    const withoutTeardownReply = fixture.slice(0, -1);
+    const fake = new FakeTcpSocket();
+
+    const sessionPromise = runEsciScan(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        outputDir,
+        tempDir,
+        entry: ET2550_ENTRY,
+        duplex: false,
+        forcedSource: null,
+        format: "jpg",
+        jpegQuality: 90,
+      },
+      fake.asFactory(),
+    );
+    sessionPromise.catch(() => {});
+
+    // Feed everything but the teardown reply, then wait until the scanner has
+    // actually emitted the full transcript (page encode is async, so feeding
+    // the last packet does not mean teardown has been reached) and drop the
+    // connection at that point.
+    await driveFixture(withoutTeardownReply, fake, Promise.resolve());
+    const expected = concatHostBytes(fixture);
+    const deadline = Date.now() + 15_000;
+    while (Buffer.concat(fake.writes).length < expected.length && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(Buffer.concat(fake.writes).toString("hex")).toBe(expected.toString("hex"));
+    fake.end();
+    await sessionPromise;
+
+    expect(readdirSync(outputDir)).toHaveLength(1);
   });
 });

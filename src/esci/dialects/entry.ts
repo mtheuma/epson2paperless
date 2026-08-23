@@ -2,7 +2,7 @@ import type { Buffer } from "node:buffer";
 import type { Source, Format, ScanMode, ScanGeometry, FsGReply } from "../commands.js";
 
 export type SetupEntryState = "INIT" | "XP_IDENT_A_META";
-export type TeardownEntryState = "POST_STATUS" | "XP_TEARDOWN_INIT";
+export type TeardownEntryState = "POST_STATUS" | "XP_TEARDOWN_INIT" | "ET_TEARDOWN_PAREN";
 
 /** A dialect branch point: target state + the command to emit on entry.
  *  `send` takes no ctx — every setup/teardown command is context-independent,
@@ -13,7 +13,7 @@ export interface Branch<S extends string> {
 }
 
 export interface LegacyDialectEntry {
-  name: "wf3620" | "xp620";
+  name: "wf3620" | "xp620" | "et2550";
   productName: string | null; // push-scan PID; null = default fallback
   sourcePolicy: "detect" | "fixed-flatbed";
   supportedSources: Source[];

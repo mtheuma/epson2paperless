@@ -4,10 +4,8 @@ JSONL fixture for the legacy ESC/I replay tests, generated from a gitignored
 Wireshark capture in `.reference/wireshark-captures/et-2550/` via
 `npm run pcap:extract`. Contributed for issue #166.
 
-**Not yet wired into `src/esci/scanner.test.ts`.** It lands here ahead of the
-ET-2550 dialect entry, which is what will consume it; until then the model has
-no replay coverage. Update this note when the entry adds it to the fixture
-table.
+Wired into the `src/esci/scanner.test.ts` replay matrix as two cases (JPG and
+PDF), both shielded by the byte-for-byte host-transcript assertion.
 
 | Fixture         | Scenario                                      |
 | --------------- | --------------------------------------------- |
@@ -31,7 +29,9 @@ one stream, and the capture ends with no FIN — the connection was still open w
 recording stopped. Our push-scan model opens a fresh session per scan, and
 `concatHostBytes` would otherwise splice both scans' host bytes into one expected
 transcript, so the pcap is trimmed to the first scan before extraction. Frame
-29697 is that scan's terminating `ESC )`.
+29712 is the printer's reply to that scan's terminating `ESC )`.
+Cutting at the `ESC )` request itself (frame 29697) truncates the session: the
+reply lands about 10 s later, and the replay would wait for it forever.
 
 The two scans are byte-identical in `FS W`, stream config and gamma, which is why
 one fixture covers both the JPG and PDF cases: the format is a host-side decision
@@ -42,7 +42,7 @@ and never reaches the wire.
 ```
 "/path/to/editcap" -r \
   .reference/wireshark-captures/et-2550/et2550-flatbed-jpg_v6.pcapng \
-  /tmp/et2550-scan1.pcapng 1-29697
+  /tmp/et2550-scan1.pcapng 1-29712
 
 TSHARK_PATH="/path/to/tshark" npm run pcap:extract -- \
   /tmp/et2550-scan1.pcapng \
@@ -51,7 +51,7 @@ TSHARK_PATH="/path/to/tshark" npm run pcap:extract -- \
   --stream 4
 ```
 
-Expected output: 60 events (40 `h>p` / 20 `p>h`), one folded image stream of 439
+Expected output: 61 events (40 `h>p` / 21 `p>h`), one folded image stream of 439
 chunks / 26,844,289 bytes at chunk size 61201, and a 20-frame host transcript of
 1292 bytes:
 
@@ -59,6 +59,8 @@ chunks / 26,844,289 bytes at chunk size 61201, and a 20-frame host transcript of
 LOCK -> ESC @ -> FS I -> FS F x3 -> ESC ( -> ESC @ -> FS F
      -> ESC z x3 (+256B LUT each) -> FS W (+64B body) -> FS G -> STREAMCFG -> ESC )
 ```
+
+The reply to that final `ESC )` is a 1-byte `0x80`, not an ACK.
 
 ## Notes for the dialect entry
 
@@ -69,10 +71,12 @@ LOCK -> ESC @ -> FS I -> FS F x3 -> ESC ( -> ESC @ -> FS F
   session terminator we have evidence for is the trailing `ESC )`. There is no
   unlock packet, matching `../xp-620/`.
 - **Gamma is not identity.** The G and B LUTs are, but R is identity except for a
-  contiguous band from index 54 to 140 where every value is exactly +1. That is
-  most likely a rounding artifact of the reporter's professional-mode settings
-  rather than a model tone curve, but it is transcribed as captured so the
-  byte-equivalence shield holds.
+  contiguous band from index 54 to 140 where every value is exactly +1. The
+  WF-3620's committed LUTs have the same shape (R is +1 across 12..215, G is -1
+  across 20..198, B identity), so this is characteristic of the driver family
+  rather than an artifact of how the capture was taken. Contrast the XP-620,
+  whose LUTs deviate on 252 of 256 entries across all three channels with deltas
+  from -23 to +26 — a real tone curve.
 - `FS G`'s reply is transfer segmentation, not raster dimensions: chunk size
   61200, chunk count 438, final partial chunk 38250. Those satisfy
   `438 x 61200 + 38250 = 26,843,850 = 2550 x 3509 x 3`. The stream config echoes
