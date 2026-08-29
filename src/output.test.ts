@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import {
   generateFilename,
   resolveSessionTimestamp,
@@ -36,6 +36,60 @@ describe("generateFilename", () => {
   it("omits the page suffix when pageIndex is undefined (existing behaviour)", () => {
     const date = new Date("2026-04-20T08:14:38.000Z");
     expect(generateFilename(date, "jpg")).toBe("scan_2026-04-20_081438.jpg");
+  });
+});
+
+describe("timezone handling", () => {
+  // One instant, read in two zones. Node applies `TZ` at call time, so each
+  // test sets it before formatting. There is deliberately no "TZ unset" case:
+  // unset means the platform's system zone, which differs per machine (and
+  // `delete process.env.TZ` is itself platform-divergent — glibc re-reads
+  // /etc/localtime, Windows keeps the cached zone), so it is not portably
+  // assertable. vitest.config.ts pins the rest of the suite to UTC.
+  const INSTANT = "2026-04-16T14:30:22.000Z";
+  const originalTz = process.env.TZ;
+
+  afterEach(() => {
+    // Always defined: vitest.config.ts sets TZ for the whole suite.
+    process.env.TZ = originalTz;
+  });
+
+  it("formats in the configured local timezone rather than UTC", () => {
+    process.env.TZ = "Europe/Berlin";
+    expect(generateFilename(new Date(INSTANT), "pdf")).toBe("scan_2026-04-16_163022.pdf");
+  });
+
+  it("rolls the date over when local time is on the next day", () => {
+    process.env.TZ = "Pacific/Auckland";
+    expect(generateFilename(new Date(INSTANT), "pdf")).toBe("scan_2026-04-17_023022.pdf");
+  });
+
+  it("matches the collision prefix against local-time filenames", () => {
+    process.env.TZ = "Europe/Berlin";
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "epson2paperless-test-"));
+    try {
+      // Berlin spelling of INSTANT. Under UTC formatting this name would not
+      // match the prefix and the timestamp would come back unbumped.
+      fs.writeFileSync(path.join(dir, "scan_2026-04-16_163022.jpg"), "x");
+      const result = resolveSessionTimestamp(new Date(INSTANT), dir);
+      expect(result.toISOString()).toBe("2026-04-16T14:30:23.000Z");
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("names promoted pages in local time", () => {
+    process.env.TZ = "Europe/Berlin";
+    const outDir = fs.mkdtempSync(path.join(os.tmpdir(), "epson2paperless-out-"));
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "epson2paperless-tmp-"));
+    try {
+      fs.writeFileSync(path.join(tempDir, "page_01.jpg"), Buffer.from("X"));
+      const paths = promoteTempPagesToOutput(tempDir, outDir, new Date(INSTANT), "jpg");
+      expect(paths[0]).toBe(path.join(outDir, "scan_2026-04-16_163022.jpg"));
+    } finally {
+      fs.rmSync(outDir, { recursive: true, force: true });
+      fs.rmSync(tempDir, { recursive: true, force: true });
+    }
   });
 });
 

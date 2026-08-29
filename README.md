@@ -123,7 +123,7 @@ skips. On ADF models without duplex hardware (ET-4800, ET-15000), set `SCAN_SIDE
 2. At the printer panel, press **Scan** → select your destination (default `Paperless`).
 3. Choose **Action** (Save as JPEG / Save as PDF) and **Sides** (1-Sided / 2-Sided) on the panel.
 4. Wait for the panel to show **"Scan complete"**.
-5. A timestamped file appears in `OUTPUT_DIR`:
+5. A timestamped file appears in `OUTPUT_DIR`, stamped in the timezone `TZ` names (the container/system zone if unset — UTC in the published image):
    - JPG, single page → `scan_2026-04-20_081438.jpg`
    - JPG, multi-page → `scan_2026-04-20_081438_01.jpg`, `_02.jpg`, …
    - PDF, any page count → one multi-page `scan_2026-04-20_081438.pdf`
@@ -139,6 +139,7 @@ Each setting's **Scope** column shows which printers it affects: `All`, `Panel` 
 | `PRINTER_IP`<br>✅ required | All                          | —                | The printer's IPv4 address.                                                                                                                                                                                                                              |
 | `SCAN_DEST_NAME`            | All                          | `Paperless`      | The label the printer shows on its panel. Give each instance a distinct name. On button-only scanners (FF-680W, DS-575W) it must also match the scanner's stored paired name; see [Button-only scanner pairing](#button-only-scanner-pairing).           |
 | `OUTPUT_DIR`                | All                          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                                                                                                                         |
+| `TZ`                        | All                          | system           | Timezone for scan filename timestamps. The standard Docker variable, read by Node directly — no app-side validation. Unset uses the container/system zone, which is UTC in the published image.                                                          |
 | `LOG_LEVEL`                 | All                          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                                                                                                                     |
 | `LOG_FORMAT`                | All                          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line, for `docker logs` + Loki / `jq`).                                                                                                                                                        |
 | `PREVIEW_ACTION`            | Panel                        | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen.                                                                                                  |

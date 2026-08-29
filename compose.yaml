@@ -12,6 +12,7 @@ services:
       PRINTER_IP: 192.0.2.58
       SCAN_DEST_NAME: Paperless
       LOG_LEVEL: info
+      # TZ: Europe/London       # scan-filename timestamps; unset = container zone (UTC in this image)
       # OUTPUT_DIR: /output       # image default; override only if you change the volume target path below
       # PREVIEW_ACTION: reject    # default; override to jpg|pdf to rewrite panel's "Preview on Computer"
       # TEMP_DIR: /tmp            # default; override if /tmp is tmpfs-constrained
