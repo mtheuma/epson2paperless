@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import {
   generateFilename,
   resolveSessionTimestamp,
@@ -36,6 +36,33 @@ describe("generateFilename", () => {
   it("omits the page suffix when pageIndex is undefined (existing behaviour)", () => {
     const date = new Date("2026-04-20T08:14:38.000Z");
     expect(generateFilename(date, "jpg")).toBe("scan_2026-04-20_081438.jpg");
+  });
+});
+
+describe("generateFilename timezone handling", () => {
+  // One instant, three zones. Node reads `TZ` at call time, so each test sets
+  // it before constructing the Date.
+  const INSTANT = "2026-04-16T14:30:22.000Z";
+  const originalTz = process.env.TZ;
+
+  afterEach(() => {
+    if (originalTz === undefined) delete process.env.TZ;
+    else process.env.TZ = originalTz;
+  });
+
+  it("formats in the configured local timezone rather than UTC", () => {
+    process.env.TZ = "Europe/Berlin";
+    expect(generateFilename(new Date(INSTANT), "pdf")).toBe("scan_2026-04-16_163022.pdf");
+  });
+
+  it("rolls the date over when local time is on the next day", () => {
+    process.env.TZ = "Pacific/Auckland";
+    expect(generateFilename(new Date(INSTANT), "pdf")).toBe("scan_2026-04-17_023022.pdf");
+  });
+
+  it("stays on UTC when TZ is unset, as in a container that sets no timezone", () => {
+    delete process.env.TZ;
+    expect(generateFilename(new Date(INSTANT), "pdf")).toBe("scan_2026-04-16_143022.pdf");
   });
 });
 

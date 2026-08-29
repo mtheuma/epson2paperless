@@ -4,14 +4,16 @@ import { createLogger } from "./logger.js";
 
 const log = createLogger("output");
 
-// UTC so filenames are stable across host timezones (e.g. in Docker).
+// Local time, so filenames match the wall clock of whoever reads them.
+// The zone comes from the standard `TZ` variable, which Node reads directly
+// (no config plumbing); a container that leaves it unset stays on UTC.
 function formatTimestamp(date: Date): string {
-  const y = date.getUTCFullYear();
-  const mo = String(date.getUTCMonth() + 1).padStart(2, "0");
-  const d = String(date.getUTCDate()).padStart(2, "0");
-  const h = String(date.getUTCHours()).padStart(2, "0");
-  const mi = String(date.getUTCMinutes()).padStart(2, "0");
-  const s = String(date.getUTCSeconds()).padStart(2, "0");
+  const y = date.getFullYear();
+  const mo = String(date.getMonth() + 1).padStart(2, "0");
+  const d = String(date.getDate()).padStart(2, "0");
+  const h = String(date.getHours()).padStart(2, "0");
+  const mi = String(date.getMinutes()).padStart(2, "0");
+  const s = String(date.getSeconds()).padStart(2, "0");
   return `${y}-${mo}-${d}_${h}${mi}${s}`;
 }
 
