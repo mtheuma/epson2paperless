@@ -12,6 +12,7 @@ import {
   resolveScanDispatch,
   dispatchScanSession,
 } from "./startup.js";
+import { createPrinterTarget } from "./network.js";
 
 const log = createLogger("main");
 
@@ -21,7 +22,8 @@ async function main() {
   setLogFormat(config.logFormat);
 
   logStartupBanner(config, "epson2paperless starting");
-  const responder = await startPrinterDiscovery(config);
+  const target = await createPrinterTarget(config);
+  const responder = await startPrinterDiscovery(config, target);
 
   const inflight = createInflightTracker();
 
@@ -46,10 +48,11 @@ async function main() {
         action: scan.action,
         paperless: buildPaperlessOptions(config),
         productName: info.productName,
+        printerIp: info.peerAddress,
       });
       void inflight.track(scanPromise);
     },
-    buildPushScanServerOptions(config),
+    buildPushScanServerOptions(config, target),
   );
 
   const healthServer = createHealthServer(config.healthPort);

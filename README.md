@@ -50,7 +50,7 @@ Compatibility reports are welcome whether your model works or doesn't. [Open an 
 
 Image: **`ghcr.io/mtheuma/epson2paperless`**. Multi-arch (`linux/amd64`, `linux/arm64`). Published to GHCR on every `main` push (`:main`) and every `v*` git tag (`:vX.Y.Z` + `:latest`).
 
-1. In `compose.yaml`, set `PRINTER_IP` to your printer's IPv4 address and `./output` to wherever you want scans written.
+1. In `compose.yaml`, set exactly one of `PRINTER_IP` (fixed IPv4) or `PRINTER_HOSTNAME` (IPv4-resolvable DNS name), and `./output` to wherever you want scans written.
 2. `docker compose up -d`.
 3. Follow the logs: `docker compose logs -f epson2paperless`.
 
@@ -92,10 +92,10 @@ first, bounded by `SHUTDOWN_TIMEOUT_MS`.
 
 There's no panel to pick the format, so `SCAN_FORMAT` (`jpg`/`pdf`, default `pdf`) and
 `SCAN_SIDES` (`simplex`/`duplex`, default `duplex`) decide. `scan:now` reads these and
-`PRINTER_IP` from the environment like the daemon and takes no command-line arguments, so
+the printer target (`PRINTER_IP` or `PRINTER_HOSTNAME`) from the environment like the daemon and takes no command-line arguments, so
 set them however you set any env var. From source:
 
-    PRINTER_IP=192.0.2.58 npm run scan:now                                    # defaults: pdf, duplex
+    PRINTER_HOSTNAME=printer.lan npm run scan:now                              # defaults: pdf, duplex
     PRINTER_IP=192.0.2.58 SCAN_FORMAT=jpg SCAN_SIDES=simplex npm run scan:now
 
 In Docker `PRINTER_IP` already lives in your compose file / env-file, and you override per
@@ -130,13 +130,14 @@ skips. On ADF models without duplex hardware (ET-4800, ET-15000), set `SCAN_SIDE
 
 ## Configure
 
-Configuration is via environment variables. Only `PRINTER_IP` is required.
+Configuration is via environment variables. Exactly one of `PRINTER_IP` and `PRINTER_HOSTNAME` is required.
 
 Each setting's **Scope** column shows which printers it affects: `All`, `Panel` (panel-driven models), `FF-680W`, `DS-575W`, `Legacy ESC/I` (WF-3620 family, XP-620, ET-2550), or `ESC/I-2 TLS` (ET-4950 family). A setting outside a printer's path is simply ignored.
 
 | Variable                    | Scope                        | Default          | What it does                                                                                                                                                                                                                                             |
 | --------------------------- | ---------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PRINTER_IP`<br>✅ required | All                          | —                | The printer's IPv4 address.                                                                                                                                                                                                                              |
+| `PRINTER_IP`                | All                          | —                | Fixed printer IPv4 address. Mutually exclusive with `PRINTER_HOSTNAME`; retained for compatibility.                                                                                                                                                      |
+| `PRINTER_HOSTNAME`          | All                          | —                | DNS hostname for the printer. IPv4 results are loaded at startup, refreshed every 30 seconds, and refreshed on demand for an unknown peer; the last known-good set is retained after transient DNS failure. Mutually exclusive with `PRINTER_IP`.        |
 | `SCAN_DEST_NAME`            | All                          | `Paperless`      | The label the printer shows on its panel. Give each instance a distinct name. On button-only scanners (FF-680W, DS-575W) it must also match the scanner's stored paired name; see [Button-only scanner pairing](#button-only-scanner-pairing).           |
 | `OUTPUT_DIR`                | All                          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                                                                                                                         |
 | `TZ`                        | All                          | system           | Timezone for scan filename timestamps. The standard Docker variable, read by Node directly — no app-side validation. Unset uses the container/system zone, which is UTC in the published image.                                                          |

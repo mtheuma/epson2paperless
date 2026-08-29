@@ -14,6 +14,7 @@ import { buildPaperlessOptions } from "./startup.js";
 describe("loadConfig", () => {
   beforeEach(() => {
     delete process.env.PRINTER_IP;
+    delete process.env.PRINTER_HOSTNAME;
     delete process.env.SCAN_DEST_NAME;
     delete process.env.SCAN_DEST_ID;
     delete process.env.OUTPUT_DIR;
@@ -92,6 +93,24 @@ describe("loadConfig", () => {
 
   it("throws if PRINTER_IP is missing", () => {
     expect(() => loadConfig()).toThrow("PRINTER_IP");
+  });
+
+  it("accepts a hostname target", () => {
+    process.env.PRINTER_HOSTNAME = "printer.example.lan";
+    expect(loadConfig().printerHostname).toBe("printer.example.lan");
+  });
+
+  it("rejects both printer target variables", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.PRINTER_HOSTNAME = "printer.example.lan";
+    expect(() => loadConfig()).toThrow(/Exactly one/);
+  });
+
+  it("rejects malformed hostnames", () => {
+    for (const hostname of ["bad host", ".example.com", "example.com."]) {
+      process.env.PRINTER_HOSTNAME = hostname;
+      expect(() => loadConfig()).toThrow(/PRINTER_HOSTNAME/);
+    }
   });
 
   it("loads required PRINTER_IP and applies defaults", () => {
@@ -683,6 +702,7 @@ describe("buildPaperlessOptions", () => {
 describe("PRINTER_CERT_FINGERPRINT", () => {
   beforeEach(() => {
     delete process.env.PRINTER_IP;
+    delete process.env.PRINTER_HOSTNAME;
     delete process.env.PRINTER_CERT_FINGERPRINT;
     delete process.env.PRINTER_PROTOCOL;
     delete process.env.ESCI_FORCE_SOURCE;

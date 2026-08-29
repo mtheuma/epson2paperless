@@ -36,6 +36,7 @@ const runJobNumberCommitMock = vi.mocked(runJobNumberCommit);
 function makeConfig(overrides: Partial<Config> = {}): Config {
   return {
     printerIp: "192.0.2.5",
+    printerHostname: undefined,
     scanDestName: "Paperless",
     scanDestId: 0x02,
     outputDir: "/test-output",
@@ -234,6 +235,7 @@ describe("dispatchScanSession", () => {
     const config = makeConfig({ printerProtocol: "esci2", printerIp: "203.0.113.7" });
     await dispatchScanSession({
       config,
+      printerIp: "203.0.113.7",
       duplex: false,
       action: "jpg",
       paperless: undefined,

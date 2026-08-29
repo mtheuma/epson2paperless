@@ -1,6 +1,7 @@
 import dgram from "node:dgram";
 import { createLogger } from "./logger.js";
 import { PID_FF680W, PID_DS575W } from "./printer-ids.js";
+import { getLocalIpForTarget, normalizeIPv4, type PrinterTarget } from "./network.js";
 
 const log = createLogger("keepalive");
 
@@ -98,6 +99,8 @@ export interface KeepaliveResponderOptions {
   keepalive: KeepaliveOptions;
   /** Unicast destination — the printer's IP address */
   printerIp: string;
+  target?: PrinterTarget;
+  localIpForTarget?: (target: string) => Promise<string>;
   /** UDP port to send keepalives to (2968) */
   printerPort: number;
   /** Multicast group to join for printer announcements (239.255.255.253) */
@@ -147,7 +150,7 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
   const pendingTimers: ReturnType<typeof setTimeout>[] = [];
   // seq → auto-expire timer; paired lifecycle so stop() can cancel both.
   // See dedupWindowMs JSDoc above for the rationale.
-  const seenSeqs = new Map<number, ReturnType<typeof setTimeout>>();
+  const seenSeqs = new Map<string, ReturnType<typeof setTimeout>>();
   const dedupWindowMs = opts.dedupWindowMs ?? 30_000;
 
   return {
@@ -167,86 +170,103 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
         });
 
         socket.on("message", (data: Buffer, rinfo: dgram.RemoteInfo) => {
-          const announcement = parsePrinterAnnouncement(data);
-          if (!announcement) {
-            // Not an 02 06 announcement. The socket is bound to 0.0.0.0:2968,
-            // so unicast probes land here too — some models may validate a
-            // destination with a different command type before scanning.
-            // Surface the bytes at debug instead of dropping them invisibly.
-            log.debug(
-              `Ignoring non-announcement UDP packet from ${rinfo.address}:${rinfo.port} — ` +
-                `${data.length} bytes: ${data.subarray(0, 64).toString("hex")}${data.length > 64 ? "…" : ""}`,
+          void (async () => {
+            const announcement = parsePrinterAnnouncement(data);
+            if (!announcement) {
+              // Not an 02 06 announcement. The socket is bound to 0.0.0.0:2968,
+              // so unicast probes land here too — some models may validate a
+              // destination with a different command type before scanning.
+              // Surface the bytes at debug instead of dropping them invisibly.
+              log.debug(
+                `Ignoring non-announcement UDP packet from ${rinfo.address}:${rinfo.port} — ` +
+                  `${data.length} bytes: ${data.subarray(0, 64).toString("hex")}${data.length > 64 ? "…" : ""}`,
+              );
+              return;
+            }
+
+            const seqHex = `0x${announcement.seq.toString(16).padStart(2, "0")}`;
+
+            const source = normalizeIPv4(rinfo.address);
+            if (
+              !source ||
+              (opts.target
+                ? !(await opts.target.accepts(source))
+                : source !== normalizeIPv4(opts.printerIp))
+            ) {
+              log.debug(`Ignoring announcement from unauthorized peer ${rinfo.address}`);
+              return;
+            }
+            const dedupKey = `${source}:${announcement.seq}`;
+            if (seenSeqs.has(dedupKey)) {
+              log.debug(
+                `Duplicate printer announcement from ${rinfo.address} — seq=${seqHex} already handled within ${dedupWindowMs}ms window, skipping burst`,
+              );
+              return;
+            }
+            // Mark this seq as recently handled; auto-expire so a later cycle
+            // that reuses the same seq (byte wraps at 256) still fires.
+            const expiry = setTimeout(() => {
+              seenSeqs.delete(dedupKey);
+            }, dedupWindowMs);
+            seenSeqs.set(dedupKey, expiry);
+
+            // Packet bytes are identical across all N packets in the burst —
+            // build once and reuse.
+            const keepalive: KeepaliveOptions = {
+              ...opts.keepalive,
+              version:
+                opts.keepalive.version ??
+                (announcement.productName && V3_KEEPALIVE_PRODUCTS.has(announcement.productName)
+                  ? "3.0"
+                  : "2.0"),
+            };
+
+            // Surface the announced PID and the chosen keepalive version at INFO —
+            // compatibility reports for unrecognised models hinge on both.
+            log.info(
+              `Printer announcement received from ${rinfo.address} — seq=${seqHex}, ` +
+                `product=${announcement.productName ?? "<not reported>"}; ` +
+                `sending burst of ${opts.burstCount} (keepalive v${keepalive.version})`,
             );
-            return;
-          }
-
-          const seqHex = `0x${announcement.seq.toString(16).padStart(2, "0")}`;
-
-          if (seenSeqs.has(announcement.seq)) {
-            log.debug(
-              `Duplicate printer announcement from ${rinfo.address} — seq=${seqHex} already handled within ${dedupWindowMs}ms window, skipping burst`,
+            const localIp = await (opts.localIpForTarget ?? getLocalIpForTarget)(source);
+            const packet = buildKeepalivePacket(
+              { ...keepalive, ipAddress: localIp },
+              announcement.seq,
             );
-            return;
-          }
-          // Mark this seq as recently handled; auto-expire so a later cycle
-          // that reuses the same seq (byte wraps at 256) still fires.
-          const expiry = setTimeout(() => {
-            seenSeqs.delete(announcement.seq);
-          }, dedupWindowMs);
-          seenSeqs.set(announcement.seq, expiry);
 
-          // Packet bytes are identical across all N packets in the burst —
-          // build once and reuse.
-          const keepalive: KeepaliveOptions = {
-            ...opts.keepalive,
-            version:
-              opts.keepalive.version ??
-              (announcement.productName && V3_KEEPALIVE_PRODUCTS.has(announcement.productName)
-                ? "3.0"
-                : "2.0"),
-          };
+            // Source-port policy. The FF-680W's reference (Mac) driver sends its
+            // keepalive from an ephemeral source port — verified in the capture —
+            // so v3 announcements egress via the dedicated unbound `sender`. The
+            // already-verified v2 fleet keeps sending from the bound multicast
+            // socket (port 2968) exactly as before this device was added, so a
+            // wire detail those printers were validated against doesn't change.
+            const useEphemeralSender = keepalive.version === "3.0";
 
-          // Surface the announced PID and the chosen keepalive version at INFO —
-          // compatibility reports for unrecognised models hinge on both.
-          log.info(
-            `Printer announcement received from ${rinfo.address} — seq=${seqHex}, ` +
-              `product=${announcement.productName ?? "<not reported>"}; ` +
-              `sending burst of ${opts.burstCount} (keepalive v${keepalive.version})`,
-          );
-          const packet = buildKeepalivePacket(keepalive, announcement.seq);
+            for (let i = 0; i < opts.burstCount; i++) {
+              const burstIndex = i + 1;
+              const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
+                // Resolve the live socket inside the timer so stop() (which nulls
+                // both) still cancels an in-flight burst.
+                const burstSocket = useEphemeralSender ? sender : socket;
+                if (!burstSocket) return;
+                burstSocket.send(packet, opts.printerPort, source, (err) => {
+                  if (err) {
+                    log.error(`Keepalive burst send #${burstIndex} failed`, err);
+                  } else {
+                    log.debug(
+                      `Keepalive burst #${burstIndex}/${opts.burstCount} sent to ${source}:${opts.printerPort} seq=${seqHex}`,
+                    );
+                  }
+                });
+                // Remove self from pendingTimers so the array doesn't grow
+                // unboundedly across beacon cycles.
+                const idx = pendingTimers.indexOf(timer);
+                if (idx !== -1) pendingTimers.splice(idx, 1);
+              }, i * opts.burstIntervalMs);
 
-          // Source-port policy. The FF-680W's reference (Mac) driver sends its
-          // keepalive from an ephemeral source port — verified in the capture —
-          // so v3 announcements egress via the dedicated unbound `sender`. The
-          // already-verified v2 fleet keeps sending from the bound multicast
-          // socket (port 2968) exactly as before this device was added, so a
-          // wire detail those printers were validated against doesn't change.
-          const useEphemeralSender = keepalive.version === "3.0";
-
-          for (let i = 0; i < opts.burstCount; i++) {
-            const burstIndex = i + 1;
-            const timer: ReturnType<typeof setTimeout> = setTimeout(() => {
-              // Resolve the live socket inside the timer so stop() (which nulls
-              // both) still cancels an in-flight burst.
-              const burstSocket = useEphemeralSender ? sender : socket;
-              if (!burstSocket) return;
-              burstSocket.send(packet, opts.printerPort, opts.printerIp, (err) => {
-                if (err) {
-                  log.error(`Keepalive burst send #${burstIndex} failed`, err);
-                } else {
-                  log.debug(
-                    `Keepalive burst #${burstIndex}/${opts.burstCount} sent to ${opts.printerIp}:${opts.printerPort} seq=${seqHex}`,
-                  );
-                }
-              });
-              // Remove self from pendingTimers so the array doesn't grow
-              // unboundedly across beacon cycles.
-              const idx = pendingTimers.indexOf(timer);
-              if (idx !== -1) pendingTimers.splice(idx, 1);
-            }, i * opts.burstIntervalMs);
-
-            pendingTimers.push(timer);
-          }
+              pendingTimers.push(timer);
+            }
+          })();
         });
 
         socket.bind(opts.multicastPort, () => {

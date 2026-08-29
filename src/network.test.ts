@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import dgram from "node:dgram";
-import { getLocalIpForTarget } from "./network.js";
+import { createPrinterTarget, getLocalIpForTarget, normalizeIPv4 } from "./network.js";
 
 /**
  * Behaviorally-rich fake `dgram.Socket` for the UDP `connect()` path that
@@ -111,5 +111,38 @@ describe("getLocalIpForTarget", () => {
 
     await getLocalIpForTarget("192.0.2.5");
     expect(spy).toHaveBeenCalledWith("udp4");
+  });
+});
+
+describe("printer target", () => {
+  it("normalizes IPv4-mapped IPv6", () => {
+    expect(normalizeIPv4("::ffff:192.168.1.174")).toBe("192.168.1.174");
+    expect(normalizeIPv4("2001:db8::1")).toBeNull();
+  });
+
+  it("retains the last-known-good set after a refresh failure", async () => {
+    let calls = 0;
+    const target = await createPrinterTarget(
+      { printerHostname: "printer.lan" },
+      {
+        lookup: () =>
+          calls++ === 0 ? Promise.resolve(["192.0.2.10"]) : Promise.reject(new Error("timeout")),
+      },
+    );
+    await target.refresh(true);
+    expect(target.addresses).toEqual(new Set(["192.0.2.10"]));
+    target.stop();
+  });
+
+  it("uses changed DNS results for the next target operation", async () => {
+    let address = "192.0.2.10";
+    const target = await createPrinterTarget(
+      { printerHostname: "printer.lan" },
+      { lookup: () => Promise.resolve([address]) },
+    );
+    address = "192.0.2.11";
+    expect(await target.target()).toBe("192.0.2.11");
+    expect(await target.accepts("192.0.2.11")).toBe(true);
+    target.stop();
   });
 });

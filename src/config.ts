@@ -71,9 +71,16 @@ const ipv4Regex =
 
 const configSchema = z
   .object({
-    printerIp: z
-      .string({ error: "PRINTER_IP is required and must be a string" })
-      .regex(ipv4Regex, "PRINTER_IP must be a valid IPv4 address"),
+    printerIp: z.string().regex(ipv4Regex, "PRINTER_IP must be a valid IPv4 address").optional(),
+    printerHostname: z
+      .string()
+      .trim()
+      .min(1, "PRINTER_HOSTNAME must not be empty")
+      .regex(
+        /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/,
+        "PRINTER_HOSTNAME must be a valid hostname",
+      )
+      .optional(),
     scanDestName: z.string().default("Paperless"),
     // scanDestId is a hex byte (e.g. "02"); parsed in loadConfig.
     scanDestId: z.number().int().min(1).max(255).default(0x02),
@@ -169,6 +176,13 @@ const configSchema = z
       .optional(),
   })
   .superRefine((cfg, ctx) => {
+    if (Boolean(cfg.printerIp) === Boolean(cfg.printerHostname)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: "Exactly one of PRINTER_IP or PRINTER_HOSTNAME must be set",
+        path: ["printerIp"],
+      });
+    }
     // PRINTER_CERT_FINGERPRINT only makes sense on the TLS path. Reject
     // the combo for both legacy plain-TCP variants (esci, esci2-plain),
     // and for `auto` (where a probe failure could downgrade silently to
@@ -229,7 +243,8 @@ export function loadConfig(): Config {
   }
 
   const raw = {
-    printerIp: process.env.PRINTER_IP,
+    printerIp: process.env.PRINTER_IP || undefined,
+    printerHostname: process.env.PRINTER_HOSTNAME || undefined,
     scanDestName: process.env.SCAN_DEST_NAME || undefined,
     scanDestId: process.env.SCAN_DEST_ID ? parseInt(process.env.SCAN_DEST_ID, 16) : undefined,
     outputDir: process.env.OUTPUT_DIR || undefined,
