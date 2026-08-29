@@ -6,7 +6,9 @@ const log = createLogger("output");
 
 // Local time, so filenames match the wall clock of whoever reads them.
 // The zone comes from the standard `TZ` variable, which Node reads directly
-// (no config plumbing); a container that leaves it unset stays on UTC.
+// (no config plumbing). Unset falls back to the system zone — UTC in the
+// published image, which configures none, but the host zone wherever
+// /etc/localtime is set or mounted.
 function formatTimestamp(date: Date): string {
   const y = date.getFullYear();
   const mo = String(date.getMonth() + 1).padStart(2, "0");
