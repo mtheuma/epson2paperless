@@ -394,12 +394,22 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
     // class (et4800-um08).
     //
     // Gamma is not advertised in CAPA, so it can't be pinned from the
-    // diagnostic. Inherited from the ET-4800/ET-15000 (et4800-stock) rather
-    // than the flat et4950-stock: the closest structural siblings — office
-    // AIOs with flatbed + simplex ADF on plain TCP — all validated on that
-    // curve (ET-15000 PID 116E, ET-2810 #132), and the WF-3835 is the same class
-    // of hardware, not a photo scanner. A capture would still pin the exact
-    // curve. Awaiting reporter validation on real hardware (#174).
+    // diagnostic, and here the two candidate curves disagree about which
+    // sibling to follow. By segment shape (QIT present, CCT absent) the
+    // nearest entries are the ET-8500 and ET-7700, which run the flat
+    // et4950-stock; by hardware class the WF-3835 is a working-document AIO
+    // like the ET-4800 and ET-15000, which run et4800-stock — as do the
+    // flatbed-only ET-2810 / XP-3200 that inherited it (#132). We follow
+    // hardware class, on the reading that Epson tunes the curve to the
+    // scanner's purpose rather than to which optional segments its firmware
+    // advertises: the ET-8500 and ET-7700 are photo scanners, where the flat
+    // curve was chosen deliberately, and the WF-3835 is not one.
+    //
+    // This is the one field in the entry that is a judgement call rather than
+    // a transcription, so it is what a reporter retest should exercise first:
+    // et4800-stock crushes shadows if it turns out to be the wrong pick, which
+    // a compatibility-test-page scan would show as a lifted black floor.
+    // Awaiting reporter validation on real hardware (#174).
     "860a899be9dc4fc27b68f8aed21a49ccfe87733a3974813f0c2ade6810e89dc7",
     {
       displayName: "WF-3835 (ESC/I-2 over plain TCP)",
