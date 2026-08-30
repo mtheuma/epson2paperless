@@ -72,13 +72,13 @@ Offset  Len  Field
 ──────  ───  ─────
   0      2   ASCII magic "IS"
   2      2   Packet type (big-endian uint16)
-  4      2   Data offset (host-side: 0x000C; printer-side: 0x300C — see below)
+  4      2   Data offset (host-side: 0x000C; printer-side: 0x300C or 0x380C — see below)
   6      4   Payload size (big-endian uint32)
  10      2   Padding (zeros)
  12      N   Payload
 ```
 
-The data-offset field is asymmetric: host-side is always `0x000C` (12); printer-side is always `0x300C` — confirmed across all seven ET-4950 Frida captures and the ET-2750 / XP-7100 / ET-4800 pcaps. The `0x300C` is a printer-firmware constant that the SANE `epsonds` source treats as opaque too. Our builders write `0x000C` on outbound; our parser reads only the type and length fields and ignores offset 4-5 on inbound, so the asymmetry requires no code change.
+The data-offset field is asymmetric: host-side is always `0x000C` (12); printer-side is `0x300C` in every committed capture except the FF-680W's and DS-575W's, which carry `0x380C` in every frame. The value is a printer-firmware constant that the SANE `epsonds` source treats as opaque too. Our builders write `0x000C` on outbound; our parser reads only the type and length fields and ignores offset 4-5 on inbound, so the variation requires no code change.
 
 The packet type field determines the semantics of the payload. The ESC/I-2 path uses these types:
 
@@ -330,7 +330,7 @@ Only `esci2` (TLS) results are cached for the daemon's lifetime. The plain-TCP a
 
 ## ESC/I-2 over plain TCP
 
-Most dialects added since the ET-4950 speak its ESC/I-2 vocabulary **without the TLS layer** — the `esci2-plain` rows in the [PARA table above](#source-adf-vs-flatbed); `src/esci2/dialects/registry.ts` is the full set. The hardware shapes vary from flatbed-only (ET-2750, ET-7700) through flatbed + ADF (XP-7100, ET-4800) to ADF-only sheet-fed (FF-680W, DS-575W — the FF-680W takes sides/format/resolution from config, not the panel). The wire is plain TCP on port 1865; the IS framing, command names, PARA structure, IMG pull loop, and async-event mechanics are otherwise identical to the TLS path. The scanner shell (`runEsci2ScanOverPlain` in `src/esci2/scanner.ts`) shares the protocol graph (`src/esci2/graph.ts`) with the TLS path — the only differences are at the socket factory (`net.connect` instead of `tls.connect`, no cert pinning, no TLS-error label adapter) and the per-dialect decisions the graph reads from the resolved registry entry.
+Most dialects added since the ET-4950 speak its ESC/I-2 vocabulary **without the TLS layer** — the `esci2-plain` rows in the [PARA table above](#source-adf-vs-flatbed); the registry (`src/esci2/dialects/registry.ts`) holds the full dialect set across all transports. The hardware shapes vary from flatbed-only (ET-2750, ET-7700) through flatbed + ADF (XP-7100, ET-4800) to ADF-only sheet-fed (FF-680W, DS-575W — the FF-680W takes sides/format/resolution from config, not the panel). The wire is plain TCP on port 1865; the IS framing, command names, PARA structure, IMG pull loop, and async-event mechanics are otherwise identical to the TLS path. The scanner shell (`runEsci2ScanOverPlain` in `src/esci2/scanner.ts`) shares the protocol graph (`src/esci2/graph.ts`) with the TLS path — the only differences are at the socket factory (`net.connect` instead of `tls.connect`, no cert pinning, no TLS-error label adapter) and the per-dialect decisions the graph reads from the resolved registry entry.
 
 Wire differences from the ET-4950 (decoded from the pcap captures under `tools/pcap-extract/captures/`):
 
