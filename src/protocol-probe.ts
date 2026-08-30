@@ -23,8 +23,9 @@ export interface DetectOptions {
   /**
    * The push-scan trigger's `ProductNameIn` ("PID XXXX"), when the dispatch
    * has one (panel-triggered scans; `scan:now` has no panel and passes null).
-   * Consulted only to correct a `esci` verdict for PIDs in
-   * `ESCI2_PLAIN_WITH_LEGACY_WELCOME` — it never overrides a TLS result.
+   * Consulted only after the TLS arm fails: PIDs in
+   * `ESCI2_PLAIN_WITH_LEGACY_WELCOME` select `esci2-plain` directly, because
+   * their welcome carries no signal. It never overrides a TLS result.
    */
   productName?: string | null;
 }
@@ -33,7 +34,9 @@ export interface DetectOptions {
  * ESC/I-2-over-plain-TCP models whose plain-TCP welcome is byte-identical to
  * the legacy ESC/I one, making the payload[1] discriminator alone misclassify
  * them as `esci`. Keyed by the push-scan PID, which is per-model and already
- * pinned by the CAPA diagnostic that seeded each dialect entry.
+ * pinned by the CAPA diagnostic that seeded each dialect entry. Exported for
+ * the disjointness test against the legacy dialect registry — a PID in both
+ * would silently shadow its legacy dialect under `auto`.
  *
  * ET-7700: both committed fixtures (`tools/pcap-extract/captures/et-7700/`)
  * open with `49538000300c0000000500000102000000` — the WF-3620's exact
@@ -41,7 +44,19 @@ export interface DetectOptions {
  * hardware-validated). Its push-scan SOAP announces "PID 112B" (verified from
  * the reporter's pcap).
  */
-const ESCI2_PLAIN_WITH_LEGACY_WELCOME: ReadonlySet<string> = new Set([PID_ET7700]);
+export const ESCI2_PLAIN_WITH_LEGACY_WELCOME: ReadonlySet<string> = new Set([PID_ET7700]);
+
+/**
+ * Normalise a push-scan `ProductNameIn` to the canonical `PID XXXX` form for
+ * the hint lookup. The SOAP field is captured verbatim off the wire and each
+ * model's exact spelling is pinned by only one or two pcaps, so tolerate
+ * casing/padding variance the same way keepalive.ts does for the UDP
+ * announcement (regex extract + uppercase). Null when no PID token is found.
+ */
+function normalizePid(productName: string | null | undefined): string | null {
+  const match = productName?.match(/PID [0-9A-Fa-f]{4}/);
+  return match ? match[0].toUpperCase() : null;
+}
 
 const cache = new Map<string, Variant>();
 
@@ -60,26 +75,7 @@ export async function detectVariant(opts: DetectOptions): Promise<Variant> {
   //      family discriminator (ET-2750 and WF-3620 both send one immediately
   //      on TCP connect; ET-4950 also does, but inside TLS, so it isn't
   //      reachable from this arm).
-  let variant = await runProbe(opts);
-
-  // PID hint: a welcome-based `esci` verdict is not trustworthy for models in
-  // ESCI2_PLAIN_WITH_LEGACY_WELCOME — their welcome is byte-identical to the
-  // legacy one. The PID is stronger evidence than the discriminator (it names
-  // the exact model, whose dialect is hardware-validated), so it wins. Also
-  // applied to the all-probes-inconclusive `esci` fallback: for a known
-  // ESC/I-2 PID, surfacing the socket error from the esci2-plain scanner is
-  // strictly more accurate than a misleading legacy-init failure.
-  if (
-    variant === "esci" &&
-    opts.productName != null &&
-    ESCI2_PLAIN_WITH_LEGACY_WELCOME.has(opts.productName)
-  ) {
-    log.info(
-      `${opts.productName} presents a legacy-shaped welcome but is a known ESC/I-2 model — ` +
-        `routing to esci2-plain (PID hint)`,
-    );
-    variant = "esci2-plain";
-  }
+  const variant = await runProbe(opts);
 
   // Cache positive evidence only — and only for `esci2` (TLS). The
   // ECONNRESET / version-mismatch errors that classify as plain or
@@ -99,6 +95,23 @@ async function runProbe(opts: DetectOptions): Promise<Variant> {
 
   if (await probeTls(printerIp, port, timeoutMs)) {
     return "esci2";
+  }
+  // PID hint: for models in ESCI2_PLAIN_WITH_LEGACY_WELCOME the welcome
+  // discriminator carries no usable signal (their welcome is byte-identical
+  // to the legacy one), so once TLS is ruled out the PID — which names the
+  // exact model, whose dialect is hardware-validated — settles the variant
+  // directly. Sitting after the TLS arm preserves TLS supremacy; skipping
+  // the welcome arm saves a per-scan connection whose verdict could never
+  // change the outcome, and keeps hinted models off the all-probes-failed
+  // fallback (whose log would otherwise misread a connectivity failure as a
+  // classification result).
+  const pid = normalizePid(opts.productName);
+  if (pid !== null && ESCI2_PLAIN_WITH_LEGACY_WELCOME.has(pid)) {
+    log.info(
+      `${pid} is a known ESC/I-2 model whose welcome mimics the legacy one — ` +
+        `selecting esci2-plain without welcome classification (PID hint)`,
+    );
+    return "esci2-plain";
   }
   const fromWelcome = await probePlainWelcome(printerIp, port, timeoutMs);
   if (fromWelcome) {
@@ -167,8 +180,8 @@ function probeTls(host: string, port: number, timeoutMs: number): Promise<boolea
  * the WF-3620's exact welcome bytes). `0x04` is seen from ET-2750, XP-7100,
  * ET-4800, FF-680W and DS-575W. So the byte separates the families for most
  * models but is NOT a guaranteed family marker; known ESC/I-2 models that
- * present the legacy shape are corrected by the push-scan PID hint
- * (`ESCI2_PLAIN_WITH_LEGACY_WELCOME` in `detectVariant`). What the byte
+ * present the legacy shape are routed by the push-scan PID hint instead
+ * (`ESCI2_PLAIN_WITH_LEGACY_WELCOME` in `runProbe`). What the byte
  * *means* is unknown — it is treated purely as an observed marker, not a
  * decoded field.
  */

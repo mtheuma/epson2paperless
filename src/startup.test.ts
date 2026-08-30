@@ -24,7 +24,7 @@ import { runJobListCommit, runJobNumberCommit } from "./job-control.js";
 import type { Config } from "./config.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import type { PushScanInfo } from "./pushscan.js";
-import { PID_FF680W, PID_DS575W } from "./printer-ids.js";
+import { PID_FF680W, PID_DS575W, PID_ET7700 } from "./printer-ids.js";
 
 const detectVariantMock = vi.mocked(detectVariant);
 const runEsci2ScanMock = vi.mocked(runEsci2Scan);
@@ -229,7 +229,11 @@ describe("dispatchScanSession", () => {
     runEsciScanMock.mockReset().mockResolvedValue(undefined);
   });
 
-  it("forwards the configured override + IP to detectVariant", async () => {
+  it("forwards the configured override, IP and push-scan PID to detectVariant", async () => {
+    // The exact-object assertion pins the full call shape, including the PID
+    // threading the probe's hint depends on (the ET-7700 welcomes with the
+    // legacy-shaped 0x02 discriminator, so the probe needs the PID to route
+    // it correctly).
     detectVariantMock.mockResolvedValue("esci2");
     const config = makeConfig({ printerProtocol: "esci2", printerIp: "203.0.113.7" });
     await dispatchScanSession({
@@ -237,7 +241,7 @@ describe("dispatchScanSession", () => {
       duplex: false,
       action: "jpg",
       paperless: undefined,
-      productName: null,
+      productName: PID_ET7700,
     });
 
     expect(detectVariantMock).toHaveBeenCalledTimes(1);
@@ -246,26 +250,8 @@ describe("dispatchScanSession", () => {
       port: 1865,
       override: "esci2",
       timeoutMs: 3000,
-      productName: null,
+      productName: PID_ET7700,
     });
-  });
-
-  it("threads the push-scan PID into detectVariant (probe hint for ambiguous welcomes)", async () => {
-    // The ET-7700 welcomes with the legacy-shaped 0x02 discriminator; the
-    // probe can only correct for that if the dispatcher hands it the PID.
-    detectVariantMock.mockResolvedValue("esci2-plain");
-    const config = makeConfig({ printerProtocol: "auto" });
-    await dispatchScanSession({
-      config,
-      duplex: false,
-      action: "jpg",
-      paperless: undefined,
-      productName: "PID 112B",
-    });
-
-    expect(detectVariantMock).toHaveBeenCalledWith(
-      expect.objectContaining({ productName: "PID 112B" }),
-    );
   });
 
   it("variant=esci2 routes to runEsci2Scan with cert fingerprint threaded through", async () => {

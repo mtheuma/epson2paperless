@@ -15,6 +15,11 @@ for (const entry of PID_ENTRIES) {
   BY_PID[entry.productName] = entry;
 }
 
+// PIDs with a dedicated legacy dialect. Exported so the protocol probe's
+// ESC/I-2 PID-hint set can be tested disjoint from legacy routing — a PID in
+// both would silently shadow its legacy dialect under PRINTER_PROTOCOL=auto.
+export const LEGACY_DIALECT_PIDS: ReadonlySet<string> = new Set(Object.keys(BY_PID));
+
 export function resolveLegacyEntry(productName: string | null): LegacyDialectEntry {
   return (productName && BY_PID[productName]) || WF3620_ENTRY;
 }

@@ -2,7 +2,8 @@ import { describe, it, expect, beforeEach, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import net from "node:net";
 import tls from "node:tls";
-import { detectVariant, resetCache } from "./protocol-probe.js";
+import { detectVariant, resetCache, ESCI2_PLAIN_WITH_LEGACY_WELCOME } from "./protocol-probe.js";
+import { LEGACY_DIALECT_PIDS } from "./esci/dialects/registry.js";
 import { PID_ET7700 } from "./printer-ids.js";
 
 /** Stub `tls.connect` that fires `secureConnect` on next-tick. */
@@ -417,11 +418,12 @@ describe("protocol-probe", () => {
     expect(variant).toBe("esci2-plain");
   });
 
-  it("routes a known ESC/I-2 PID to esci2-plain despite a legacy-shaped welcome (ET-7700)", async () => {
-    // Wire-anchored: the literal ET-7700 fixture welcome is byte-identical to
-    // the WF-3620's, so payload[1] says "legacy" for a printer that is not.
-    // The dispatcher passes the push-scan PID along; for PIDs in the
-    // known-ESC/I-2 hint set the probe must override the welcome verdict.
+  it("routes a known ESC/I-2 PID to esci2-plain without consulting the welcome (ET-7700)", async () => {
+    // The literal ET-7700 fixture welcome is byte-identical to the WF-3620's
+    // (see ET7700_REAL_WELCOME_HEX), so payload[1] carries no signal for this
+    // model. Once the TLS arm fails, the push-scan PID settles the variant
+    // directly — the welcome arm must not even open a connection, since no
+    // outcome of it could change the routing.
     vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
     const netSpy = mockNetConnect(
       new FakeNetSocket({
@@ -438,7 +440,35 @@ describe("protocol-probe", () => {
       productName: PID_ET7700,
     });
     expect(variant).toBe("esci2-plain");
-    expect(netSpy).toHaveBeenCalledTimes(1);
+    expect(netSpy).not.toHaveBeenCalled();
+  });
+
+  it("normalises the ProductNameIn before the hint lookup (casing/padding variance)", async () => {
+    // The SOAP field is captured verbatim off the wire and only one pcap pins
+    // the ET-7700's exact spelling; a firmware variant emitting different
+    // casing or padding must not silently miss the hint and misroute.
+    // keepalive.ts applies the same tolerance to the UDP announcement.
+    vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
+    const netSpy = mockNetConnect(new FakeNetSocket({ kind: "no-reply" }));
+
+    const variant = await detectVariant({
+      printerIp: "10.0.0.24",
+      port: 1865,
+      override: "auto",
+      timeoutMs: 50,
+      productName: "  PID 112b  ",
+    });
+    expect(variant).toBe("esci2-plain");
+    expect(netSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps the ESC/I-2 PID-hint set disjoint from the legacy dialect registry", () => {
+    // A PID in both sets would make the probe hint silently shadow that
+    // model's legacy dialect under auto (the hint resolves before dispatch
+    // ever consults resolveLegacyEntry), with every per-module test green.
+    for (const pid of ESCI2_PLAIN_WITH_LEGACY_WELCOME) {
+      expect(LEGACY_DIALECT_PIDS.has(pid)).toBe(false);
+    }
   });
 
   it("does not let an unrelated PID disturb the legacy welcome classification", async () => {
@@ -461,12 +491,14 @@ describe("protocol-probe", () => {
     expect(variant).toBe("esci");
   });
 
-  it("applies the PID hint when both probe arms are inconclusive", async () => {
-    // Unreachable/unresponsive printer with a known ESC/I-2 PID: routing the
-    // fallback to esci2-plain surfaces the socket error from the scanner the
-    // model actually speaks, instead of a misleading legacy-init failure.
+  it("applies the PID hint when the TLS arm is inconclusive (unreachable printer)", async () => {
+    // Unresponsive printer with a known ESC/I-2 PID: the hint still selects
+    // esci2-plain right after the TLS arm gives up, so the socket error
+    // surfaces from the scanner the model actually speaks — never from a
+    // misleading legacy-init failure, and never via the all-probes-failed
+    // fallback (whose log would misread the outage as classification).
     vi.spyOn(tls, "connect").mockReturnValue(tlsSilent());
-    mockNetConnect(new FakeNetSocket({ kind: "no-reply" }));
+    const netSpy = mockNetConnect(new FakeNetSocket({ kind: "no-reply" }));
 
     const variant = await detectVariant({
       printerIp: "10.0.0.22",
@@ -476,6 +508,7 @@ describe("protocol-probe", () => {
       productName: PID_ET7700,
     });
     expect(variant).toBe("esci2-plain");
+    expect(netSpy).not.toHaveBeenCalled();
   });
 
   it("PID hint never overrides a successful TLS classification", async () => {
