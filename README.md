@@ -33,6 +33,7 @@ What you get:
 | **ET-15000**          | 🟡&nbsp;Experimental | Flatbed verified; ADF simplex untested                                                                                        |
 | **FF-680W**           | 🟡&nbsp;Experimental | Requires [pairing](#button-only-scanner-pairing); ADF-only; 200/300 DPI verified                                              |
 | **WF-3620**           | ✅&nbsp;Verified     | Plain TCP scanner, no TLS pinning                                                                                             |
+| **WF-3835**           | 🟡&nbsp;Experimental | ADF simplex; inferred dialect, no reporter retest yet ([#174](https://github.com/mtheuma/epson2paperless/issues/174))         |
 | **XP-620**            | 🟡&nbsp;Experimental | Flatbed-only hardware                                                                                                         |
 | **XP-3200**           | ✅&nbsp;Verified     | Flatbed-only hardware; shares the ET-2810 dialect over TLS; panel lists the destination but errors "Invalid" — use `scan:now` |
 | **XP-4100**           | ✅&nbsp;Verified     | Flatbed-only hardware; shares the ET-2750 dialect ([#139](https://github.com/mtheuma/epson2paperless/issues/139))             |
