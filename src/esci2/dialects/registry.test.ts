@@ -3,8 +3,8 @@ import { describe, it, expect } from "vitest";
 import { REGISTRY, supportsWireGrayscale } from "./registry.js";
 
 describe("REGISTRY", () => {
-  it("contains exactly eleven known fingerprints", () => {
-    expect(REGISTRY.size).toBe(11);
+  it("contains exactly twelve known fingerprints", () => {
+    expect(REGISTRY.size).toBe(12);
   });
 
   it("includes ET-4950 family entry", () => {
@@ -100,6 +100,19 @@ describe("REGISTRY", () => {
     expect(e!.optionalSegments).toEqual({ qit: true, cct: false });
     expect(e!.fbExtents).toEqual({ x0: 0, y0: 0, w: 2481, h: 3506 });
     expect(e!.adfExtents).toBeNull();
+  });
+
+  it("includes WF-3835 entry (flatbed + ADF simplex, plain TCP; speculative from #174)", () => {
+    const e = REGISTRY.get("860a899be9dc4fc27b68f8aed21a49ccfe87733a3974813f0c2ade6810e89dc7");
+    expect(e).toBeDefined();
+    expect(e!.sourceDetection).toBe("stat-length");
+    expect(e!.initPollIterations).toBe(3);
+    expect(e!.gmm).toBe("UG18");
+    expect(e!.gammaClass).toEqual({ jpg: "et4800-stock", pdf: "et4800-stock" });
+    expect(e!.cmxClass).toEqual({ jpg: "et4800-um08", pdf: "et4800-um08" });
+    expect(e!.optionalSegments).toEqual({ qit: true, cct: false });
+    expect(e!.fbExtents).toEqual({ x0: 0, y0: 0, w: 2481, h: 3506 });
+    expect(e!.adfExtents).toEqual({ x0: 69, y0: 0, w: 2481, h: 3506 });
   });
 
   it("includes FF-680W entry (ADF-only, plain TCP)", () => {
@@ -217,6 +230,8 @@ describe("REGISTRY", () => {
       "708704b6abb184cede037fcd9893ea81f69651fde28780cde0162dfa33a33f6e": false,
       // ET-7700 — no ADF
       "72319314b621fea0aab6cc16f4fd891534cec08f33ce80116a849f6f6e1e58d4": false,
+      // WF-3835 — ADF simplex
+      "860a899be9dc4fc27b68f8aed21a49ccfe87733a3974813f0c2ade6810e89dc7": false,
     };
     for (const [fp, want] of Object.entries(expected)) {
       expect(REGISTRY.get(fp)!.adfDuplex, `fingerprint ${fp}`).toBe(want);
