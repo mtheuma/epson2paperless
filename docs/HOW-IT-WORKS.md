@@ -54,8 +54,8 @@ Implemented in `src/pushscan.ts`. Action decoding is split between `computeActio
 After the push-scan response is written, the service connects outbound to the printer on TCP port `1865`. In `PRINTER_PROTOCOL=auto`, `src/protocol-probe.ts` classifies the printer for each scan:
 
 1. Try a TLS handshake. Success selects `esci2-tls`.
-2. If TLS fails, connect over plain TCP and inspect the unsolicited IS welcome packet. A non-WF-3620 discriminator selects `esci2-plain`.
-3. If that does not match, send `ESC @` and look for the legacy ACK. Success selects `esci`.
+2. If TLS fails, connect over plain TCP and inspect the unsolicited IS welcome packet's discriminator byte: the WF-3620-shaped `0x02` selects `esci`, anything else selects `esci2-plain`. Known ESC/I-2 models whose welcome carries the legacy `0x02` (currently the ET-7700) are corrected to `esci2-plain` by the push-scan PID.
+3. If neither arm classifies, fall back to `esci` (or `esci2-plain` for a known ESC/I-2 PID) so the scanner's connect path surfaces the underlying error.
 
 The dispatcher in `src/startup.ts` then calls the matching scanner shell:
 
