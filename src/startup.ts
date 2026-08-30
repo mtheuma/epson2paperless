@@ -179,6 +179,10 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     port: 1865,
     override: args.config.printerProtocol,
     timeoutMs: 3000,
+    // PID hint: lets the probe correct the welcome-discriminator verdict for
+    // ESC/I-2 models whose welcome is byte-identical to the legacy one
+    // (currently the ET-7700). Null for scan:now, which has no panel to ask.
+    productName: args.productName,
   });
   if (variant === "esci2") {
     return runEsci2Scan({

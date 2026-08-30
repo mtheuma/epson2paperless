@@ -3,6 +3,7 @@ import { EventEmitter } from "node:events";
 import net from "node:net";
 import tls from "node:tls";
 import { detectVariant, resetCache } from "./protocol-probe.js";
+import { PID_ET7700 } from "./printer-ids.js";
 
 /** Stub `tls.connect` that fires `secureConnect` on next-tick. */
 function tlsHappyPath(): tls.TLSSocket {
@@ -141,6 +142,11 @@ function welcomeBytes(discriminator: number = 0x04): Buffer {
  * an off-by-one in `welcomeBytes()` (or in the probe) can't go undetected. */
 const WF3620_REAL_WELCOME_HEX = "49538000300c0000000500000102000000";
 const ET2750_REAL_WELCOME_HEX = "49538000300c0000000500000104000000";
+/** The ET-7700 — an ESC/I-2 model — welcomes with bytes IDENTICAL to the
+ * WF-3620's (both fixtures under `tools/pcap-extract/captures/et-7700/` open
+ * with this frame). The discriminator alone cannot classify it; the push-scan
+ * PID hint is what keeps `auto` off the legacy path. */
+const ET7700_REAL_WELCOME_HEX = "49538000300c0000000500000102000000";
 
 /** Install a `net.connect` mock that hands out the given fakes in order.
  * Returns the spy so tests can assert how many plain-TCP connections the
@@ -409,6 +415,80 @@ describe("protocol-probe", () => {
       timeoutMs: 50,
     });
     expect(variant).toBe("esci2-plain");
+  });
+
+  it("routes a known ESC/I-2 PID to esci2-plain despite a legacy-shaped welcome (ET-7700)", async () => {
+    // Wire-anchored: the literal ET-7700 fixture welcome is byte-identical to
+    // the WF-3620's, so payload[1] says "legacy" for a printer that is not.
+    // The dispatcher passes the push-scan PID along; for PIDs in the
+    // known-ESC/I-2 hint set the probe must override the welcome verdict.
+    vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
+    const netSpy = mockNetConnect(
+      new FakeNetSocket({
+        kind: "welcome",
+        bytes: Buffer.from(ET7700_REAL_WELCOME_HEX, "hex"),
+      }),
+    );
+
+    const variant = await detectVariant({
+      printerIp: "10.0.0.20",
+      port: 1865,
+      override: "auto",
+      timeoutMs: 50,
+      productName: PID_ET7700,
+    });
+    expect(variant).toBe("esci2-plain");
+    expect(netSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not let an unrelated PID disturb the legacy welcome classification", async () => {
+    // XP-620's PID rides along on real dispatches; it must not flip esci.
+    vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
+    mockNetConnect(
+      new FakeNetSocket({
+        kind: "welcome",
+        bytes: Buffer.from(WF3620_REAL_WELCOME_HEX, "hex"),
+      }),
+    );
+
+    const variant = await detectVariant({
+      printerIp: "10.0.0.21",
+      port: 1865,
+      override: "auto",
+      timeoutMs: 50,
+      productName: "PID 08C8",
+    });
+    expect(variant).toBe("esci");
+  });
+
+  it("applies the PID hint when both probe arms are inconclusive", async () => {
+    // Unreachable/unresponsive printer with a known ESC/I-2 PID: routing the
+    // fallback to esci2-plain surfaces the socket error from the scanner the
+    // model actually speaks, instead of a misleading legacy-init failure.
+    vi.spyOn(tls, "connect").mockReturnValue(tlsSilent());
+    mockNetConnect(new FakeNetSocket({ kind: "no-reply" }));
+
+    const variant = await detectVariant({
+      printerIp: "10.0.0.22",
+      port: 1865,
+      override: "auto",
+      timeoutMs: 30,
+      productName: PID_ET7700,
+    });
+    expect(variant).toBe("esci2-plain");
+  });
+
+  it("PID hint never overrides a successful TLS classification", async () => {
+    vi.spyOn(tls, "connect").mockReturnValue(tlsHappyPath());
+
+    const variant = await detectVariant({
+      printerIp: "10.0.0.23",
+      port: 1865,
+      override: "auto",
+      timeoutMs: 100,
+      productName: PID_ET7700,
+    });
+    expect(variant).toBe("esci2");
   });
 
   it("rejects a non-welcome IS frame as inconclusive rather than classifying it", async () => {

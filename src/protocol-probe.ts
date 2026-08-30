@@ -2,6 +2,7 @@ import net from "node:net";
 import tls from "node:tls";
 import { createLogger } from "./logger.js";
 import { IS_HEADER_SIZE } from "./protocol.js";
+import { PID_ET7700 } from "./printer-ids.js";
 
 const log = createLogger("protocol-probe");
 
@@ -19,7 +20,28 @@ export interface DetectOptions {
   port: number;
   override: Override;
   timeoutMs: number;
+  /**
+   * The push-scan trigger's `ProductNameIn` ("PID XXXX"), when the dispatch
+   * has one (panel-triggered scans; `scan:now` has no panel and passes null).
+   * Consulted only to correct a `esci` verdict for PIDs in
+   * `ESCI2_PLAIN_WITH_LEGACY_WELCOME` — it never overrides a TLS result.
+   */
+  productName?: string | null;
 }
+
+/**
+ * ESC/I-2-over-plain-TCP models whose plain-TCP welcome is byte-identical to
+ * the legacy ESC/I one, making the payload[1] discriminator alone misclassify
+ * them as `esci`. Keyed by the push-scan PID, which is per-model and already
+ * pinned by the CAPA diagnostic that seeded each dialect entry.
+ *
+ * ET-7700: both committed fixtures (`tools/pcap-extract/captures/et-7700/`)
+ * open with `49538000300c0000000500000102000000` — the WF-3620's exact
+ * welcome — while the model itself is ESC/I-2 (registry entry, issue #145,
+ * hardware-validated). Its push-scan SOAP announces "PID 112B" (verified from
+ * the reporter's pcap).
+ */
+const ESCI2_PLAIN_WITH_LEGACY_WELCOME: ReadonlySet<string> = new Set([PID_ET7700]);
 
 const cache = new Map<string, Variant>();
 
@@ -38,7 +60,26 @@ export async function detectVariant(opts: DetectOptions): Promise<Variant> {
   //      family discriminator (ET-2750 and WF-3620 both send one immediately
   //      on TCP connect; ET-4950 also does, but inside TLS, so it isn't
   //      reachable from this arm).
-  const variant = await runProbe(opts);
+  let variant = await runProbe(opts);
+
+  // PID hint: a welcome-based `esci` verdict is not trustworthy for models in
+  // ESCI2_PLAIN_WITH_LEGACY_WELCOME — their welcome is byte-identical to the
+  // legacy one. The PID is stronger evidence than the discriminator (it names
+  // the exact model, whose dialect is hardware-validated), so it wins. Also
+  // applied to the all-probes-inconclusive `esci` fallback: for a known
+  // ESC/I-2 PID, surfacing the socket error from the esci2-plain scanner is
+  // strictly more accurate than a misleading legacy-init failure.
+  if (
+    variant === "esci" &&
+    opts.productName != null &&
+    ESCI2_PLAIN_WITH_LEGACY_WELCOME.has(opts.productName)
+  ) {
+    log.info(
+      `${opts.productName} presents a legacy-shaped welcome but is a known ESC/I-2 model — ` +
+        `routing to esci2-plain (PID hint)`,
+    );
+    variant = "esci2-plain";
+  }
 
   // Cache positive evidence only — and only for `esci2` (TLS). The
   // ECONNRESET / version-mismatch errors that classify as plain or
@@ -116,14 +157,20 @@ function probeTls(host: string, port: number, timeoutMs: number): Promise<boolea
 
 /**
  * Legacy ESC/I family discriminator at IS-`0x8000` payload byte 1 (frame
- * offset 13). Real welcome payloads are `01 02 00 00 00` (legacy ESC/I) and
- * `01 04 00 00 00` (ESC/I-2); the discriminator is the second byte.
+ * offset 13). Real welcome payloads are `01 02 00 00 00` and
+ * `01 04 00 00 00`; the discriminator is the second byte.
  *
- * Holds across every capture we have — `0x02` for WF-3620 (all committed
- * fixtures in `tools/pcap-extract/captures/wf-3620/`) and XP-620 (issue #124,
- * whose welcome is byte-for-byte identical to the WF-3620's); `0x04` for
- * ET-2750, XP-7100, ET-4800 and FF-680W. What the byte *means* is unknown —
- * it is treated purely as an observed family marker, not a decoded field.
+ * `0x02` is seen from WF-3620 (all committed fixtures in
+ * `tools/pcap-extract/captures/wf-3620/`) and XP-620 (issue #124, whose
+ * welcome is byte-for-byte identical to the WF-3620's) — but ALSO from the
+ * ET-7700, an ESC/I-2 model (issue #145; both committed fixtures open with
+ * the WF-3620's exact welcome bytes). `0x04` is seen from ET-2750, XP-7100,
+ * ET-4800, FF-680W and DS-575W. So the byte separates the families for most
+ * models but is NOT a guaranteed family marker; known ESC/I-2 models that
+ * present the legacy shape are corrected by the push-scan PID hint
+ * (`ESCI2_PLAIN_WITH_LEGACY_WELCOME` in `detectVariant`). What the byte
+ * *means* is unknown — it is treated purely as an observed marker, not a
+ * decoded field.
  */
 const LEGACY_ESCI_WELCOME_DISCRIMINATOR = 0x02;
 
@@ -131,7 +178,9 @@ const LEGACY_ESCI_WELCOME_DISCRIMINATOR = 0x02;
  * Plain-TCP probe: connect, then wait for an inbound IS-`0x8000` welcome
  * frame and classify the printer from its family discriminator. Both
  * generations emit a welcome unsolicited on TCP connect, so the welcome's
- * *presence* says only "plain TCP"; payload byte 1 says which family.
+ * *presence* says only "plain TCP"; payload byte 1 says which family — for
+ * most models (see the `LEGACY_ESCI_WELCOME_DISCRIMINATOR` caveat; the
+ * ET-7700 needs the PID hint on top).
  * ET-4950 also sends a welcome immediately, but only inside its TLS tunnel,
  * so this arm never sees it.
  *

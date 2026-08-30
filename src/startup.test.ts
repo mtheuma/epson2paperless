@@ -246,7 +246,26 @@ describe("dispatchScanSession", () => {
       port: 1865,
       override: "esci2",
       timeoutMs: 3000,
+      productName: null,
     });
+  });
+
+  it("threads the push-scan PID into detectVariant (probe hint for ambiguous welcomes)", async () => {
+    // The ET-7700 welcomes with the legacy-shaped 0x02 discriminator; the
+    // probe can only correct for that if the dispatcher hands it the PID.
+    detectVariantMock.mockResolvedValue("esci2-plain");
+    const config = makeConfig({ printerProtocol: "auto" });
+    await dispatchScanSession({
+      config,
+      duplex: false,
+      action: "jpg",
+      paperless: undefined,
+      productName: "PID 112B",
+    });
+
+    expect(detectVariantMock).toHaveBeenCalledWith(
+      expect.objectContaining({ productName: "PID 112B" }),
+    );
   });
 
   it("variant=esci2 routes to runEsci2Scan with cert fingerprint threaded through", async () => {
