@@ -12,7 +12,7 @@ Printer (unicast)    →  Service (TCP port 2968)          Push-scan trigger
 Service              →  Printer (TCP port 1865)          Scan session
 ```
 
-Each channel is independent enough to be developed and tested separately. Inside the scan session, the same `IS` framing wraps either ESC/I-2 commands (ET-4950 family + ET-2950 over TLS; ET-2750 / XP-7100 / ET-4800 / ET-15000 / FF-680W / DS-575W over plain TCP) or legacy ESC/I commands (WF-3620 family, XP-620 and ET-2550, plain TCP). TLS is layered around it only for the ESC/I-2-over-TLS printers (the ET-4950 family and ET-2950 — a separate registry entry); everything else runs on plain TCP.
+Each channel is independent enough to be developed and tested separately. Inside the scan session, the same `IS` framing wraps either ESC/I-2 commands (most current models — over TLS for some, plain TCP for the rest) or legacy ESC/I commands (WF-3620 family, XP-620 and ET-2550, plain TCP). The authoritative per-model list lives in `src/esci2/dialects/registry.ts` (ESC/I-2), `src/esci/dialects/` (legacy ESC/I), and the [README compatibility table](../README.md#compatible-printers); this document names models only where a specific model illustrates a wire-level difference.
 
 ### Discovery and keepalive (UDP multicast)
 
@@ -49,13 +49,15 @@ Implemented in `src/pushscan.ts`. `parsePushScanRequest` extracts the SOAP field
 
 Three transport variants ride on TCP port 1865, decided per scan session by `src/protocol-probe.ts` (covered in detail in [Protocol probe](#protocol-probe-two-arms) below):
 
-| Variant       | Transport    | Command set          | Hardware                                                   |
-| ------------- | ------------ | -------------------- | ---------------------------------------------------------- |
-| `esci2-tls`   | TLS over TCP | ESC/I-2 over IS      | ET-4950 / ET-3950 / ET-4956 / ET-2950                      |
-| `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750 / XP-7100 / ET-4800 / ET-15000 / FF-680W / DS-575W |
-| `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family / XP-620 / ET-2550                          |
+| Variant       | Transport    | Command set          | Hardware (examples)                         |
+| ------------- | ------------ | -------------------- | ------------------------------------------- |
+| `esci2-tls`   | TLS over TCP | ESC/I-2 over IS      | ET-4950 family, ET-2950, XP-3200            |
+| `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750, XP-7100, ET-4800, FF-680W, DS-575W |
+| `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family, XP-620, ET-2550             |
 
-The rest of this section walks the **canonical `esci2-tls` path** in depth, since it's the most mechanically complex (TLS on top, both command generations layered inside) and the foundation that the other two variants peel back from. The plain-TCP ESC/I-2 differences (ET-2750 / XP-7100 / ET-4800 / ET-15000 / FF-680W / DS-575W) live in [ESC/I-2 over plain TCP](#esci-2-over-plain-tcp), and the legacy ESC/I family (WF-3620) in [ESC/I variant](#esci-variant-wf-3620). Both are sibling sections, not appendices.
+The Hardware column is illustrative, not exhaustive — the full model list lives in the [README compatibility table](../README.md#compatible-printers) and the dialect registries. The variant is also a per-session transport decision, not a dialect property: ESC/I-2 dialect entries are keyed by CAPA fingerprint, and some are transport-agnostic — the ET-8500 has been reported over both TLS and plain TCP, and the ET-2810 (plain TCP) and XP-3200 (TLS) share one fingerprint and one registry entry.
+
+The rest of this section walks the **canonical `esci2-tls` path** in depth, since it's the most mechanically complex (TLS on top, both command generations layered inside) and the foundation that the other two variants peel back from. The plain-TCP ESC/I-2 differences live in [ESC/I-2 over plain TCP](#esci-2-over-plain-tcp), and the legacy ESC/I family in [ESC/I variant](#esci-variant-wf-3620). Both are sibling sections, not appendices.
 
 #### TLS on the canonical path
 
@@ -63,20 +65,20 @@ The `esci2-tls` image transfer happens over a TLS 1.2 session that the service i
 
 #### IS framing (universal across all three variants)
 
-Whether the session runs over TLS (ET-4950 family + ET-2950) or plain TCP (ET-2750, XP-7100, ET-4800, WF-3620), all traffic is wrapped in Epson's proprietary **IS framing**. Every message in both directions is an IS packet:
+Whether the session runs over TLS or plain TCP, and whichever command generation rides inside, all traffic is wrapped in Epson's proprietary **IS framing**. Every message in both directions is an IS packet:
 
 ```
 Offset  Len  Field
 ──────  ───  ─────
   0      2   ASCII magic "IS"
   2      2   Packet type (big-endian uint16)
-  4      2   Data offset (host-side: 0x000C; printer-side: 0x300C — see below)
+  4      2   Data offset (host-side: 0x000C; printer-side: 0x300C or 0x380C — see below)
   6      4   Payload size (big-endian uint32)
  10      2   Padding (zeros)
  12      N   Payload
 ```
 
-The data-offset field is asymmetric: host-side is always `0x000C` (12); printer-side is always `0x300C` — confirmed across all seven ET-4950 Frida captures and the ET-2750 / XP-7100 / ET-4800 pcaps. The `0x300C` is a printer-firmware constant that the SANE `epsonds` source treats as opaque too. Our builders write `0x000C` on outbound; our parser reads only the type and length fields and ignores offset 4-5 on inbound, so the asymmetry requires no code change.
+The data-offset field is asymmetric: host-side is always `0x000C` (12); printer-side is `0x300C` in every committed capture except the FF-680W's and DS-575W's, which carry `0x380C` in every frame. The value is a printer-firmware constant that the SANE `epsonds` source treats as opaque too. Our builders write `0x000C` on outbound; our parser reads only the type and length fields and ignores offset 4-5 on inbound, so the variation requires no code change.
 
 The packet type field determines the semantics of the payload. The ESC/I-2 path uses these types:
 
@@ -168,7 +170,7 @@ INIT2_CAPA       ← send CAPA, drain declared capability body
 INIT2_RESA       ← send RESA, drain declared resolution body
 INIT2_FIN        ← send FIN, await 64-byte reply
     │
-INIT_POLL × dialect.initPollIterations (3 for ET-4950 family + ET-2950 + XP-7100 + ET-4800, 2 for ET-2750, 8 for FF-680W, 12 for DS-575W):
+INIT_POLL × dialect.initPollIterations (3 for most dialects; 2 for ET-2750, 8 for FF-680W, 12 for DS-575W):
   INIT_POLL_FS_Y    ← send FS Y, await ACK
   INIT_POLL_STAT    ← send STAT, await 64-byte envelope
   INIT_POLL_STAT_DRAIN  ← drain N bytes if STAT reply declares length > 0 (flatbed only)
@@ -204,7 +206,7 @@ UNLOCKING        ← send Unlock (IS 0x2101), await IS 0xa101 ack
 DONE             ← compose/promote output files, then resolve
 ```
 
-**INIT_POLL iterations.** The iteration count is per-dialect, read from `ctx.entry.initPollIterations` — 3 for the ET-4950 family, ET-2950, XP-7100, and ET-4800; 2 for ET-2750; 8 for the FF-680W; 12 for the DS-575W. It is not a per-transport constant: `esci2-plain` spans both counts. (ET-2750's host driver only loops twice before sending FS X — sending a third FS Y after the printer has moved on returns a non-ACK that fails MODE_SWITCH validation.) The captured drivers actually poll many more times — the ET-4950 family and ET-4800 run 11–14 cycles while the printer wakes the feeder — but that count is a driver artifact, not a readiness gate: a fixed small count suffices for an already-active printer, and replay fixtures are trimmed to match (see [REVERSE-ENGINEERING.md](REVERSE-ENGINEERING.md)). The loop is driven by a counter, not a ready-state signal from the printer — the status values returned by STAT during INIT_POLL are not examined for readiness; they are simply consumed.
+**INIT_POLL iterations.** The iteration count is per-dialect, read from `ctx.entry.initPollIterations` — 3 for most dialects; 2 for ET-2750; 8 for the FF-680W; 12 for the DS-575W. It is not a per-transport constant: `esci2-plain` spans several counts. (ET-2750's host driver only loops twice before sending FS X — sending a third FS Y after the printer has moved on returns a non-ACK that fails MODE_SWITCH validation.) The captured drivers actually poll many more times — the ET-4950 family and ET-4800 run 11–14 cycles while the printer wakes the feeder — but that count is a driver artifact, not a readiness gate: a fixed small count suffices for an already-active printer, and replay fixtures are trimmed to match (see [REVERSE-ENGINEERING.md](REVERSE-ENGINEERING.md)). The loop is driven by a counter, not a ready-state signal from the printer — the status values returned by STAT during INIT_POLL are not examined for readiness; they are simply consumed.
 
 **Async events.** At any point during the session, the printer can send an IS `0x9000` async event packet. The ESC/I-2 graph's `globalAbortHandlers` entry for `0x9000` inspects the dispatch byte and returns `null` (info-only) for `0x01` (ScanStart) and `0x04` (Stop), or an `Error` for `0x03` (ScanCancel — cancel) and the fatal set `0x02`/`0x80`/`0xa0` (Disconnect/Timeout/ServerError). The engine settles with `{ ok: false, reason }` on any returned `Error`, regardless of which fatal it was. The handler is registered at the ESC/I-2 graph level — it applies to both ESC/I-2 variants (TLS and plain-TCP) but not to the legacy ESC/I (WF-3620) graph, which does not register a global async handler. In practice, a `0x9000`/`0xa0` ServerError always means the printer rejected a command (typically a malformed PARA or an unexpected command sequence), and the session connection closes within milliseconds of the event.
 
@@ -217,9 +219,9 @@ The IMG loop's termination condition differs by source:
 
 **POSTSCAN drain.** After ADF scans the printer queues a final `#ERRADF PE` (ADF Paper End) status message in its output buffer. If this message is not consumed before the session closes, the printer's internal state machine does not advance cleanly, and the panel displays "Scanning Error" on subsequent scans. The two POSTSCAN cycles (`FS Y → STAT → pure-read(declared length) → FIN`, twice) drain this queued status. The drain consumes the length declared by the STAT reply — 12 bytes (`#ERRADF PE  `) on every captured ADF post-scan, but the implementation reads the declared length verbatim rather than hardcoding 12. The structure mirrors the `INIT_POLL_STAT_DRAIN` mechanism: the printer uses the IS payload-length field as a general signal that the host should issue a drain read before continuing. Flatbed scans do not produce an ADF status message and skip these two POSTSCAN cycles entirely, going directly from `FIN_AFTER_IMG` to `UNLOCKING`.
 
-**Source detection.** The push-scan SOAP body does not indicate whether the printer will scan from the ADF or the flatbed glass — the panel does not expose a source selector. Instead, the printer detects its own source (via the ADF paper sensor) and signals the result in the first `@STAT` reply during INIT_POLL cycle 1. Dialects with `sourceDetection: "stat-length"` (ET-4950 family + XP-7100 + ET-4800) apply this heuristic: an ADF-mode printer returns a zero-length `STATx0000000` reply and a flatbed-mode printer returns a 12-byte `STATx000000C` reply with filler content. The scanner reads this length field and sets `ctx.source`, which governs the PARA blob selection, the IMG loop terminator, and the POSTSCAN branching.
+**Source detection.** The push-scan SOAP body does not indicate whether the printer will scan from the ADF or the flatbed glass — the panel does not expose a source selector. Instead, the printer detects its own source (via the ADF paper sensor) and signals the result in the first `@STAT` reply during INIT_POLL cycle 1. Dialects with `sourceDetection: "stat-length"` (the flatbed + ADF models: ET-4950 family, XP-7100, ET-4800, ET-15000, WF-3835) apply this heuristic: an ADF-mode printer returns a zero-length `STATx0000000` reply and a flatbed-mode printer returns a 12-byte `STATx000000C` reply with filler content. The scanner reads this length field and sets `ctx.source`, which governs the PARA blob selection, the IMG loop terminator, and the POSTSCAN branching.
 
-The ET-2750 dialect uses `sourceDetection: "fixed-flatbed"` and skips this heuristic: its STAT reply declares `length=0` in the 12-byte ESC/I-2 header but packs a 52-byte filler (`#---#---#---…`) inline in the same 64-byte IS frame, so applying the stat-length rule would misclassify it as ADF. ET-2750 hardware is flatbed-only — there's no ADF to detect — so the graph trusts the `source: "flatbed"` value the scanner shell pre-sets in `initialCtx`. The `INIT_POLL_STAT` decision is conditioned on `ctx.entry.sourceDetection === "stat-length"` for the override path. ET-2950 is the other `fixed-flatbed` dialect (flatbed-only hardware) and takes the same skip-the-heuristic path.
+The ET-2750 dialect uses `sourceDetection: "fixed-flatbed"` and skips this heuristic: its STAT reply declares `length=0` in the 12-byte ESC/I-2 header but packs a 52-byte filler (`#---#---#---…`) inline in the same 64-byte IS frame, so applying the stat-length rule would misclassify it as ADF. ET-2750 hardware is flatbed-only — there's no ADF to detect — so the graph trusts the `source: "flatbed"` value the scanner shell pre-sets in `initialCtx`. The `INIT_POLL_STAT` decision is conditioned on `ctx.entry.sourceDetection === "stat-length"` for the override path. Every other flatbed-only dialect (ET-2950, ET-2810 / XP-3200, ET-8500, ET-7700) is `fixed-flatbed` too and takes the same skip-the-heuristic path.
 
 ### Transport adapters
 
@@ -238,11 +240,11 @@ The WF-3620 ESC/I path uses no transport-shape adapters. It still emits LOCK and
 
 ### Source: ADF vs flatbed
 
-For dialects with **`sourceDetection: "stat-length"`** (ET-4950 family + XP-7100 + ET-4800), the scanner detects the physical source from the first `@STAT` reply in INIT_POLL cycle 1: declared length `0` → ADF; declared length `12` → flatbed; any other non-zero length falls back to ADF (no other lengths have been observed in practice — the fallback exists for diagnostic resilience). When the declared length is non-zero, those bytes are drained with a pure-read before the next command is sent — the printer queues them as pending output, and failing to drain them desynchronises the IS framing for all subsequent packets.
+For dialects with **`sourceDetection: "stat-length"`** (the flatbed + ADF models: ET-4950 family, XP-7100, ET-4800, ET-15000, WF-3835), the scanner detects the physical source from the first `@STAT` reply in INIT_POLL cycle 1: declared length `0` → ADF; declared length `12` → flatbed; any other non-zero length falls back to ADF (no other lengths have been observed in practice — the fallback exists for diagnostic resilience). When the declared length is non-zero, those bytes are drained with a pure-read before the next command is sent — the printer queues them as pending output, and failing to drain them desynchronises the IS framing for all subsequent packets.
 
-For dialects with **`sourceDetection: "fixed-flatbed"`** (ET-2750 and ET-2950), the heuristic is skipped entirely — both are flatbed-only hardware. ET-2750 additionally needs the override because its STAT reply declares length `0` (with a 52-byte filler packed inline in the same 64-byte IS frame), so applying the stat-length rule would misclassify it as ADF. The scanner shell pre-sets `source: "flatbed"` in `initialCtx`, and the `INIT_POLL_STAT` decision is gated on `ctx.entry.sourceDetection === "stat-length"` — the override path doesn't run on these dialects and the pre-set value survives.
+For dialects with **`sourceDetection: "fixed-flatbed"`** (the flatbed-only models), the heuristic is skipped entirely — there is no ADF to detect. ET-2750 additionally needs the override because its STAT reply declares length `0` (with a 52-byte filler packed inline in the same 64-byte IS frame), so applying the stat-length rule would misclassify it as ADF. The scanner shell pre-sets `source: "flatbed"` in `initialCtx`, and the `INIT_POLL_STAT` decision is gated on `ctx.entry.sourceDetection === "stat-length"` — the override path doesn't run on these dialects and the pre-set value survives.
 
-ADF precedence (dialects with ADF hardware: ET-4950 family + XP-7100 + ET-4800): when the ADF feeder has paper loaded, the printer picks ADF regardless of whether a document is also present on the glass. The INIT_POLL STAT reply returns length 0 in this case. Users who want flatbed must clear the ADF first.
+ADF precedence (the `stat-length` dialects above): when the ADF feeder has paper loaded, the printer picks ADF regardless of whether a document is also present on the glass. The INIT_POLL STAT reply returns length 0 in this case. Users who want flatbed must clear the ADF first.
 
 The composed PARA length depends on the dialect (which gamma / CMX classes and optional segments it carries) and the source axis. Actual `composePara` output per registry entry:
 
@@ -256,14 +258,20 @@ The composed PARA length depends on the dialect (which gamma / CMX classes and o
 | ET-15000                    | `esci2-plain` | 936 B   | 944 B       | —          |
 | FF-680W                     | `esci2-plain` | —       | 996 B       | 1000 B     |
 | DS-575W                     | `esci2-plain` | —       | 996 B       | 1000 B     |
+| ET-2810 / XP-3200           | either†       | 936 B   | —           | —          |
+| ET-8500                     | either†       | 944 B   | —           | —          |
+| ET-7700                     | `esci2-plain` | 944 B   | —           | —          |
+| WF-3835                     | `esci2-plain` | 944 B   | 952 B       | —          |
+
+† Transport-agnostic entries, keyed by CAPA fingerprint rather than transport: the ET-2810 presents over plain TCP and its fingerprint-sharing XP-3200 sibling over TLS; the ET-8500 has been reported over both across reporters.
 
 The FF-680W is ADF-only — its source is fixed to ADF (it has no flatbed). It reports no panel selection either (it sends a `JobNumberIn` trigger with no Sides/Action), so its sides, output format, and resolution come from `SCAN_SIDES` / `SCAN_FORMAT` / `SCAN_RESOLUTION` rather than the panel. PARA byte-length is DPI-independent (the `#RSM`/`#RSS`/`#ACQ` fields are fixed-width); the values, not the lengths, scale with `SCAN_RESOLUTION`.
 
 The DS-575W is the FF-680W's ADF-only sibling and reuses the same `adf-crp` PARA layout — the sizes above are its **colour** bodies. It adds a colour-mode axis: `SCAN_COLOR_MODE=grayscale` swaps the 804-byte RGB gamma triplet for a 268-byte mono LUT and `#COLC024` for `#COLM008`, giving 460 B (simplex) / 464 B (duplex) greyscale bodies. (`SCAN_COLOR_MODE=auto` never reaches the wire — it composes the colour body and decides colour vs greyscale per page in host-side post-processing, mirroring what Epson's own software does for the DS-575W's "Auto" setting.) The `#ADFCRP` flag bytes (skew / double-feed / duplex) are GUI-only scan options this service doesn't model; the composer pins the FF-680W canonical for them.
 
-(ET-2950 and ET-2750 are flatbed-only hardware; ET-4800 is flatbed + ADF simplex — its `composePara` can emit a 948 B `#ADFDPLX` body, but the simplex-only panel never requests duplex, so that row is `—`. ET-15000 reuses the ET-4800's class data and shares its PARA shape; only the flatbed body is hardware-verified, with the ADF row pending a capture.)
+(ET-2950, ET-2750, ET-2810 / XP-3200, ET-8500 and ET-7700 are flatbed-only hardware; ET-4800 is flatbed + ADF simplex — its `composePara` can emit a 948 B `#ADFDPLX` body, but the simplex-only panel never requests duplex, so that row is `—`. ET-15000 reuses the ET-4800's class data and shares its PARA shape; only the flatbed body is hardware-verified, with the ADF row pending a capture. The WF-3835 is flatbed + ADF simplex — its CAPA reports `duplex: N` — and its entry is speculative from the issue #174 diagnostic, pending hardware validation.)
 
-PARA bodies are assembled at run time by `composePara` (`src/esci2/para-composer.ts`) from the resolved registry entry (`src/esci2/dialects/registry.ts`) plus the source / action axes — see [How printer-model differences are handled](#how-printer-model-differences-are-handled). The per-dialect byte data lives in `src/esci2/data/gamma-classes.ts` and `cmx-classes.ts`, each class byte-transcribed verbatim from that model's capture; none of it is hardcoded in `src/esci2/commands.ts` (that file holds only the command / header builders). Dialects differ by more than length: gamma constant (`#GMMUG18` for ET-2750 / XP-7100 / ET-4800 / ET-15000 / FF-680W / DS-575W vs `#GMMUG10` for the ET-4950 family and ET-2950), optional-segment presence (`#QITOFF` / `#CCTCOL`, flagged per entry), and a model-specific inline `#CMXUM08` ICC-matrix block — so no dialect's body can be derived by editing another's.
+PARA bodies are assembled at run time by `composePara` (`src/esci2/para-composer.ts`) from the resolved registry entry (`src/esci2/dialects/registry.ts`) plus the source / action axes — see [How printer-model differences are handled](#how-printer-model-differences-are-handled). The per-dialect byte data lives in `src/esci2/data/gamma-classes.ts` and `cmx-classes.ts`, each class byte-transcribed verbatim from that model's capture; none of it is hardcoded in `src/esci2/commands.ts` (that file holds only the command / header builders). Dialects differ by more than length: gamma constant (`#GMMUG10` for the ET-4950 family and ET-2950; `#GMMUG18` for every other entry), optional-segment presence (`#QITOFF` / `#CCTCOL`, flagged per entry), and a model-specific inline `#CMXUM08` ICC-matrix block — so no dialect's body can be derived by editing another's.
 
 Within a dialect, the per-source variants differ in three places: the source token (`#FB ` / `#ADF` / `#ADFDPLX`), the `#PAG` page-count token (present for ADF, omitted for flatbed), and the `#ACQ` y-start offset (`0000069` for ADF, `0000000` for flatbed). The remainder — the three RGB gamma tables (`#GMTRED` / `#GMTGRN` / `#GMTBLU`), CMX colour-correction matrix, scan-area extents, and 1 MB buffer-size token — is byte-identical across sources within a dialect. The FF-680W and DS-575W (`adf-crp` profile) are the exception to this structure: their sides axis is the presence of a `DPLX` token inside the `#ADFCRP…DFL1` prefix, and their `#RSM` / `#RSS` / `#ACQ` fields scale with `SCAN_RESOLUTION` rather than being byte-identical across the resolution axis. The DS-575W additionally varies its `#COL` code and gamma LUT with `SCAN_COLOR_MODE`.
 
@@ -303,14 +311,16 @@ Three protocol variants ride on port 1865, decided per scan session by `src/prot
 1. **TLS handshake** against `1865`. Success → `esci2` (ET-4950 family + ET-2950). The probe socket is destroyed before the real scan begins.
 2. **Plain TCP connect**, await an unsolicited IS-`0x8000` welcome packet within the timeout, then classify from the welcome's payload byte 1 (frame offset 13): `0x02` → `esci`, anything else → `esci2-plain`. The ESC/I-2-over-TLS printers (ET-4950 family, ET-2950) also send a welcome immediately, but only inside the TLS tunnel — connecting to one of them over plain TCP yields no `0x8000` and the arm times out (→ inconclusive).
 
-The byte-1 discriminator in arm 2 is the load-bearing piece: **both** generations send an unsolicited `0x8000` welcome on plain TCP (a misconception in the original probe design said the legacy family stayed silent until prompted), so a welcome's presence alone means only "plain TCP". Payload byte 1 is what separates the families, and it does so cleanly across every capture we have:
+The byte-1 discriminator in arm 2 is the load-bearing piece: **both** generations send an unsolicited `0x8000` welcome on plain TCP (a misconception in the original probe design said the legacy family stayed silent until prompted), so a welcome's presence alone means only "plain TCP". Payload byte 1 is what separates the families in every committed capture but one (see the ET-7700 caveat below):
 
-| payload[1] | Variant       | Models                                   |
-| ---------- | ------------- | ---------------------------------------- |
-| `0x02`     | `esci`        | WF-3620 (all committed fixtures), XP-620 |
-| `0x04`     | `esci2-plain` | ET-2750, XP-7100, ET-4800, FF-680W       |
+| payload[1] | Variant       | Models (committed fixtures)                 |
+| ---------- | ------------- | ------------------------------------------- |
+| `0x02`     | `esci`        | WF-3620, XP-620 — and the ESC/I-2 ET-7700   |
+| `0x04`     | `esci2-plain` | ET-2750, XP-7100, ET-4800, FF-680W, DS-575W |
 
-Real welcome payloads are `01 02 00 00 00` and `01 04 00 00 00`. The XP-620 (issue #124) emits a welcome byte-for-byte identical to the WF-3620's, which is the second independent model to corroborate the `0x02` anchor. What the byte _means_ is unknown — it is treated as an observed family marker, not a decoded field — so the non-`0x02` side stays open: a future ESC/I-2-class device emitting some third value at payload[1] is still classified `esci2-plain`.
+Real welcome payloads are `01 02 00 00 00` and `01 04 00 00 00`. The XP-620 (issue #124) emits a welcome byte-for-byte identical to the WF-3620's, corroborating the `0x02` anchor. What the byte _means_ is unknown — it is treated as an observed family marker, not a decoded field — so the non-`0x02` side stays open: a future ESC/I-2-class device emitting some third value at payload[1] is still classified `esci2-plain`.
+
+**ET-7700 caveat:** the committed ET-7700 fixtures (issue #145) record scan sessions whose welcome is byte-identical to the WF-3620's — `01 02 00 00 00` from an ESC/I-2 printer — so `0x02` is not a reliable legacy marker on its own. Each of those pcaps holds only the session conversation (no probe connection), so the discriminator an ET-7700 presents at probe time is unconfirmed; if it matches its session welcome, `auto` would misroute the ET-7700 to the legacy path, and `PRINTER_PROTOCOL=esci2-plain` should be set explicitly on that model.
 
 There is deliberately **no third arm** that sends a bare `ESC @` and awaits a 1-byte ACK. Real hardware only accepts IS-framed commands, and only after a lock: in both the WF-3620 and XP-620 captures every host write begins with the `IS` magic, and `ESC @` appears solely inside a `0x2000` passthru (`IS 2100` lock → `IS 2000` passthru → `1b40`). An unframed `ESC @` models an exchange that has never occurred on the wire, so such an arm could never classify a real printer — it would only add a wasted round-trip and a misleading error before the fallback answered `esci` anyway.
 
@@ -320,14 +330,14 @@ Only `esci2` (TLS) results are cached for the daemon's lifetime. The plain-TCP a
 
 ## ESC/I-2 over plain TCP
 
-Several printers speak the ET-4950's ESC/I-2 vocabulary **without the TLS layer**: ET-2750 (flatbed-only), XP-7100 (flatbed + ADF, simplex and duplex), ET-4800 (flatbed + ADF simplex), ET-15000 (an A3 EcoTank that mirrors the ET-4800's dialect; flatbed hardware-verified, ADF simplex pending a capture); plus the FF-680W (ADF-only FastFoto photo scanner; sides/format/resolution come from config, not the panel). The wire is plain TCP on port 1865; the IS framing, command names, PARA structure, IMG pull loop, and async-event mechanics are otherwise identical to the TLS path. The scanner shell (`runEsci2ScanOverPlain` in `src/esci2/scanner.ts`) shares the protocol graph (`src/esci2/graph.ts`) with the TLS path — the only differences are at the socket factory (`net.connect` instead of `tls.connect`, no cert pinning, no TLS-error label adapter) and the per-dialect decisions the graph reads from the resolved registry entry.
+Most dialects added since the ET-4950 speak its ESC/I-2 vocabulary **without the TLS layer** — the `esci2-plain` rows in the [PARA table above](#source-adf-vs-flatbed); the registry (`src/esci2/dialects/registry.ts`) holds the full dialect set across all transports. The hardware shapes vary from flatbed-only (ET-2750, ET-7700) through flatbed + ADF (XP-7100, ET-4800) to ADF-only sheet-fed (FF-680W, DS-575W — the FF-680W takes sides/format/resolution from config, not the panel). The wire is plain TCP on port 1865; the IS framing, command names, PARA structure, IMG pull loop, and async-event mechanics are otherwise identical to the TLS path. The scanner shell (`runEsci2ScanOverPlain` in `src/esci2/scanner.ts`) shares the protocol graph (`src/esci2/graph.ts`) with the TLS path — the only differences are at the socket factory (`net.connect` instead of `tls.connect`, no cert pinning, no TLS-error label adapter) and the per-dialect decisions the graph reads from the resolved registry entry.
 
 Wire differences from the ET-4950 (decoded from the pcap captures under `tools/pcap-extract/captures/`):
 
 - **No TLS handshake.** The printer sends the welcome IS packet (type `0x8000`) immediately after TCP connect. (Before the real session the driver opens a throwaway connection on 1865 — a rejected TLS probe on XP-7100 / ET-4800 / FF-680W / DS-575W, an aborted SYN/RST on ET-2750 — so each capture holds two `tcp.port==1865` conversations; isolate the real plain-TCP one — see [REVERSE-ENGINEERING.md](REVERSE-ENGINEERING.md).)
 - **INIT_POLL count is per-dialect:** 2 for ET-2750, 3 for XP-7100 and ET-4800, 8 for FF-680W, 12 for DS-575W (`ctx.entry.initPollIterations`). For ET-2750, sending a third FS Y after the printer has moved on returns a non-ACK that fails MODE_SWITCH validation.
 - **Source detection / STAT.** XP-7100 and ET-4800 use `sourceDetection: "stat-length"` like the ET-4950 family (length 0 → ADF, 12 → flatbed). ET-2750 uses `"fixed-flatbed"`: its STAT reply packs a 52-byte filler inline in a single 64-byte IS frame while the 12-byte header still declares `length=0`, so the stat-length rule would misclassify it as ADF — the graph skips the override and trusts the `source: "flatbed"` value from `initialCtx`. ET-2750 hardware is flatbed-only, so this is correct. The FF-680W uses `sourceDetection: "fixed-adf"` (ADF-only hardware); the graph pins `ctx.source = "adf"` from the registry entry, mirroring ET-2750's `fixed-flatbed` approach in the opposite direction.
-- **PARA bodies are dialect-specific** and larger than the ET-4950 family's: 936 B (ET-2750 flatbed); 944 / 952 / 956 B (XP-7100 flatbed / ADF simplex / ADF duplex); 936 / 944 B (ET-4800 flatbed / ADF simplex); 996 / 1000 B (FF-680W ADF simplex / duplex). They carry `#GMMUG18`, per-entry optional-segment flags, and a model-specific inline `#CMXUM08` ICC-matrix block. See the [PARA table above](#source-adf-vs-flatbed).
+- **PARA bodies are dialect-specific** and generally larger than the ET-4950 family's, carrying `#GMMUG18`, per-entry optional-segment flags, and a model-specific inline `#CMXUM08` ICC-matrix block. Per-dialect sizes are in the [PARA table above](#source-adf-vs-flatbed).
 
 These dialects are resolved by the same CAPA-fingerprint lookup used by the rest of the ESC/I-2 family. The scanner shell picks the entry point (`runEsci2Scan` for TLS vs `runEsci2ScanOverPlain` for plain TCP) and pre-sets `ctx.transport` in the initial ctx. On the `esci2-plain` transport, config-time validation rejects `ESCI_FORCE_SOURCE` (a legacy-ESC/I-only knob) and `PRINTER_CERT_FINGERPRINT` (no TLS layer to pin) at startup.
 
