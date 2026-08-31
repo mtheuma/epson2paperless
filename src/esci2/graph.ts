@@ -30,7 +30,9 @@ import {
   assertSourceSupported,
 } from "./dialects/dispatch.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
-import { composePara, type ParaSpec } from "./para-composer.js";
+import { composePara, STANDARD_BASE_DPI, type ParaSpec } from "./para-composer.js";
+import { parseCapaTokens, type CapaTokens } from "./capabilities.js";
+import { advertisedDpiSet, selectWireDpi } from "./resolution.js";
 import { createLogger } from "../logger.js";
 
 const log = createLogger("scanner-esci2");
@@ -63,14 +65,23 @@ export interface Esci2Ctx {
   infoBody: Buffer;
   /** CAPA#1 reply body captured from INIT1. Buffer.alloc(0) until INIT1_CAPA_DATA fires. */
   capaBody: Buffer;
+  /**
+   * Parsed CAPA#1 tokens (resolution lists, JPEG quality range, etc.),
+   * captured alongside `entry` at INIT1_CAPA once the fingerprint resolves.
+   * Undefined until INIT1 completes. Consumed by buildParaSend to select the
+   * wire DPI and clamp jpegQuality against the printer's advertised range.
+   */
+  capaTokens: CapaTokens | undefined;
   /** Resolved registry entry post-INIT1, drives PARA build + init-poll count + source detection. Undefined until INIT1 completes. */
   entry: RegistryEntry | undefined;
   /** Panel-selected output format; drives action-aware dialects' PARA splice. */
   action: "jpg" | "pdf";
   /**
    * Target scan resolution in DPI, threaded from config.scanResolution.
-   * Undefined means the dialect's pinned default. Only the adf-crp PARA
-   * profile consumes it; other dialects pin resolution regardless.
+   * Undefined means the dialect's pinned default. buildParaSend resolves
+   * this against the printer's advertised CAPA resolution lists (via
+   * selectWireDpi) to pick the actual wire DPI — see `wireDpi` /
+   * `downsampleToDpi` below.
    */
   resolution: number | undefined;
   /**
@@ -80,6 +91,25 @@ export interface Esci2Ctx {
    * page to greyscale host-side at finalize.
    */
   colorMode: "color" | "grayscale";
+  /**
+   * Requested JPEG encode quality (1..100), threaded from
+   * config.scanJpegQuality (or DEFAULT_JPEG_QUALITY). buildParaSend clamps
+   * this against the printer's advertised #JPGRANG before it reaches the
+   * wire; the unclamped value still drives the host-side JPEG encode.
+   */
+  jpegQuality: number;
+  /**
+   * The DPI actually requested on the wire, resolved by buildParaSend via
+   * selectWireDpi. Undefined until the PARA build runs. Read by Task 6's
+   * finalize resolver alongside `downsampleToDpi`.
+   */
+  wireDpi: number | undefined;
+  /**
+   * Set when the wire couldn't reach the requested target DPI exactly and
+   * the scan must be host-downsampled after capture to reach it. Undefined
+   * when no downsample is needed (exact match or capped-at-max).
+   */
+  downsampleToDpi: number | undefined;
 }
 
 export const ESCI2_TIMEOUT_MS = 30_000;
@@ -318,6 +348,7 @@ twoPhaseRead(
     } catch (err) {
       return { error: err as Error };
     }
+    ctx.capaTokens = parseCapaTokens(body);
     log.debug("Dialect resolved", { name: ctx.entry.displayName, fingerprint });
     applyEntrySourceOverride(ctx, ctx.entry);
   },
@@ -634,8 +665,44 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
         "upside down, please open an issue.",
     );
   }
+
+  // Resolve the target DPI against what the printer actually advertised in
+  // CAPA — exact match, else smallest-above + host downsample, else capped
+  // at the max with an info log. No advertised lists (older/unprobed
+  // dialects) fall back to the profile's pinned default as the sole wire
+  // DPI, so the target still gets full selection semantics instead of being
+  // silently discarded.
+  const pinnedDefault = ctx.entry!.paraProfile === "adf-crp" ? 200 : STANDARD_BASE_DPI;
+  const target = ctx.resolution ?? pinnedDefault;
+  const advertised = ctx.capaTokens ? advertisedDpiSet(ctx.capaTokens, paraSource) : [];
+  const sel = selectWireDpi(target, advertised.length > 0 ? advertised : [pinnedDefault]);
+  ctx.wireDpi = sel.wireDpi;
+  ctx.downsampleToDpi = sel.downsampleToDpi;
+  if (sel.cappedFrom !== undefined) {
+    log.info(
+      `SCAN_RESOLUTION=${sel.cappedFrom} exceeds this model's maximum — scanning at ${sel.wireDpi} DPI`,
+    );
+  }
+  // Only warn when the caller explicitly asked for a resolution — the
+  // dialect's own pinned default running at an as-yet-unverified DPI isn't
+  // actionable by the user and would just be noise on every default scan.
+  if (ctx.resolution !== undefined && !ctx.entry!.verifiedWireDpis.includes(sel.wireDpi)) {
+    log.warn(
+      `wire DPI ${sel.wireDpi} is unverified on ${ctx.entry!.displayName} — ` +
+        "please report results (issue #81)",
+    );
+  }
+
+  // Clamp the requested JPEG quality to the printer's advertised #JPGRANG,
+  // if it advertised one — the host-side encode still uses the unclamped
+  // ctx.jpegQuality.
+  const range = ctx.capaTokens?.jpgRange;
+  const quality = range
+    ? Math.min(range.max, Math.max(range.min, ctx.jpegQuality))
+    : ctx.jpegQuality;
+
   const paraPayload = composePara(
-    makeParaSpec(ctx.entry!, paraSource, ctx.action, ctx.resolution, ctx.colorMode),
+    makeParaSpec(ctx.entry!, paraSource, ctx.action, sel.wireDpi, ctx.colorMode, quality),
   );
   return [
     buildPassthruPacket(buildParaHeader(paraPayload.length), 0),
@@ -687,24 +754,33 @@ g.state(
   }),
 );
 
-// PARA: validates printer's acceptance of parameters — header must parse,
-// cmd must be "PARA", and the body must contain #parOK. The bare token
-// check would otherwise accept a malformed reply that happened to contain
-// "#parOK" at the right offset.
-g.state("PARA", {
-  on: {
-    0xa000: {
-      validate: (payload) => {
-        const header = parseEsci2ReplyHeader(payload);
-        if (header === null || header.cmd !== "PARA") return false;
-        const tokens = parseTokens(payload.subarray(12));
-        return tokens.get("par")?.trim() === "OK";
-      },
-      next: "TRDT",
-      send: buildPassthruPacket(buildEsci2Command("TRDT"), ESCI2_REPLY_SIZE),
-    },
-  },
-});
+// PARA: decision on the printer's acceptance of parameters — header must
+// parse, cmd must be "PARA", and the body must contain #parOK. A decision
+// (rather than the previous validate-based static state) so a parsed-but-
+// rejected reply produces a real, actionable error instead of falling
+// through to an unmatched-packet timeout.
+g.state(
+  "PARA",
+  decision<Esci2Ctx>((ctx, packet) => {
+    const typeGuard = expectIsType(packet, 0xa000, "PARA");
+    if (typeGuard) return typeGuard;
+    const payload = packet.payload;
+    const header = parseEsci2ReplyHeader(payload);
+    if (header === null || header.cmd !== "PARA") {
+      return { error: new Error("PARA: unparseable reply header") };
+    }
+    const par = parseTokens(payload.subarray(12)).get("par")?.trim();
+    if (par !== "OK") {
+      const hint =
+        ctx.resolution !== undefined
+          ? ` Requested wire DPI was ${ctx.wireDpi}; this model may not accept it — ` +
+            `remove SCAN_RESOLUTION or report the result (issue #81).`
+          : "";
+      return { error: new Error(`PARA rejected by printer (#par${par ?? "?"}).${hint}`) };
+    }
+    return { next: "TRDT", send: buildPassthruPacket(buildEsci2Command("TRDT"), ESCI2_REPLY_SIZE) };
+  }),
+);
 
 // TRDT: transfer-data handshake; sends IMG to start the image-receive loop.
 g.state("TRDT", {

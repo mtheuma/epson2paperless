@@ -14,7 +14,11 @@ import { esci2Graph, type Esci2Ctx } from "./graph.js";
 import { withEsci2UnlockOnDestroy, withTlsErrorLabels } from "./transport.js";
 import { supportsWireGrayscale } from "./dialects/registry.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
-import { DEFAULT_JPEG_QUALITY, resolveWireColorMode, resolveGrayscaleConversion } from "../config.js";
+import {
+  DEFAULT_JPEG_QUALITY,
+  resolveWireColorMode,
+  resolveGrayscaleConversion,
+} from "../config.js";
 import type { PostProcessProfile } from "../postprocess/index.js";
 
 export interface ScanSession {
@@ -96,7 +100,11 @@ function buildInitialCtx(session: ScanSession, transport: "tls" | "plain"): Esci
     tprDeclaredLength: 0,
     infoBody: Buffer.alloc(0),
     capaBody: Buffer.alloc(0),
+    capaTokens: undefined,
     entry: undefined,
+    jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
+    wireDpi: undefined,
+    downsampleToDpi: undefined,
   };
 }
 
@@ -184,6 +192,12 @@ function makeOutputResolvers(session: ScanSession) {
     // invariant must fail loudly here, not silently fall back to rotating —
     // the wrong-guess direction is exactly the inverted-backs bug of #128.
     resolveBackPageRotated: (ctx: Esci2Ctx) => ctx.entry!.duplexBackRotated,
+    // ctx.downsampleToDpi is set at buildParaSend once the wire DPI selection
+    // resolves (undefined when the wire hit the target exactly or was capped
+    // at the model's max). Not yet consumed by runScanSession — a future
+    // finalize resolver reads this to host-downsample a page when the wire
+    // couldn't reach the requested SCAN_RESOLUTION.
+    resolveDownsample: (ctx: Esci2Ctx) => ctx.downsampleToDpi,
   };
 }
 
