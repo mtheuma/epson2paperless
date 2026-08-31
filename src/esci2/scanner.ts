@@ -194,10 +194,14 @@ function makeOutputResolvers(session: ScanSession) {
     resolveBackPageRotated: (ctx: Esci2Ctx) => ctx.entry!.duplexBackRotated,
     // ctx.downsampleToDpi is set at buildParaSend once the wire DPI selection
     // resolves (undefined when the wire hit the target exactly or was capped
-    // at the model's max). Not yet consumed by runScanSession — a future
-    // finalize resolver reads this to host-downsample a page when the wire
-    // couldn't reach the requested SCAN_RESOLUTION.
-    resolveDownsample: (ctx: Esci2Ctx) => ctx.downsampleToDpi,
+    // at the model's max). ctx.wireDpi is the DPI actually requested on the
+    // wire — the "from" side of the ratio. Both must be known to host-
+    // downsample a page when the wire couldn't reach the requested
+    // SCAN_RESOLUTION.
+    resolveDownsample: (ctx: Esci2Ctx) =>
+      ctx.downsampleToDpi !== undefined && ctx.wireDpi !== undefined
+        ? { fromDpi: ctx.wireDpi, toDpi: ctx.downsampleToDpi }
+        : undefined,
   };
 }
 

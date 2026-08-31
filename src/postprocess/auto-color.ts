@@ -1,5 +1,6 @@
 import sharp from "sharp";
 import { readJpegOrientation, setJpegOrientation, setJfifDensity } from "../exif.js";
+import { scaledDimensions, type Downsample } from "./downsample.js";
 
 // SCAN_COLOR_MODE=auto: the scan itself always runs in colour (the DS-575W's
 // own "Auto" does the same — Epson's software decides colour vs greyscale
@@ -209,24 +210,36 @@ export async function classifyRawPixels(
 
 /**
  * Re-encode a neutral page as a single-channel greyscale JPEG, preserving the
- * source's DPI and EXIF orientation.
+ * source's DPI and EXIF orientation. `downsample`, when given, folds the
+ * finalize-time DPI fallback into this same encode (one decode, one encode)
+ * instead of chaining a second re-encode after this one; the target DPI wins
+ * over the inherited source density in that case.
  *
  * `.toColourspace("b-w")` is what actually yields one channel — sharp's
  * `.withMetadata()` would attach an sRGB ICC profile and silently force the
- * encode back to three, so the source density is re-stamped into the fresh
- * encode's JFIF APP0 instead (setJfifDensity), and the EXIF orientation tag
- * (duplex back pages hold Orientation=3 at this point; pixels never rotate,
- * so the tag stays correct) is re-stamped after it — density first, because
- * the EXIF prepend shifts the JFIF segment.
+ * encode back to three, so the density (source, or the downsample target) is
+ * re-stamped into the fresh encode's JFIF APP0 instead (setJfifDensity), and
+ * the EXIF orientation tag (duplex back pages hold Orientation=3 at this
+ * point; pixels never rotate, so the tag stays correct) is re-stamped after
+ * it — density first, because the EXIF prepend shifts the JFIF segment.
  */
-export async function toGrayscaleJpeg(jpeg: Buffer, jpegQuality: number): Promise<Buffer> {
+export async function toGrayscaleJpeg(
+  jpeg: Buffer,
+  jpegQuality: number,
+  downsample?: Downsample,
+): Promise<Buffer> {
   const orientation = readJpegOrientation(jpeg);
-  const { density } = await sharp(jpeg).metadata();
-  let out: Buffer = await sharp(jpeg)
-    .toColourspace("b-w")
-    .jpeg({ quality: jpegQuality })
-    .toBuffer();
-  if (density) out = setJfifDensity(out, density);
+  const { width, height, density } = await sharp(jpeg).metadata();
+  let pipeline = sharp(jpeg).toColourspace("b-w");
+  if (downsample) {
+    const dims = scaledDimensions(width ?? 0, height ?? 0, downsample);
+    // fit: "fill" absorbs the sub-pixel aspect difference between the two
+    // independently-rounded dimensions (see scaledDimensions).
+    pipeline = pipeline.resize({ ...dims, fit: "fill" });
+  }
+  let out: Buffer = await pipeline.jpeg({ quality: jpegQuality }).toBuffer();
+  const outDensity = downsample ? downsample.toDpi : density;
+  if (outDensity) out = setJfifDensity(out, outDensity);
   if (orientation !== undefined && orientation !== 1) out = setJpegOrientation(out, orientation);
   return out;
 }

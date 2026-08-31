@@ -70,4 +70,67 @@ describe("postProcessTempPages", () => {
       postProcessTempPages("/no/such/dir/xyz", "document", { jpegQuality: 90 }, noopLog),
     ).resolves.toBeUndefined();
   });
+
+  it("no downsample field → pages byte-identical (pure no-op path preserved)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-nods-"));
+    await writePage(dir, "page_00.jpg", [222, 220, 244]);
+    const before = fs.readFileSync(path.join(dir, "page_00.jpg"));
+    await postProcessTempPages(dir, "none", { jpegQuality: 90 }, noopLog);
+    expect(fs.readFileSync(path.join(dir, "page_00.jpg")).equals(before)).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("runs the standalone downsample under profile none (no document/grayscale transform)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-ds-none-"));
+    await writePage(dir, "page_00.jpg", [222, 220, 244]);
+    await postProcessTempPages(
+      dir,
+      "none",
+      { jpegQuality: 90, downsample: { fromDpi: 300, toDpi: 150 } },
+      noopLog,
+    );
+    const { info } = await sharp(path.join(dir, "page_00.jpg")).toBuffer({
+      resolveWithObject: true,
+    });
+    expect(info.width).toBe(16);
+    expect(info.height).toBe(16);
+    expect(fs.readdirSync(dir).some((f) => f.endsWith(".tmp"))).toBe(false);
+  });
+
+  it("document profile folds the downsample into its single encode pass", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-ds-doc-"));
+    await writePage(dir, "page_00.jpg", [222, 220, 244]);
+    await postProcessTempPages(
+      dir,
+      "document",
+      { jpegQuality: 90, downsample: { fromDpi: 300, toDpi: 150 } },
+      noopLog,
+    );
+    const out = fs.readFileSync(path.join(dir, "page_00.jpg"));
+    const meta = await sharp(out).metadata();
+    expect(meta.width).toBe(16);
+    expect(meta.height).toBe(16);
+    expect(meta.density).toBe(150);
+  });
+
+  it("folds the downsample into the forced-grayscale re-encode (profile none)", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-ds-gray-"));
+    await writePage(dir, "page_00.jpg", [222, 220, 244]);
+    await postProcessTempPages(
+      dir,
+      "none",
+      {
+        jpegQuality: 90,
+        grayscaleConversion: "force",
+        downsample: { fromDpi: 300, toDpi: 150 },
+      },
+      noopLog,
+    );
+    const out = fs.readFileSync(path.join(dir, "page_00.jpg"));
+    const meta = await sharp(out).metadata();
+    expect(meta.width).toBe(16);
+    expect(meta.height).toBe(16);
+    expect(meta.density).toBe(150);
+    expect(meta.channels).toBe(1);
+  });
 });

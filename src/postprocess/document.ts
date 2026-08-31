@@ -1,6 +1,7 @@
 import sharp from "sharp";
 import { TONE_CURVES, type ToneCurveName } from "./tone-curves.js";
 import { classifyRawPixels, type ChromaVerdict, type WhitePoint } from "./auto-color.js";
+import { scaledDimensions, type Downsample } from "./downsample.js";
 import { setJfifDensity } from "../exif.js";
 import type { GrayscaleConversion } from "../config.js";
 
@@ -170,6 +171,7 @@ async function transformDocumentImage(
   toneCurve: ToneCurveName | undefined,
   conversion: GrayscaleConversion,
   whitePoint?: WhitePoint,
+  downsample?: Downsample,
 ): Promise<{ jpeg: Buffer; grayscale: boolean; verdict?: ChromaVerdict }> {
   const [{ orientation, density, channels: sourceChannels }, { data, info }] = await Promise.all([
     sharp(jpeg).metadata(),
@@ -228,15 +230,26 @@ async function transformDocumentImage(
   // the output (e.g. a duplex back page) even when the paper-correction
   // guard trips — AND the page doesn't need its channel count collapsed
   // (an already-single-channel source needs no collapse, so a greyscale
-  // outcome alone doesn't force a re-encode). Only when none applies is the
-  // original buffer identical in substance to what a re-encode would
-  // produce, so return it untouched and skip the generational JPEG quality
-  // loss. `grayscale: false` on this path means "not converted" — the page
-  // ships byte-identical, whatever its channel count.
+  // outcome alone doesn't force a re-encode) — AND no host-side downsample is
+  // pending, or a page that trips the low-paper guard (e.g. a dark photo)
+  // would silently ignore SCAN_RESOLUTION under POST_PROCESS=document. Only
+  // when none applies is the original buffer identical in substance to what a
+  // re-encode would produce, so return it untouched and skip the
+  // generational JPEG quality loss. `grayscale: false` on this path means
+  // "not converted" — the page ships byte-identical, whatever its channel
+  // count.
   const needsRotateBake = orientation !== undefined && orientation !== 1;
   const needsChannelCollapse = grayscale && !sourceGrayscale;
-  if (!applied && !needsRotateBake && !needsChannelCollapse)
+  if (!applied && !needsRotateBake && !needsChannelCollapse && !downsample)
     return { jpeg, grayscale: false, verdict };
+
+  // Both dimensions are computed once, up front, and reused by whichever
+  // encode branch runs below — same rounding rule as downsampleJpeg
+  // (scaledDimensions), so a folded resize and a standalone one never drift.
+  const resizeDims = downsample ? scaledDimensions(info.width, info.height, downsample) : null;
+  // The downsample target density wins over the inherited source density —
+  // physical size must reflect the OUTPUT resolution, not the input's.
+  const outDensity = downsample ? downsample.toDpi : density;
 
   const rawInput = { raw: { width: info.width, height: info.height, channels: 3 as const } };
   if (grayscale) {
@@ -245,24 +258,28 @@ async function transformDocumentImage(
     // input's DPI is re-stamped into the fresh encode's JFIF APP0 instead.
     // Orientation is already baked into the pixels by `.rotate()` above, and
     // no EXIF is written, so the output reads as upright — correct.
-    let out: Buffer = await sharp(corrected, rawInput)
-      .toColourspace("b-w")
-      .jpeg({ quality: jpegQuality })
-      .toBuffer();
-    if (density) out = setJfifDensity(out, density);
+    let grayPipeline = sharp(corrected, rawInput).toColourspace("b-w");
+    if (resizeDims) grayPipeline = grayPipeline.resize({ ...resizeDims, fit: "fill" });
+    let out: Buffer = await grayPipeline.jpeg({ quality: jpegQuality }).toBuffer();
+    if (outDensity) out = setJfifDensity(out, outDensity);
     return { jpeg: out, grayscale: true, verdict };
   }
 
   // Preserve the input's DPI on the re-encode. The raw pixel buffer we're
   // encoding from carries no metadata of its own (it's a fresh `sharp()`
   // pipeline over a Buffer, not a decode), so `.withMetadata()` has nothing
-  // to inherit — pulling `density` from the ORIGINAL jpeg's metadata and
-  // pinning `orientation: 1` explicitly is required, not just belt-and-
-  // braces: the pixels above already had EXIF orientation baked in via
-  // `.rotate()`, so writing anything other than "upright" here would rotate
-  // the image a second time in EXIF-aware viewers.
+  // to inherit — pulling `density` from the ORIGINAL jpeg's metadata (or the
+  // downsample target, when one applies) and pinning `orientation: 1`
+  // explicitly is required, not just belt-and-braces: the pixels above
+  // already had EXIF orientation baked in via `.rotate()`, so writing
+  // anything other than "upright" here would rotate the image a second time
+  // in EXIF-aware viewers.
   let pipeline = sharp(corrected, rawInput);
-  if (density) pipeline = pipeline.withMetadata({ density, orientation: 1 });
+  // fit: "fill" absorbs the sub-pixel aspect difference between the two
+  // independently-rounded dimensions (see scaledDimensions); the default
+  // "cover" would crop instead.
+  if (resizeDims) pipeline = pipeline.resize({ ...resizeDims, fit: "fill" });
+  if (outDensity) pipeline = pipeline.withMetadata({ density: outDensity, orientation: 1 });
   return {
     jpeg: await pipeline.jpeg({ quality: jpegQuality }).toBuffer(),
     grayscale: false,
@@ -270,13 +287,19 @@ async function transformDocumentImage(
   };
 }
 
-/** Full page transform: decode → auto-orient → correct → re-encode. */
+/**
+ * Full page transform: decode → auto-orient → correct [→ resize] → re-encode.
+ * `downsample`, when given, folds the finalize-time DPI fallback into this
+ * same encode — one decode, one encode, no second compression generation.
+ */
 export async function correctDocumentImage(
   jpeg: Buffer,
   jpegQuality: number,
   toneCurve?: ToneCurveName,
+  downsample?: Downsample,
 ): Promise<Buffer> {
-  return (await transformDocumentImage(jpeg, jpegQuality, toneCurve, "off")).jpeg;
+  return (await transformDocumentImage(jpeg, jpegQuality, toneCurve, "off", undefined, downsample))
+    .jpeg;
 }
 
 /**
@@ -286,6 +309,8 @@ export async function correctDocumentImage(
  * separate conversion pass would cost. "auto" (SCAN_COLOR_MODE=auto) runs the
  * chroma verdict on the clip-stage pixels; "force" (SCAN_COLOR_MODE=grayscale
  * without greyscale wire support) converts every page, no verdict.
+ * `downsample`, when given, folds the finalize-time DPI fallback into the
+ * same single encode.
  */
 export async function correctDocumentImageAuto(
   jpeg: Buffer,
@@ -293,6 +318,7 @@ export async function correctDocumentImageAuto(
   toneCurve?: ToneCurveName,
   conversion: Exclude<GrayscaleConversion, "off"> = "auto",
   whitePoint?: WhitePoint,
+  downsample?: Downsample,
 ): Promise<{ jpeg: Buffer; grayscale: boolean; verdict?: ChromaVerdict }> {
-  return transformDocumentImage(jpeg, jpegQuality, toneCurve, conversion, whitePoint);
+  return transformDocumentImage(jpeg, jpegQuality, toneCurve, conversion, whitePoint, downsample);
 }

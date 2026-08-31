@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { correctDocumentImage, correctDocumentImageAuto } from "./document.js";
 import { classifyJpeg, describeVerdict, toGrayscaleJpeg, type WhitePoint } from "./auto-color.js";
+import { downsampleJpeg, type Downsample } from "./downsample.js";
 import { sortedPageFiles } from "../output.js";
 import type { ToneCurveName } from "./tone-curves.js";
 import type { GrayscaleConversion } from "../config.js";
@@ -33,12 +34,22 @@ export interface PostProcessOptions {
    * correction. Never inferred from the page — see auto-color.ts.
    */
   whitePoint?: WhitePoint;
+  /**
+   * Finalize-time host-side DPI downsample — the fallback arm for a
+   * SCAN_RESOLUTION the wire couldn't reach. Folded into the document /
+   * grayscale re-encode below when either also runs (single decode-encode);
+   * otherwise applied as its own standalone pass. Never upscales — see
+   * downsample.ts.
+   */
+  downsample?: Downsample;
 }
 
 /**
  * Apply the named post-process profile to a single JPEG page. `none` returns
- * the input untouched (no decode). Transform errors are the caller's to handle
- * (see finalizeSession fallback).
+ * the input untouched (no decode) — downsample folding for that path happens
+ * in postProcessTempPages, since `applyPostProcess` alone has no way to know
+ * a caller wants a resize without a document transform. Transform errors are
+ * the caller's to handle (see finalizeSession fallback).
  */
 export async function applyPostProcess(
   profile: PostProcessProfile,
@@ -49,7 +60,7 @@ export async function applyPostProcess(
     case "none":
       return jpeg;
     case "document":
-      return correctDocumentImage(jpeg, opts.jpegQuality, opts.toneCurve);
+      return correctDocumentImage(jpeg, opts.jpegQuality, opts.toneCurve, opts.downsample);
   }
 }
 
@@ -75,7 +86,7 @@ export async function postProcessTempPages(
   log: MinimalLog,
 ): Promise<void> {
   const conversion = opts.grayscaleConversion ?? "off";
-  if (profile === "none" && conversion === "off") return;
+  if (profile === "none" && conversion === "off" && opts.downsample === undefined) return;
   let pages: ReturnType<typeof sortedPageFiles>;
   try {
     pages = sortedPageFiles(fs.readdirSync(tempDir), "jpg");
@@ -91,35 +102,51 @@ export async function postProcessTempPages(
       const original = await fs.promises.readFile(full);
       let processed: Buffer;
       let grayscaled = false;
+      // Tracks whether opts.downsample (if any) has already been folded into
+      // a decode/encode pass that ran below, so the standalone downsampleJpeg
+      // call at the end never chains a second re-encode on top.
+      let downsampleFolded = false;
       if (profile === "document" && conversion !== "off") {
         // Integrated path: single decode/encode, greyscale verdict (or the
-        // forced conversion) between the white-point clip and the tone curve.
-        // A failure here means the document transform itself failed, so the
-        // outer catch keeping the original page is the right fallback — there
-        // is no succeeded-then-reverted intermediate stage to lose.
+        // forced conversion) between the white-point clip and the tone curve,
+        // plus the DPI downsample when one is pending. A failure here means
+        // the document transform itself failed, so the outer catch keeping
+        // the original page is the right fallback — there is no
+        // succeeded-then-reverted intermediate stage to lose.
         const r = await correctDocumentImageAuto(
           original,
           opts.jpegQuality,
           opts.toneCurve,
           conversion,
           opts.whitePoint,
+          opts.downsample,
         );
         processed = r.jpeg;
         grayscaled = r.grayscale;
+        downsampleFolded = true;
         if (r.verdict) log.debug?.(`auto colour mode: ${name} ${describeVerdict(r.verdict)}`);
       } else {
         processed = await applyPostProcess(profile, original, opts);
+        if (profile === "document") downsampleFolded = true; // correctDocumentImage folded it
         if (conversion === "force") {
-          processed = await toGrayscaleJpeg(processed, opts.jpegQuality);
+          processed = await toGrayscaleJpeg(processed, opts.jpegQuality, opts.downsample);
           grayscaled = true;
+          downsampleFolded = true;
         } else if (conversion === "auto") {
           const verdict = await classifyJpeg(processed, opts.whitePoint);
           log.debug?.(`auto colour mode: ${name} ${describeVerdict(verdict)}`);
           if (verdict.grayscale) {
-            processed = await toGrayscaleJpeg(processed, opts.jpegQuality);
+            processed = await toGrayscaleJpeg(processed, opts.jpegQuality, opts.downsample);
             grayscaled = true;
+            downsampleFolded = true;
           }
         }
+      }
+      // Neither the document transform nor a grayscale conversion ran (or
+      // "auto" ran but kept the page in colour) — apply the DPI fallback as
+      // its own standalone pass instead of silently dropping it.
+      if (opts.downsample && !downsampleFolded) {
+        processed = await downsampleJpeg(processed, opts.downsample, opts.jpegQuality);
       }
       // "force" converts every page by design — announcing each one would be
       // noise; the scanner layer logs the fallback once per session instead.

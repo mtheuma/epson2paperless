@@ -10,6 +10,7 @@ import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import type { PostProcessProfile } from "./postprocess/index.js";
 import type { ToneCurveName } from "./postprocess/tone-curves.js";
 import type { WhitePoint } from "./postprocess/auto-color.js";
+import type { Downsample } from "./postprocess/downsample.js";
 import { DEFAULT_JPEG_QUALITY, type GrayscaleConversion } from "./config.js";
 
 /**
@@ -357,6 +358,14 @@ export interface RunScanSessionOpts<Ctx> {
    * resolveToneCurve, because the dialect is only known mid-scan.
    */
   resolveBackPageRotated?: (ctx: Ctx) => boolean;
+  /**
+   * Resolves the finalize-time host-side DPI downsample fallback from the
+   * final context — set when the wire couldn't reach the requested
+   * SCAN_RESOLUTION (the dialect's max, or the wire's own DPI vocabulary, is
+   * only known mid-scan). Undefined means no fallback is needed: the wire hit
+   * the requested DPI, or the transport has no such notion.
+   */
+  resolveDownsample?: (ctx: Ctx) => Downsample | undefined;
   paperless?: PaperlessUploadOptions;
   /**
    * Test-only: allow reaching DONE without any flushPage having fired.
@@ -429,6 +438,7 @@ export async function runScanSession<Ctx>(
         grayscaleConversion: opts.resolveGrayscaleConversion?.(ctx),
         toneCurve: opts.resolveToneCurve?.(ctx),
         whitePoint: opts.whitePoint,
+        downsample: opts.resolveDownsample?.(ctx),
       });
     }
 
