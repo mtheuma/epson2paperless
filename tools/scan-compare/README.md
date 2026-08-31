@@ -11,13 +11,16 @@ and the torn-edge artefact reports on PR #143.
 ## Usage
 
 ```
-npm run scan:compare -- <file...> [--document]
+npm run scan:compare -- <file...> [--document] [--tone-curve <name>]
 ```
 
 Accepts PDFs (every embedded JPEG is extracted and measured as a page) or image
 files. `--document` additionally runs each page through the document profile and
 prints the after-metrics beneath the before — the before/after view for judging
-a change to the clip.
+a change to the clip. `--tone-curve <name>` (implies `--document`) also applies
+that dialect's pinned tone curve, so the `+ document` row matches what the
+pipeline delivers for a dialect that has one; without it the row is clip-only.
+Valid names are the keys of `TONE_CURVES` (currently `et4950-family`).
 
 ## Metrics
 

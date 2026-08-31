@@ -20,11 +20,14 @@
  *   - `chroma`      the auto-colour classifier's own measurements and verdict.
  *
  * Usage:
- *   npm run scan:compare -- <file...> [--document]
+ *   npm run scan:compare -- <file...> [--document] [--tone-curve <name>]
  *
  * `--document` additionally runs each page through the document profile and
  * prints the after-metrics beneath the before, which is the before/after view
- * for judging a change to the clip.
+ * for judging a change to the clip. `--tone-curve <name>` (implies
+ * `--document`) also applies that pinned tone curve, so the `+ document` row
+ * shows what the pipeline actually delivers for a dialect that has one —
+ * without it the row is clip-only, which is how issue #158 went unnoticed.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -36,6 +39,7 @@ import {
   KNEE_WIDTH,
 } from "../../src/postprocess/document.js";
 import { classifyJpeg } from "../../src/postprocess/auto-color.js";
+import { parseCliArgs, type CliArgs } from "./cli-args.js";
 
 /**
  * Pull every embedded JPEG out of a PDF (pdf-lib and Epson Scan 2 both embed
@@ -160,11 +164,17 @@ function row(label: string, m: Metrics): string {
 }
 
 async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-  const withDocument = args.includes("--document");
-  const files = args.filter((a) => !a.startsWith("--"));
+  let parsed: CliArgs;
+  try {
+    parsed = parseCliArgs(process.argv.slice(2));
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    process.exitCode = 1;
+    return;
+  }
+  const { files, withDocument, toneCurve } = parsed;
   if (files.length === 0) {
-    console.error("usage: npm run scan:compare -- <file...> [--document]");
+    console.error("usage: npm run scan:compare -- <file...> [--document] [--tone-curve <name>]");
     process.exitCode = 1;
     return;
   }
@@ -184,8 +194,9 @@ async function main(): Promise<void> {
       const label = pages.length > 1 ? `page ${i + 1}` : "page";
       console.log(row(label, await measurePage(pages[i])));
       if (withDocument) {
-        const processed = await correctDocumentImage(pages[i], 90);
-        console.log(row(`${label} + document`, await measurePage(processed)));
+        const processed = await correctDocumentImage(pages[i], 90, toneCurve);
+        const suffix = toneCurve ? ` + document (${toneCurve})` : " + document";
+        console.log(row(`${label}${suffix}`, await measurePage(processed)));
       }
     }
     console.log("");
