@@ -179,7 +179,21 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     port: 1865,
     override: args.config.printerProtocol,
     timeoutMs: 3000,
+    // PID hint: lets the probe correct the welcome-discriminator verdict for
+    // ESC/I-2 models whose welcome is byte-identical to the legacy one
+    // (currently the ET-7700). Null for scan:now, which has no panel to ask.
+    productName: args.productName,
   });
+  // Zod rejects ESCI_FORCE_SOURCE only alongside an explicit esci2/esci2-plain
+  // override; under auto it validates and then does nothing on a non-legacy
+  // route. Say so, instead of failing loudly in one mode and silently in the
+  // other.
+  if (variant !== "esci" && args.config.esciForceSource) {
+    log.warn(
+      `ESCI_FORCE_SOURCE is set but this session resolved to ${variant} — ` +
+        `the flag only affects the legacy ESC/I path and is ignored.`,
+    );
+  }
   if (variant === "esci2") {
     return runEsci2Scan({
       printerIp: args.config.printerIp,
