@@ -68,10 +68,11 @@ export interface Esci2Ctx {
   /** Panel-selected output format; drives action-aware dialects' PARA splice. */
   action: "jpg" | "pdf";
   /**
-   * Scan resolution in DPI, threaded from config.scanResolution. Only the
-   * adf-crp PARA profile consumes it; other dialects pin resolution.
+   * Target scan resolution in DPI, threaded from config.scanResolution.
+   * Undefined means the dialect's pinned default. Only the adf-crp PARA
+   * profile consumes it; other dialects pin resolution regardless.
    */
-  resolution: number;
+  resolution: number | undefined;
   /**
    * Colour mode, threaded from config.scanColorMode. Only greyscale-capable
    * dialects (those with a monoGammaClass, e.g. DS-575W) act on it on the

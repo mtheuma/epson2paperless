@@ -14,12 +14,7 @@ import { esci2Graph, type Esci2Ctx } from "./graph.js";
 import { withEsci2UnlockOnDestroy, withTlsErrorLabels } from "./transport.js";
 import { supportsWireGrayscale } from "./dialects/registry.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
-import {
-  DEFAULT_SCAN_RESOLUTION,
-  DEFAULT_JPEG_QUALITY,
-  resolveWireColorMode,
-  resolveGrayscaleConversion,
-} from "../config.js";
+import { DEFAULT_JPEG_QUALITY, resolveWireColorMode, resolveGrayscaleConversion } from "../config.js";
 import type { PostProcessProfile } from "../postprocess/index.js";
 
 export interface ScanSession {
@@ -89,7 +84,7 @@ function buildInitialCtx(session: ScanSession, transport: "tls" | "plain"): Esci
     source: transport === "plain" ? "flatbed" : "adf",
     transport,
     action: session.action,
-    resolution: session.resolution ?? DEFAULT_SCAN_RESOLUTION,
+    resolution: session.resolution,
     // "auto" is a post-processing decision; on the wire it always scans colour.
     colorMode: resolveWireColorMode(session.colorMode),
     initPollIteration: 0,
