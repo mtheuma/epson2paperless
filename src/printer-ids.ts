@@ -30,6 +30,6 @@ export const PID_ET7700 = "PID 112B";
  * or null when no PID token is present.
  */
 export function extractPid(text: string | null | undefined): string | null {
-  const match = text?.match(/(?<![0-9A-Za-z])PID\s*([0-9A-Fa-f]{4})(?![0-9A-Fa-f])/i);
+  const match = text?.match(/(?<![0-9A-Za-z])PID\s*([0-9A-Fa-f]{4})(?![0-9A-Za-z])/i);
   return match ? `PID ${match[1].toUpperCase()}` : null;
 }

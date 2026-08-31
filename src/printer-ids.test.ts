@@ -28,6 +28,10 @@ describe("extractPid", () => {
     expect(extractPid("RAPID 112B")).toBeNull();
     expect(extractPid("PID 112B7")).toBeNull();
     expect(extractPid("PID 112")).toBeNull();
+    // Non-hex alphanumeric suffixes must not be truncated into a match
+    // either: "PID 112BG" is not the ET-7700.
+    expect(extractPid("PID 112BG")).toBeNull();
+    expect(extractPid("PID 016bz")).toBeNull();
   });
 
   it("returns null when no PID token is present", () => {
