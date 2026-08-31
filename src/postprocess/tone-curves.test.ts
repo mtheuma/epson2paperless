@@ -12,33 +12,35 @@ const TOP_REGION_START = 240;
 /** Largest allowed jump between adjacent entries in the near-white region. */
 const MAX_TOP_STEP = 3;
 
-const CHANNELS = ["R", "G", "B"] as const;
+const CHANNELS = [
+  ["R", 0],
+  ["G", 1],
+  ["B", 2],
+] as const;
 
 describe.each(Object.entries(TONE_CURVES))("tone curve %s", (_name, curve) => {
-  it.each([0, 1, 2])("channel %i has 256 entries", (c) => {
+  it.each(CHANNELS)("channel %s has 256 entries", (_ch, c) => {
     expect(curve[c].length).toBe(256);
   });
 
-  it.each([0, 1, 2])(`channel %i (${CHANNELS.join("/")}) is monotonic non-decreasing`, (c) => {
+  it.each(CHANNELS)("channel %s is monotonic non-decreasing", (ch, c) => {
     for (let i = 1; i < 256; i++) {
-      expect(curve[c][i], `${CHANNELS[c]}[${i}] < ${CHANNELS[c]}[${i - 1}]`).toBeGreaterThanOrEqual(
-        curve[c][i - 1],
-      );
+      expect(curve[c][i], `${ch}[${i}] < ${ch}[${i - 1}]`).toBeGreaterThanOrEqual(curve[c][i - 1]);
     }
   });
 
-  it.each([0, 1, 2])("channel %i maps input 255 to pure white (255)", (c) => {
+  it.each(CHANNELS)("channel %s maps input 255 to pure white (255)", (_ch, c) => {
     expect(curve[c][255]).toBe(255);
   });
 
-  it.each([0, 1, 2])(
-    `channel %i has no step larger than ${MAX_TOP_STEP} above input ${TOP_REGION_START}`,
-    (c) => {
+  it.each(CHANNELS)(
+    `channel %s has no step larger than ${MAX_TOP_STEP} above input ${TOP_REGION_START}`,
+    (ch, c) => {
       for (let i = TOP_REGION_START + 1; i < 256; i++) {
         const step = curve[c][i] - curve[c][i - 1];
         expect(
           step,
-          `${CHANNELS[c]}[${i - 1}]=${curve[c][i - 1]} -> ${CHANNELS[c]}[${i}]=${curve[c][i]}`,
+          `${ch}[${i - 1}]=${curve[c][i - 1]} -> ${ch}[${i}]=${curve[c][i]}`,
         ).toBeLessThanOrEqual(MAX_TOP_STEP);
       }
     },

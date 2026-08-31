@@ -37,4 +37,20 @@ describe("parseCliArgs", () => {
   it("rejects an unrecognised flag instead of silently ignoring it", () => {
     expect(() => parseCliArgs(["--tonecurve", "a.pdf"])).toThrow(/--tonecurve/);
   });
+
+  it("treats -- as end-of-options: everything after is a file", () => {
+    expect(parseCliArgs(["--document", "--", "--weird.pdf", "--document"])).toEqual({
+      files: ["--weird.pdf", "--document"],
+      withDocument: true,
+      toneCurve: undefined,
+    });
+  });
+
+  it("a bare trailing -- is accepted and adds no files", () => {
+    expect(parseCliArgs(["a.pdf", "--"])).toEqual({
+      files: ["a.pdf"],
+      withDocument: false,
+      toneCurve: undefined,
+    });
+  });
 });

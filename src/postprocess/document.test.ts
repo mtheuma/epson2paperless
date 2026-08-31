@@ -99,10 +99,12 @@ describe("correctDocumentPixels", () => {
     expect(plain.data[0]).toBe(128);
     // ...the tone curve lifts it toward the printed-page brightness.
     expect(toned.data[0]).toBeGreaterThan(plain.data[0]);
-    // paper stays (near-)white in both — stage 1 clips to 255, the curve maps
-    // ~255 back to Epson's paper level (~254), still effectively white.
+    // paper stays pure white in both — stage 1 clips to 255 and the curve's
+    // top end is anchored so 255 maps to exactly 255 (issue #158; before the
+    // anchor the R channel landed at 253 and colour pages never reached pure
+    // white). Exact assertion: this path is raw pixels, no JPEG round-trip.
     expect(plain.data[3]).toBe(255);
-    expect(toned.data[3]).toBeGreaterThan(250);
+    expect(toned.data[3]).toBe(255);
   });
 });
 

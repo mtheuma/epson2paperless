@@ -34,12 +34,11 @@ import path from "node:path";
 import sharp from "sharp";
 import {
   correctDocumentImage,
-  estimatePaperWhite,
   CLIP_BELOW_PAPER,
   KNEE_WIDTH,
 } from "../../src/postprocess/document.js";
-import { classifyJpeg } from "../../src/postprocess/auto-color.js";
 import { parseCliArgs, type CliArgs } from "./cli-args.js";
+import { measurePage, type Metrics } from "./metrics.js";
 
 /**
  * Pull every embedded JPEG out of a PDF (pdf-lib and Epson Scan 2 both embed
@@ -79,73 +78,6 @@ async function pagesOf(file: string): Promise<Buffer[]> {
   const buf = fs.readFileSync(file);
   if (buf.subarray(0, 4).toString("latin1") === "%PDF") return extractJpegs(buf);
   return [buf];
-}
-
-interface Metrics {
-  width: number;
-  height: number;
-  dpi: number | undefined;
-  channels: number | undefined;
-  whitePct: number;
-  paperWhite: [number, number, number];
-  castSpread: number;
-  atRiskPct: number;
-  kneePct: number;
-  chroma24: number;
-  chroma64: number;
-  grayscale: boolean;
-}
-
-async function measurePage(jpeg: Buffer): Promise<Metrics> {
-  const meta = await sharp(jpeg).metadata();
-  const { data, info } = await sharp(jpeg)
-    .toColourspace("srgb")
-    .removeAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const paperWhite = estimatePaperWhite(data, info.channels);
-  // Band boundaries use the green channel as representative; the three differ
-  // only by the cast, which is reported separately.
-  const clipPoint = Math.max(1, paperWhite[1] - CLIP_BELOW_PAPER);
-  const kneeStart = Math.max(0, clipPoint - KNEE_WIDTH);
-
-  let white = 0;
-  let nonWhite = 0;
-  let atRisk = 0;
-  let knee = 0;
-  let total = 0;
-  for (let i = 0; i < data.length; i += info.channels) {
-    const r = data[i];
-    const g = data[i + 1];
-    const b = data[i + 2];
-    total++;
-    if (r === 255 && g === 255 && b === 255) {
-      white++;
-      continue;
-    }
-    const luma = (r + g + b) / 3;
-    if (luma >= 250) continue; // effectively background, not detail
-    nonWhite++;
-    if (luma >= clipPoint) atRisk++;
-    else if (luma >= kneeStart) knee++;
-  }
-
-  const verdict = await classifyJpeg(jpeg);
-  return {
-    width: info.width,
-    height: info.height,
-    dpi: meta.density,
-    channels: meta.channels,
-    whitePct: (100 * white) / total,
-    paperWhite,
-    castSpread: Math.max(...paperWhite) - Math.min(...paperWhite),
-    atRiskPct: nonWhite ? (100 * atRisk) / nonWhite : 0,
-    kneePct: nonWhite ? (100 * knee) / nonWhite : 0,
-    chroma24: 100 * verdict.colourfulFraction,
-    chroma64: 100 * verdict.strongFraction,
-    grayscale: verdict.grayscale,
-  };
 }
 
 function row(label: string, m: Metrics): string {
@@ -198,9 +130,15 @@ async function main(): Promise<void> {
       console.log(row(label, await measurePage(pages[i])));
       if (withDocument) {
         // The applied tone curve is named once in the header line — repeating
-        // it per row would push the metrics out of column alignment.
-        const processed = await correctDocumentImage(pages[i], 90, toneCurve);
-        console.log(row(`${label} + document`, await measurePage(processed)));
+        // it per row would push the metrics out of column alignment. The
+        // chroma/verdict columns of a toned row come from the clip-only
+        // output, because the pipeline classifies clip-stage pixels before
+        // the tone curve (see measurePage).
+        const clipped = await correctDocumentImage(pages[i], 90);
+        const processed = toneCurve ? await correctDocumentImage(pages[i], 90, toneCurve) : clipped;
+        console.log(
+          row(`${label} + document`, await measurePage(processed, toneCurve ? clipped : undefined)),
+        );
       }
     }
     console.log("");

@@ -20,7 +20,9 @@ prints the after-metrics beneath the before — the before/after view for judgin
 a change to the clip. `--tone-curve <name>` (implies `--document`) also applies
 that dialect's pinned tone curve, so the `+ document` row matches what the
 pipeline delivers for a dialect that has one; without it the row is clip-only.
-Valid names are the keys of `TONE_CURVES` (currently `et4950-family`).
+Valid names are the keys of `TONE_CURVES` (currently `et4950-family`). A toned
+row's chroma columns and GREY/COLOUR verdict still come from the clip-only
+output, because the pipeline classifies clip-stage pixels before the curve.
 
 ## Metrics
 

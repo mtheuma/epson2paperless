@@ -21,6 +21,11 @@ export function parseCliArgs(argv: string[]): CliArgs {
 
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
+    if (arg === "--") {
+      // End-of-options: everything after is a file, however it is spelled.
+      files.push(...argv.slice(i + 1));
+      break;
+    }
     if (arg === "--document") {
       withDocument = true;
     } else if (arg === "--tone-curve") {
