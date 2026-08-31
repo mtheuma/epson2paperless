@@ -2,7 +2,7 @@ import net from "node:net";
 import tls from "node:tls";
 import { createLogger } from "./logger.js";
 import { IS_HEADER_SIZE } from "./protocol.js";
-import { PID_ET7700 } from "./printer-ids.js";
+import { PID_ET7700, extractPid } from "./printer-ids.js";
 
 const log = createLogger("protocol-probe");
 
@@ -46,18 +46,6 @@ export interface DetectOptions {
  */
 export const ESCI2_PLAIN_WITH_LEGACY_WELCOME: ReadonlySet<string> = new Set([PID_ET7700]);
 
-/**
- * Normalise a push-scan `ProductNameIn` to the canonical `PID XXXX` form for
- * the hint lookup. The SOAP field is captured verbatim off the wire and each
- * model's exact spelling is pinned by only one or two pcaps, so tolerate
- * casing/padding variance the same way keepalive.ts does for the UDP
- * announcement (regex extract + uppercase). Null when no PID token is found.
- */
-function normalizePid(productName: string | null | undefined): string | null {
-  const match = productName?.match(/PID [0-9A-Fa-f]{4}/);
-  return match ? match[0].toUpperCase() : null;
-}
-
 const cache = new Map<string, Variant>();
 
 export function resetCache(): void {
@@ -96,16 +84,12 @@ async function runProbe(opts: DetectOptions): Promise<Variant> {
   if (await probeTls(printerIp, port, timeoutMs)) {
     return "esci2";
   }
-  // PID hint: for models in ESCI2_PLAIN_WITH_LEGACY_WELCOME the welcome
-  // discriminator carries no usable signal (their welcome is byte-identical
-  // to the legacy one), so once TLS is ruled out the PID — which names the
-  // exact model, whose dialect is hardware-validated — settles the variant
-  // directly. Sitting after the TLS arm preserves TLS supremacy; skipping
-  // the welcome arm saves a per-scan connection whose verdict could never
-  // change the outcome, and keeps hinted models off the all-probes-failed
-  // fallback (whose log would otherwise misread a connectivity failure as a
-  // classification result).
-  const pid = normalizePid(opts.productName);
+  // PID hint (see ESCI2_PLAIN_WITH_LEGACY_WELCOME): once TLS is ruled out,
+  // the PID settles the variant directly — the welcome arm is skipped since
+  // no outcome of it could change the routing. pushscan.ts already
+  // canonicalises productName; re-extracting here is cheap defence for
+  // direct callers.
+  const pid = extractPid(opts.productName);
   if (pid !== null && ESCI2_PLAIN_WITH_LEGACY_WELCOME.has(pid)) {
     log.info(
       `${pid} is a known ESC/I-2 model whose welcome mimics the legacy one — ` +
@@ -192,8 +176,8 @@ const LEGACY_ESCI_WELCOME_DISCRIMINATOR = 0x02;
  * frame and classify the printer from its family discriminator. Both
  * generations emit a welcome unsolicited on TCP connect, so the welcome's
  * *presence* says only "plain TCP"; payload byte 1 says which family — for
- * most models (see the `LEGACY_ESCI_WELCOME_DISCRIMINATOR` caveat; the
- * ET-7700 needs the PID hint on top).
+ * most models (see the `LEGACY_ESCI_WELCOME_DISCRIMINATOR` caveat; hinted
+ * PIDs are routed in `runProbe` and never reach this arm).
  * ET-4950 also sends a welcome immediately, but only inside its TLS tunnel,
  * so this arm never sees it.
  *

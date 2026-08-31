@@ -1,5 +1,6 @@
 import net from "node:net";
 import { createLogger } from "./logger.js";
+import { extractPid } from "./printer-ids.js";
 
 const log = createLogger("pushscan");
 
@@ -91,10 +92,16 @@ export function parsePushScanRequest(body: string): PushScanInfo {
   const pushScanId = getId("PushScanIDIn");
   const duplex = computeDuplexFromId(pushScanId);
   const action = computeActionFromId(pushScanId);
+  // Canonicalise the PID token here, at the single parse point, so every
+  // downstream consumer (dialect resolution, job-control routing, the probe's
+  // PID hint) sees the same `PID XXXX` form regardless of firmware
+  // casing/spacing. A value with no PID token passes through raw, keeping
+  // unknown models diagnosable in the logs.
+  const rawProductName = getId("ProductNameIn");
   return {
     pushScanId,
     jobNumber: getId("JobNumberIn"),
-    productName: getId("ProductNameIn"),
+    productName: extractPid(rawProductName) ?? rawProductName,
     ipAddress: getId("IPAddressIn"),
     duplex,
     action,

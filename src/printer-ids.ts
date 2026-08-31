@@ -17,3 +17,19 @@ export const PID_DS575W = "PID 0169";
 // `<ProductNameIn>PID 112B</ProductNameIn>`, matching the PRD in the CAPA
 // diagnostic that seeded its dialect entry.
 export const PID_ET7700 = "PID 112B";
+
+/**
+ * Extract and canonicalise the `PID XXXX` token from a wire-sourced string —
+ * the SOAP `ProductNameIn` (pushscan.ts) or the latin1-decoded UDP
+ * announcement (keepalive.ts). Tolerates prefix/hex casing and spacing
+ * variance (each model's exact spelling is pinned by only one or two pcaps),
+ * while the alphanumeric guards on both ends keep PID-shaped substrings
+ * inside longer tokens ("RAPID 112B") and longer hex runs ("PID 112B7") from
+ * matching. In the real announcement the token sits between a length byte and
+ * a NUL, so the guards hold there too. Returns the canonical uppercase form,
+ * or null when no PID token is present.
+ */
+export function extractPid(text: string | null | undefined): string | null {
+  const match = text?.match(/(?<![0-9A-Za-z])PID\s*([0-9A-Fa-f]{4})(?![0-9A-Fa-f])/i);
+  return match ? `PID ${match[1].toUpperCase()}` : null;
+}

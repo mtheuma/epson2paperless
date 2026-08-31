@@ -4,7 +4,7 @@ import net from "node:net";
 import tls from "node:tls";
 import { detectVariant, resetCache, ESCI2_PLAIN_WITH_LEGACY_WELCOME } from "./protocol-probe.js";
 import { LEGACY_DIALECT_PIDS } from "./esci/dialects/registry.js";
-import { PID_ET7700 } from "./printer-ids.js";
+import { PID_ET7700, extractPid } from "./printer-ids.js";
 
 /** Stub `tls.connect` that fires `secureConnect` on next-tick. */
 function tlsHappyPath(): tls.TLSSocket {
@@ -444,10 +444,11 @@ describe("protocol-probe", () => {
   });
 
   it("normalises the ProductNameIn before the hint lookup (casing/padding variance)", async () => {
-    // The SOAP field is captured verbatim off the wire and only one pcap pins
-    // the ET-7700's exact spelling; a firmware variant emitting different
-    // casing or padding must not silently miss the hint and misroute.
-    // keepalive.ts applies the same tolerance to the UDP announcement.
+    // Only one pcap pins the ET-7700's exact spelling; a firmware variant
+    // emitting different casing (prefix included) or padding must not
+    // silently miss the hint and misroute. extractPid (printer-ids.ts) owns
+    // the tolerance; its edge cases are pinned in printer-ids.test.ts —
+    // this test pins that the probe applies it even to a raw caller value.
     vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
     const netSpy = mockNetConnect(new FakeNetSocket({ kind: "no-reply" }));
 
@@ -456,16 +457,32 @@ describe("protocol-probe", () => {
       port: 1865,
       override: "auto",
       timeoutMs: 50,
-      productName: "  PID 112b  ",
+      productName: "  pid 112b  ",
     });
     expect(variant).toBe("esci2-plain");
     expect(netSpy).not.toHaveBeenCalled();
+  });
+
+  it("keeps every hint-set member in the canonical form the lookup produces", () => {
+    // The runtime lookup is `set.has(extractPid(...))`, and extractPid always
+    // yields uppercase `PID XXXX`. A member added in any other form (say,
+    // pasted lowercase from a pcap dump) could never match — the hint would
+    // be silently dead for that model with every other test green.
+    for (const pid of ESCI2_PLAIN_WITH_LEGACY_WELCOME) {
+      expect(extractPid(pid)).toBe(pid);
+    }
   });
 
   it("keeps the ESC/I-2 PID-hint set disjoint from the legacy dialect registry", () => {
     // A PID in both sets would make the probe hint silently shadow that
     // model's legacy dialect under auto (the hint resolves before dispatch
     // ever consults resolveLegacyEntry), with every per-module test green.
+    //
+    // Known limitation: this only covers legacy models with a dedicated
+    // BY_PID entry. Fallback-served models (the WF-3620 itself) resolve
+    // without a registered PID — the WF-3620's on-wire PID has never been
+    // captured — so a hint entry shadowing one of those cannot be detected
+    // here; it would have to be caught in review.
     for (const pid of ESCI2_PLAIN_WITH_LEGACY_WELCOME) {
       expect(LEGACY_DIALECT_PIDS.has(pid)).toBe(false);
     }
