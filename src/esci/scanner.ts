@@ -16,6 +16,9 @@ import { withRawSocketCleanClose } from "./transport.js";
 import type { PostProcessProfile } from "../postprocess/index.js";
 import type { GrayscaleConversion } from "../config.js";
 import type { LegacyDialectEntry } from "./dialects/entry.js";
+import { createLogger } from "../logger.js";
+
+const log = createLogger("scanner-esci");
 
 export { appendImageChunk } from "./graph.js";
 
@@ -33,6 +36,14 @@ export interface LegacyScanSession {
   forcedSource: Source | null;
   format: Format;
   jpegQuality: number;
+  /**
+   * SCAN_RESOLUTION. The legacy wire has no resolution arm — the fixed raster
+   * per format/dialect (LegacyDialectEntry.deliveredDpi) is always what's
+   * requested on the wire. When set below what the dialect delivers, pages
+   * are downsampled host-side at finalize; at or above, the dialect's fixed
+   * DPI is delivered as-is (with an info log when it's strictly above).
+   */
+  resolution?: number;
   /** PRINTER_WHITE_POINT — device cast reference for the auto-colour verdict. */
   whitePoint?: WhitePoint;
   postProcess?: PostProcessProfile;
@@ -141,6 +152,25 @@ export async function runEsciScan(
     // Known up front on this path (no dialect-dependent wire capability),
     // but the engine resolves it from the ctx like the tone curve.
     resolveGrayscaleConversion: () => session.grayscaleConversion ?? "off",
+    // The legacy wire has no resolution arm at all — deliveredDpi is a pure
+    // function of format (and, for some future dialect, source), so this
+    // could read session.format directly, but it reads ctx like the ESC/I-2
+    // resolvers to stay resilient if a future dialect ever varies delivered
+    // DPI by the detected source too.
+    resolveDownsample: (ctx: EsciCtx) => {
+      if (session.resolution === undefined) return undefined;
+      const delivered = ctx.entry.deliveredDpi({ source: ctx.source, format: ctx.format });
+      if (session.resolution >= delivered) {
+        if (session.resolution > delivered) {
+          log.info(
+            `SCAN_RESOLUTION=${session.resolution} exceeds what this model delivers ` +
+              `(${delivered} DPI ${ctx.format}) — delivering ${delivered} DPI`,
+          );
+        }
+        return undefined;
+      }
+      return { fromDpi: delivered, toDpi: session.resolution };
+    },
   });
 
   // Fire the public onSourceDetected hook only on success paths AND only

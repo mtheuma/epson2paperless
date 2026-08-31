@@ -404,6 +404,7 @@ describe("dispatchScanSession", () => {
       forcedSource: "adf-duplex",
       format: "pdf",
       jpegQuality: 75,
+      resolution: 200,
       postProcess: "none",
       grayscaleConversion: "off",
       paperless: PAPERLESS_OPTS,
