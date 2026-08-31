@@ -268,8 +268,10 @@ describe("REGISTRY", () => {
       d1d7293e92fa726e006429beacca1255e474de0d66b3559f87176d4e4b3d0e55: [300],
       // FF-680W — pcap-extracted replay fixtures at 200 and 300 DPI.
       "5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd": [200, 300],
-      // DS-575W — pcap-extracted replay fixtures at 400 and 600 DPI.
-      "90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b074": [400, 600],
+      // DS-575W — 200: README-recorded hardware validation (only duplex
+      // colour PDF @ 200 DPI hardware-verified); 400/600: pcap-extracted
+      // replay fixtures.
+      "90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b074": [200, 400, 600],
       // ET-2810 / XP-3200 — hardware-validated at 300 DPI (#132).
       "708704b6abb184cede037fcd9893ea81f69651fde28780cde0162dfa33a33f6e": [300],
       // ET-8500 — hardware-confirmed at 300 DPI (#120).
