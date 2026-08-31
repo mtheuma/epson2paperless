@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import sharp from "sharp";
 import { correctDocumentPixels, correctDocumentImage } from "./document.js";
+import { classifyRawPixels } from "./auto-color.js";
 import { setJpegOrientation, readJpegOrientation } from "../exif.js";
 
 // Build a 3-channel raw image: `rows` of per-pixel [r,g,b].
@@ -105,6 +106,84 @@ describe("correctDocumentPixels", () => {
     // white). Exact assertion: this path is raw pixels, no JPEG round-trip.
     expect(plain.data[3]).toBe(255);
     expect(toned.data[3]).toBe(255);
+  });
+});
+
+describe("neutral-preserving knee (#164)", () => {
+  // A page whose paper carries a mild cast — [243, 241, 233], spread 10, the
+  // exact paper white the #150 DS-575W baseline measured — with one content
+  // pixel to probe the knee band. Shared knee band (anchored on the min
+  // channel, 233): clipPoint 183, kneeStart 163.
+  function castPaperPage(content: [number, number, number]): Buffer {
+    const rows = Array.from({ length: 20 }, () =>
+      Array.from({ length: 20 }, () => [243, 241, 233] as number[]),
+    );
+    rows[0][0] = [...content];
+    return raw(rows).buf;
+  }
+
+  it("keeps equal input channels equal on output through the knee band", () => {
+    // A perfectly neutral grey inside the knee band. Per-channel anchors used
+    // to lift each channel by a different amount on cast paper (mechanism 2 of
+    // #146's diagnostic), turning a neutral grey chromatic.
+    const { data, applied } = correctDocumentPixels(castPaperPage([173, 173, 173]), 3);
+    expect(applied).toBe(true);
+    expect(data[0]).toBe(data[1]);
+    expect(data[1]).toBe(data[2]);
+    // ...and it is genuinely knee-lifted, not identity or plateau.
+    expect(data[0]).toBeGreaterThan(173);
+    expect(data[0]).toBeLessThan(255);
+  });
+
+  it("passes small existing channel differences through unamplified", () => {
+    // Chroma 6 of ordinary sensor/JPEG noise in the knee band. The steep knee
+    // slope used to multiply it several-fold (mechanism 1), pushing it over
+    // the classifier's floor of 24.
+    const { data, applied } = correctDocumentPixels(castPaperPage([178, 174, 172]), 3);
+    expect(applied).toBe(true);
+    const chroma = Math.max(data[0], data[1], data[2]) - Math.min(data[0], data[1], data[2]);
+    expect(chroma).toBeLessThanOrEqual(6);
+    // channel ordering survives too (the old per-channel curves inverted it)
+    expect(data[0]).toBeGreaterThanOrEqual(data[1]);
+    expect(data[1]).toBeGreaterThanOrEqual(data[2]);
+  });
+
+  it("classifies a soft-grey gradient page GREY after the clip", async () => {
+    // Models the #164 DS-575W page: rich in soft near-white detail sweeping
+    // the knee band, with block-structured chroma noise (≤10, well under the
+    // classifier's floor of 24) that survives the classifier's downsampling
+    // the way real JPEG-block noise does. Physically neutral, so the verdict
+    // must be GREY both before and after the clip.
+    const w = 720;
+    const h = 480;
+    const buf = Buffer.alloc(w * h * 3);
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        const i = (y * w + x) * 3;
+        if (y < h * 0.6) {
+          buf[i] = buf[i + 1] = buf[i + 2] = 240; // clean paper
+        } else {
+          // torn-edge-like gradient 235 -> 150 across the width, in 8px
+          // blocks; each block leans a different channel by up to ±5.
+          const g = Math.round(235 - (85 * x) / (w - 1));
+          const block = Math.floor(x / 8) + Math.floor(y / 8);
+          const lean = block % 3; // 0: +R, 1: +G/-B, 2: -R/+B
+          buf[i] = g + (lean === 0 ? 5 : lean === 2 ? -5 : 0);
+          buf[i + 1] = g + (lean === 1 ? 5 : 0);
+          buf[i + 2] = g + (lean === 1 ? -5 : lean === 2 ? 5 : 0);
+        }
+      }
+    }
+
+    const before = await classifyRawPixels(buf, w, h, 3);
+    expect(before.grayscale).toBe(true); // sanity: the page really is neutral
+
+    const { data, applied } = correctDocumentPixels(buf, 3);
+    expect(applied).toBe(true);
+    const after = await classifyRawPixels(data, w, h, 3);
+    expect(after.grayscale).toBe(true);
+    // and not marginally so — the clip must add essentially no chroma
+    expect(after.colourfulFraction).toBeLessThanOrEqual(before.colourfulFraction);
   });
 });
 
