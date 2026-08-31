@@ -14,9 +14,11 @@
  *                   measured paper white — i.e. detail our document profile
  *                   would force to pure white (torn edges, soft shadows, the
  *                   faint fibres around spiral-binding tabs).
- *   - `knee%`       non-white detail inside the clip's soft-knee band, where the
- *                   three independent per-channel curves lift unevenly and
- *                   inject chroma into neutral greys.
+ *   - `knee%`       non-white detail inside the clip's soft-knee band. Before
+ *                   #164 the three independent per-channel curves amplified
+ *                   chroma there; the shared-lift knee preserves it, so a
+ *                   rising chroma reading against a high knee% would now be a
+ *                   regression signal.
  *   - `chroma`      the auto-colour classifier's own measurements and verdict.
  *
  * Usage:
@@ -117,7 +119,7 @@ async function main(): Promise<void> {
   console.log(
     `\nclip config: CLIP_BELOW_PAPER=${CLIP_BELOW_PAPER} KNEE_WIDTH=${KNEE_WIDTH}` +
       (toneCurve ? ` TONE_CURVE=${toneCurve}` : "") +
-      `   (at-risk = detail our clip forces to pure white; knee = detail the clip tints)\n`,
+      `   (at-risk = detail our clip forces to pure white; knee = detail in the clip's soft-knee band)\n`,
   );
 
   for (const file of files) {

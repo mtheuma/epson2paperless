@@ -49,10 +49,12 @@ import { readJpegOrientation, setJpegOrientation, setJfifDensity } from "../exif
 //
 // Under POST_PROCESS=document the classification runs INSIDE the document
 // transform, on the white-point-clipped pixels but BEFORE any pinned tone
-// curve composes in (see document.ts): the clip amplifies real colour, while
-// a perceptual tone curve maps neutral mid-greys to slightly divergent RGB
-// (et4950-family peaks at chroma 30 for neutral inputs 128–148) and would
-// push every anti-aliased text edge over the floor.
+// curve composes in (see document.ts): the clip neutralises the device cast
+// for free while leaving real colour content intact (since #164 its knee is
+// neutral-preserving and adds no chroma of its own), while a perceptual tone
+// curve maps neutral mid-greys to slightly divergent RGB (et4950-family peaks
+// at chroma 30 for neutral inputs 128–148) and would push every anti-aliased
+// text edge over the floor.
 //
 // A scanner with a colour cast renders plain white paper as something other
 // than neutral — an ET-4956 reads it as roughly 227/232/255 — and that alone
