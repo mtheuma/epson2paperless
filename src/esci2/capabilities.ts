@@ -50,8 +50,32 @@ export interface CapaTokens {
   cctList: string | null;
   /** True if the CAPA body contains a `#ADFDPLX` segment. */
   adfDuplex: boolean;
+  /** Supported main-scan resolutions (dpi) from `#RSMLIST`. Null if absent. */
+  rsmList: number[] | null;
+  /** Supported sub-scan resolutions (dpi) from `#RSSLIST`. Null if absent. */
+  rssList: number[] | null;
+  /** Supported ADF-specific resolutions (dpi) from `#ADFRSMSLIST`. Null if absent. */
+  adfRsmsList: number[] | null;
+  /** Supported flatbed-specific resolutions (dpi) from `#FB RSMSLIST`. Null if absent. */
+  fbRsmsList: number[] | null;
+  /** JPEG quality range from `#JPGRANG`. Null if absent. */
+  jpgRange: { min: number; max: number } | null;
   /** Raw segments, in encounter order. Includes unrecognised prefixes. */
   segments: string[];
+}
+
+/**
+ * Parses a concatenated Epson numeric list ("d050d075…i0001200") into numbers.
+ * `d` values are 3-digit, `i` values 7-digit — both forms occur mixed in one
+ * list on real hardware (ET-4950 #RSMLIST).
+ */
+function parseNumericList(text: string | null): number[] | null {
+  if (text === null) return null;
+  const out: number[] = [];
+  for (const m of text.matchAll(/d(\d{3})|i(\d{7})/g)) {
+    out.push(Number(m[1] ?? m[2]));
+  }
+  return out.length > 0 ? out : null;
 }
 
 /**
@@ -98,6 +122,14 @@ export function parseCapaTokens(body: Buffer): CapaTokens {
     fmtList: textAfterPrefix(segments, "#FMTLIST"),
     cctList: textAfterPrefix(segments, "#CCTLIST"),
     adfDuplex: segments.some((s) => s.startsWith("#ADFDPLX")),
+    rsmList: parseNumericList(textAfterPrefix(segments, "#RSMLIST")),
+    rssList: parseNumericList(textAfterPrefix(segments, "#RSSLIST")),
+    adfRsmsList: parseNumericList(textAfterPrefix(segments, "#ADFRSMSLIST")),
+    fbRsmsList: parseNumericList(textAfterPrefix(segments, "#FB RSMSLIST")),
+    jpgRange: (() => {
+      const vals = parseNumericList(textAfterPrefix(segments, "#JPGRANG"));
+      return vals && vals.length >= 2 ? { min: vals[0], max: vals[1] } : null;
+    })(),
     segments,
   };
 }
