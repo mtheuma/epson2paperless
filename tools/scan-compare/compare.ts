@@ -164,23 +164,26 @@ function row(label: string, m: Metrics): string {
 }
 
 async function main(): Promise<void> {
+  const usage = "usage: npm run scan:compare -- <file...> [--document] [--tone-curve <name>]";
   let parsed: CliArgs;
   try {
     parsed = parseCliArgs(process.argv.slice(2));
   } catch (err) {
     console.error(err instanceof Error ? err.message : String(err));
+    console.error(usage);
     process.exitCode = 1;
     return;
   }
   const { files, withDocument, toneCurve } = parsed;
   if (files.length === 0) {
-    console.error("usage: npm run scan:compare -- <file...> [--document] [--tone-curve <name>]");
+    console.error(usage);
     process.exitCode = 1;
     return;
   }
 
   console.log(
     `\nclip config: CLIP_BELOW_PAPER=${CLIP_BELOW_PAPER} KNEE_WIDTH=${KNEE_WIDTH}` +
+      (toneCurve ? ` TONE_CURVE=${toneCurve}` : "") +
       `   (at-risk = detail our clip forces to pure white; knee = detail the clip tints)\n`,
   );
 
@@ -194,9 +197,10 @@ async function main(): Promise<void> {
       const label = pages.length > 1 ? `page ${i + 1}` : "page";
       console.log(row(label, await measurePage(pages[i])));
       if (withDocument) {
+        // The applied tone curve is named once in the header line — repeating
+        // it per row would push the metrics out of column alignment.
         const processed = await correctDocumentImage(pages[i], 90, toneCurve);
-        const suffix = toneCurve ? ` + document (${toneCurve})` : " + document";
-        console.log(row(`${label}${suffix}`, await measurePage(processed)));
+        console.log(row(`${label} + document`, await measurePage(processed)));
       }
     }
     console.log("");

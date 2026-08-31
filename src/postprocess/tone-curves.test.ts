@@ -8,8 +8,8 @@ import { TONE_CURVES } from "./tone-curves.js";
 // — a visible step. These invariants pin the fix and stop a future re-derive
 // from reintroducing it.
 
-/** Largest allowed jump between adjacent entries in the near-white region. */
 const TOP_REGION_START = 240;
+/** Largest allowed jump between adjacent entries in the near-white region. */
 const MAX_TOP_STEP = 3;
 
 const CHANNELS = ["R", "G", "B"] as const;
