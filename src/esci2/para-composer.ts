@@ -26,9 +26,11 @@ export interface ParaSpec {
   optionalSegments: { qit: boolean; cct: boolean };
   profile?: ParaProfile;
   /**
-   * Scan resolution in DPI. Consumed ONLY by the adf-crp profile (drives
-   * #RSM/#RSS and ACQ-extent scaling). The standard profile pins resolution in
-   * its fixed prefix and ignores this. Falls back to ADF_CRP_BASE_DPI when unset.
+   * Scan resolution in DPI. Consumed by BOTH profiles: drives #RSM/#RSS and
+   * scales the chosen ACQ extents (all four fields) off each profile's
+   * registry-extent reference DPI — STANDARD_BASE_DPI (300) for the standard
+   * profile, ADF_CRP_BASE_DPI (200) for adf-crp. Falls back to that profile's
+   * base DPI when unset, reproducing the captured bytes exactly.
    */
   resolution?: number;
   /**
@@ -47,19 +49,29 @@ export interface ParaSpec {
    * entirely in colour mode.
    */
   monoGammaClass?: GammaClassName;
+  /**
+   * JPEG encode quality, wire field #JPGdNNN (three-digit, 1..100). Consumed
+   * by BOTH profiles. Falls back to 90 when unset, reproducing the captured
+   * bytes exactly.
+   */
+  jpegQuality?: number;
 }
 
-const STANDARD_FIXED_PREFIX = Buffer.from(
-  "#RSMi0000300" + // bytes 0..12
-    "#RSSi0000300" + // 12..24
-    "#COLC024" + //    24..32
-    "#FMTJPG " + //    32..40
-    "#JPGd090", //     40..48
-  "ascii",
-);
+/** Reference DPI the standard profile's registry extents are captured at. */
+export const STANDARD_BASE_DPI = 300;
+
+const pad3 = (n: number): string => n.toString().padStart(3, "0");
+
+// Replaces the old STANDARD_FIXED_PREFIX constant. Defaults (300, 90)
+// reproduce its bytes exactly.
+function renderStandardPrefix(resolution: number, jpegQuality: number): Buffer {
+  return Buffer.from(
+    `#RSMi${pad7(resolution)}#RSSi${pad7(resolution)}#COLC024#FMTJPG #JPGd${pad3(jpegQuality)}`,
+    "ascii",
+  );
+}
 
 const ADF_CRP_PREFIX_HEAD = "#ADFCRP SKEW";
-const ADF_CRP_PREFIX_TAIL = "#FMTJPG " + "#JPGd090";
 // The registry's adfExtents are captured at this DPI; both the RSM/RSS
 // resolution fields and the ACQ extents scale linearly off it. For the FF-680W
 // only 200 and 300 are wire-verified — see
@@ -136,6 +148,12 @@ function validate(spec: ParaSpec): void {
   if (spec.gmm.length !== 4) {
     throw new Error(`composePara: gmm must be exactly 4 ASCII chars, got ${spec.gmm.length}`);
   }
+  if (
+    spec.jpegQuality !== undefined &&
+    (!Number.isInteger(spec.jpegQuality) || spec.jpegQuality < 1 || spec.jpegQuality > 100)
+  ) {
+    throw new Error(`composePara: jpegQuality=${spec.jpegQuality} must be an integer in 1..100`);
+  }
 }
 
 export function composePara(spec: ParaSpec): Buffer {
@@ -149,11 +167,15 @@ export function composePara(spec: ParaSpec): Buffer {
 }
 
 function composeStandardPara(spec: ParaSpec): Buffer {
+  const resolution = spec.resolution ?? STANDARD_BASE_DPI;
+  const jpegQuality = spec.jpegQuality ?? 90;
+
   const parts: Buffer[] = [];
   // 1. Source segment.
   parts.push(renderSourceSegment(spec.source));
-  // 2. Fixed constants.
-  parts.push(STANDARD_FIXED_PREFIX);
+  // 2. Fixed constants (resolution + quality now variable; defaults reproduce
+  // the old fixed bytes exactly).
+  parts.push(renderStandardPrefix(resolution, jpegQuality));
   // 3. GMM.
   parts.push(Buffer.from(`#GMM${spec.gmm}`, "ascii"));
   // 4. Gamma LUT triplet (verbatim bytes for the action's class).
@@ -175,9 +197,20 @@ function composeStandardPara(spec: ParaSpec): Buffer {
   if (spec.source !== "flatbed") {
     parts.push(Buffer.from("#PAGd000", "ascii"));
   }
-  // 9. ACQ extents (fb or adf, per source).
+  // 9. ACQ extents (fb or adf, per source). Registry extents are pinned at
+  // STANDARD_BASE_DPI; scale all four fields (offsets included — e.g. the
+  // ET-4950 ADF's x0=69 would drift the crop at any other DPI) to the chosen
+  // resolution. Scale is 1 at the default, keeping the replay shields
+  // byte-identical.
+  const scale = resolution / STANDARD_BASE_DPI;
+  const scaleExtents = (e: Extents): Extents => ({
+    x0: Math.round(e.x0 * scale),
+    y0: Math.round(e.y0 * scale),
+    w: Math.round(e.w * scale),
+    h: Math.round(e.h * scale),
+  });
   const acqExtents = spec.source === "flatbed" ? spec.fbExtents! : spec.adfExtents!;
-  parts.push(renderAcq(acqExtents));
+  parts.push(renderAcq(scaleExtents(acqExtents)));
   // 10. BSZ trailing constant.
   parts.push(TRAILING_BSZ);
 
@@ -201,6 +234,7 @@ function composeAdfCrpPara(spec: ParaSpec): Buffer {
     throw new Error("composePara: profile=adf-crp requires a CMX class");
   }
   const resolution = spec.resolution ?? ADF_CRP_BASE_DPI;
+  const jpegQuality = spec.jpegQuality ?? 90;
   const dplx = spec.source === "adf-duplex" ? "DPLX" : "";
 
   // Colour mode selects the #COL code and gamma LUT. Greyscale needs the
@@ -219,7 +253,8 @@ function composeAdfCrpPara(spec: ParaSpec): Buffer {
       `#RSMi${pad7(resolution)}` +
       `#RSSi${pad7(resolution)}` +
       colSegment +
-      ADF_CRP_PREFIX_TAIL,
+      "#FMTJPG " +
+      `#JPGd${pad3(jpegQuality)}`,
     "ascii",
   );
 

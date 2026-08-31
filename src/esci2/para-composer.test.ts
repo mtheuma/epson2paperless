@@ -331,6 +331,48 @@ describe("composePara — adf-crp colour-mode axis (DS-575W)", () => {
   });
 });
 
+describe("composePara — resolution axis (standard profile)", () => {
+  it("standard profile: default spec is byte-identical to the pinned prefix", () => {
+    const body = composePara(baselineSpec());
+    expect(body.subarray(4, 52).toString("ascii")).toBe(
+      "#RSMi0000300#RSSi0000300#COLC024#FMTJPG #JPGd090",
+    );
+  });
+
+  it("standard profile: resolution renders into #RSM/#RSS and scales ACQ (all four fields)", () => {
+    const spec: ParaSpec = {
+      ...baselineSpec(),
+      resolution: 600,
+      fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
+      adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
+      source: "adf-simplex",
+    };
+    const body = composePara(spec).toString("ascii");
+    expect(body).toContain("#RSMi0000600#RSSi0000600");
+    // 69 * 600/300 = 138 — offsets scale too (all four ACQ fields).
+    expect(body).toContain("#ACQi0000138i0000000i0004962i0007012");
+  });
+});
+
+describe("composePara — jpegQuality axis", () => {
+  it("quality renders d%03d — three digits at 100, PARA length unchanged", () => {
+    const q90 = composePara(baselineSpec());
+    const q100 = composePara({ ...baselineSpec(), jpegQuality: 100 });
+    expect(q100.length).toBe(q90.length);
+    expect(q100.toString("ascii")).toContain("#JPGd100");
+  });
+
+  it("adf-crp: quality parameterises its prefix tail the same way", () => {
+    const body = composePara({ ...ff680wSpec(), jpegQuality: 75 }).toString("ascii");
+    expect(body).toContain("#FMTJPG #JPGd075");
+  });
+
+  it("rejects out-of-range jpegQuality", () => {
+    expect(() => composePara({ ...baselineSpec(), jpegQuality: 0 })).toThrow(/jpegQuality/);
+    expect(() => composePara({ ...baselineSpec(), jpegQuality: 101 })).toThrow(/jpegQuality/);
+  });
+});
+
 describe("composePara — validation", () => {
   it("throws when ADF source is requested but adfExtents is null", () => {
     expect(() =>
