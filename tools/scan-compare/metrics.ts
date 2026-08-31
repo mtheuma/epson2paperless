@@ -4,7 +4,7 @@ import {
   CLIP_BELOW_PAPER,
   KNEE_WIDTH,
 } from "../../src/postprocess/document.js";
-import { classifyJpeg } from "../../src/postprocess/auto-color.js";
+import { classifyJpeg, type ChromaVerdict } from "../../src/postprocess/auto-color.js";
 
 export interface Metrics {
   width: number;
@@ -23,13 +23,14 @@ export interface Metrics {
 
 /**
  * Measure one page. All pixel metrics describe `jpeg`; the chroma columns and
- * GREY/COLOUR verdict come from `verdictSource` when given. The pipeline runs
- * its greyscale verdict on clip-stage pixels BEFORE any tone curve (the curve
- * maps neutral mid-greys to chroma above the classifier's floor), so a toned
- * page must pass its clip-only counterpart here — classifying the toned
- * pixels would print a verdict the service never uses.
+ * GREY/COLOUR verdict come from `verdict` when given. The pipeline runs its
+ * greyscale verdict on clip-stage RAW pixels — before any tone curve and
+ * before any re-encode — so a + document row passes the verdict returned by
+ * correctDocumentImageAuto instead of letting this function classify the
+ * processed JPEG: re-classifying a re-encoded buffer attenuates near-floor
+ * chroma and can flip the verdict on a near-threshold page.
  */
-export async function measurePage(jpeg: Buffer, verdictSource?: Buffer): Promise<Metrics> {
+export async function measurePage(jpeg: Buffer, verdict?: ChromaVerdict): Promise<Metrics> {
   const meta = await sharp(jpeg).metadata();
   const { data, info } = await sharp(jpeg)
     .toColourspace("srgb")
@@ -64,7 +65,7 @@ export async function measurePage(jpeg: Buffer, verdictSource?: Buffer): Promise
     else if (luma >= kneeStart) knee++;
   }
 
-  const verdict = await classifyJpeg(verdictSource ?? jpeg);
+  const v = verdict ?? (await classifyJpeg(jpeg));
   return {
     width: info.width,
     height: info.height,
@@ -75,8 +76,8 @@ export async function measurePage(jpeg: Buffer, verdictSource?: Buffer): Promise
     castSpread: Math.max(...paperWhite) - Math.min(...paperWhite),
     atRiskPct: nonWhite ? (100 * atRisk) / nonWhite : 0,
     kneePct: nonWhite ? (100 * knee) / nonWhite : 0,
-    chroma24: 100 * verdict.colourfulFraction,
-    chroma64: 100 * verdict.strongFraction,
-    grayscale: verdict.grayscale,
+    chroma24: 100 * v.colourfulFraction,
+    chroma64: 100 * v.strongFraction,
+    grayscale: v.grayscale,
   };
 }

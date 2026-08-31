@@ -34,6 +34,7 @@ import path from "node:path";
 import sharp from "sharp";
 import {
   correctDocumentImage,
+  correctDocumentImageAuto,
   CLIP_BELOW_PAPER,
   KNEE_WIDTH,
 } from "../../src/postprocess/document.js";
@@ -130,15 +131,14 @@ async function main(): Promise<void> {
       console.log(row(label, await measurePage(pages[i])));
       if (withDocument) {
         // The applied tone curve is named once in the header line — repeating
-        // it per row would push the metrics out of column alignment. The
-        // chroma/verdict columns of a toned row come from the clip-only
-        // output, because the pipeline classifies clip-stage pixels before
-        // the tone curve (see measurePage).
-        const clipped = await correctDocumentImage(pages[i], 90);
-        const processed = toneCurve ? await correctDocumentImage(pages[i], 90, toneCurve) : clipped;
-        console.log(
-          row(`${label} + document`, await measurePage(processed, toneCurve ? clipped : undefined)),
-        );
+        // it per row would push the metrics out of column alignment. Pixel
+        // metrics measure the colour document-profile output; the chroma
+        // columns and verdict are the pipeline's own, computed by
+        // correctDocumentImageAuto on clip-stage raw pixels before the tone
+        // curve and before any re-encode (see measurePage).
+        const { verdict } = await correctDocumentImageAuto(pages[i], 90, toneCurve);
+        const processed = await correctDocumentImage(pages[i], 90, toneCurve);
+        console.log(row(`${label} + document`, await measurePage(processed, verdict)));
       }
     }
     console.log("");
