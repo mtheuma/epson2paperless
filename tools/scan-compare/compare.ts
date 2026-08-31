@@ -20,22 +20,26 @@
  *   - `chroma`      the auto-colour classifier's own measurements and verdict.
  *
  * Usage:
- *   npm run scan:compare -- <file...> [--document]
+ *   npm run scan:compare -- <file...> [--document] [--tone-curve <name>]
  *
  * `--document` additionally runs each page through the document profile and
  * prints the after-metrics beneath the before, which is the before/after view
- * for judging a change to the clip.
+ * for judging a change to the clip. `--tone-curve <name>` (implies
+ * `--document`) also applies that pinned tone curve, so the `+ document` row
+ * shows what the pipeline actually delivers for a dialect that has one —
+ * without it the row is clip-only, which is how issue #158 went unnoticed.
  */
 import fs from "node:fs";
 import path from "node:path";
 import sharp from "sharp";
 import {
   correctDocumentImage,
-  estimatePaperWhite,
+  correctDocumentImageAuto,
   CLIP_BELOW_PAPER,
   KNEE_WIDTH,
 } from "../../src/postprocess/document.js";
-import { classifyJpeg } from "../../src/postprocess/auto-color.js";
+import { parseCliArgs, type CliArgs } from "./cli-args.js";
+import { measurePage, type Metrics } from "./metrics.js";
 
 /**
  * Pull every embedded JPEG out of a PDF (pdf-lib and Epson Scan 2 both embed
@@ -77,73 +81,6 @@ async function pagesOf(file: string): Promise<Buffer[]> {
   return [buf];
 }
 
-interface Metrics {
-  width: number;
-  height: number;
-  dpi: number | undefined;
-  channels: number | undefined;
-  whitePct: number;
-  paperWhite: [number, number, number];
-  castSpread: number;
-  atRiskPct: number;
-  kneePct: number;
-  chroma24: number;
-  chroma64: number;
-  grayscale: boolean;
-}
-
-async function measurePage(jpeg: Buffer): Promise<Metrics> {
-  const meta = await sharp(jpeg).metadata();
-  const { data, info } = await sharp(jpeg)
-    .toColourspace("srgb")
-    .removeAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-
-  const paperWhite = estimatePaperWhite(data, info.channels);
-  // Band boundaries use the green channel as representative; the three differ
-  // only by the cast, which is reported separately.
-  const clipPoint = Math.max(1, paperWhite[1] - CLIP_BELOW_PAPER);
-  const kneeStart = Math.max(0, clipPoint - KNEE_WIDTH);
-
-  let white = 0;
-  let nonWhite = 0;
-  let atRisk = 0;
-  let knee = 0;
-  let total = 0;
-  for (let i = 0; i < data.length; i += info.channels) {
-    const r = data[i];
-    const g = data[i + 1];
-    const b = data[i + 2];
-    total++;
-    if (r === 255 && g === 255 && b === 255) {
-      white++;
-      continue;
-    }
-    const luma = (r + g + b) / 3;
-    if (luma >= 250) continue; // effectively background, not detail
-    nonWhite++;
-    if (luma >= clipPoint) atRisk++;
-    else if (luma >= kneeStart) knee++;
-  }
-
-  const verdict = await classifyJpeg(jpeg);
-  return {
-    width: info.width,
-    height: info.height,
-    dpi: meta.density,
-    channels: meta.channels,
-    whitePct: (100 * white) / total,
-    paperWhite,
-    castSpread: Math.max(...paperWhite) - Math.min(...paperWhite),
-    atRiskPct: nonWhite ? (100 * atRisk) / nonWhite : 0,
-    kneePct: nonWhite ? (100 * knee) / nonWhite : 0,
-    chroma24: 100 * verdict.colourfulFraction,
-    chroma64: 100 * verdict.strongFraction,
-    grayscale: verdict.grayscale,
-  };
-}
-
 function row(label: string, m: Metrics): string {
   const f = (v: number, w = 6, d = 2) => v.toFixed(d).padStart(w);
   return (
@@ -160,17 +97,26 @@ function row(label: string, m: Metrics): string {
 }
 
 async function main(): Promise<void> {
-  const args = process.argv.slice(2);
-  const withDocument = args.includes("--document");
-  const files = args.filter((a) => !a.startsWith("--"));
+  const usage = "usage: npm run scan:compare -- <file...> [--document] [--tone-curve <name>]";
+  let parsed: CliArgs;
+  try {
+    parsed = parseCliArgs(process.argv.slice(2));
+  } catch (err) {
+    console.error(err instanceof Error ? err.message : String(err));
+    console.error(usage);
+    process.exitCode = 1;
+    return;
+  }
+  const { files, withDocument, toneCurve } = parsed;
   if (files.length === 0) {
-    console.error("usage: npm run scan:compare -- <file...> [--document]");
+    console.error(usage);
     process.exitCode = 1;
     return;
   }
 
   console.log(
     `\nclip config: CLIP_BELOW_PAPER=${CLIP_BELOW_PAPER} KNEE_WIDTH=${KNEE_WIDTH}` +
+      (toneCurve ? ` TONE_CURVE=${toneCurve}` : "") +
       `   (at-risk = detail our clip forces to pure white; knee = detail the clip tints)\n`,
   );
 
@@ -184,8 +130,15 @@ async function main(): Promise<void> {
       const label = pages.length > 1 ? `page ${i + 1}` : "page";
       console.log(row(label, await measurePage(pages[i])));
       if (withDocument) {
-        const processed = await correctDocumentImage(pages[i], 90);
-        console.log(row(`${label} + document`, await measurePage(processed)));
+        // The applied tone curve is named once in the header line — repeating
+        // it per row would push the metrics out of column alignment. Pixel
+        // metrics measure the colour document-profile output; the chroma
+        // columns and verdict are the pipeline's own, computed by
+        // correctDocumentImageAuto on clip-stage raw pixels before the tone
+        // curve and before any re-encode (see measurePage).
+        const { verdict } = await correctDocumentImageAuto(pages[i], 90, toneCurve);
+        const processed = await correctDocumentImage(pages[i], 90, toneCurve);
+        console.log(row(`${label} + document`, await measurePage(processed, verdict)));
       }
     }
     console.log("");
