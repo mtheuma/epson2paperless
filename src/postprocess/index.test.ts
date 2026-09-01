@@ -113,6 +113,51 @@ describe("postProcessTempPages", () => {
     expect(meta.density).toBe(150);
   });
 
+  it("warns (not errors) when a page's transform fails while a downsample is pending, noting the mixed-size consequence", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-ds-warn-"));
+    const bad = Buffer.from("this is not a jpeg");
+    fs.writeFileSync(path.join(dir, "page_00.jpg"), bad);
+    const warnings: string[] = [];
+    const errors: string[] = [];
+    const log = {
+      info: () => {},
+      error: (m: string) => errors.push(m),
+      warn: (m: string) => warnings.push(m),
+    };
+    await postProcessTempPages(
+      dir,
+      "none",
+      { jpegQuality: 90, downsample: { fromDpi: 300, toDpi: 150 } },
+      log,
+    );
+    expect(errors).toEqual([]);
+    expect(warnings.length).toBe(1);
+    expect(warnings[0]).toMatch(/page_00\.jpg/);
+    expect(warnings[0]).toMatch(/wire resolution/);
+    expect(warnings[0]).toMatch(/output page sizes will differ/);
+    // Fail-open behaviour is unchanged — original bytes kept, no .tmp left.
+    expect(fs.readFileSync(path.join(dir, "page_00.jpg")).equals(bad)).toBe(true);
+    expect(fs.readdirSync(dir).some((f) => f.endsWith(".tmp"))).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("still errors (not warns) when a page's transform fails and no downsample is pending", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-nods-err-"));
+    const bad = Buffer.from("this is not a jpeg");
+    fs.writeFileSync(path.join(dir, "page_00.jpg"), bad);
+    const warnings: string[] = [];
+    const errors: string[] = [];
+    const log = {
+      info: () => {},
+      error: (m: string) => errors.push(m),
+      warn: (m: string) => warnings.push(m),
+    };
+    await postProcessTempPages(dir, "document", { jpegQuality: 90 }, log);
+    expect(warnings).toEqual([]);
+    expect(errors.length).toBe(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
   it("folds the downsample into the forced-grayscale re-encode (profile none)", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-ds-gray-"));
     await writePage(dir, "page_00.jpg", [222, 220, 244]);

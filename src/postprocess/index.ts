@@ -69,6 +69,12 @@ interface MinimalLog {
   error: (m: string) => void;
   /** Optional — per-page chroma measurements under auto colour mode. */
   debug?: (m: string) => void;
+  /**
+   * Optional — used instead of `error` for a per-page failure that occurs
+   * while a downsample was pending, since that failure has a visible
+   * consequence (mixed output page sizes) beyond "kept the original".
+   */
+  warn?: (m: string) => void;
 }
 
 /**
@@ -164,7 +170,17 @@ export async function postProcessTempPages(
         conversion === "force"
           ? "keeping original in colour despite SCAN_COLOR_MODE=grayscale"
           : "keeping original";
-      log.error(`post-process failed for ${name}, ${kept}: ${msg}`);
+      if (opts.downsample) {
+        // The kept page ships at wire resolution instead of the requested
+        // SCAN_RESOLUTION target — flag it above error level so the mixed
+        // output-page-size consequence isn't buried among routine failures.
+        (log.warn ?? log.error)(
+          `post-process failed for ${name}, ${kept}: ${msg} — page kept at wire resolution; ` +
+            "output page sizes will differ from other pages in this scan",
+        );
+      } else {
+        log.error(`post-process failed for ${name}, ${kept}: ${msg}`);
+      }
       try {
         await fs.promises.unlink(tmp);
       } catch {

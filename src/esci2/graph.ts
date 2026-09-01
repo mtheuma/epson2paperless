@@ -792,8 +792,14 @@ g.state(
     }
     const par = parseTokens(payload.subarray(12)).get("par")?.trim();
     if (par !== "OK") {
+      // The hint is only warranted when the wire DPI actually in use is one
+      // we haven't verified works on this model — that's the real suspect
+      // for a rejection, whether or not the DPI came from an explicit
+      // SCAN_RESOLUTION (a session can land on an unverified DPI via the
+      // dialect's own pinned default too). A verified wire DPI points
+      // elsewhere, so the hint would be actively misleading there.
       const hint =
-        ctx.resolution !== undefined
+        ctx.wireDpi !== undefined && !ctx.entry!.verifiedWireDpis.includes(ctx.wireDpi)
           ? ` Requested wire DPI was ${ctx.wireDpi}; this model may not accept it — ` +
             `remove SCAN_RESOLUTION or report the result (issue #81).`
           : "";

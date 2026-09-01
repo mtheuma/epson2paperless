@@ -372,7 +372,9 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
     expect(result.send).toBeDefined();
   });
 
-  it("PARA rejects a non-OK #par token with an actionable error naming the wire DPI and SCAN_RESOLUTION when resolution was explicit", () => {
+  // makeCtx's default entry (ET-4950) seeds verifiedWireDpis: [300].
+
+  it("PARA rejects a non-OK #par token with an actionable error naming the wire DPI and SCAN_RESOLUTION hint when the wire DPI in use is unverified", () => {
     const state = esci2Graph.states.PARA;
     if (state.kind !== "decision") return;
     const ctx = makeCtx({ resolution: 600, wireDpi: 600 });
@@ -385,7 +387,31 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
     expect(result.error.message).toMatch(/SCAN_RESOLUTION/);
   });
 
-  it("PARA rejection omits the SCAN_RESOLUTION hint when resolution was left at the dialect default", () => {
+  it("PARA rejection still includes the hint on an unverified wire DPI even when resolution was left at the dialect default (the real suspect is the wire DPI, not how it was set)", () => {
+    const state = esci2Graph.states.PARA;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ resolution: undefined, wireDpi: 600 });
+    const ngPayload = Buffer.from("PARAx0000000#parNG  ", "ascii");
+    const result = state.decide(ctx, { type: 0xa000, payload: ngPayload });
+    expect("error" in result).toBe(true);
+    if (!("error" in result)) return;
+    expect(result.error.message).toMatch(/PARA rejected/);
+    expect(result.error.message).toMatch(/SCAN_RESOLUTION/);
+  });
+
+  it("PARA rejection omits the hint when the wire DPI in use is verified, even though resolution was set explicitly", () => {
+    const state = esci2Graph.states.PARA;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ resolution: 300, wireDpi: 300 });
+    const ngPayload = Buffer.from("PARAx0000000#parNG  ", "ascii");
+    const result = state.decide(ctx, { type: 0xa000, payload: ngPayload });
+    expect("error" in result).toBe(true);
+    if (!("error" in result)) return;
+    expect(result.error.message).toMatch(/PARA rejected/);
+    expect(result.error.message).not.toMatch(/SCAN_RESOLUTION/);
+  });
+
+  it("PARA rejection omits the hint when resolution was left at the dialect default and the resulting wire DPI is verified", () => {
     const state = esci2Graph.states.PARA;
     if (state.kind !== "decision") return;
     const ctx = makeCtx({ resolution: undefined, wireDpi: 300 });
