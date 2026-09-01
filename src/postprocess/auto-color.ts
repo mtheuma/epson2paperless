@@ -232,7 +232,10 @@ export async function toGrayscaleJpeg(
   const { width, height, density } = await sharp(jpeg).metadata();
   let pipeline = sharp(jpeg).toColourspace("b-w");
   if (downsample) {
-    const dims = scaledDimensions(width ?? 0, height ?? 0, downsample);
+    if (!width || !height) {
+      throw new Error("downsample: page metadata unreadable (no dimensions) — keeping original");
+    }
+    const dims = scaledDimensions(width, height, downsample);
     // fit: "fill" absorbs the sub-pixel aspect difference between the two
     // independently-rounded dimensions (see scaledDimensions).
     pipeline = pipeline.resize({ ...dims, fit: "fill" });

@@ -55,4 +55,29 @@ describe("resolution", () => {
     const none = parseCapaTokens(Buffer.from("#GMMLISTUG10", "ascii"));
     expect(advertisedDpiSet(none, "flatbed")).toEqual([]);
   });
+
+  it("only RSMLIST present (RSSLIST absent) -> RSMLIST values are the base set", () => {
+    const rsmOnly = parseCapaTokens(Buffer.from("#RSMLISTd050d075d100d150d200", "ascii"));
+    expect(advertisedDpiSet(rsmOnly, "flatbed")).toEqual([50, 75, 100, 150, 200]);
+  });
+
+  it("only RSSLIST present (RSMLIST absent) -> RSSLIST values are the base set", () => {
+    const rssOnly = parseCapaTokens(Buffer.from("#RSSLISTd050d075d100d150d200", "ascii"));
+    expect(advertisedDpiSet(rssOnly, "flatbed")).toEqual([50, 75, 100, 150, 200]);
+  });
+
+  it("a single present global list is still capped by the source list's max", () => {
+    const rsmOnly = parseCapaTokens(
+      Buffer.from("#RSMLISTd050d075d100d150d200d300d600d800#ADFRSMSLISTd300d600", "ascii"),
+    );
+    // Cap = max(ADFRSMSLIST) = 600, so the 800 above it is dropped even
+    // though it appears in RSMLIST.
+    expect(advertisedDpiSet(rsmOnly, "adf-simplex")).toEqual([50, 75, 100, 150, 200, 300, 600]);
+  });
+
+  describe("selectWireDpi contract", () => {
+    it("throws on an empty advertised set — caller must supply [pinnedDefault]", () => {
+      expect(() => selectWireDpi(300, [])).toThrow(/non-empty/);
+    });
+  });
 });

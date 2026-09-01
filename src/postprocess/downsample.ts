@@ -48,8 +48,19 @@ export async function downsampleJpeg(
   jpegQuality: number,
 ): Promise<Buffer> {
   const orientation = readJpegOrientation(jpeg);
-  const meta = await sharp(jpeg).metadata();
-  const { width, height } = scaledDimensions(meta.width ?? 0, meta.height ?? 0, ds);
+  // sharp's metadata() itself throws on an undecodable buffer, and even a
+  // successful read can omit width/height for a format sharp only
+  // partially understands — normalise both to one actionable error instead
+  // of surfacing sharp's raw message (or, worse, letting undefined flow
+  // into scaledDimensions/.resize() as a silent 0, which sharp itself
+  // rejects downstream with an opaque "Expected positive integer").
+  const meta = await sharp(jpeg)
+    .metadata()
+    .catch(() => ({ width: undefined, height: undefined }));
+  if (!meta.width || !meta.height) {
+    throw new Error("downsample: page metadata unreadable (no dimensions) — keeping original");
+  }
+  const { width, height } = scaledDimensions(meta.width, meta.height, ds);
   // fit: "fill" absorbs the sub-pixel aspect difference between the two
   // independently-rounded dimensions; the default "cover" would crop instead.
   let out: Buffer = await sharp(jpeg)

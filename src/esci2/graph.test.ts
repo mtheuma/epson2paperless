@@ -680,6 +680,49 @@ describe("esci2Graph buildParaSend — wire DPI selection + JPEG quality clamp (
     expect(body).toContain("#JPGd085");
   });
 
+  it("an advertised #JPGRANG entirely outside 1..100 is ignored — falls back to ctx.jpegQuality unclamped", () => {
+    // #JPGRANGd150d200 sits entirely above the JPEG quality domain; a naive
+    // clamp would produce a nonsensical #JPGd150+ wire value. The
+    // intersection with [1,100] is empty, so the advertised range is
+    // discarded and the (already config-bounded) requested quality is used
+    // as-is — the session must still complete, not throw.
+    const capa = parseCapaTokens(Buffer.from("#JPGRANGd150d200", "ascii"));
+    const infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const { body } = runParaBuild({
+        capaTokens: capa,
+        jpegQuality: 90,
+        resolution: undefined,
+      });
+      expect(body).toContain("#JPGd090");
+      expect(infoSpy).not.toHaveBeenCalledWith(expect.stringContaining("JPEG quality"));
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  it("an advertised #JPGRANG with an out-of-domain edge is sanitized to 1..100 before clamping, and logs the clamp", () => {
+    // #JPGRANGd000d080: min=0 is below the 1..100 domain and sanitizes up to
+    // 1; the intersected range [1,80] is non-empty, so it clamps normally.
+    const capa = parseCapaTokens(Buffer.from("#JPGRANGd000d080", "ascii"));
+    const infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const { body } = runParaBuild({
+        capaTokens: capa,
+        jpegQuality: 90,
+        resolution: undefined,
+      });
+      expect(body).toContain("#JPGd080");
+      expect(infoSpy).toHaveBeenCalled();
+      const message = String(infoSpy.mock.calls[infoSpy.mock.calls.length - 1][0]);
+      expect(message).toContain("90");
+      expect(message).toContain("80");
+      expect(message).toContain("0-80");
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
   it("no advertised lists: target still gets full selection semantics (downsample below pinned default, cap above it)", () => {
     const capa = parseCapaTokens(Buffer.from("#GMMLISTUG10", "ascii"));
     const infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});

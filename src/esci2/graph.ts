@@ -701,11 +701,26 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
 
   // Clamp the requested JPEG quality to the printer's advertised #JPGRANG,
   // if it advertised one — the host-side encode still uses the unclamped
-  // ctx.jpegQuality.
+  // ctx.jpegQuality. The advertised range itself isn't trusted blindly:
+  // parseNumericList accepts any dNNN/iNNNNNNN, so a malformed or
+  // out-of-domain CAPA value (e.g. #JPGRANGd150d200, entirely above the
+  // 1..100 JPEG quality domain) is intersected with [1,100] first. An empty
+  // intersection means the advertised range is unusable — ignore it and
+  // fall back to ctx.jpegQuality as-is (already config-bounded 1..100).
   const range = ctx.capaTokens?.jpgRange;
-  const quality = range
-    ? Math.min(range.max, Math.max(range.min, ctx.jpegQuality))
-    : ctx.jpegQuality;
+  const sanitizedRange = range
+    ? { min: Math.max(range.min, 1), max: Math.min(range.max, 100) }
+    : undefined;
+  const quality =
+    sanitizedRange && sanitizedRange.min <= sanitizedRange.max
+      ? Math.min(sanitizedRange.max, Math.max(sanitizedRange.min, ctx.jpegQuality))
+      : ctx.jpegQuality;
+  if (quality !== ctx.jpegQuality && range) {
+    log.info(
+      `JPEG quality ${ctx.jpegQuality} is outside this model's advertised #JPGRANG ` +
+        `(${range.min}-${range.max}) — using ${quality}`,
+    );
+  }
 
   const paraPayload = composePara(
     makeParaSpec(ctx.entry!, paraSource, ctx.action, sel.wireDpi, ctx.colorMode, quality),

@@ -67,4 +67,11 @@ describe("downsampleJpeg", () => {
     const out = await downsampleJpeg(src, { fromDpi: 300, toDpi: 150 }, 90);
     expect(readJpegOrientation(out)).toBeUndefined();
   });
+
+  it("rejects a non-JPEG/garbage buffer with an actionable metadata error, not sharp's raw decode failure", async () => {
+    const garbage = Buffer.from("this is not a jpeg");
+    await expect(downsampleJpeg(garbage, { fromDpi: 300, toDpi: 150 }, 90)).rejects.toThrow(
+      /metadata unreadable/,
+    );
+  });
 });
