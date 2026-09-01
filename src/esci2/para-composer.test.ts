@@ -1,6 +1,12 @@
 // src/esci2/para-composer.test.ts
 import { describe, it, expect } from "vitest";
-import { composePara, type ParaSpec } from "./para-composer.js";
+import {
+  composePara,
+  baseDpiFor,
+  STANDARD_BASE_DPI,
+  ADF_CRP_BASE_DPI,
+  type ParaSpec,
+} from "./para-composer.js";
 import { GAMMA_CLASSES } from "./data/gamma-classes.js";
 
 // A reusable baseline spec — ET-4950 flatbed JPG params. Tests override fields
@@ -464,5 +470,21 @@ describe("composePara — validation", () => {
         gammaClass: { jpg: "made-up", pdf: "made-up" },
       }),
     ).toThrow(/gamma.*made-up/i);
+  });
+});
+
+describe("baseDpiFor", () => {
+  it("returns ADF_CRP_BASE_DPI (200) for the adf-crp profile", () => {
+    expect(baseDpiFor("adf-crp")).toBe(ADF_CRP_BASE_DPI);
+    expect(baseDpiFor("adf-crp")).toBe(200);
+  });
+
+  it("returns STANDARD_BASE_DPI (300) for the standard profile", () => {
+    expect(baseDpiFor("standard")).toBe(STANDARD_BASE_DPI);
+    expect(baseDpiFor("standard")).toBe(300);
+  });
+
+  it("returns STANDARD_BASE_DPI (300) when the profile is undefined", () => {
+    expect(baseDpiFor(undefined)).toBe(STANDARD_BASE_DPI);
   });
 });

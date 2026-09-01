@@ -30,7 +30,7 @@ import {
   assertSourceSupported,
 } from "./dialects/dispatch.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
-import { composePara, STANDARD_BASE_DPI, type ParaSpec } from "./para-composer.js";
+import { composePara, baseDpiFor, type ParaSpec } from "./para-composer.js";
 import { parseCapaTokens, type CapaTokens } from "./capabilities.js";
 import { advertisedDpiSet, selectWireDpi } from "./resolution.js";
 import { createLogger } from "../logger.js";
@@ -672,7 +672,7 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
   // dialects) fall back to the profile's pinned default as the sole wire
   // DPI, so the target still gets full selection semantics instead of being
   // silently discarded.
-  const pinnedDefault = ctx.entry!.paraProfile === "adf-crp" ? 200 : STANDARD_BASE_DPI;
+  const pinnedDefault = baseDpiFor(ctx.entry!.paraProfile);
   const target = ctx.resolution ?? pinnedDefault;
   const advertised = ctx.capaTokens ? advertisedDpiSet(ctx.capaTokens, paraSource) : [];
   const sel = selectWireDpi(target, advertised.length > 0 ? advertised : [pinnedDefault]);

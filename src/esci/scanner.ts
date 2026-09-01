@@ -17,6 +17,7 @@ import type { PostProcessProfile } from "../postprocess/index.js";
 import type { GrayscaleConversion } from "../config.js";
 import type { LegacyDialectEntry } from "./dialects/entry.js";
 import { createLogger } from "../logger.js";
+import { selectWireDpi } from "../esci2/resolution.js";
 
 const log = createLogger("scanner-esci");
 
@@ -156,20 +157,25 @@ export async function runEsciScan(
     // function of format (and, for some future dialect, source), so this
     // could read session.format directly, but it reads ctx like the ESC/I-2
     // resolvers to stay resilient if a future dialect ever varies delivered
-    // DPI by the detected source too.
+    // DPI by the detected source too. Delegates the actual selection to the
+    // shared `selectWireDpi` (src/esci2/resolution.ts) with a single-element
+    // advertised set — the fixed delivered DPI is the only DPI this wire can
+    // ever produce, so "exact"/"smallest-above"/"capped" collapse to
+    // "at delivered"/"below delivered"/"above delivered" respectively.
     resolveDownsample: (ctx: EsciCtx) => {
       if (session.resolution === undefined) return undefined;
       const delivered = ctx.entry.deliveredDpi({ source: ctx.source, format: ctx.format });
-      if (session.resolution >= delivered) {
-        if (session.resolution > delivered) {
-          log.info(
-            `SCAN_RESOLUTION=${session.resolution} exceeds what this model delivers ` +
-              `(${delivered} DPI ${ctx.format}) — delivering ${delivered} DPI`,
-          );
-        }
-        return undefined;
+      const sel = selectWireDpi(session.resolution, [delivered]);
+      if (sel.downsampleToDpi !== undefined) {
+        return { fromDpi: sel.wireDpi, toDpi: sel.downsampleToDpi };
       }
-      return { fromDpi: delivered, toDpi: session.resolution };
+      if (sel.cappedFrom !== undefined) {
+        log.info(
+          `SCAN_RESOLUTION=${session.resolution} exceeds what this model delivers ` +
+            `(${delivered} DPI ${ctx.format}) — delivering ${delivered} DPI`,
+        );
+      }
+      return undefined;
     },
   });
 

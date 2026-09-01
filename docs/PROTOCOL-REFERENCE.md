@@ -416,11 +416,16 @@ single regex (the ET-4950's own `#RSMLIST` does this).
 ### Selection rule: the source list is a cap, not an allowed-set
 
 `advertisedDpiSet` (`src/esci2/resolution.ts`) computes the DPI set a scan may
-request on the wire for the detected source. The base set is `rsmList ∩ rssList`.
+request on the wire for the detected source. The base set comes from whichever
+global list(s) the printer actually advertised: `rsmList ∩ rssList` when both
+`#RSMLIST` and `#RSSLIST` are present, or whichever single one is present alone.
 When the source's own list (`adfRsmsList` for ADF, `fbRsmsList` for flatbed) is
 also present, its **maximum** caps that base set — values above the cap are
 dropped — but the source list is never treated as the enumerable set of allowed
-values itself.
+values itself. That cap rule presumes a global list to cap in the first place:
+when neither `#RSMLIST` nor `#RSSLIST` is advertised, there's no base set to
+cap, so `advertisedDpiSet` falls back to using the source list directly as the
+allowed set — the one case where it is enumerable rather than a ceiling.
 
 This distinction is capture-proven, not theoretical: the FF-680W and DS-575W both
 advertise `#ADFRSMSLISTd300d600` (300 and 600 only), yet Epson's own driver has

@@ -78,7 +78,12 @@ const ADF_CRP_PREFIX_HEAD = "#ADFCRP SKEW";
 // .reference/wireshark-captures/ff-680w/SOURCE-NOTES.md. DS-575W adfExtents are
 // stored at the same 200-DPI reference (wire captures at 400 and 600 confirm the
 // linear scaling).
-const ADF_CRP_BASE_DPI = 200;
+export const ADF_CRP_BASE_DPI = 200;
+
+/** The registry-extent reference DPI for `profile` — 200 for adf-crp, else 300. */
+export function baseDpiFor(profile: ParaProfile | undefined): number {
+  return profile === "adf-crp" ? ADF_CRP_BASE_DPI : STANDARD_BASE_DPI;
+}
 
 const ADF_CRP_TRAILER_BEFORE_ACQ = Buffer.from(
   "#CRPi0000000" + "#DFAi0000000i0001550" + "#LAMOFF " + "#PAGd000",
