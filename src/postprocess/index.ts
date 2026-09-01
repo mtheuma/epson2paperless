@@ -6,6 +6,7 @@ import { downsampleJpeg, type Downsample } from "./downsample.js";
 import { sortedPageFiles } from "../output.js";
 import type { ToneCurveName } from "./tone-curves.js";
 import type { GrayscaleConversion } from "../config.js";
+import { setJfifDensity } from "../exif.js";
 
 export type PostProcessProfile = "none" | "document";
 
@@ -42,6 +43,18 @@ export interface PostProcessOptions {
    * downsample.ts.
    */
   downsample?: Downsample;
+  /**
+   * Lossless JFIF-density-only stamp for pages that reach output without a
+   * density-stamping re-encode — the legacy ESC/I path's counterpart to
+   * `downsample` for an explicit SCAN_RESOLUTION that exactly matches (or is
+   * capped above) the delivered DPI: no resize happens, so without this the
+   * host-encoded JPEG carries no real JFIF density and reads as 72 DPI.
+   * Applied on top of whatever profile/grayscale re-encode ran (those
+   * preserve only the SOURCE density, which legacy pages never had) — never
+   * when `downsample` is set, since that path already stamps its own toDpi.
+   * Mutually exclusive with `downsample` by construction at the resolver.
+   */
+  stampDpi?: number;
 }
 
 /**
@@ -86,7 +99,13 @@ export async function postProcessTempPages(
   log: MinimalLog,
 ): Promise<void> {
   const conversion = opts.grayscaleConversion ?? "off";
-  if (profile === "none" && conversion === "off" && opts.downsample === undefined) return;
+  if (
+    profile === "none" &&
+    conversion === "off" &&
+    opts.downsample === undefined &&
+    opts.stampDpi === undefined
+  )
+    return;
   let pages: ReturnType<typeof sortedPageFiles>;
   try {
     pages = sortedPageFiles(fs.readdirSync(tempDir), "jpg");
@@ -147,6 +166,15 @@ export async function postProcessTempPages(
       // its own standalone pass instead of silently dropping it.
       if (opts.downsample && !downsampleFolded) {
         processed = await downsampleJpeg(processed, opts.downsample, opts.jpegQuality);
+      }
+      // Lossless density-only stamp — see PostProcessOptions.stampDpi. Runs
+      // after every transform above (document/grayscale re-encodes preserve
+      // only the source density, which a legacy page never had) and is
+      // skipped whenever a downsample ran, since downsampleJpeg already
+      // stamped its own toDpi; the resolvers never set both, but the guard
+      // stays local and obvious rather than leaning on that invariant.
+      if (opts.stampDpi !== undefined && opts.downsample === undefined) {
+        processed = setJfifDensity(processed, opts.stampDpi);
       }
       // "force" converts every page by design — announcing each one would be
       // noise; the scanner layer logs the fallback once per session instead.

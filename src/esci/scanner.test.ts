@@ -406,14 +406,16 @@ describe("SCAN_RESOLUTION host-side downsample fallback (legacy path)", () => {
     fixturePath: string;
     format: "jpg" | "pdf";
     resolution: number | undefined;
-  }): Promise<{ downsample: unknown; infoLogs: string[] }> {
+  }): Promise<{ downsample: unknown; stampDpi: unknown; infoLogs: string[] }> {
     const fixture = loadFixture(path.join(FIXTURES, opts.fixturePath));
     const fake = new FakeTcpSocket();
 
     const outputTail = await import("../output-tail.js");
     let capturedDownsample: unknown = "unset";
+    let capturedStampDpi: unknown = "unset";
     const finalizeSpy = vi.spyOn(outputTail, "finalizeSession").mockImplementation((args) => {
       capturedDownsample = args.downsample;
+      capturedStampDpi = args.stampDpi;
       return Promise.resolve();
     });
     const infoLogs: string[] = [];
@@ -443,36 +445,50 @@ describe("SCAN_RESOLUTION host-side downsample fallback (legacy path)", () => {
       consoleSpy.mockRestore();
     }
 
-    return { downsample: capturedDownsample, infoLogs };
+    return { downsample: capturedDownsample, stampDpi: capturedStampDpi, infoLogs };
   }
 
-  it("resolution below the delivered DPI (600, JPG): resolveDownsample yields {fromDpi:600, toDpi:150}", async () => {
-    const { downsample, infoLogs } = await runWithDownsampleSpy({
+  it("resolution below the delivered DPI (600, JPG): resolveDownsample yields {fromDpi:600, toDpi:150}, stampDpi undefined", async () => {
+    const { downsample, stampDpi, infoLogs } = await runWithDownsampleSpy({
       fixturePath: "wf-3620/flatbed-single-page-jpeg.jsonl",
       format: "jpg",
       resolution: 150,
     });
     expect(downsample).toEqual({ fromDpi: 600, toDpi: 150 });
+    expect(stampDpi).toBeUndefined();
     expect(infoLogs.some((l) => /exceeds|maximum|delivers/.test(l))).toBe(false);
   }, 60_000);
 
-  it("resolution at/above the delivered DPI (300, PDF): resolveDownsample yields undefined plus an info log", async () => {
-    const { downsample, infoLogs } = await runWithDownsampleSpy({
+  it("resolution above the delivered DPI (800 requested, 300 delivered, PDF): resolveDownsample undefined, stampDpi is the delivered 300, plus an info log", async () => {
+    const { downsample, stampDpi, infoLogs } = await runWithDownsampleSpy({
       fixturePath: "wf-3620/flatbed-single-page-pdf.jsonl",
       format: "pdf",
-      resolution: 600,
+      resolution: 800,
     });
     expect(downsample).toBeUndefined();
+    expect(stampDpi).toBe(300);
     expect(infoLogs.some((l) => /exceeds|maximum|delivers/.test(l))).toBe(true);
   }, 60_000);
 
-  it("resolution unset: resolveDownsample yields undefined with no info log", async () => {
-    const { downsample, infoLogs } = await runWithDownsampleSpy({
+  it("resolution exactly equal to the delivered DPI (600, JPG): resolveDownsample undefined, stampDpi is the delivered 600, no info log", async () => {
+    const { downsample, stampDpi, infoLogs } = await runWithDownsampleSpy({
+      fixturePath: "wf-3620/flatbed-single-page-jpeg.jsonl",
+      format: "jpg",
+      resolution: 600,
+    });
+    expect(downsample).toBeUndefined();
+    expect(stampDpi).toBe(600);
+    expect(infoLogs.some((l) => /exceeds|maximum|delivers/.test(l))).toBe(false);
+  }, 60_000);
+
+  it("resolution unset: resolveDownsample and stampDpi both yield undefined with no info log", async () => {
+    const { downsample, stampDpi, infoLogs } = await runWithDownsampleSpy({
       fixturePath: "wf-3620/flatbed-single-page-jpeg.jsonl",
       format: "jpg",
       resolution: undefined,
     });
     expect(downsample).toBeUndefined();
+    expect(stampDpi).toBeUndefined();
     expect(infoLogs.some((l) => /exceeds|maximum|delivers/.test(l))).toBe(false);
   }, 60_000);
 });

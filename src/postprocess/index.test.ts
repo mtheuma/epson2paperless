@@ -170,4 +170,49 @@ describe("postProcessTempPages", () => {
     expect(meta.density).toBe(150);
     expect(meta.channels).toBe(1);
   });
+
+  // -------------------------------------------------------------------------
+  // stampDpi — lossless density-only patch for legacy-path pages that reach
+  // output with no resize (explicit SCAN_RESOLUTION exact match, or capped
+  // above the delivered DPI). See src/exif.ts's setJfifDensity and
+  // PostProcessOptions.stampDpi.
+  // -------------------------------------------------------------------------
+
+  it("stampDpi under profile none/conversion off: page carries the stamped density, pixel dimensions unchanged", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-stamp-none-"));
+    await writePage(dir, "page_00.jpg", [222, 220, 244]);
+    await postProcessTempPages(dir, "none", { jpegQuality: 90, stampDpi: 600 }, noopLog);
+    const out = fs.readFileSync(path.join(dir, "page_00.jpg"));
+    const meta = await sharp(out).metadata();
+    expect(meta.density).toBe(600);
+    expect(meta.width).toBe(32);
+    expect(meta.height).toBe(32);
+    expect(fs.readdirSync(dir).some((f) => f.endsWith(".tmp"))).toBe(false);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("stampDpi + forced grayscale: the converted page carries the stamped density", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-stamp-gray-"));
+    await writePage(dir, "page_00.jpg", [222, 220, 244]);
+    await postProcessTempPages(
+      dir,
+      "none",
+      { jpegQuality: 90, grayscaleConversion: "force", stampDpi: 300 },
+      noopLog,
+    );
+    const out = fs.readFileSync(path.join(dir, "page_00.jpg"));
+    const meta = await sharp(out).metadata();
+    expect(meta.density).toBe(300);
+    expect(meta.channels).toBe(1);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("stampDpi undefined: existing no-op behaviour is untouched", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-stamp-unset-"));
+    await writePage(dir, "page_00.jpg", [222, 220, 244]);
+    const before = fs.readFileSync(path.join(dir, "page_00.jpg"));
+    await postProcessTempPages(dir, "none", { jpegQuality: 90 }, noopLog);
+    expect(fs.readFileSync(path.join(dir, "page_00.jpg")).equals(before)).toBe(true);
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
 });
