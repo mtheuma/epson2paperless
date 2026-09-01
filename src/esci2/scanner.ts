@@ -35,7 +35,11 @@ export interface ScanSession {
   jpegQuality?: number;
   /** PRINTER_WHITE_POINT — device cast reference for the auto-colour verdict. */
   whitePoint?: WhitePoint;
-  /** Scan resolution in DPI (adf-crp dialects: FF-680W, DS-575W; default applied at config layer). */
+  /**
+   * Universal target DPI; undefined = each dialect's pinned default.
+   * Resolved per-session against the printer's CAPA-advertised resolution
+   * lists (ESC/I-2) or the fixed delivered DPI (legacy ESC/I).
+   */
   resolution?: number;
   /**
    * Colour mode (default at config layer). "grayscale" changes the wire

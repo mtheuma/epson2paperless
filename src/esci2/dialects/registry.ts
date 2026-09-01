@@ -270,10 +270,10 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       monoGammaClass: "ds575w-mono",
       // 400 and 600: committed pcap-extracted replay fixtures drive these
       // end-to-end. 200: not fixture-covered, but README-recorded as the one
-      // DPI actually hardware-verified on this model (only duplex colour PDF
-      // @ 200 DPI hardware-verified — README compatibility row and the
-      // SCAN_RESOLUTION config row both say so); 400/600 are capture/replay-
-      // tested only. All three qualify under the verification-posture rule.
+      // DPI actually hardware-verified on this model (compatibility table row:
+      // "only duplex colour PDF @ 200 DPI hardware-verified"); 400/600 are
+      // capture/replay-tested only. All three qualify under the
+      // verification-posture rule.
       verifiedWireDpis: [200, 400, 600],
     },
   ],

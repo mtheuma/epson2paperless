@@ -692,6 +692,31 @@ describe("esci2Graph buildParaSend — wire DPI selection + JPEG quality clamp (
       expect(over.ctx.wireDpi).toBe(300);
       expect(over.ctx.downsampleToDpi).toBeUndefined();
       expect(infoSpy).toHaveBeenCalled();
+      const message = String(infoSpy.mock.calls[infoSpy.mock.calls.length - 1][0]);
+      expect(message).toContain("SCAN_RESOLUTION=600 exceeds this model's maximum");
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  it("caps a default (unset SCAN_RESOLUTION) target without naming the env var", () => {
+    // Synthetic CAPA whose advertised max (200) sits below the standard
+    // profile's 300 DPI pinned default — realistic hardware wouldn't
+    // advertise this, but it's the only way to force the default-branch
+    // cap path (buildParaSend's `target = ctx.resolution ?? pinnedDefault`)
+    // without SCAN_RESOLUTION ever being set.
+    const capa = parseCapaTokens(
+      Buffer.from("#RSMLISTd050d075d100d150d200#RSSLISTd050d075d100d150d200", "ascii"),
+    );
+    const infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const { ctx } = runParaBuild({ capaTokens: capa, resolution: undefined, source: "adf" });
+      expect(ctx.wireDpi).toBe(200);
+      expect(infoSpy).toHaveBeenCalled();
+      const message = String(infoSpy.mock.calls[infoSpy.mock.calls.length - 1][0]);
+      expect(message).not.toMatch(/SCAN_RESOLUTION/);
+      expect(message).toContain("200 DPI");
+      expect(message).toContain("300 DPI pinned default");
     } finally {
       infoSpy.mockRestore();
     }

@@ -679,9 +679,15 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
   ctx.wireDpi = sel.wireDpi;
   ctx.downsampleToDpi = sel.downsampleToDpi;
   if (sel.cappedFrom !== undefined) {
-    log.info(
-      `SCAN_RESOLUTION=${sel.cappedFrom} exceeds this model's maximum — scanning at ${sel.wireDpi} DPI`,
-    );
+    // Explicit requests name the env var the user set; the pinned default
+    // isn't something the user chose, so don't imply they configured it —
+    // name the model's own ceiling instead (the warn below already makes
+    // this same explicit/default distinction).
+    const message =
+      ctx.resolution !== undefined
+        ? `SCAN_RESOLUTION=${sel.cappedFrom} exceeds this model's maximum — scanning at ${sel.wireDpi} DPI`
+        : `${ctx.entry!.displayName}'s ${paraSource} maximum is ${sel.wireDpi} DPI, below the ${sel.cappedFrom} DPI pinned default — scanning at ${sel.wireDpi} DPI`;
+    log.info(message);
   }
   // Only warn when the caller explicitly asked for a resolution — the
   // dialect's own pinned default running at an as-yet-unverified DPI isn't
