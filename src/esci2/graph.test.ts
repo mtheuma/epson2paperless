@@ -374,7 +374,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
 
   // makeCtx's default entry (ET-4950) seeds verifiedWireDpis: [300].
 
-  it("PARA rejects a non-OK #par token with an actionable error naming the wire DPI and SCAN_RESOLUTION hint when the wire DPI in use is unverified", () => {
+  it("PARA rejects a non-OK #par token with an actionable error naming the wire DPI and inviting removal of SCAN_RESOLUTION when it was set explicitly and the resulting wire DPI is unverified", () => {
     const state = esci2Graph.states.PARA;
     if (state.kind !== "decision") return;
     const ctx = makeCtx({ resolution: 600, wireDpi: 600 });
@@ -387,7 +387,7 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
     expect(result.error.message).toMatch(/SCAN_RESOLUTION/);
   });
 
-  it("PARA rejection still includes the hint on an unverified wire DPI even when resolution was left at the dialect default (the real suspect is the wire DPI, not how it was set)", () => {
+  it("PARA rejection still includes a hint on an unverified wire DPI even when resolution was left at the dialect default (the real suspect is the wire DPI, not how it was set) — but drops the 'remove SCAN_RESOLUTION' clause since nothing was set to remove", () => {
     const state = esci2Graph.states.PARA;
     if (state.kind !== "decision") return;
     const ctx = makeCtx({ resolution: undefined, wireDpi: 600 });
@@ -396,7 +396,10 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
     expect("error" in result).toBe(true);
     if (!("error" in result)) return;
     expect(result.error.message).toMatch(/PARA rejected/);
-    expect(result.error.message).toMatch(/SCAN_RESOLUTION/);
+    expect(result.error.message).toMatch(/600/);
+    expect(result.error.message).toMatch(/report the result \(issue #81\)/);
+    expect(result.error.message).not.toMatch(/SCAN_RESOLUTION/);
+    expect(result.error.message).not.toMatch(/remove/);
   });
 
   it("PARA rejection omits the hint when the wire DPI in use is verified, even though resolution was set explicitly", () => {

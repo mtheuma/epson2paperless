@@ -797,12 +797,20 @@ g.state(
       // for a rejection, whether or not the DPI came from an explicit
       // SCAN_RESOLUTION (a session can land on an unverified DPI via the
       // dialect's own pinned default too). A verified wire DPI points
-      // elsewhere, so the hint would be actively misleading there.
-      const hint =
-        ctx.wireDpi !== undefined && !ctx.entry!.verifiedWireDpis.includes(ctx.wireDpi)
+      // elsewhere, so the hint would be actively misleading there. The
+      // wording itself still branches on explicit vs. default: "remove
+      // SCAN_RESOLUTION" is only actionable advice when the user actually
+      // set it — a default scan on a model with an unverified pinned DPI
+      // (e.g. a fresh entry with verifiedWireDpis: []) has nothing to
+      // remove, so that scan just invites a report.
+      const dpiUnverified =
+        ctx.wireDpi !== undefined && !ctx.entry!.verifiedWireDpis.includes(ctx.wireDpi);
+      const hint = !dpiUnverified
+        ? ""
+        : ctx.resolution !== undefined
           ? ` Requested wire DPI was ${ctx.wireDpi}; this model may not accept it — ` +
             `remove SCAN_RESOLUTION or report the result (issue #81).`
-          : "";
+          : ` This model may not accept wire DPI ${ctx.wireDpi} — please report the result (issue #81).`;
       return { error: new Error(`PARA rejected by printer (#par${par ?? "?"}).${hint}`) };
     }
     return { next: "TRDT", send: buildPassthruPacket(buildEsci2Command("TRDT"), ESCI2_REPLY_SIZE) };

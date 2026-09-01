@@ -113,48 +113,40 @@ describe("postProcessTempPages", () => {
     expect(meta.density).toBe(150);
   });
 
-  it("warns (not errors) when a page's transform fails while a downsample is pending, noting the mixed-size consequence", async () => {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-ds-warn-"));
+  it("errors (at error level, not warn) when a page's transform fails while a downsample is pending, noting the mixed-size consequence", async () => {
+    // The logger ranks warn (2) BELOW error (3) — see src/logger.ts — so this
+    // failure must stay at error level or LOG_LEVEL=error would suppress the
+    // more consequential mixed-output-size case while plain failures print.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-ds-err-"));
     const bad = Buffer.from("this is not a jpeg");
     fs.writeFileSync(path.join(dir, "page_00.jpg"), bad);
-    const warnings: string[] = [];
     const errors: string[] = [];
-    const log = {
-      info: () => {},
-      error: (m: string) => errors.push(m),
-      warn: (m: string) => warnings.push(m),
-    };
+    const log = { info: () => {}, error: (m: string) => errors.push(m) };
     await postProcessTempPages(
       dir,
       "none",
       { jpegQuality: 90, downsample: { fromDpi: 300, toDpi: 150 } },
       log,
     );
-    expect(errors).toEqual([]);
-    expect(warnings.length).toBe(1);
-    expect(warnings[0]).toMatch(/page_00\.jpg/);
-    expect(warnings[0]).toMatch(/wire resolution/);
-    expect(warnings[0]).toMatch(/output page sizes will differ/);
+    expect(errors.length).toBe(1);
+    expect(errors[0]).toMatch(/page_00\.jpg/);
+    expect(errors[0]).toMatch(/wire resolution/);
+    expect(errors[0]).toMatch(/output page sizes will differ/);
     // Fail-open behaviour is unchanged — original bytes kept, no .tmp left.
     expect(fs.readFileSync(path.join(dir, "page_00.jpg")).equals(bad)).toBe(true);
     expect(fs.readdirSync(dir).some((f) => f.endsWith(".tmp"))).toBe(false);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("still errors (not warns) when a page's transform fails and no downsample is pending", async () => {
+  it("omits the mixed-size consequence text when a page's transform fails and no downsample is pending", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-nods-err-"));
     const bad = Buffer.from("this is not a jpeg");
     fs.writeFileSync(path.join(dir, "page_00.jpg"), bad);
-    const warnings: string[] = [];
     const errors: string[] = [];
-    const log = {
-      info: () => {},
-      error: (m: string) => errors.push(m),
-      warn: (m: string) => warnings.push(m),
-    };
+    const log = { info: () => {}, error: (m: string) => errors.push(m) };
     await postProcessTempPages(dir, "document", { jpegQuality: 90 }, log);
-    expect(warnings).toEqual([]);
     expect(errors.length).toBe(1);
+    expect(errors[0]).not.toMatch(/wire resolution/);
     fs.rmSync(dir, { recursive: true, force: true });
   });
 

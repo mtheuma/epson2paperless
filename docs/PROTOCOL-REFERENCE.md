@@ -493,10 +493,12 @@ warning, even when it isn't in `verifiedWireDpis` itself: only a user-supplied
 ### PARA rejection
 
 If the printer's `#par` token in the PARA reply is anything other than `OK`, the
-`PARA` state resolves to an error rather than continuing. When `SCAN_RESOLUTION`
-was set explicitly, the error names the wire DPI that was requested and suggests
-removing the override or reporting the outcome (issue #81) — there is no
-automatic retry at a different DPI.
+`PARA` state resolves to an error rather than continuing. When the wire DPI
+actually in use is outside the model's `verifiedWireDpis` — whether it got
+there via an explicit `SCAN_RESOLUTION` or the dialect's own unverified pinned
+default — the error names that wire DPI and suggests removing the override (if
+one was set) or reporting the outcome (issue #81) — there is no automatic retry
+at a different DPI.
 
 ### Legacy ESC/I: fallback-only
 

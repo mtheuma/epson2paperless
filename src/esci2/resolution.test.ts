@@ -66,6 +66,15 @@ describe("resolution", () => {
     expect(advertisedDpiSet(rssOnly, "flatbed")).toEqual([50, 75, 100, 150, 200]);
   });
 
+  it("only-one-global-list branch copies rather than aliases — does not mutate CapaTokens' own array", () => {
+    // Unsorted input so the function's internal sort (Array#sort mutates
+    // in place) would visibly reorder an alias of capa.rsmList if the
+    // implementation didn't copy first.
+    const rsmOnly = parseCapaTokens(Buffer.from("#RSMLISTd200d050d100", "ascii"));
+    expect(advertisedDpiSet(rsmOnly, "flatbed")).toEqual([50, 100, 200]);
+    expect(rsmOnly.rsmList).toEqual([200, 50, 100]);
+  });
+
   it("a single present global list is still capped by the source list's max", () => {
     const rsmOnly = parseCapaTokens(
       Buffer.from("#RSMLISTd050d075d100d150d200d300d600d800#ADFRSMSLISTd300d600", "ascii"),

@@ -69,12 +69,6 @@ interface MinimalLog {
   error: (m: string) => void;
   /** Optional — per-page chroma measurements under auto colour mode. */
   debug?: (m: string) => void;
-  /**
-   * Optional — used instead of `error` for a per-page failure that occurs
-   * while a downsample was pending, since that failure has a visible
-   * consequence (mixed output page sizes) beyond "kept the original".
-   */
-  warn?: (m: string) => void;
 }
 
 /**
@@ -170,17 +164,16 @@ export async function postProcessTempPages(
         conversion === "force"
           ? "keeping original in colour despite SCAN_COLOR_MODE=grayscale"
           : "keeping original";
-      if (opts.downsample) {
-        // The kept page ships at wire resolution instead of the requested
-        // SCAN_RESOLUTION target — flag it above error level so the mixed
-        // output-page-size consequence isn't buried among routine failures.
-        (log.warn ?? log.error)(
-          `post-process failed for ${name}, ${kept}: ${msg} — page kept at wire resolution; ` +
-            "output page sizes will differ from other pages in this scan",
-        );
-      } else {
-        log.error(`post-process failed for ${name}, ${kept}: ${msg}`);
-      }
+      // The kept page ships at wire resolution instead of the requested
+      // SCAN_RESOLUTION target when a downsample was pending — append that
+      // consequence so mixed output page sizes aren't a silent surprise.
+      // Still logged at error level: this logger ranks warn (2) BELOW error
+      // (3), so downgrading would make LOG_LEVEL=error suppress the more
+      // consequential failure while plain ones still print.
+      const sizeNote = opts.downsample
+        ? " — page kept at wire resolution; output page sizes will differ from other pages in this scan"
+        : "";
+      log.error(`post-process failed for ${name}, ${kept}: ${msg}${sizeNote}`);
       try {
         await fs.promises.unlink(tmp);
       } catch {

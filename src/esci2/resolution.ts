@@ -30,7 +30,9 @@ export function advertisedDpiSet(capa: CapaTokens, source: ParaSpec["source"]): 
       const rss = new Set(capa.rssList);
       base = capa.rsmList.filter((d) => rss.has(d));
     } else {
-      base = capa.rsmList ?? capa.rssList!;
+      // Copy, not alias — base is later sorted in place (Array#sort
+      // mutates), and this must never mutate the caller's CapaTokens array.
+      base = [...(capa.rsmList ?? capa.rssList!)];
     }
   } else if (sourceList !== null) {
     return [...sourceList].sort((a, b) => a - b);
