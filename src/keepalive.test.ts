@@ -424,6 +424,32 @@ describe("createKeepaliveResponder", () => {
     warnSpy.mockRestore();
   });
 
+  it("drops the dedup entry on a local-route failure so the next cycle retries", async () => {
+    let calls = 0;
+    const h = await setupHarness({
+      burstCount: 1,
+      localIpForTarget: (): Promise<string> => {
+        calls++;
+        if (calls === 1)
+          return Promise.reject(Object.assign(new Error("no route"), { code: "EHOSTUNREACH" }));
+        return Promise.resolve("127.0.0.1");
+      },
+    });
+    // First attempt: route resolution rejects → no burst, no unhandled rejection.
+    await sendAnnouncement(h, makeAnnouncement(0x60));
+    await new Promise((r) => setTimeout(r, 40));
+    expect(h.received).toHaveLength(0);
+
+    // Same seq again: must NOT be skipped as a duplicate — the failed attempt
+    // cleared the dedup entry — so it retries and now succeeds.
+    await sendAnnouncement(h, makeAnnouncement(0x60));
+    await new Promise((r) => setTimeout(r, 40));
+    expect(h.received).toHaveLength(1);
+    expect(h.received[0][11]).toBe(0x60);
+
+    h.teardown();
+  });
+
   it("dedupes repeated announcements of the same seq within the window (3 announcements → 1 burst)", async () => {
     const h = await setupHarness({ dedupWindowMs: 1_000 });
     // Simulate the printer's 3-in-a-row beacons with identical seq.

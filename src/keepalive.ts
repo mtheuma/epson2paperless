@@ -246,7 +246,26 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
                 `product=${announcement.productName ?? "<not reported>"}; ` +
                 `sending burst of ${opts.burstCount} (keepalive v${keepalive.version})`,
             );
-            const localIp = await (opts.localIpForTarget ?? getLocalIpForTarget)(source);
+            const localIp = await (async () => {
+              try {
+                return await (opts.localIpForTarget ?? getLocalIpForTarget)(source);
+              } catch (err) {
+                // No route to the printer (EHOSTUNREACH / ENETUNREACH), most
+                // likely mid-renumber. Drop the dedup entry so the next
+                // announcement cycle (~60s) retries instead of skipping this
+                // seq as a duplicate; the two near-simultaneous duplicates in
+                // this same cycle have already been skipped by now.
+                const timer = seenSeqs.get(dedupKey);
+                if (timer) clearTimeout(timer);
+                seenSeqs.delete(dedupKey);
+                log.warn(
+                  `No local route to ${source} for keepalive (seq=${seqHex}) — skipping burst, will retry next cycle`,
+                  err,
+                );
+                return null;
+              }
+            })();
+            if (localIp === null) return;
             const packet = buildKeepalivePacket(
               { ...keepalive, ipAddress: localIp },
               announcement.seq,
