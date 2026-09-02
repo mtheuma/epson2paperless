@@ -151,6 +151,10 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
   // seq → auto-expire timer; paired lifecycle so stop() can cancel both.
   // See dedupWindowMs JSDoc above for the rationale.
   const seenSeqs = new Map<string, ReturnType<typeof setTimeout>>();
+  // Unrecognised source IP → auto-expire timer. Throttles the rejected-peer
+  // warning to once per address per dedup window, so a chatty stale beacon
+  // can't flood the log while the mismatch persists.
+  const warnedPeers = new Map<string, ReturnType<typeof setTimeout>>();
   const dedupWindowMs = opts.dedupWindowMs ?? 30_000;
 
   return {
@@ -193,7 +197,21 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
                 ? !(await opts.target.accepts(source))
                 : source !== normalizeIPv4(opts.printerIp))
             ) {
-              log.debug(`Ignoring announcement from unauthorized peer ${rinfo.address}`);
+              // A mismatched beacon means no keepalive goes out and the panel
+              // destination never appears — a stale DNS record is the likeliest
+              // cause. Warn (parity with the push-scan rejection), naming the
+              // observed and expected addresses, throttled per address.
+              const observed = rinfo.address;
+              if (!warnedPeers.has(observed)) {
+                const expected = opts.target
+                  ? `${opts.target.hostname ?? "configured target"} [${[...opts.target.addresses].join(", ") || "unresolved"}]`
+                  : (normalizeIPv4(opts.printerIp) ?? opts.printerIp);
+                log.warn(
+                  `Ignoring announcement from unrecognised peer ${observed} — expected ${expected}`,
+                );
+                const warnExpiry = setTimeout(() => warnedPeers.delete(observed), dedupWindowMs);
+                warnedPeers.set(observed, warnExpiry);
+              }
               return;
             }
             const dedupKey = `${source}:${announcement.seq}`;
@@ -293,6 +311,9 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
       // Cancel any pending dedup-window expiries
       for (const t of seenSeqs.values()) clearTimeout(t);
       seenSeqs.clear();
+      // Cancel any pending rejected-peer warn throttles
+      for (const t of warnedPeers.values()) clearTimeout(t);
+      warnedPeers.clear();
 
       if (socket) {
         try {
