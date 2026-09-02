@@ -462,7 +462,7 @@ PARA profile: `STANDARD_BASE_DPI` (300) for the standard profile, `ADF_CRP_BASE_
 
 - **Standard profile** scales all four `#ACQ` fields, offsets included — the
   ET-4950 ADF's `x0=69` would drift the crop window at any DPI other than 300 if
-  the offset were left unscaled. It scales the window's *edges* (near edge
+  the offset were left unscaled. It scales the window's _edges_ (near edge
   rounded, far edge floored) and derives width/height from them, rather than
   rounding offset and size independently: the ET-4950 ADF window spans the full
   advertised 8.5 in area (`69 + 2481 = 2550` at 300 DPI), and independent
