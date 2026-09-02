@@ -584,6 +584,10 @@ g.state(
       } else {
         ctx.source = "adf"; // fallback for unexpected status length
       }
+      log.debug("Source detected from first STAT", {
+        statLength: header.length,
+        source: ctx.source,
+      });
     }
     if (header.length > 0) {
       return {
