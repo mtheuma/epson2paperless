@@ -358,6 +358,26 @@ describe("composePara — resolution axis (standard profile)", () => {
     // 69 * 600/300 = 138 — offsets scale too (all four ACQ fields).
     expect(body).toContain("#ACQi0000138i0000000i0004962i0007012");
   });
+
+  it("standard profile: scaled ACQ never overshoots the source area at half-scales", () => {
+    // ET-4956 ADF, hardware-verified 2026-09-02: the 300-DPI window is
+    // x0=69 + w=2481 = 2550 = the full 8.5in ADF width (#ADFAREA d850). At
+    // 150 DPI, rounding x0 and w independently gives 35 + 1241 = 1276 — one
+    // pixel past the 1275 limit — and the firmware answers #parFAIL. Scaling
+    // the far edge (floored) and deriving w keeps the window inside the area.
+    const adf = (resolution: number): string =>
+      composePara({
+        ...baselineSpec(),
+        resolution,
+        fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
+        adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
+        source: "adf-simplex",
+      }).toString("ascii");
+    expect(adf(150)).toContain("#ACQi0000035i0000000i0001240i0001753"); // 35 + 1240 = 1275
+    expect(adf(75)).toContain("#ACQi0000017i0000000i0000620i0000876"); // 17 + 620 = 637 <= 637.5
+    expect(adf(200)).toContain("#ACQi0000046i0000000i0001654i0002337"); // exact: 1700
+    expect(adf(600)).toContain("#ACQi0000138i0000000i0004962i0007012"); // exact: 5100
+  });
 });
 
 describe("composePara — jpegQuality axis", () => {

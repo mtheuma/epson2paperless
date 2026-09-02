@@ -207,13 +207,22 @@ function composeStandardPara(spec: ParaSpec): Buffer {
   // ET-4950 ADF's x0=69 would drift the crop at any other DPI) to the chosen
   // resolution. Scale is 1 at the default, keeping the replay shields
   // byte-identical.
+  //
+  // Scale the EDGES, not the offset and size independently: the registry
+  // window can span the source's full advertised area (ET-4950 ADF: 69 +
+  // 2481 = 2550 = 8.5in x 300), and rounding x0 and w separately at a
+  // half-scale (150 DPI: 34.5 -> 35, 1240.5 -> 1241) lands one pixel past the
+  // area's edge, which the firmware answers with #parFAIL (ET-4956,
+  // hardware-verified 2026-09-02). Flooring the far edge keeps every DPI
+  // inside the area; the near edge rounds to preserve centring.
   const scale = resolution / STANDARD_BASE_DPI;
-  const scaleExtents = (e: Extents): Extents => ({
-    x0: Math.round(e.x0 * scale),
-    y0: Math.round(e.y0 * scale),
-    w: Math.round(e.w * scale),
-    h: Math.round(e.h * scale),
-  });
+  const scaleExtents = (e: Extents): Extents => {
+    const x0 = Math.round(e.x0 * scale);
+    const y0 = Math.round(e.y0 * scale);
+    const x1 = Math.floor((e.x0 + e.w) * scale);
+    const y1 = Math.floor((e.y0 + e.h) * scale);
+    return { x0, y0, w: x1 - x0, h: y1 - y0 };
+  };
   const acqExtents = spec.source === "flatbed" ? spec.fbExtents! : spec.adfExtents!;
   parts.push(renderAcq(scaleExtents(acqExtents)));
   // 10. BSZ trailing constant.
