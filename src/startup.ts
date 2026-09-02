@@ -187,15 +187,20 @@ export interface DispatchArgs {
 }
 
 export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
+  // The validated push-scan peer (daemon / one-shot) or the resolved target
+  // (scan:now); fixed-IP mode falls back to config. Resolve once so the routing
+  // IP can't diverge between detectVariant and the scanner it dispatches to.
+  const printerIp = args.printerIp ?? args.config.printerIp;
+  if (!printerIp) throw new Error("No printer address: pass a peer or set PRINTER_IP");
   const variant: Variant = await detectVariant({
-    printerIp: args.printerIp ?? args.config.printerIp!,
+    printerIp,
     port: 1865,
     override: args.config.printerProtocol,
     timeoutMs: 3000,
   });
   if (variant === "esci2") {
     return runEsci2Scan({
-      printerIp: args.printerIp ?? args.config.printerIp!,
+      printerIp,
       port: 1865,
       destId: args.config.scanDestId,
       outputDir: args.config.outputDir,
@@ -218,7 +223,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     // ignored on this path (no TLS layer); config-time Zod validation
     // rejects the combo at startup.
     return runEsci2ScanOverPlain({
-      printerIp: args.printerIp ?? args.config.printerIp!,
+      printerIp,
       port: 1865,
       destId: args.config.scanDestId,
       outputDir: args.config.outputDir,
@@ -249,7 +254,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     );
   }
   return runEsciScan({
-    printerIp: args.printerIp ?? args.config.printerIp!,
+    printerIp,
     port: 1865,
     outputDir: args.config.outputDir,
     tempDir: args.config.tempDir,

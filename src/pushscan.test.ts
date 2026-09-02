@@ -336,6 +336,44 @@ describe("createPushScanServer", () => {
     server.close();
   });
 
+  it("rejects a push-scan from an unauthorized peer without invoking the callback", async () => {
+    let called = false;
+    const server = createPushScanServer(
+      0,
+      () => {
+        called = true;
+      },
+      { validatePeer: () => false },
+    );
+    await new Promise<void>((r) => {
+      if (server.listening) r();
+      else server.once("listening", () => r());
+    });
+    const port = (server.address() as AddressInfo).port;
+
+    const body = buildSoapBody("01", "PID 11D1", "C0A8013A");
+    const request =
+      `POST /PushScan HTTP/1.0\r\n` +
+      `Content-Type: application/octet-stream\r\n` +
+      `Content-Length: ${Buffer.byteLength(body, "utf-8")}\r\n` +
+      `\r\n` +
+      body;
+
+    const client = net.createConnection(port, "127.0.0.1");
+    await new Promise<void>((r) => client.once("connect", () => r()));
+    const responsePromise = readFullHttpResponse(client);
+    client.write(request);
+    const response = await responsePromise;
+
+    // Peer is a valid IPv4 (loopback) so it clears the non-IPv4 guard and
+    // reaches validatePeer; the rejection returns ERROR and never scans.
+    expect(response).toContain("<StatusOut>ERROR</StatusOut>");
+    expect(called).toBe(false);
+
+    client.destroy();
+    server.close();
+  });
+
   it("handles body arriving in multiple TCP chunks", async () => {
     let callbackInfo: PushScanInfo | null = null;
     const server = createPushScanServer(0, (info) => {

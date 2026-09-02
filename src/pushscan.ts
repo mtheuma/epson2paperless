@@ -81,7 +81,6 @@ export interface PushScanInfo {
    */
   duplex: boolean;
   action: PushScanAction;
-  peerAddress: string;
 }
 
 /** Simple regex-based extraction from the SOAP body — no XML parser needed. */
@@ -100,7 +99,6 @@ export function parsePushScanRequest(body: string): PushScanInfo {
     ipAddress: getId("IPAddressIn"),
     duplex,
     action,
-    peerAddress: "",
   };
 }
 
@@ -187,7 +185,7 @@ export function resolveEffectiveAction(
   return null;
 }
 
-export type PushScanCallback = (info: PushScanInfo) => void;
+export type PushScanCallback = (info: PushScanInfo, peerAddress: string) => void;
 
 export interface PushScanPreResponseContext {
   kind: PushScanRequestKind;
@@ -292,6 +290,12 @@ export function createPushScanServer(
         const verMatch = headers.match(/x-protocol-version\s*:\s*(\S+)/i);
         const protocolVersion = verMatch ? verMatch[1] : "2.00";
 
+        if (!peerAddress) {
+          log.warn(`Rejecting non-IPv4 push-scan peer ${peer}`);
+          socket.destroy();
+          return;
+        }
+
         const sendResponse = (status: "OK" | "ERROR") => {
           // The pre-response hook can run for a few hundred ms (an out-of-band
           // job-control round-trip); if the printer closed the trigger socket
@@ -315,16 +319,10 @@ export function createPushScanServer(
             log.info(
               `Scan requested: product=${info.productName}, id=${info.pushScanId}, job=${info.jobNumber}`,
             );
-            onPushScan(info);
+            onPushScan(info, peerAddress);
           });
         };
 
-        if (!peerAddress) {
-          log.warn(`Rejecting non-IPv4 push-scan peer ${peer}`);
-          socket.destroy();
-          return;
-        }
-        info.peerAddress = peerAddress;
         if (options.validatePeer && !(await options.validatePeer(peerAddress))) {
           log.warn(`Rejecting push-scan from unauthorized peer ${peerAddress}`);
           sendResponse("ERROR");

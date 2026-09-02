@@ -38,7 +38,7 @@ async function main() {
 
   const pushscanServer = createPushScanServer(
     2968,
-    (info) => {
+    (info, peerAddress) => {
       const scan = resolveScanDispatch(info, config);
       if (scan === null) {
         log.warn(
@@ -60,7 +60,7 @@ async function main() {
         action: scan.action,
         paperless: buildPaperlessOptions(config),
         productName: info.productName,
-        printerIp: info.peerAddress,
+        printerIp: peerAddress,
       });
       void inflight.track(scanPromise);
       scanPromise.then(
