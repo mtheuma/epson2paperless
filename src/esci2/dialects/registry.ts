@@ -100,8 +100,13 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       cmxClass: { jpg: null, pdf: null },
       optionalSegments: { qit: true, cct: true },
       toneCurve: "et4950-family",
-      // Frida-captured replay fixtures drive 300 DPI end-to-end.
-      verifiedWireDpis: [300],
+      // 300: Frida-captured replay fixtures drive it end-to-end. The rest:
+      // ET-4956 hardware verification, 2026-09-02 (issue #81 runbook) —
+      // flatbed at 75/150/600/1200 and ADF at 75/150/200/600 all accepted on
+      // the wire with linearly-scaled dimensions and centred registration
+      // marks; 1200 is flatbed-only (the ADF source list caps at 600, and a
+      // 1200 request on the ADF was confirmed to cap to 600).
+      verifiedWireDpis: [75, 150, 200, 300, 600, 1200],
     },
   ],
   [

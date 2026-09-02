@@ -377,26 +377,28 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
   it("PARA rejects a non-OK #par token with an actionable error naming the wire DPI and inviting removal of SCAN_RESOLUTION when it was set explicitly and the resulting wire DPI is unverified", () => {
     const state = esci2Graph.states.PARA;
     if (state.kind !== "decision") return;
-    const ctx = makeCtx({ resolution: 600, wireDpi: 600 });
+    // 100 is CAPA-advertised on the ET-4950 but outside its verifiedWireDpis
+    // (75/150/200/300/600/1200 are hardware-verified as of 2026-09-02).
+    const ctx = makeCtx({ resolution: 100, wireDpi: 100 });
     const ngPayload = Buffer.from("PARAx0000000#parNG  ", "ascii");
     const result = state.decide(ctx, { type: 0xa000, payload: ngPayload });
     expect("error" in result).toBe(true);
     if (!("error" in result)) return;
     expect(result.error.message).toMatch(/PARA rejected/);
-    expect(result.error.message).toMatch(/600/);
+    expect(result.error.message).toMatch(/100/);
     expect(result.error.message).toMatch(/SCAN_RESOLUTION/);
   });
 
   it("PARA rejection still includes a hint on an unverified wire DPI even when resolution was left at the dialect default (the real suspect is the wire DPI, not how it was set) — but drops the 'remove SCAN_RESOLUTION' clause since nothing was set to remove", () => {
     const state = esci2Graph.states.PARA;
     if (state.kind !== "decision") return;
-    const ctx = makeCtx({ resolution: undefined, wireDpi: 600 });
+    const ctx = makeCtx({ resolution: undefined, wireDpi: 100 });
     const ngPayload = Buffer.from("PARAx0000000#parNG  ", "ascii");
     const result = state.decide(ctx, { type: 0xa000, payload: ngPayload });
     expect("error" in result).toBe(true);
     if (!("error" in result)) return;
     expect(result.error.message).toMatch(/PARA rejected/);
-    expect(result.error.message).toMatch(/600/);
+    expect(result.error.message).toMatch(/100/);
     expect(result.error.message).toMatch(/report the result \(issue #81\)/);
     expect(result.error.message).not.toMatch(/SCAN_RESOLUTION/);
     expect(result.error.message).not.toMatch(/remove/);
@@ -664,16 +666,17 @@ describe("esci2Graph buildParaSend — wire DPI selection + JPEG quality clamp (
   it("warns once when an explicit resolution is outside verifiedWireDpis", () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      // ET-4950 registry entry is seeded verifiedWireDpis: [300]; the CAPA
-      // fixture advertises 600 exactly, so this resolves cleanly on the wire
-      // but is still unverified by our own bar.
+      // The ET-4950 CAPA fixture advertises 100 exactly, so it resolves
+      // cleanly on the wire, but 100 is outside the entry's verifiedWireDpis
+      // (75/150/200/300/600/1200 hardware-verified 2026-09-02) — still
+      // unverified by our own bar.
       const { ctx } = runParaBuild({
-        resolution: 600,
+        resolution: 100,
         capaTokens: ET4950_CAPA_TOKENS,
         source: "adf",
         duplex: false,
       });
-      expect(ctx.wireDpi).toBe(600);
+      expect(ctx.wireDpi).toBe(100);
       expect(warnSpy).toHaveBeenCalled();
       const messages = warnSpy.mock.calls.map((c) => String(c[0])).join(" ");
       expect(messages).toMatch(/unverified/);

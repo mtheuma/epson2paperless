@@ -254,8 +254,11 @@ describe("REGISTRY", () => {
 
   it("pins verifiedWireDpis per model (committed replay fixture or documented hardware validation -> that DPI; neither -> empty)", () => {
     const expected: Record<string, number[]> = {
-      // ET-4950 / ET-3950 / ET-4956 — Frida-captured replay fixtures at 300 DPI.
-      "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2": [300],
+      // ET-4950 / ET-3950 / ET-4956 — Frida-captured replay fixtures at 300 DPI;
+      // 75/150/200/600/1200 hardware-verified on an ET-4956 (2026-09-02, #81).
+      "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2": [
+        75, 150, 200, 300, 600, 1200,
+      ],
       // ET-2750 / XP-4100 — pcap-extracted replay fixture at 300 DPI.
       de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7: [300],
       // XP-7100 — pcap-extracted replay fixture at 300 DPI.
