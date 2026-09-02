@@ -129,7 +129,7 @@ The SANE `epsonds` backend provides a useful cross-reference: its passthru frami
 
 During the pre-mode-switch init sequence, the driver performs two capability discovery cycles. The first follows the initial `FS Y` ACK and sends `INFO → CAPA → FIN`; the second follows the `FS Z` ACK and sends `INFO → CAPA → RESA → FIN`. (The `@` prefix in the Frida capture naming convention is not a wire prefix — the actual command bytes on the wire are `INFOx0000000` and `CAPAx0000000` in the ESC/I-2 format.) These cycles appear in the Frida captures with consistent counts across all scan scenarios (2 × INFO, 2 × CAPA, 1 × RESA), which suggests they are mandatory initialization steps rather than optional feature queries.
 
-The INFO and CAPA replies declare the scanner's capabilities (supported resolutions, colour modes, document sources, and similar parameters). In a host-initiated pull-scan flow, the way the vendor driver's own UI works, these values would populate a scan dialog. In the push-scan flow implemented here, INFO is consumed and discarded, while CAPA is hashed into a fingerprint that resolves the printer's registry entry (see [How printer-model differences are handled](#how-printer-model-differences-are-handled)). The PARA payload is **not** dynamically constructed from the advertised capabilities; it is assembled by `composePara` from the resolved entry's pinned data (the named gamma / CMX classes, byte-transcribed from that model's capture). This is a deliberate simplification: every supported printer's capabilities are fixed in firmware for the parameters this project uses (colour and JPEG, plus a fixed 300 dpi for panel-driven models; the ADF-only FF-680W and DS-575W take their scan resolution from `SCAN_RESOLUTION`), so runtime negotiation would only restate what the captures already pin, at the cost of more reverse-engineering work and no change to the end result.
+The INFO and CAPA replies declare the scanner's capabilities (supported resolutions, colour modes, document sources, and similar parameters). In a host-initiated pull-scan flow, the way the vendor driver's own UI works, these values would populate a scan dialog. In the push-scan flow implemented here, INFO is consumed and discarded, while CAPA is hashed into a fingerprint that resolves the printer's registry entry (see [How printer-model differences are handled](#how-printer-model-differences-are-handled)). Most of the PARA payload is **not** dynamically constructed from the advertised capabilities: colour handling (gamma / CMX classes, `gmm`, optional-segment flags) is assembled by `composePara` from the resolved entry's pinned data, byte-transcribed from that model's capture. This is a deliberate simplification: every supported printer's colour parameters are fixed in firmware for what this project needs, so negotiating them would only restate what the captures already pin, at the cost of more reverse-engineering work and no change to the end result. Resolution and JPEG quality are the exception — CAPA's `#RSMLIST` / `#RSSLIST` / `#ADFRSMSLIST` / `#FB RSMSLIST` / `#JPGRANG` segments are parsed and drive `SCAN_RESOLUTION` / `JPEG_QUALITY` selection at PARA build time (see [Scan resolution and JPEG quality](#scan-resolution-and-jpeg-quality)), because a single fixed DPI doesn't serve every use case the way a fixed colour curve does.
 
 ---
 
@@ -273,7 +273,7 @@ The DS-575W is the FF-680W's ADF-only sibling and reuses the same `adf-crp` PARA
 
 PARA bodies are assembled at run time by `composePara` (`src/esci2/para-composer.ts`) from the resolved registry entry (`src/esci2/dialects/registry.ts`) plus the source / action axes — see [How printer-model differences are handled](#how-printer-model-differences-are-handled). The per-dialect byte data lives in `src/esci2/data/gamma-classes.ts` and `cmx-classes.ts`, each class byte-transcribed verbatim from that model's capture; none of it is hardcoded in `src/esci2/commands.ts` (that file holds only the command / header builders). Dialects differ by more than length: gamma constant (`#GMMUG10` for the ET-4950 family and ET-2950; `#GMMUG18` for every other entry), optional-segment presence (`#QITOFF` / `#CCTCOL`, flagged per entry), and a model-specific inline `#CMXUM08` ICC-matrix block — so no dialect's body can be derived by editing another's.
 
-Within a dialect, the per-source variants differ in three places: the source token (`#FB ` / `#ADF` / `#ADFDPLX`), the `#PAG` page-count token (present for ADF, omitted for flatbed), and the `#ACQ` y-start offset (`0000069` for ADF, `0000000` for flatbed). The remainder — the three RGB gamma tables (`#GMTRED` / `#GMTGRN` / `#GMTBLU`), CMX colour-correction matrix, scan-area extents, and 1 MB buffer-size token — is byte-identical across sources within a dialect. The FF-680W and DS-575W (`adf-crp` profile) are the exception to this structure: their sides axis is the presence of a `DPLX` token inside the `#ADFCRP…DFL1` prefix, and their `#RSM` / `#RSS` / `#ACQ` fields scale with `SCAN_RESOLUTION` rather than being byte-identical across the resolution axis. The DS-575W additionally varies its `#COL` code and gamma LUT with `SCAN_COLOR_MODE`.
+Within a dialect, the per-source variants differ in three places: the source token (`#FB ` / `#ADF` / `#ADFDPLX`), the `#PAG` page-count token (present for ADF, omitted for flatbed), and the `#ACQ` x-start offset (`0000069` for ADF, `0000000` for flatbed). The remainder — the three RGB gamma tables (`#GMTRED` / `#GMTGRN` / `#GMTBLU`), CMX colour-correction matrix, and 1 MB buffer-size token — is byte-identical across sources within a dialect. (Scan-area extents and the `#RSM` / `#RSS` resolution fields scale with `SCAN_RESOLUTION` for every dialect — see [Scan resolution and JPEG quality](#scan-resolution-and-jpeg-quality) — so at the default DPI they're byte-identical across sources too, but that's a resolution-axis property, not a per-source one.) The FF-680W and DS-575W (`adf-crp` profile) are the exception to this per-source structure: their sides axis is the presence of a `DPLX` token inside the `#ADFCRP…DFL1` prefix rather than a distinct source token. The DS-575W additionally varies its `#COL` code and gamma LUT with `SCAN_COLOR_MODE`.
 
 ### Sides: 1-sided vs 2-sided
 
@@ -389,6 +389,152 @@ reports `0x01` there, never the WF-3620's `0x81`, and `legacyDetectSource` reads
 rather than an ACK, with no unlock packet (as on the XP-620), and the state sits
 in `cleanupStates` so a connection drop during teardown still saves a page that
 has already flushed.
+
+## Scan resolution and JPEG quality
+
+`SCAN_RESOLUTION` (50–1200 DPI, optional) and `JPEG_QUALITY` (1–100, default 90) are
+universal knobs, validated once in `src/config.ts`. On ESC/I-2 both are resolved
+per-session against whatever the printer's CAPA reply actually advertises; on
+legacy ESC/I neither has a wire arm at all (see below).
+
+### CAPA-advertised resolution and quality lists
+
+CAPA carries four resolution-related segments and one quality-range segment,
+parsed by `parseCapaTokens` (`src/esci2/capabilities.ts`) into `CapaTokens`:
+
+- `#RSMLIST` / `#RSSLIST` → `rsmList` / `rssList` — the printer's main-scan and
+  sub-scan resolution lists.
+- `#ADFRSMSLIST` / `#FB RSMSLIST` → `adfRsmsList` / `fbRsmsList` — source-specific
+  resolution lists.
+- `#JPGRANG` → `jpgRange.{min,max}` — the JPEG quality range the printer accepts
+  in `#JPGdNNN`.
+
+Each list mixes Epson's two numeric encodings in one segment — 3-digit `dNNN` and
+7-digit `iNNNNNNN` — which is why `parseNumericList` matches both forms with a
+single regex (the ET-4950's own `#RSMLIST` does this).
+
+### Selection rule: the source list is a cap, not an allowed-set
+
+`advertisedDpiSet` (`src/esci2/resolution.ts`) computes the DPI set a scan may
+request on the wire for the detected source. The base set comes from whichever
+global list(s) the printer actually advertised: `rsmList ∩ rssList` when both
+`#RSMLIST` and `#RSSLIST` are present, or whichever single one is present alone.
+When the source's own list (`adfRsmsList` for ADF, `fbRsmsList` for flatbed) is
+also present, its **maximum** caps that base set — values above the cap are
+dropped — but the source list is never treated as the enumerable set of allowed
+values itself. That cap rule presumes a global list to cap in the first place:
+when neither `#RSMLIST` nor `#RSSLIST` is advertised, there's no base set to
+cap, so `advertisedDpiSet` falls back to using the source list directly as the
+allowed set — the one case where it is enumerable rather than a ceiling.
+
+This distinction is capture-proven, not theoretical: the FF-680W and DS-575W both
+advertise `#ADFRSMSLISTd300d600` (300 and 600 only), yet Epson's own driver has
+been captured scanning them at 200 DPI (FF-680W) and 400 DPI (DS-575W) —
+neither of which appears in that list. Reading `adfRsmsList` as the allowed-set
+would reject both DPIs outright. Reading its maximum (600) as a ceiling on
+`rsmList ∩ rssList` instead reproduces the captured behaviour while still
+enforcing each source's real resolution ceiling — e.g. the ET-4950's ADF tops
+out at 600 DPI where its flatbed reaches 1200, same firmware, different physical
+transport path.
+
+`selectWireDpi` then resolves the target DPI against that set:
+
+1. **Exact match** → requested directly on the wire.
+2. **No exact match, but a higher value is advertised** → the smallest advertised
+   value above the target is requested on the wire; the scan is downsampled
+   host-side afterward (see [Host-side downsample](#host-side-downsample)).
+   Never upscales.
+3. **Target above every advertised value** → the wire request is capped at the
+   advertised maximum, with an info log naming both the requested and the actual
+   DPI.
+
+Dialects with no advertised lists at all (CAPA-silent or not yet probed) fall
+back to a single-element set: the PARA profile's pinned default (300 DPI for the
+standard profile, 200 DPI for `adf-crp`) — so an unrecognised target still goes
+through full selection semantics instead of being silently discarded.
+
+### Extent scaling from the registry reference DPI
+
+The registry's `fbExtents` / `adfExtents` are pinned at a fixed reference DPI per
+PARA profile: `STANDARD_BASE_DPI` (300) for the standard profile, `ADF_CRP_BASE_DPI`
+(200) for `adf-crp` (FF-680W / DS-575W). `composePara` scales both the `#RSM` /
+`#RSS` resolution fields and the `#ACQ` extents by `resolution / referenceDpi`:
+
+- **Standard profile** scales all four `#ACQ` fields, offsets included — the
+  ET-4950 ADF's `x0=69` would drift the crop window at any DPI other than 300 if
+  the offset were left unscaled. It scales the window's _edges_ (near edge
+  rounded, far edge floored) and derives width/height from them, rather than
+  rounding offset and size independently: the ET-4950 ADF window spans the full
+  advertised 8.5 in area (`69 + 2481 = 2550` at 300 DPI), and independent
+  rounding at 150 DPI (`35 + 1241 = 1276`) lands one pixel past the 1275-px
+  edge, which the firmware rejects with `#parFAIL` (ET-4956, hardware-verified).
+- **`adf-crp` profile** scales only width/height; `x0`/`y0` pass through
+  unscaled. Every `adf-crp` registry entry's origin is `0,0` today, so this is
+  currently unobservable on the wire, but it is a genuine divergence from the
+  standard profile's rule rather than an oversight the two profiles happen to
+  share.
+
+### JPEG quality on the wire
+
+`JPEG_QUALITY` now also drives the ESC/I-2 `#JPGdNNN` PARA segment, clamped to
+`jpgRange` (when the printer advertised one) before it reaches the wire — the
+host-side JPEG encode (finalize, `POST_PROCESS=document`, downsample) always uses
+the unclamped value. The default of 90 reproduces the pre-existing fixed
+`#JPGd090` bytes exactly, so every committed replay fixture stays byte-identical
+without needing a fixture update. The legacy ESC/I path has no equivalent wire
+segment — `JPEG_QUALITY` there was, and remains, host-encode only.
+
+### `verifiedWireDpis` and the explicit-only warning
+
+Each ESC/I-2 registry entry carries `verifiedWireDpis: number[]` — DPIs backed by
+either a committed replay fixture or a documented hardware report (a README
+compatibility row or a linked issue). When an **explicit** `SCAN_RESOLUTION`
+resolves (via `selectWireDpi`) to a wire DPI outside that list, `buildParaSend`
+logs one warning inviting a report on issue #81. The scan still proceeds — this
+is a heads-up, not a guard. A model's own pinned default DPI never triggers the
+warning, even when it isn't in `verifiedWireDpis` itself: only a user-supplied
+`SCAN_RESOLUTION` is something the user can act on by filing a report.
+
+### PARA rejection
+
+If the printer's `#par` token in the PARA reply is anything other than `OK`, the
+`PARA` state resolves to an error rather than continuing. When the wire DPI
+actually in use is outside the model's `verifiedWireDpis` — whether it got
+there via an explicit `SCAN_RESOLUTION` or the dialect's own unverified pinned
+default — the error names that wire DPI and suggests removing the override (if
+one was set) or reporting the outcome (issue #81) — there is no automatic retry
+at a different DPI.
+
+### Legacy ESC/I: fallback-only
+
+The legacy path (WF-3620 family, XP-620, ET-2550) has no resolution arm on the
+wire at all: the cross-product of DPI × format × dialect was never captured
+across the board, and the stream-config trailer's derivation from resolution is
+unknown, so the wire bytes are always the dialect's fixed values regardless of
+`SCAN_RESOLUTION`. `LegacyDialectEntry.deliveredDpi` pins what each dialect
+actually delivers: 600 DPI for WF-3620 JPG / 300 for WF-3620 PDF (the firmware
+locks resolution to the panel's format choice — see
+[Action: JPG / PDF / Preview](#action-jpg--pdf--preview)); a flat 300 DPI for
+XP-620 and ET-2550. `SCAN_RESOLUTION` below what a dialect delivers triggers a
+host-side downsample at finalize — the same mechanism as the ESC/I-2
+smaller-wire-DPI-then-downsample arm above. At or above the delivered DPI, the
+fixed DPI is used as-is, with an info log when it's strictly above (mirroring the
+ESC/I-2 capped-at-max log).
+
+### Host-side downsample
+
+`downsampleJpeg` (`src/postprocess/downsample.ts`) is the fallback arm both paths
+share whenever the wire can't reach the target DPI. It computes the two target
+dimensions independently — `Math.round(px * toDpi/fromDpi)` per axis, rather than
+deriving one from the other's rounded value — because at a non-half ratio (e.g.
+300→50 DPI, ratio 1/6) a height derived from a rounded width would be off by a
+row: a 2481×3506 page must become 414×584, not 414×585. It stamps the JFIF
+density to the new DPI and re-applies the source's EXIF orientation (duplex back
+pages carry `Orientation=3`), and is folded into whichever re-encode pass
+`POST_PROCESS=document` or `SCAN_COLOR_MODE`'s host-side greyscale conversion
+already runs, rather than adding a second decode/encode cycle of its own.
+Downsample only — it throws if asked to upscale, which the wire-DPI selection
+rule above guarantees never happens.
 
 ## ESC/I variant (WF-3620)
 

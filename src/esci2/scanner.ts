@@ -15,7 +15,6 @@ import { withEsci2UnlockOnDestroy, withTlsErrorLabels } from "./transport.js";
 import { supportsWireGrayscale } from "./dialects/registry.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
 import {
-  DEFAULT_SCAN_RESOLUTION,
   DEFAULT_JPEG_QUALITY,
   resolveWireColorMode,
   resolveGrayscaleConversion,
@@ -36,7 +35,11 @@ export interface ScanSession {
   jpegQuality?: number;
   /** PRINTER_WHITE_POINT — device cast reference for the auto-colour verdict. */
   whitePoint?: WhitePoint;
-  /** Scan resolution in DPI (adf-crp dialects: FF-680W, DS-575W; default applied at config layer). */
+  /**
+   * Universal target DPI; undefined = each dialect's pinned default.
+   * Resolved per-session against the printer's CAPA-advertised resolution
+   * lists (ESC/I-2) or the fixed delivered DPI (legacy ESC/I).
+   */
   resolution?: number;
   /**
    * Colour mode (default at config layer). "grayscale" changes the wire
@@ -89,7 +92,7 @@ function buildInitialCtx(session: ScanSession, transport: "tls" | "plain"): Esci
     source: transport === "plain" ? "flatbed" : "adf",
     transport,
     action: session.action,
-    resolution: session.resolution ?? DEFAULT_SCAN_RESOLUTION,
+    resolution: session.resolution,
     // "auto" is a post-processing decision; on the wire it always scans colour.
     colorMode: resolveWireColorMode(session.colorMode),
     initPollIteration: 0,
@@ -101,7 +104,11 @@ function buildInitialCtx(session: ScanSession, transport: "tls" | "plain"): Esci
     tprDeclaredLength: 0,
     infoBody: Buffer.alloc(0),
     capaBody: Buffer.alloc(0),
+    capaTokens: undefined,
     entry: undefined,
+    jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
+    wireDpi: undefined,
+    downsampleToDpi: undefined,
   };
 }
 
@@ -189,6 +196,16 @@ function makeOutputResolvers(session: ScanSession) {
     // invariant must fail loudly here, not silently fall back to rotating —
     // the wrong-guess direction is exactly the inverted-backs bug of #128.
     resolveBackPageRotated: (ctx: Esci2Ctx) => ctx.entry!.duplexBackRotated,
+    // ctx.downsampleToDpi is set at buildParaSend once the wire DPI selection
+    // resolves (undefined when the wire hit the target exactly or was capped
+    // at the model's max). ctx.wireDpi is the DPI actually requested on the
+    // wire — the "from" side of the ratio. Both must be known to host-
+    // downsample a page when the wire couldn't reach the requested
+    // SCAN_RESOLUTION.
+    resolveDownsample: (ctx: Esci2Ctx) =>
+      ctx.downsampleToDpi !== undefined && ctx.wireDpi !== undefined
+        ? { fromDpi: ctx.wireDpi, toDpi: ctx.downsampleToDpi }
+        : undefined,
   };
 }
 

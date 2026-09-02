@@ -183,6 +183,18 @@ describe("correctDocumentImage", () => {
     expect(out.equals(jpeg)).toBe(true);
   });
 
+  it("guard: a page that trips the low-paper guard still downsamples (SCAN_RESOLUTION must not be silently ignored)", async () => {
+    // Same full-bleed dark image as the guard test above — applied=false —
+    // but with a downsample pending, the pure no-op skip must not fire.
+    const jpeg = await solidJpeg(64, 64, [60, 90, 120]);
+    const out = await correctDocumentImage(jpeg, 90, undefined, { fromDpi: 300, toDpi: 150 });
+    expect(out).not.toBe(jpeg);
+    const meta = await sharp(out).metadata();
+    expect(meta.width).toBe(32);
+    expect(meta.height).toBe(32);
+    expect(meta.density).toBe(150);
+  });
+
   it("preserves the input's JFIF density on the re-encode", async () => {
     const w = 64,
       h = 64,
@@ -201,6 +213,19 @@ describe("correctDocumentImage", () => {
     const out = await correctDocumentImage(jpeg, 90);
     const outMeta = await sharp(out).metadata();
     expect(outMeta.density).toBe(300);
+  });
+
+  it("folds a downsample into the single re-encode alongside the paper-white clip", async () => {
+    const jpeg = await solidJpeg(64, 64, [222, 220, 244]);
+    const out = await correctDocumentImage(jpeg, 90, undefined, { fromDpi: 300, toDpi: 150 });
+    const { data, info } = await sharp(out).raw().toBuffer({ resolveWithObject: true });
+    expect(info.width).toBe(32);
+    expect(info.height).toBe(32);
+    // the paper-white clip still ran on the resized output
+    const c = (info.width * 16 + 16) * 3;
+    expect(data[c]).toBeGreaterThan(250);
+    const meta = await sharp(out).metadata();
+    expect(meta.density).toBe(150);
   });
 
   it("bakes EXIF Orientation=3 into pixels so duplex back pages are not un-rotated", async () => {

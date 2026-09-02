@@ -496,6 +496,104 @@ describe("runScanSession (engine pump)", () => {
     fs.rmSync(outputDir, { recursive: true, force: true });
   });
 
+  it("passes resolveDownsample's return value through to finalizeSession's downsample arg", async () => {
+    // Proves the RunScanSessionOpts.resolveDownsample plumbing actually
+    // reaches finalizeSession — the esci2/scanner.ts resolver was being
+    // silently dropped before this option existed (object spread bypasses
+    // excess-property checks on an untyped opts field).
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+
+    const outputTail = await import("./output-tail.js");
+    let capturedDownsample: unknown;
+    const spy = vi.spyOn(outputTail, "finalizeSession").mockImplementation((opts) => {
+      capturedDownsample = opts.downsample;
+      // Don't call through — this ctx's fake page isn't a real JPEG and the
+      // real pipeline isn't under test here, only the opts pass-through.
+      return Promise.resolve();
+    });
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "DONE",
+          flushPage: {
+            side: "front",
+            encode: () => Promise.resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+          },
+        },
+      },
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+      resolveDownsample: () => ({ fromDpi: 300, toDpi: 150 }),
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    expect(capturedDownsample).toEqual({ fromDpi: 300, toDpi: 150 });
+
+    spy.mockRestore();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
+  it("passes downsample: undefined when resolveDownsample is omitted", async () => {
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+
+    const outputTail = await import("./output-tail.js");
+    let capturedDownsample: unknown = "unset";
+    const spy = vi.spyOn(outputTail, "finalizeSession").mockImplementation((opts) => {
+      capturedDownsample = opts.downsample;
+      return Promise.resolve();
+    });
+
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "DONE",
+          flushPage: {
+            side: "front",
+            encode: () => Promise.resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+          },
+        },
+      },
+    });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "jpg",
+      // resolveDownsample intentionally omitted
+    });
+
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    expect(capturedDownsample).toBeUndefined();
+
+    spy.mockRestore();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
   it("rejects with 'zero image chunks' when DONE is reached without any flushPage (production path)", async () => {
     const transport = new FakeTransport();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));

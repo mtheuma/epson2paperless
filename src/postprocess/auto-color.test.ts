@@ -433,6 +433,31 @@ describe("correctDocumentImageAuto", () => {
     expect(grayscale).toBe(true);
     expect((await sharp(jpeg).metadata()).channels).toBe(1);
   });
+
+  it("folds a downsample into the single-channel re-encode (grayscale resize branch)", async () => {
+    // conversion="force" always converts, so this exercises document.ts's
+    // `if (grayscale) { ... if (resizeDims) grayPipeline.resize(...) ... }`
+    // branch specifically — the colour-encode resize branch just below it is
+    // already covered by document.test.ts's downsample fold tests.
+    const src = await encode(colourPagePixels(), 300);
+    const { jpeg, grayscale } = await correctDocumentImageAuto(
+      src,
+      90,
+      undefined,
+      "force",
+      undefined,
+      { fromDpi: 300, toDpi: 150 },
+    );
+    expect(grayscale).toBe(true);
+    const meta = await sharp(jpeg).metadata();
+    expect(meta.channels).toBe(1);
+    expect(meta.density).toBe(150);
+    // W=400,H=520 at ratio 1/2 fold to exactly 200x260 in one pass; a chained
+    // double-resize (e.g. the fold running and then a second standalone
+    // downsample on top) would instead halve again, to 100x130.
+    expect(meta.width).toBe(200);
+    expect(meta.height).toBe(260);
+  });
 });
 
 describe("correctDocumentImage with a single-channel source", () => {

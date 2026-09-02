@@ -259,6 +259,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     forcedSource: args.config.esciForceSource ?? null,
     format: args.action,
     jpegQuality: args.config.jpegQuality,
+    resolution: args.config.scanResolution,
     whitePoint: args.config.printerWhitePoint,
     postProcess: args.config.postProcess,
     grayscaleConversion,

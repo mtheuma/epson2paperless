@@ -72,8 +72,11 @@ export function setJpegOrientation(jpeg: Buffer, orientation: ExifOrientation): 
  * If a JFIF APP0 segment exists its density fields are patched in place (on a
  * copy); sharp's default mozjpeg output carries no APP0 at all, so when none
  * is found a minimal 18-byte JFIF APP0 is inserted immediately after SOI.
- * Call this BEFORE setJpegOrientation — the EXIF prepend shifts every later
- * segment. Throws on a non-JPEG input.
+ * Either call order relative to setJpegOrientation works: both functions
+ * anchor their insert at SOI by offset, so density-then-orientation yields
+ * SOI/APP1/APP0 and the reverse (the finalize-time stampDpi path, where
+ * orientation was stamped at page flush) yields SOI/APP0/APP1 — both read
+ * back correctly. Throws on a non-JPEG input.
  */
 export function setJfifDensity(jpeg: Buffer, dpi: number): Buffer {
   if (jpeg.length < 2 || jpeg[0] !== 0xff || jpeg[1] !== 0xd8) {

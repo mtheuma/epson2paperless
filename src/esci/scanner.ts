@@ -16,6 +16,10 @@ import { withRawSocketCleanClose } from "./transport.js";
 import type { PostProcessProfile } from "../postprocess/index.js";
 import type { GrayscaleConversion } from "../config.js";
 import type { LegacyDialectEntry } from "./dialects/entry.js";
+import { createLogger } from "../logger.js";
+import { selectWireDpi } from "../esci2/resolution.js";
+
+const log = createLogger("scanner-esci");
 
 export { appendImageChunk } from "./graph.js";
 
@@ -33,6 +37,14 @@ export interface LegacyScanSession {
   forcedSource: Source | null;
   format: Format;
   jpegQuality: number;
+  /**
+   * SCAN_RESOLUTION. The legacy wire has no resolution arm — the fixed raster
+   * per format/dialect (LegacyDialectEntry.deliveredDpi) is always what's
+   * requested on the wire. When set below what the dialect delivers, pages
+   * are downsampled host-side at finalize; at or above, the dialect's fixed
+   * DPI is delivered as-is (with an info log when it's strictly above).
+   */
+  resolution?: number;
   /** PRINTER_WHITE_POINT — device cast reference for the auto-colour verdict. */
   whitePoint?: WhitePoint;
   postProcess?: PostProcessProfile;
@@ -141,6 +153,47 @@ export async function runEsciScan(
     // Known up front on this path (no dialect-dependent wire capability),
     // but the engine resolves it from the ctx like the tone curve.
     resolveGrayscaleConversion: () => session.grayscaleConversion ?? "off",
+    // The legacy wire has no resolution arm at all — deliveredDpi is a pure
+    // function of format (and, for some future dialect, source), so this
+    // could read session.format directly, but it reads ctx like the ESC/I-2
+    // resolvers to stay resilient if a future dialect ever varies delivered
+    // DPI by the detected source too. Delegates the actual selection to the
+    // shared `selectWireDpi` (src/esci2/resolution.ts) with a single-element
+    // advertised set — the fixed delivered DPI is the only DPI this wire can
+    // ever produce, so "exact"/"smallest-above"/"capped" collapse to
+    // "at delivered"/"below delivered"/"above delivered" respectively.
+    resolveDownsample: (ctx: EsciCtx) => {
+      if (session.resolution === undefined) return undefined;
+      const delivered = ctx.entry.deliveredDpi({ source: ctx.source, format: ctx.format });
+      const sel = selectWireDpi(session.resolution, [delivered]);
+      if (sel.downsampleToDpi !== undefined) {
+        return { fromDpi: sel.wireDpi, toDpi: sel.downsampleToDpi };
+      }
+      if (sel.cappedFrom !== undefined) {
+        log.info(
+          `SCAN_RESOLUTION=${session.resolution} exceeds what this model delivers ` +
+            `(${delivered} DPI ${ctx.format}) — delivering ${delivered} DPI`,
+        );
+      }
+      return undefined;
+    },
+    // Lossless density-only stamp for the explicit no-resize cases
+    // (resolveDownsample above returns undefined): exact match, or capped
+    // above the delivered DPI. Without it those pages ship with no real
+    // JFIF density and read as 72 DPI, even though a target one DPI lower
+    // gets downsampled — and correctly stamped — instead. Reuses the same
+    // selectWireDpi call as resolveDownsample rather than sharing state
+    // with it; the resolvers never run concurrently, so recomputing is
+    // cheap and keeps each resolver independently readable. ESC/I-2 has no
+    // equivalent resolver — its JPEGs are printer-encoded passthrough.
+    resolveStampDpi: (ctx: EsciCtx) => {
+      if (session.resolution === undefined) return undefined;
+      const delivered = ctx.entry.deliveredDpi({ source: ctx.source, format: ctx.format });
+      const sel = selectWireDpi(session.resolution, [delivered]);
+      // The value is the DELIVERED DPI, not session.resolution — a capped
+      // 800 DPI request still delivers (and must be stamped) 600.
+      return sel.downsampleToDpi !== undefined ? undefined : delivered;
+    },
   });
 
   // Fire the public onSourceDetected hook only on success paths AND only
