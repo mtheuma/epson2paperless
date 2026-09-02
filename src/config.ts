@@ -69,6 +69,28 @@ export function resolveGrayscaleConversion(
 const ipv4Regex =
   /^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9][0-9]|[0-9])$/;
 
+// RFC 1123 hostname: dot-joined labels of 1-63 chars from [A-Za-z0-9-], each
+// neither starting nor ending with a hyphen. The label regex encodes the
+// length and hyphen-edge rules in one pass (first/last char alphanumeric,
+// {0,61} caps the middle so the whole label stays <=63).
+const hostnameLabelRegex = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$/;
+
+// A hostname whose every dotted segment is numeric is an IPv4 literal, not a
+// name: dns.lookup numeric-parses it, and leading-zero octets (192.168.01.1)
+// silently rebind to a different address. Reject here and point at PRINTER_IP.
+function isAllNumericDotted(host: string): boolean {
+  return host.split(".").every((label) => /^\d+$/.test(label));
+}
+
+// Validate label-by-label rather than with one regex: the 253-char total cap
+// and per-label rules don't fit a single portable pattern. One optional
+// trailing dot (the FQDN form, printer.home.lan.) is stripped before checking.
+function isValidHostname(host: string): boolean {
+  const name = host.endsWith(".") ? host.slice(0, -1) : host;
+  if (name.length === 0 || name.length > 253) return false;
+  return name.split(".").every((label) => hostnameLabelRegex.test(label));
+}
+
 const configSchema = z
   .object({
     printerIp: z.string().regex(ipv4Regex, "PRINTER_IP must be a valid IPv4 address").optional(),
@@ -76,10 +98,11 @@ const configSchema = z
       .string()
       .trim()
       .min(1, "PRINTER_HOSTNAME must not be empty")
-      .regex(
-        /^[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$/,
-        "PRINTER_HOSTNAME must be a valid hostname",
+      .refine(
+        (host) => !isAllNumericDotted(host.replace(/\.$/, "")),
+        "PRINTER_HOSTNAME looks like an IP address — use PRINTER_IP for numeric addresses",
       )
+      .refine(isValidHostname, "PRINTER_HOSTNAME must be a valid hostname")
       .optional(),
     scanDestName: z.string().default("Paperless"),
     // scanDestId is a hex byte (e.g. "02"); parsed in loadConfig.
