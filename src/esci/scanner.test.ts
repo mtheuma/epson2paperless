@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { mkdtempSync, rmSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -376,6 +376,120 @@ describe("scanner-esci", () => {
     const files = readdirSync(outputDir);
     expect(files).toHaveLength(1);
     expect((await sharp(path.join(outputDir, files[0])).metadata()).channels).toBe(1);
+  }, 60_000);
+});
+
+// ---------------------------------------------------------------------------
+// SCAN_RESOLUTION host-side downsample fallback — the legacy wire has no
+// resolution arm at all (fixed raster per format/dialect), so every axis
+// is resolved host-side from LegacyDialectEntry.deliveredDpi. Spies on
+// finalizeSession (same technique as scan-session.test.ts's plumbing test)
+// to observe the `downsample` opt the scanner's resolveDownsample resolver
+// computes, without needing pixel-level assertions on the fixture image.
+// ---------------------------------------------------------------------------
+
+describe("SCAN_RESOLUTION host-side downsample fallback (legacy path)", () => {
+  let outputDir: string;
+  let tempDir: string;
+
+  beforeEach(() => {
+    outputDir = mkdtempSync(path.join(os.tmpdir(), "leg-ds-out-"));
+    tempDir = mkdtempSync(path.join(os.tmpdir(), "leg-ds-tmp-"));
+  });
+
+  afterEach(() => {
+    rmSync(outputDir, { recursive: true, force: true });
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  async function runWithDownsampleSpy(opts: {
+    fixturePath: string;
+    format: "jpg" | "pdf";
+    resolution: number | undefined;
+  }): Promise<{ downsample: unknown; stampDpi: unknown; infoLogs: string[] }> {
+    const fixture = loadFixture(path.join(FIXTURES, opts.fixturePath));
+    const fake = new FakeTcpSocket();
+
+    const outputTail = await import("../output-tail.js");
+    let capturedDownsample: unknown = "unset";
+    let capturedStampDpi: unknown = "unset";
+    const finalizeSpy = vi.spyOn(outputTail, "finalizeSession").mockImplementation((args) => {
+      capturedDownsample = args.downsample;
+      capturedStampDpi = args.stampDpi;
+      return Promise.resolve();
+    });
+    const infoLogs: string[] = [];
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation((msg: unknown) => {
+      infoLogs.push(String(msg));
+    });
+
+    try {
+      const sessionPromise = runEsciScan(
+        {
+          printerIp: "1.2.3.4",
+          port: 1865,
+          outputDir,
+          tempDir,
+          entry: WF3620_ENTRY,
+          duplex: false,
+          forcedSource: "flatbed",
+          format: opts.format,
+          jpegQuality: 90,
+          resolution: opts.resolution,
+        },
+        fake.asFactory(),
+      );
+      await driveFixture(fixture, fake, sessionPromise);
+    } finally {
+      finalizeSpy.mockRestore();
+      consoleSpy.mockRestore();
+    }
+
+    return { downsample: capturedDownsample, stampDpi: capturedStampDpi, infoLogs };
+  }
+
+  it("resolution below the delivered DPI (600, JPG): resolveDownsample yields {fromDpi:600, toDpi:150}, stampDpi undefined", async () => {
+    const { downsample, stampDpi, infoLogs } = await runWithDownsampleSpy({
+      fixturePath: "wf-3620/flatbed-single-page-jpeg.jsonl",
+      format: "jpg",
+      resolution: 150,
+    });
+    expect(downsample).toEqual({ fromDpi: 600, toDpi: 150 });
+    expect(stampDpi).toBeUndefined();
+    expect(infoLogs.some((l) => /exceeds|maximum|delivers/.test(l))).toBe(false);
+  }, 60_000);
+
+  it("resolution above the delivered DPI (800 requested, 300 delivered, PDF): resolveDownsample undefined, stampDpi is the delivered 300, plus an info log", async () => {
+    const { downsample, stampDpi, infoLogs } = await runWithDownsampleSpy({
+      fixturePath: "wf-3620/flatbed-single-page-pdf.jsonl",
+      format: "pdf",
+      resolution: 800,
+    });
+    expect(downsample).toBeUndefined();
+    expect(stampDpi).toBe(300);
+    expect(infoLogs.some((l) => /exceeds|maximum|delivers/.test(l))).toBe(true);
+  }, 60_000);
+
+  it("resolution exactly equal to the delivered DPI (600, JPG): resolveDownsample undefined, stampDpi is the delivered 600, no info log", async () => {
+    const { downsample, stampDpi, infoLogs } = await runWithDownsampleSpy({
+      fixturePath: "wf-3620/flatbed-single-page-jpeg.jsonl",
+      format: "jpg",
+      resolution: 600,
+    });
+    expect(downsample).toBeUndefined();
+    expect(stampDpi).toBe(600);
+    expect(infoLogs.some((l) => /exceeds|maximum|delivers/.test(l))).toBe(false);
+  }, 60_000);
+
+  it("resolution unset: resolveDownsample and stampDpi both yield undefined with no info log", async () => {
+    const { downsample, stampDpi, infoLogs } = await runWithDownsampleSpy({
+      fixturePath: "wf-3620/flatbed-single-page-jpeg.jsonl",
+      format: "jpg",
+      resolution: undefined,
+    });
+    expect(downsample).toBeUndefined();
+    expect(stampDpi).toBeUndefined();
+    expect(infoLogs.some((l) => /exceeds|maximum|delivers/.test(l))).toBe(false);
   }, 60_000);
 });
 

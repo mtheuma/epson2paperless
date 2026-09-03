@@ -1034,6 +1034,88 @@ describe("runEsci2ScanOverPlain — ET-2750 fixture replay", () => {
   }, 60_000);
 });
 
+// ─── SCAN_RESOLUTION host-side downsample — fixture-driven integration ────
+//
+// The unit-level coverage in resolution.test.ts and para-composer.test.ts
+// proves selectWireDpi and composePara in isolation, but not that the real
+// makeOutputResolvers(session).resolveDownsample in scanner.ts (src/esci2/
+// scanner.ts) actually threads ctx.wireDpi/ctx.downsampleToDpi through to
+// finalizeSession with the fields the right way round — a fromDpi/toDpi swap
+// there would silently *upsample* instead of downsampling and nothing above
+// would catch it.
+//
+// This drives the real ET-2750 replay fixture end-to-end (same fixture as
+// "runEsci2ScanOverPlain — ET-2750 fixture replay" above) with
+// resolution=240, chosen against the fixture's own captured CAPA reply
+// (`#FB RSMSLISTd075d150d300d600i0001200`, `#RSMLIST`/`#RSSLIST` intersecting
+// to the same set): 240 isn't advertised, so selectWireDpi's smallest-above
+// branch fires — wire requests 300 DPI, host-side downsample target stays
+// 240. driveFixture (src/esci2/test-support/replay.ts) replays the captured
+// printer→host bytes unconditionally, regardless of what the host writes, so
+// the session completes normally even though the composed PARA's #RSM/#RSS
+// fields (300 DPI) differ from what the printer that produced this fixture
+// was actually asked for (also 300, coincidentally — the fixture's own
+// capture ran at the default). This test deliberately skips the
+// byte-equivalence PARA check the sibling ET-2750 replay test performs,
+// since driving a non-default resolution is the whole point here.
+describe("runEsci2ScanOverPlain — SCAN_RESOLUTION host-side downsample (ET-2750 fixture)", () => {
+  let outputDir: string;
+  let tempDir: string;
+
+  beforeEach(() => {
+    outputDir = mkdtempSync(path.join(os.tmpdir(), "et2750-ds-out-"));
+    tempDir = mkdtempSync(path.join(os.tmpdir(), "et2750-ds-tmp-"));
+  });
+
+  afterEach(() => {
+    rmSync(outputDir, { recursive: true, force: true });
+    rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it("resolution=240 (between advertised 150/300): wire requests 300 DPI, downsample maps {fromDpi:300, toDpi:240}", async () => {
+    const fixturePath = path.join(
+      "tools",
+      "pcap-extract",
+      "captures",
+      "et-2750",
+      "flatbed-single-page-pdf.jsonl",
+    );
+    const fixture = loadFixture(fixturePath);
+    const fake = new FakePlainSocket();
+
+    const outputTail = await import("../output-tail.js");
+    let capturedDownsample: unknown = "unset";
+    const finalizeSpy = vi.spyOn(outputTail, "finalizeSession").mockImplementation((args) => {
+      capturedDownsample = args.downsample;
+      return Promise.resolve();
+    });
+
+    try {
+      const sessionPromise = runEsci2ScanOverPlain(
+        {
+          printerIp: "10.31.50.16",
+          port: 1865,
+          destId: 0x02,
+          outputDir,
+          tempDir,
+          duplex: false,
+          action: "pdf",
+          resolution: 240,
+        },
+        fake.asFactory(),
+      );
+      await driveFixture(fixture, fake, sessionPromise);
+    } finally {
+      finalizeSpy.mockRestore();
+    }
+
+    // The load-bearing assertion: a fromDpi/toDpi swap in
+    // makeOutputResolvers' resolveDownsample would produce
+    // {fromDpi:240, toDpi:300} instead — an upsample — which this catches.
+    expect(capturedDownsample).toEqual({ fromDpi: 300, toDpi: 240 });
+  }, 60_000);
+});
+
 describe("runEsci2ScanOverPlain — XP-7100 fixture replay", () => {
   let outputDir: string;
   let tempDir: string;

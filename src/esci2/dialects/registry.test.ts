@@ -245,4 +245,47 @@ describe("REGISTRY", () => {
       }
     }
   });
+
+  it("declares verifiedWireDpis as an array on every entry", () => {
+    for (const [fp, e] of REGISTRY) {
+      expect(Array.isArray(e.verifiedWireDpis), `entry ${fp} (${e.displayName})`).toBe(true);
+    }
+  });
+
+  it("pins verifiedWireDpis per model (committed replay fixture or documented hardware validation -> that DPI; neither -> empty)", () => {
+    const expected: Record<string, number[]> = {
+      // ET-4950 / ET-3950 / ET-4956 — Frida-captured replay fixtures at 300 DPI;
+      // 75/150/200/600/1200 hardware-verified on an ET-4956 (2026-09-02, #81).
+      "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2": [
+        75, 150, 200, 300, 600, 1200,
+      ],
+      // ET-2750 / XP-4100 — pcap-extracted replay fixture at 300 DPI.
+      de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7: [300],
+      // XP-7100 — pcap-extracted replay fixture at 300 DPI.
+      "56d26c61896ca417807ac68d37775036fa1e702ee44c0beaa27d8a6ea9fa457e": [300],
+      // ET-2950 — no replay fixture, no reporter retest (README: 🟡 Experimental, #92).
+      b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb: [],
+      // ET-4800 — pcap-extracted replay fixture at 300 DPI.
+      "7870a725ab969136d5eb04387bf01d3cc3168aabb3d11cfaca7d59a4169971c2": [300],
+      // ET-15000 — hardware-validated at 300 DPI.
+      d1d7293e92fa726e006429beacca1255e474de0d66b3559f87176d4e4b3d0e55: [300],
+      // FF-680W — pcap-extracted replay fixtures at 200 and 300 DPI.
+      "5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd": [200, 300],
+      // DS-575W — 200: README-recorded hardware validation (only duplex
+      // colour PDF @ 200 DPI hardware-verified); 400/600: pcap-extracted
+      // replay fixtures.
+      "90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b074": [200, 400, 600],
+      // ET-2810 / XP-3200 — hardware-validated at 300 DPI (#132).
+      "708704b6abb184cede037fcd9893ea81f69651fde28780cde0162dfa33a33f6e": [300],
+      // ET-8500 — hardware-confirmed at 300 DPI (#120).
+      "05b5c7eaad217e9538883f3fffe9796464689a5d9006c5b3e3c3fd2c24e21467": [300],
+      // ET-7700 — pcap-extracted replay fixtures at 300 DPI (#145).
+      "72319314b621fea0aab6cc16f4fd891534cec08f33ce80116a849f6f6e1e58d4": [300],
+      // WF-3835 — awaiting reporter validation (#174); flatbed evidence not in the tree yet.
+      "860a899be9dc4fc27b68f8aed21a49ccfe87733a3974813f0c2ade6810e89dc7": [],
+    };
+    for (const [fp, want] of Object.entries(expected)) {
+      expect(REGISTRY.get(fp)!.verifiedWireDpis, `fingerprint ${fp}`).toEqual(want);
+    }
+  });
 });

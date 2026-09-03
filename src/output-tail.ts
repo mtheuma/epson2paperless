@@ -6,6 +6,7 @@ import { uploadAllToPaperless, type PaperlessUploadOptions } from "./paperless-u
 import { postProcessTempPages, type PostProcessProfile } from "./postprocess/index.js";
 import type { ToneCurveName } from "./postprocess/tone-curves.js";
 import type { WhitePoint } from "./postprocess/auto-color.js";
+import type { Downsample } from "./postprocess/downsample.js";
 import { DEFAULT_JPEG_QUALITY, type GrayscaleConversion } from "./config.js";
 
 const log = createLogger("output-tail");
@@ -34,6 +35,21 @@ export interface FinalizeSessionArgs {
   toneCurve?: ToneCurveName;
   /** PRINTER_WHITE_POINT — device cast reference for the auto-colour verdict. */
   whitePoint?: WhitePoint;
+  /**
+   * Finalize-time host-side DPI downsample — the fallback arm for a
+   * SCAN_RESOLUTION the wire couldn't reach (see postprocess/downsample.ts).
+   * Omitted means the wire hit the requested DPI (or has no such notion).
+   */
+  downsample?: Downsample;
+  /**
+   * Lossless JFIF density patch for pages that reach output without a
+   * density-stamping re-encode — e.g. the legacy ESC/I path's explicit
+   * SCAN_RESOLUTION that exactly matches (or is capped above) the delivered
+   * DPI, where no resize happens so the host-encoded JPEG would otherwise
+   * ship with no real density and read as 72 DPI. Mutually exclusive with
+   * `downsample` by construction at the resolver.
+   */
+  stampDpi?: number;
 }
 
 /**
@@ -57,12 +73,17 @@ export async function finalizeSession(args: FinalizeSessionArgs): Promise<void> 
     grayscaleConversion = "off",
     toneCurve,
     whitePoint,
+    downsample,
+    stampDpi,
   } = args;
   try {
+    if (downsample) {
+      log.info(`downsampling ${downsample.fromDpi} → ${downsample.toDpi} DPI (host-side fallback)`);
+    }
     await postProcessTempPages(
       sessionTempDir,
       postProcess,
-      { jpegQuality, toneCurve, grayscaleConversion, whitePoint },
+      { jpegQuality, toneCurve, grayscaleConversion, whitePoint, downsample, stampDpi },
       log,
     );
     let savedPaths: string[];

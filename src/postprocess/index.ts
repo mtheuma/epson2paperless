@@ -2,9 +2,11 @@ import fs from "node:fs";
 import path from "node:path";
 import { correctDocumentImage, correctDocumentImageAuto } from "./document.js";
 import { classifyJpeg, describeVerdict, toGrayscaleJpeg, type WhitePoint } from "./auto-color.js";
+import { downsampleJpeg, type Downsample } from "./downsample.js";
 import { sortedPageFiles } from "../output.js";
 import type { ToneCurveName } from "./tone-curves.js";
 import type { GrayscaleConversion } from "../config.js";
+import { setJfifDensity } from "../exif.js";
 
 export type PostProcessProfile = "none" | "document";
 
@@ -33,12 +35,34 @@ export interface PostProcessOptions {
    * correction. Never inferred from the page — see auto-color.ts.
    */
   whitePoint?: WhitePoint;
+  /**
+   * Finalize-time host-side DPI downsample — the fallback arm for a
+   * SCAN_RESOLUTION the wire couldn't reach. Folded into the document /
+   * grayscale re-encode below when either also runs (single decode-encode);
+   * otherwise applied as its own standalone pass. Never upscales — see
+   * downsample.ts.
+   */
+  downsample?: Downsample;
+  /**
+   * Lossless JFIF-density-only stamp for pages that reach output without a
+   * density-stamping re-encode — the legacy ESC/I path's counterpart to
+   * `downsample` for an explicit SCAN_RESOLUTION that exactly matches (or is
+   * capped above) the delivered DPI: no resize happens, so without this the
+   * host-encoded JPEG carries no real JFIF density and reads as 72 DPI.
+   * Applied on top of whatever profile/grayscale re-encode ran (those
+   * preserve only the SOURCE density, which legacy pages never had) — never
+   * when `downsample` is set, since that path already stamps its own toDpi.
+   * Mutually exclusive with `downsample` by construction at the resolver.
+   */
+  stampDpi?: number;
 }
 
 /**
  * Apply the named post-process profile to a single JPEG page. `none` returns
- * the input untouched (no decode). Transform errors are the caller's to handle
- * (see finalizeSession fallback).
+ * the input untouched (no decode) — downsample folding for that path happens
+ * in postProcessTempPages, since `applyPostProcess` alone has no way to know
+ * a caller wants a resize without a document transform. Transform errors are
+ * the caller's to handle (see finalizeSession fallback).
  */
 export async function applyPostProcess(
   profile: PostProcessProfile,
@@ -49,7 +73,7 @@ export async function applyPostProcess(
     case "none":
       return jpeg;
     case "document":
-      return correctDocumentImage(jpeg, opts.jpegQuality, opts.toneCurve);
+      return correctDocumentImage(jpeg, opts.jpegQuality, opts.toneCurve, opts.downsample);
   }
 }
 
@@ -75,7 +99,13 @@ export async function postProcessTempPages(
   log: MinimalLog,
 ): Promise<void> {
   const conversion = opts.grayscaleConversion ?? "off";
-  if (profile === "none" && conversion === "off") return;
+  if (
+    profile === "none" &&
+    conversion === "off" &&
+    opts.downsample === undefined &&
+    opts.stampDpi === undefined
+  )
+    return;
   let pages: ReturnType<typeof sortedPageFiles>;
   try {
     pages = sortedPageFiles(fs.readdirSync(tempDir), "jpg");
@@ -91,35 +121,60 @@ export async function postProcessTempPages(
       const original = await fs.promises.readFile(full);
       let processed: Buffer;
       let grayscaled = false;
+      // Tracks whether opts.downsample (if any) has already been folded into
+      // a decode/encode pass that ran below, so the standalone downsampleJpeg
+      // call at the end never chains a second re-encode on top.
+      let downsampleFolded = false;
       if (profile === "document" && conversion !== "off") {
         // Integrated path: single decode/encode, greyscale verdict (or the
-        // forced conversion) between the white-point clip and the tone curve.
-        // A failure here means the document transform itself failed, so the
-        // outer catch keeping the original page is the right fallback — there
-        // is no succeeded-then-reverted intermediate stage to lose.
+        // forced conversion) between the white-point clip and the tone curve,
+        // plus the DPI downsample when one is pending. A failure here means
+        // the document transform itself failed, so the outer catch keeping
+        // the original page is the right fallback — there is no
+        // succeeded-then-reverted intermediate stage to lose.
         const r = await correctDocumentImageAuto(
           original,
           opts.jpegQuality,
           opts.toneCurve,
           conversion,
           opts.whitePoint,
+          opts.downsample,
         );
         processed = r.jpeg;
         grayscaled = r.grayscale;
+        downsampleFolded = true;
         if (r.verdict) log.debug?.(`auto colour mode: ${name} ${describeVerdict(r.verdict)}`);
       } else {
         processed = await applyPostProcess(profile, original, opts);
+        if (profile === "document") downsampleFolded = true; // correctDocumentImage folded it
         if (conversion === "force") {
-          processed = await toGrayscaleJpeg(processed, opts.jpegQuality);
+          processed = await toGrayscaleJpeg(processed, opts.jpegQuality, opts.downsample);
           grayscaled = true;
+          downsampleFolded = true;
         } else if (conversion === "auto") {
           const verdict = await classifyJpeg(processed, opts.whitePoint);
           log.debug?.(`auto colour mode: ${name} ${describeVerdict(verdict)}`);
           if (verdict.grayscale) {
-            processed = await toGrayscaleJpeg(processed, opts.jpegQuality);
+            processed = await toGrayscaleJpeg(processed, opts.jpegQuality, opts.downsample);
             grayscaled = true;
+            downsampleFolded = true;
           }
         }
+      }
+      // Neither the document transform nor a grayscale conversion ran (or
+      // "auto" ran but kept the page in colour) — apply the DPI fallback as
+      // its own standalone pass instead of silently dropping it.
+      if (opts.downsample && !downsampleFolded) {
+        processed = await downsampleJpeg(processed, opts.downsample, opts.jpegQuality);
+      }
+      // Lossless density-only stamp — see PostProcessOptions.stampDpi. Runs
+      // after every transform above (document/grayscale re-encodes preserve
+      // only the source density, which a legacy page never had) and is
+      // skipped whenever a downsample ran, since downsampleJpeg already
+      // stamped its own toDpi; the resolvers never set both, but the guard
+      // stays local and obvious rather than leaning on that invariant.
+      if (opts.stampDpi !== undefined && opts.downsample === undefined) {
+        processed = setJfifDensity(processed, opts.stampDpi);
       }
       // "force" converts every page by design — announcing each one would be
       // noise; the scanner layer logs the fallback once per session instead.
@@ -137,7 +192,16 @@ export async function postProcessTempPages(
         conversion === "force"
           ? "keeping original in colour despite SCAN_COLOR_MODE=grayscale"
           : "keeping original";
-      log.error(`post-process failed for ${name}, ${kept}: ${msg}`);
+      // The kept page ships at wire resolution instead of the requested
+      // SCAN_RESOLUTION target when a downsample was pending — append that
+      // consequence so mixed output page sizes aren't a silent surprise.
+      // Still logged at error level: this logger ranks warn (2) BELOW error
+      // (3), so downgrading would make LOG_LEVEL=error suppress the more
+      // consequential failure while plain ones still print.
+      const sizeNote = opts.downsample
+        ? " — page kept at wire resolution; output page sizes will differ from other pages in this scan"
+        : "";
+      log.error(`post-process failed for ${name}, ${kept}: ${msg}${sizeNote}`);
       try {
         await fs.promises.unlink(tmp);
       } catch {

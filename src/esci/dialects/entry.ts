@@ -24,4 +24,11 @@ export interface LegacyDialectEntry {
   prestart: "status-then-start" | "start-direct";
   setup: Branch<SetupEntryState>;
   teardown: Branch<TeardownEntryState>;
+  /**
+   * DPI the fixed wire parameters actually deliver for a mode. The legacy
+   * path has NO wire resolution arm (spec: cross-product DPI×format combos
+   * are uncaptured and the stream-config trailer's derivation is unknown) —
+   * this feeds only the host-side downsample decision.
+   */
+  deliveredDpi: (mode: ScanMode) => number;
 }

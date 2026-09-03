@@ -1,6 +1,12 @@
 // src/esci2/para-composer.test.ts
 import { describe, it, expect } from "vitest";
-import { composePara, type ParaSpec } from "./para-composer.js";
+import {
+  composePara,
+  baseDpiFor,
+  STANDARD_BASE_DPI,
+  ADF_CRP_BASE_DPI,
+  type ParaSpec,
+} from "./para-composer.js";
 import { GAMMA_CLASSES } from "./data/gamma-classes.js";
 
 // A reusable baseline spec — ET-4950 flatbed JPG params. Tests override fields
@@ -331,6 +337,68 @@ describe("composePara — adf-crp colour-mode axis (DS-575W)", () => {
   });
 });
 
+describe("composePara — resolution axis (standard profile)", () => {
+  it("standard profile: default spec is byte-identical to the pinned prefix", () => {
+    const body = composePara(baselineSpec());
+    expect(body.subarray(4, 52).toString("ascii")).toBe(
+      "#RSMi0000300#RSSi0000300#COLC024#FMTJPG #JPGd090",
+    );
+  });
+
+  it("standard profile: resolution renders into #RSM/#RSS and scales ACQ (all four fields)", () => {
+    const spec: ParaSpec = {
+      ...baselineSpec(),
+      resolution: 600,
+      fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
+      adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
+      source: "adf-simplex",
+    };
+    const body = composePara(spec).toString("ascii");
+    expect(body).toContain("#RSMi0000600#RSSi0000600");
+    // 69 * 600/300 = 138 — offsets scale too (all four ACQ fields).
+    expect(body).toContain("#ACQi0000138i0000000i0004962i0007012");
+  });
+
+  it("standard profile: scaled ACQ never overshoots the source area at half-scales", () => {
+    // ET-4956 ADF, hardware-verified 2026-09-02: the 300-DPI window is
+    // x0=69 + w=2481 = 2550 = the full 8.5in ADF width (#ADFAREA d850). At
+    // 150 DPI, rounding x0 and w independently gives 35 + 1241 = 1276 — one
+    // pixel past the 1275 limit — and the firmware answers #parFAIL. Scaling
+    // the far edge (floored) and deriving w keeps the window inside the area.
+    const adf = (resolution: number): string =>
+      composePara({
+        ...baselineSpec(),
+        resolution,
+        fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
+        adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
+        source: "adf-simplex",
+      }).toString("ascii");
+    expect(adf(150)).toContain("#ACQi0000035i0000000i0001240i0001753"); // 35 + 1240 = 1275
+    expect(adf(75)).toContain("#ACQi0000017i0000000i0000620i0000876"); // 17 + 620 = 637 <= 637.5
+    expect(adf(200)).toContain("#ACQi0000046i0000000i0001654i0002337"); // exact: 1700
+    expect(adf(600)).toContain("#ACQi0000138i0000000i0004962i0007012"); // exact: 5100
+  });
+});
+
+describe("composePara — jpegQuality axis", () => {
+  it("quality renders d%03d — three digits at 100, PARA length unchanged", () => {
+    const q90 = composePara(baselineSpec());
+    const q100 = composePara({ ...baselineSpec(), jpegQuality: 100 });
+    expect(q100.length).toBe(q90.length);
+    expect(q100.toString("ascii")).toContain("#JPGd100");
+  });
+
+  it("adf-crp: quality parameterises its prefix tail the same way", () => {
+    const body = composePara({ ...ff680wSpec(), jpegQuality: 75 }).toString("ascii");
+    expect(body).toContain("#FMTJPG #JPGd075");
+  });
+
+  it("rejects out-of-range jpegQuality", () => {
+    expect(() => composePara({ ...baselineSpec(), jpegQuality: 0 })).toThrow(/jpegQuality/);
+    expect(() => composePara({ ...baselineSpec(), jpegQuality: 101 })).toThrow(/jpegQuality/);
+  });
+});
+
 describe("composePara — validation", () => {
   it("throws when ADF source is requested but adfExtents is null", () => {
     expect(() =>
@@ -422,5 +490,21 @@ describe("composePara — validation", () => {
         gammaClass: { jpg: "made-up", pdf: "made-up" },
       }),
     ).toThrow(/gamma.*made-up/i);
+  });
+});
+
+describe("baseDpiFor", () => {
+  it("returns ADF_CRP_BASE_DPI (200) for the adf-crp profile", () => {
+    expect(baseDpiFor("adf-crp")).toBe(ADF_CRP_BASE_DPI);
+    expect(baseDpiFor("adf-crp")).toBe(200);
+  });
+
+  it("returns STANDARD_BASE_DPI (300) for the standard profile", () => {
+    expect(baseDpiFor("standard")).toBe(STANDARD_BASE_DPI);
+    expect(baseDpiFor("standard")).toBe(300);
+  });
+
+  it("returns STANDARD_BASE_DPI (300) when the profile is undefined", () => {
+    expect(baseDpiFor(undefined)).toBe(STANDARD_BASE_DPI);
   });
 });

@@ -66,3 +66,47 @@ describe("parseInfoTokens — extended fields for diagnostics", () => {
     expect(parsed.adfArea).toBeNull();
   });
 });
+
+describe("parseCapaTokens — resolution lists and JPEG quality range", () => {
+  it("parses mixed d/i resolution lists", () => {
+    const body = Buffer.from(
+      "#RSMLISTd050d075d100d150d200d300d600i0001200#RSSLISTd050d075d100d150d200d300d600i0001200i0002400",
+      "ascii",
+    );
+    const t = parseCapaTokens(body);
+    expect(t.rsmList).toEqual([50, 75, 100, 150, 200, 300, 600, 1200]);
+    expect(t.rssList).toEqual([50, 75, 100, 150, 200, 300, 600, 1200, 2400]);
+  });
+
+  it("parses per-source RSMSLIST segments, including #FB 's embedded space", () => {
+    const body = Buffer.from(
+      "#ADFRSMSLISTd075d150d200d300d600#FB RSMSLISTd075d150d200d300d600i0001200",
+      "ascii",
+    );
+    const t = parseCapaTokens(body);
+    expect(t.adfRsmsList).toEqual([75, 150, 200, 300, 600]);
+    expect(t.fbRsmsList).toEqual([75, 150, 200, 300, 600, 1200]);
+  });
+
+  it("parses #JPGRANG min/max", () => {
+    const t = parseCapaTokens(Buffer.from("#JPGRANGd001d100", "ascii"));
+    expect(t.jpgRange).toEqual({ min: 1, max: 100 });
+  });
+
+  it("returns null for all new fields when segments are absent", () => {
+    const t = parseCapaTokens(Buffer.from("#GMMLISTUG10", "ascii"));
+    expect(t.rsmList).toBeNull();
+    expect(t.adfRsmsList).toBeNull();
+    expect(t.fbRsmsList).toBeNull();
+    expect(t.jpgRange).toBeNull();
+  });
+
+  it("doesn't confuse #FB RSMSLIST with a #FB AREA-prefixed segment (CAPA is not INFO)", () => {
+    // #FB AREA doesn't actually appear in real CAPA bodies (it's an INFO-only
+    // token) but textAfterPrefix takes the first startsWith match, so prove
+    // the two "#FB " prefixes don't shadow each other when both are present.
+    const body = Buffer.from("#FB AREAd850i0001170#FB RSMSLISTd075d150d200", "ascii");
+    const t = parseCapaTokens(body);
+    expect(t.fbRsmsList).toEqual([75, 150, 200]);
+  });
+});

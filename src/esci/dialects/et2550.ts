@@ -38,4 +38,5 @@ export const ET2550_ENTRY: LegacyDialectEntry = {
   prestart: "start-direct",
   setup: { next: "INIT", send: () => passthru(buildEscInit(), 1) }, // ESC @ (reply 1)
   teardown: { next: "ET_TEARDOWN_PAREN", send: () => passthru(buildEscCleanup(), 1) }, // ESC ) (reply 1)
+  deliveredDpi: () => 300, // fixed; only one geometry captured
 };

@@ -1,8 +1,10 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { esci2Graph, ESCI2_TIMEOUT_MS } from "./graph.js";
 import { applyEntrySourceOverride } from "./dialects/dispatch.js";
 import { REGISTRY } from "./dialects/registry.js";
 import { IS_HEADER_SIZE, buildPurereadPacket, parseIsPacket } from "../protocol.js";
+import { parseCapaTokens } from "./capabilities.js";
+import { DEFAULT_JPEG_QUALITY } from "../config.js";
 
 describe("esci2Graph (smoke)", () => {
   it("builds with the expected initial state and timeout", () => {
@@ -355,20 +357,82 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
     }
   });
 
+  it("PARA is a decision state (rewritten from validate: matcher so a rejected reply produces a real error, not an unmatched-packet timeout)", () => {
+    expect(esci2Graph.states.PARA.kind).toBe("decision");
+  });
+
   it("PARA validates #parOK token and advances to TRDT", () => {
     const state = esci2Graph.states.PARA;
-    expect(state.kind).toBe("static");
-    if (state.kind === "static") {
-      expect(state.on[0xa000]?.next).toBe("TRDT");
-      expect(state.on[0xa000]?.validate).toBeDefined();
-      const validateFn = state.on[0xa000]?.validate;
-      // Payload with #parOK at offset 12
-      const okPayload = Buffer.from("PARAx0000000#parOK  ", "ascii");
-      expect(validateFn?.(okPayload)).toBe(true);
-      // Payload with #parNG
-      const ngPayload = Buffer.from("PARAx0000000#parNG  ", "ascii");
-      expect(validateFn?.(ngPayload)).toBe(false);
-    }
+    expect(state.kind).toBe("decision");
+    if (state.kind !== "decision") return;
+    const okPayload = Buffer.from("PARAx0000000#parOK  ", "ascii");
+    const result = state.decide(makeCtx(), { type: 0xa000, payload: okPayload });
+    if ("error" in result) throw result.error;
+    expect(result.next).toBe("TRDT");
+    expect(result.send).toBeDefined();
+  });
+
+  // makeCtx's default entry (ET-4950) seeds verifiedWireDpis: [300].
+
+  it("PARA rejects a non-OK #par token with an actionable error naming the wire DPI and inviting removal of SCAN_RESOLUTION when it was set explicitly and the resulting wire DPI is unverified", () => {
+    const state = esci2Graph.states.PARA;
+    if (state.kind !== "decision") return;
+    // 100 is CAPA-advertised on the ET-4950 but outside its verifiedWireDpis
+    // (75/150/200/300/600/1200 are hardware-verified as of 2026-09-02).
+    const ctx = makeCtx({ resolution: 100, wireDpi: 100 });
+    const ngPayload = Buffer.from("PARAx0000000#parNG  ", "ascii");
+    const result = state.decide(ctx, { type: 0xa000, payload: ngPayload });
+    expect("error" in result).toBe(true);
+    if (!("error" in result)) return;
+    expect(result.error.message).toMatch(/PARA rejected/);
+    expect(result.error.message).toMatch(/100/);
+    expect(result.error.message).toMatch(/SCAN_RESOLUTION/);
+  });
+
+  it("PARA rejection still includes a hint on an unverified wire DPI even when resolution was left at the dialect default (the real suspect is the wire DPI, not how it was set) — but drops the 'remove SCAN_RESOLUTION' clause since nothing was set to remove", () => {
+    const state = esci2Graph.states.PARA;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ resolution: undefined, wireDpi: 100 });
+    const ngPayload = Buffer.from("PARAx0000000#parNG  ", "ascii");
+    const result = state.decide(ctx, { type: 0xa000, payload: ngPayload });
+    expect("error" in result).toBe(true);
+    if (!("error" in result)) return;
+    expect(result.error.message).toMatch(/PARA rejected/);
+    expect(result.error.message).toMatch(/100/);
+    expect(result.error.message).toMatch(/report the result \(issue #81\)/);
+    expect(result.error.message).not.toMatch(/SCAN_RESOLUTION/);
+    expect(result.error.message).not.toMatch(/remove/);
+  });
+
+  it("PARA rejection omits the hint when the wire DPI in use is verified, even though resolution was set explicitly", () => {
+    const state = esci2Graph.states.PARA;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ resolution: 300, wireDpi: 300 });
+    const ngPayload = Buffer.from("PARAx0000000#parNG  ", "ascii");
+    const result = state.decide(ctx, { type: 0xa000, payload: ngPayload });
+    expect("error" in result).toBe(true);
+    if (!("error" in result)) return;
+    expect(result.error.message).toMatch(/PARA rejected/);
+    expect(result.error.message).not.toMatch(/SCAN_RESOLUTION/);
+  });
+
+  it("PARA rejection omits the hint when resolution was left at the dialect default and the resulting wire DPI is verified", () => {
+    const state = esci2Graph.states.PARA;
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ resolution: undefined, wireDpi: 300 });
+    const ngPayload = Buffer.from("PARAx0000000#parNG  ", "ascii");
+    const result = state.decide(ctx, { type: 0xa000, payload: ngPayload });
+    expect("error" in result).toBe(true);
+    if (!("error" in result)) return;
+    expect(result.error.message).toMatch(/PARA rejected/);
+    expect(result.error.message).not.toMatch(/SCAN_RESOLUTION/);
+  });
+
+  it("PARA errors on an unparseable reply header", () => {
+    const state = esci2Graph.states.PARA;
+    if (state.kind !== "decision") return;
+    const result = state.decide(makeCtx(), { type: 0xa000, payload: Buffer.from("bad") });
+    expect("error" in result).toBe(true);
   });
 
   it("TRDT advances to IMG_META with IMG send", () => {
@@ -486,12 +550,29 @@ function makeCtx(
     tprDeclaredLength: 0,
     infoBody: Buffer.alloc(0),
     capaBody: Buffer.alloc(0),
+    capaTokens: undefined,
     entry: REGISTRY.get("2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2")!,
+    jpegQuality: DEFAULT_JPEG_QUALITY,
+    wireDpi: undefined,
+    downsampleToDpi: undefined,
     ...overrides,
   };
 }
 
 const FF680W_FP = "5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd";
+
+// Real FF-680W CAPA resolution segments (from tools/pcap-extract/captures/ff-680w
+// fixtures) — 200 and 300 are both advertised exactly, so an explicit
+// ctx.resolution of either reaches the wire unchanged (no downsample/cap).
+const FF680W_CAPA_TOKENS = parseCapaTokens(
+  Buffer.from(
+    "#ADFRSMSLISTd300d600" +
+      "#RSMLISTd050d075d100d150d200d240d300d360d400d600" +
+      "#RSSLISTd050d075d100d150d200d240d300d360d400d600" +
+      "#JPGRANGd001d100",
+    "ascii",
+  ),
+);
 
 describe("esci2Graph POST_MODE_STAT — PARA reflects ctx.resolution + source", () => {
   // Drives the state that calls buildParaSend(ctx) and inspects the emitted
@@ -501,7 +582,12 @@ describe("esci2Graph POST_MODE_STAT — PARA reflects ctx.resolution + source", 
     const state = esci2Graph.states.POST_MODE_STAT;
     expect(state.kind).toBe("decision");
     if (state.kind !== "decision") throw new Error("POST_MODE_STAT not a decision");
-    const ctx = makeCtx({ entry: REGISTRY.get(FF680W_FP)!, source: "adf", ...overrides });
+    const ctx = makeCtx({
+      entry: REGISTRY.get(FF680W_FP)!,
+      source: "adf",
+      capaTokens: FF680W_CAPA_TOKENS,
+      ...overrides,
+    });
     // STAT reply header length 0 → PARA branch (send = buildParaSend(ctx)).
     const result = state.decide(ctx, {
       type: 0xa000,
@@ -526,6 +612,189 @@ describe("esci2Graph POST_MODE_STAT — PARA reflects ctx.resolution + source", 
     expect(emitParaBody({ resolution: 200, duplex: true })).toContain("SKEWDPLXDFL1");
     expect(emitParaBody({ resolution: 200, duplex: false })).toContain("SKEWDFL1");
     expect(emitParaBody({ resolution: 200, duplex: false })).not.toContain("DPLX");
+  });
+});
+
+// Real ET-4950 CAPA resolution segments (from the committed Frida capture) —
+// matches the sample in resolution.test.ts. Advertises exact 300 and 600, so
+// selection can be pinned exactly against these DPIs.
+const ET4950_CAPA_TOKENS = parseCapaTokens(
+  Buffer.from(
+    "#ADFRSMSLISTd075d150d200d300d600" +
+      "#FB RSMSLISTd075d150d200d300d600i0001200" +
+      "#RSMLISTd050d075d100d150d200d300d600i0001200" +
+      "#RSSLISTd050d075d100d150d200d300d600i0001200i0002400",
+    "ascii",
+  ),
+);
+
+describe("esci2Graph buildParaSend — wire DPI selection + JPEG quality clamp (Task 5)", () => {
+  // Drives POST_MODE_STAT (which calls buildParaSend) and returns both the
+  // mutated ctx and the decoded PARA body text.
+  function runParaBuild(overrides: Partial<import("./graph.js").Esci2Ctx>): {
+    ctx: import("./graph.js").Esci2Ctx;
+    body: string;
+  } {
+    const state = esci2Graph.states.POST_MODE_STAT;
+    if (state.kind !== "decision") throw new Error("POST_MODE_STAT not a decision");
+    const ctx = makeCtx(overrides);
+    const result = state.decide(ctx, {
+      type: 0xa000,
+      payload: Buffer.from("STATx0000000" + " ".repeat(52), "ascii"),
+    });
+    if ("error" in result) throw result.error;
+    if (!("send" in result) || !Array.isArray(result.send)) {
+      throw new Error("expected a 2-element send array from POST_MODE_STAT");
+    }
+    const sends = result.send as Buffer[];
+    const body = parseIsPacket(sends[1])!.payload.subarray(8).toString("latin1");
+    return { ctx, body };
+  }
+
+  it("selects wire DPI from CAPA and records downsample intent", () => {
+    const { ctx, body } = runParaBuild({
+      resolution: 240,
+      capaTokens: ET4950_CAPA_TOKENS,
+      source: "adf",
+      duplex: false,
+    });
+    expect(body).toContain("#RSMi0000300");
+    expect(ctx.wireDpi).toBe(300);
+    expect(ctx.downsampleToDpi).toBe(240);
+  });
+
+  it("warns once when an explicit resolution is outside verifiedWireDpis", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // The ET-4950 CAPA fixture advertises 100 exactly, so it resolves
+      // cleanly on the wire, but 100 is outside the entry's verifiedWireDpis
+      // (75/150/200/300/600/1200 hardware-verified 2026-09-02) — still
+      // unverified by our own bar.
+      const { ctx } = runParaBuild({
+        resolution: 100,
+        capaTokens: ET4950_CAPA_TOKENS,
+        source: "adf",
+        duplex: false,
+      });
+      expect(ctx.wireDpi).toBe(100);
+      expect(warnSpy).toHaveBeenCalled();
+      const messages = warnSpy.mock.calls.map((c) => String(c[0])).join(" ");
+      expect(messages).toMatch(/unverified/);
+      expect(messages).toMatch(/#81/);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("does not warn when resolution is undefined (dialect default), even though verifiedWireDpis gates explicit requests only", () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { ctx } = runParaBuild({
+        resolution: undefined,
+        capaTokens: ET4950_CAPA_TOKENS,
+        source: "adf",
+        duplex: false,
+      });
+      expect(ctx.wireDpi).toBe(300);
+      expect(warnSpy).not.toHaveBeenCalled();
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("clamps jpegQuality to the advertised #JPGRANG", () => {
+    const capa = parseCapaTokens(Buffer.from("#JPGRANGd001d085", "ascii"));
+    const { body } = runParaBuild({
+      capaTokens: capa,
+      jpegQuality: 90,
+      resolution: undefined,
+    });
+    expect(body).toContain("#JPGd085");
+  });
+
+  it("an advertised #JPGRANG entirely outside 1..100 is ignored — falls back to ctx.jpegQuality unclamped", () => {
+    // #JPGRANGd150d200 sits entirely above the JPEG quality domain; a naive
+    // clamp would produce a nonsensical #JPGd150+ wire value. The
+    // intersection with [1,100] is empty, so the advertised range is
+    // discarded and the (already config-bounded) requested quality is used
+    // as-is — the session must still complete, not throw.
+    const capa = parseCapaTokens(Buffer.from("#JPGRANGd150d200", "ascii"));
+    const infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const { body } = runParaBuild({
+        capaTokens: capa,
+        jpegQuality: 90,
+        resolution: undefined,
+      });
+      expect(body).toContain("#JPGd090");
+      expect(infoSpy).not.toHaveBeenCalledWith(expect.stringContaining("JPEG quality"));
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  it("an advertised #JPGRANG with an out-of-domain edge is sanitized to 1..100 before clamping, and logs the clamp", () => {
+    // #JPGRANGd000d080: min=0 is below the 1..100 domain and sanitizes up to
+    // 1; the intersected range [1,80] is non-empty, so it clamps normally.
+    const capa = parseCapaTokens(Buffer.from("#JPGRANGd000d080", "ascii"));
+    const infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const { body } = runParaBuild({
+        capaTokens: capa,
+        jpegQuality: 90,
+        resolution: undefined,
+      });
+      expect(body).toContain("#JPGd080");
+      expect(infoSpy).toHaveBeenCalled();
+      const message = String(infoSpy.mock.calls[infoSpy.mock.calls.length - 1][0]);
+      expect(message).toContain("90");
+      expect(message).toContain("80");
+      expect(message).toContain("0-80");
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  it("no advertised lists: target still gets full selection semantics (downsample below pinned default, cap above it)", () => {
+    const capa = parseCapaTokens(Buffer.from("#GMMLISTUG10", "ascii"));
+    const infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const under = runParaBuild({ capaTokens: capa, resolution: 150 });
+      expect(under.ctx.wireDpi).toBe(300);
+      expect(under.ctx.downsampleToDpi).toBe(150);
+
+      const over = runParaBuild({ capaTokens: capa, resolution: 600 });
+      expect(over.ctx.wireDpi).toBe(300);
+      expect(over.ctx.downsampleToDpi).toBeUndefined();
+      expect(infoSpy).toHaveBeenCalled();
+      const message = String(infoSpy.mock.calls[infoSpy.mock.calls.length - 1][0]);
+      expect(message).toContain("SCAN_RESOLUTION=600 exceeds this model's maximum");
+    } finally {
+      infoSpy.mockRestore();
+    }
+  });
+
+  it("caps a default (unset SCAN_RESOLUTION) target without naming the env var", () => {
+    // Synthetic CAPA whose advertised max (200) sits below the standard
+    // profile's 300 DPI pinned default — realistic hardware wouldn't
+    // advertise this, but it's the only way to force the default-branch
+    // cap path (buildParaSend's `target = ctx.resolution ?? pinnedDefault`)
+    // without SCAN_RESOLUTION ever being set.
+    const capa = parseCapaTokens(
+      Buffer.from("#RSMLISTd050d075d100d150d200#RSSLISTd050d075d100d150d200", "ascii"),
+    );
+    const infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const { ctx } = runParaBuild({ capaTokens: capa, resolution: undefined, source: "adf" });
+      expect(ctx.wireDpi).toBe(200);
+      expect(infoSpy).toHaveBeenCalled();
+      const message = String(infoSpy.mock.calls[infoSpy.mock.calls.length - 1][0]);
+      expect(message).not.toMatch(/SCAN_RESOLUTION/);
+      expect(message).toContain("200 DPI");
+      expect(message).toContain("300 DPI pinned default");
+    } finally {
+      infoSpy.mockRestore();
+    }
   });
 });
 

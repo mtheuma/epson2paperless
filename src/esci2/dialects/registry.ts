@@ -57,6 +57,17 @@ export interface RegistryEntry {
    * omitted printers get the adaptive white-point clip only.
    */
   toneCurve?: ToneCurveName;
+  /**
+   * Wire DPIs confirmed to work on this model — either a committed replay
+   * fixture drives that exact DPI to completion, or a hardware report
+   * documents it (README compatibility row / linked issue). Read by
+   * buildParaSend: an explicit SCAN_RESOLUTION that resolves (via
+   * selectWireDpi) to a DPI NOT in this list gets a one-line warn inviting a
+   * report (issue #81) — it still scans, this is a heads-up, not a guard.
+   * Empty means no wire DPI beyond the dialect's pinned default has been
+   * confirmed, so every explicit SCAN_RESOLUTION warns.
+   */
+  verifiedWireDpis: number[];
 }
 
 /**
@@ -89,6 +100,13 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       cmxClass: { jpg: null, pdf: null },
       optionalSegments: { qit: true, cct: true },
       toneCurve: "et4950-family",
+      // 300: Frida-captured replay fixtures drive it end-to-end. The rest:
+      // ET-4956 hardware verification, 2026-09-02 (issue #81 runbook) —
+      // flatbed at 75/150/600/1200 and ADF at 75/150/200/600 all accepted on
+      // the wire with linearly-scaled dimensions and centred registration
+      // marks; 1200 is flatbed-only (the ADF source list caps at 600, and a
+      // 1200 request on the ADF was confirmed to cap to 600).
+      verifiedWireDpis: [75, 150, 200, 300, 600, 1200],
     },
   ],
   [
@@ -112,6 +130,8 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
       optionalSegments: { qit: false, cct: false },
+      // Committed pcap-extracted replay fixture drives 300 DPI end-to-end.
+      verifiedWireDpis: [300],
     },
   ],
   [
@@ -128,6 +148,8 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
       cmxClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
       optionalSegments: { qit: true, cct: false },
+      // Committed pcap-extracted replay fixture drives 300 DPI end-to-end.
+      verifiedWireDpis: [300],
     },
   ],
   [
@@ -144,6 +166,10 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: null, pdf: null },
       optionalSegments: { qit: true, cct: true },
+      // No replay fixture and no reporter retest (README: 🟡 Experimental,
+      // inferred dialect, issue #92) — seed empty per the verification-posture
+      // rule until a hardware report confirms a wire DPI.
+      verifiedWireDpis: [],
     },
   ],
   [
@@ -160,6 +186,8 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
       optionalSegments: { qit: false, cct: false },
+      // Committed pcap-extracted replay fixture drives 300 DPI end-to-end.
+      verifiedWireDpis: [300],
     },
   ],
   [
@@ -182,6 +210,8 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
       optionalSegments: { qit: false, cct: false },
+      // Live-validated on real hardware (PID 116E, FW FB 1.01) at 300 DPI.
+      verifiedWireDpis: [300],
     },
   ],
   [
@@ -205,6 +235,8 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
       optionalSegments: { qit: false, cct: false },
       paraProfile: "adf-crp",
+      // Committed pcap-extracted replay fixtures drive 200 and 300 DPI end-to-end.
+      verifiedWireDpis: [200, 300],
     },
   ],
   [
@@ -241,6 +273,13 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       optionalSegments: { qit: false, cct: false },
       paraProfile: "adf-crp",
       monoGammaClass: "ds575w-mono",
+      // 400 and 600: committed pcap-extracted replay fixtures drive these
+      // end-to-end. 200: not fixture-covered, but README-recorded as the one
+      // DPI actually hardware-verified on this model (compatibility table row:
+      // "only duplex colour PDF @ 200 DPI hardware-verified"); 400/600 are
+      // capture/replay-tested only. All three qualify under the
+      // verification-posture rule.
+      verifiedWireDpis: [200, 400, 600],
     },
   ],
   [
@@ -305,6 +344,8 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
       optionalSegments: { qit: false, cct: false },
+      // Live-validated on real hardware at 300 DPI (issue #132).
+      verifiedWireDpis: [300],
     },
   ],
   [
@@ -340,6 +381,8 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
       optionalSegments: { qit: true, cct: false },
+      // Confirmed working by the reporter at 300 DPI (issue #120).
+      verifiedWireDpis: [300],
     },
   ],
   [
@@ -379,6 +422,8 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
       optionalSegments: { qit: true, cct: false },
+      // Committed pcap-extracted replay fixtures drive 300 DPI end-to-end (issue #145).
+      verifiedWireDpis: [300],
     },
   ],
   [
@@ -423,6 +468,10 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
       optionalSegments: { qit: true, cct: false },
+      // Awaiting reporter validation (#174) — the flatbed evidence isn't
+      // recorded in the tree yet. Flip to [300] in the PR that flips the
+      // README row to ✅.
+      verifiedWireDpis: [],
     },
   ],
 ]);

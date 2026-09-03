@@ -24,4 +24,5 @@ export const XP620_ENTRY: LegacyDialectEntry = {
   // pure-read of that length. XP_IDENT_A_META handles phase 2 (see Task 12).
   setup: { next: "XP_IDENT_A_META", send: () => passthru(buildEscI(), 4) }, // ESC I (reply 4)
   teardown: { next: "XP_TEARDOWN_INIT", send: () => passthru(buildEscInit(), 1) }, // ESC @ (reply 1)
+  deliveredDpi: () => 300, // fixed; format-independent
 };

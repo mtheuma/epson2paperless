@@ -242,33 +242,31 @@ describe("loadConfig", () => {
     expect(() => loadConfig()).toThrow();
   });
 
-  it("defaults SCAN_RESOLUTION to 200", () => {
+  it("leaves scanResolution undefined when SCAN_RESOLUTION is unset", () => {
     process.env.PRINTER_IP = "192.0.2.58";
-    expect(loadConfig().scanResolution).toBe(200);
+    expect(loadConfig().scanResolution).toBeUndefined();
   });
 
-  it("coerces an advertised SCAN_RESOLUTION (300) to a number", () => {
+  it("accepts any integer in the sanity range (250 is no longer rejected)", () => {
     process.env.PRINTER_IP = "192.0.2.58";
-    process.env.SCAN_RESOLUTION = "300";
-    expect(loadConfig().scanResolution).toBe(300);
+    process.env.SCAN_RESOLUTION = "250";
+    expect(loadConfig().scanResolution).toBe(250);
   });
 
-  it("accepts the lowest advertised SCAN_RESOLUTION (50)", () => {
+  it("accepts the range bounds 50 and 1200", () => {
     process.env.PRINTER_IP = "192.0.2.58";
     process.env.SCAN_RESOLUTION = "50";
     expect(loadConfig().scanResolution).toBe(50);
-  });
-
-  it("rejects a non-advertised SCAN_RESOLUTION (250)", () => {
-    process.env.PRINTER_IP = "192.0.2.58";
-    process.env.SCAN_RESOLUTION = "250";
-    expect(() => loadConfig()).toThrow();
-  });
-
-  it("rejects an out-of-range SCAN_RESOLUTION (1200)", () => {
-    process.env.PRINTER_IP = "192.0.2.58";
     process.env.SCAN_RESOLUTION = "1200";
-    expect(() => loadConfig()).toThrow();
+    expect(loadConfig().scanResolution).toBe(1200);
+  });
+
+  it("rejects out-of-range SCAN_RESOLUTION (49, 1201)", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.SCAN_RESOLUTION = "49";
+    expect(() => loadConfig()).toThrow(/SCAN_RESOLUTION/);
+    process.env.SCAN_RESOLUTION = "1201";
+    expect(() => loadConfig()).toThrow(/SCAN_RESOLUTION/);
   });
 
   it("defaults SCAN_COLOR_MODE to color", () => {
