@@ -11,6 +11,7 @@ import {
   resolveScanDispatch,
   dispatchScanSession,
 } from "./startup.js";
+import { createPrinterTarget } from "./network.js";
 
 const log = createLogger("one-shot");
 
@@ -20,7 +21,8 @@ async function main() {
   setLogFormat(config.logFormat);
 
   logStartupBanner(config, "epson2paperless one-shot — will exit after the first scan completes");
-  const responder = await startPrinterDiscovery(config);
+  const target = await createPrinterTarget(config);
+  const responder = await startPrinterDiscovery(config, target);
 
   type ExitReason =
     | { kind: "complete" }
@@ -36,7 +38,7 @@ async function main() {
 
   const pushscanServer = createPushScanServer(
     2968,
-    (info) => {
+    (info, peerAddress) => {
       const scan = resolveScanDispatch(info, config);
       if (scan === null) {
         log.warn(
@@ -58,6 +60,7 @@ async function main() {
         action: scan.action,
         paperless: buildPaperlessOptions(config),
         productName: info.productName,
+        printerIp: peerAddress,
       });
       void inflight.track(scanPromise);
       scanPromise.then(
@@ -65,7 +68,7 @@ async function main() {
         (err) => settle({ kind: "fail", err }),
       );
     },
-    buildPushScanServerOptions(config),
+    buildPushScanServerOptions(config, target),
   );
 
   log.info("epson2paperless ready — waiting for one scan from printer panel");

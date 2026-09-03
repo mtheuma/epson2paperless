@@ -1,4 +1,115 @@
 import dgram from "node:dgram";
+import dns from "node:dns/promises";
+import net from "node:net";
+import { createLogger } from "./logger.js";
+
+const log = createLogger("network");
+
+export function normalizeIPv4(address: string): string | null {
+  if (net.isIPv4(address)) return address;
+  const mapped = address.match(/^::ffff:(\d+(?:\.\d+){3})$/i);
+  return mapped && net.isIPv4(mapped[1]) ? mapped[1] : null;
+}
+
+export type IPv4Lookup = (hostname: string) => Promise<string[]>;
+
+async function lookupIPv4(hostname: string): Promise<string[]> {
+  const results = await dns.lookup(hostname, { family: 4, all: true });
+  return results
+    .map((result) => result.address)
+    .filter((address) => normalizeIPv4(address) !== null);
+}
+
+export interface PrinterTarget {
+  readonly configuredIp?: string;
+  readonly hostname?: string;
+  readonly addresses: ReadonlySet<string>;
+  refresh(force?: boolean): Promise<void>;
+  accepts(peer: string): Promise<boolean>;
+  target(): Promise<string>;
+  stop(): void;
+}
+
+export async function createPrinterTarget(
+  config: { printerIp?: string; printerHostname?: string },
+  options: { lookup?: IPv4Lookup; refreshIntervalMs?: number; now?: () => number } = {},
+): Promise<PrinterTarget> {
+  const lookup = options.lookup ?? lookupIPv4;
+  const intervalMs = options.refreshIntervalMs ?? 30_000;
+  const now = options.now ?? Date.now;
+  const addresses = new Set<string>(config.printerIp ? [config.printerIp] : []);
+  let lastRefresh = config.printerIp ? now() : 0;
+  let lastOnDemand = 0;
+  let inFlight: Promise<void> | null = null;
+
+  const refresh = async (force = false): Promise<void> => {
+    if (config.printerIp || (!force && now() - lastRefresh < intervalMs)) return;
+    if (inFlight) return inFlight;
+    inFlight = (async () => {
+      try {
+        const resolved = new Set(
+          (await lookup(config.printerHostname!))
+            .map((a) => normalizeIPv4(a))
+            .filter((a): a is string => a !== null),
+        );
+        if (resolved.size === 0) throw new Error("hostname has no IPv4 address");
+        const added = [...resolved].filter((a) => !addresses.has(a));
+        const removed = [...addresses].filter((a) => !resolved.has(a));
+        addresses.clear();
+        for (const address of resolved) addresses.add(address);
+        lastRefresh = now();
+        if (added.length || removed.length)
+          log.info(
+            `Resolved ${config.printerHostname}: +[${added.join(", ")}] -[${removed.join(", ")}]`,
+          );
+      } catch (err) {
+        if (addresses.size === 0) {
+          throw new Error(
+            `Cannot resolve PRINTER_HOSTNAME=${config.printerHostname} to IPv4: ${err instanceof Error ? err.message : String(err)}`,
+          );
+        }
+        log.warn(
+          `Unable to refresh ${config.printerHostname}; retaining last-known-good addresses`,
+          err,
+        );
+      } finally {
+        inFlight = null;
+      }
+    })();
+    return inFlight;
+  };
+
+  await refresh(true);
+  const timer = config.printerHostname ? setInterval(() => void refresh(), intervalMs) : null;
+  timer?.unref();
+  return {
+    configuredIp: config.printerIp,
+    hostname: config.printerHostname,
+    get addresses() {
+      return new Set(addresses);
+    },
+    refresh,
+    async accepts(peer) {
+      const normalized = normalizeIPv4(peer);
+      if (!normalized) return false;
+      if (config.printerIp) return normalized === config.printerIp;
+      if (!addresses.has(normalized) && now() - lastOnDemand >= 1000) {
+        lastOnDemand = now();
+        await refresh(true);
+      }
+      return addresses.has(normalized);
+    },
+    async target() {
+      await refresh(true);
+      const value = config.printerIp ?? [...addresses][0];
+      if (!value) throw new Error(`PRINTER_HOSTNAME=${config.printerHostname} has no IPv4 address`);
+      return value;
+    },
+    stop() {
+      if (timer) clearInterval(timer);
+    },
+  };
+}
 
 /**
  * Determines which local IP address can reach the given target IP.

@@ -1,6 +1,6 @@
 import { isPaperlessEnabled, resolveGrayscaleConversion, type Config } from "./config.js";
 import { createLogger } from "./logger.js";
-import { getLocalIpForTarget } from "./network.js";
+import { createPrinterTarget, getLocalIpForTarget, type PrinterTarget } from "./network.js";
 import { createKeepaliveResponder, type KeepaliveResponder } from "./keepalive.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import { detectVariant, type Variant } from "./protocol-probe.js";
@@ -19,7 +19,7 @@ const log = createLogger("startup");
 
 export function logStartupBanner(config: Config, modeMessage: string): void {
   log.info(modeMessage);
-  log.info(`Printer IP: ${config.printerIp}`);
+  log.info(`Printer target: ${config.printerIp ?? config.printerHostname}`);
   log.info(`Destination name: ${config.scanDestName}`);
   log.info(`Output directory: ${config.outputDir}`);
 
@@ -62,8 +62,13 @@ export function logStartupBanner(config: Config, modeMessage: string): void {
   log.info(`JPEG quality: ${config.jpegQuality}`);
 }
 
-export async function startPrinterDiscovery(config: Config): Promise<KeepaliveResponder> {
-  const localIp = await getLocalIpForTarget(config.printerIp);
+export async function startPrinterDiscovery(
+  config: Config,
+  existingTarget?: PrinterTarget,
+): Promise<KeepaliveResponder> {
+  const target = existingTarget ?? (await createPrinterTarget(config));
+  const printerIp = await target.target();
+  const localIp = await getLocalIpForTarget(printerIp);
   log.info(`Local IP: ${localIp}`);
 
   const responder = createKeepaliveResponder({
@@ -80,7 +85,8 @@ export async function startPrinterDiscovery(config: Config): Promise<KeepaliveRe
       // button-only scanners we don't recognise yet.
       version: config.netscanVersion === "auto" ? undefined : config.netscanVersion,
     },
-    printerIp: config.printerIp,
+    printerIp,
+    target,
     printerPort: 2968,
     multicastAddress: "239.255.255.253",
     multicastPort: 2968,
@@ -123,14 +129,20 @@ function usesJobControl(productName: string | null): boolean {
   return productName !== null && JOB_CONTROL_PRODUCTS.has(productName);
 }
 
-export function buildPushScanServerOptions(config: Config): PushScanServerOptions {
+export function buildPushScanServerOptions(
+  config: Config,
+  target?: PrinterTarget,
+): PushScanServerOptions {
   return {
-    beforeResponse: async ({ kind, info }) => {
+    validatePeer: target ? (peer) => target.accepts(peer) : undefined,
+    beforeResponse: async ({ kind, info, peerAddress }) => {
+      const targetIp = peerAddress || config.printerIp;
+      if (!targetIp) throw new Error("Push-scan peer address is required");
       if (!usesJobControl(info.productName)) return;
 
       if (kind === "jobList") {
         log.debug(`${info.productName} JobList received — committing dummy job over TCP/1865`);
-        await runJobListCommit({ printerIp: config.printerIp });
+        await runJobListCommit({ printerIp: targetIp });
         return;
       }
 
@@ -138,7 +150,7 @@ export function buildPushScanServerOptions(config: Config): PushScanServerOption
         log.debug(
           `${info.productName} JobNumberIn=${info.jobNumber} received — reading selected job over TCP/1865`,
         );
-        await runJobNumberCommit({ printerIp: config.printerIp });
+        await runJobNumberCommit({ printerIp: targetIp });
       }
     },
   };
@@ -171,11 +183,17 @@ export interface DispatchArgs {
   action: "jpg" | "pdf";
   paperless: PaperlessUploadOptions | undefined;
   productName: string | null;
+  printerIp?: string;
 }
 
 export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
+  // The validated push-scan peer (daemon / one-shot) or the resolved target
+  // (scan:now); fixed-IP mode falls back to config. Resolve once so the routing
+  // IP can't diverge between detectVariant and the scanner it dispatches to.
+  const printerIp = args.printerIp ?? args.config.printerIp;
+  if (!printerIp) throw new Error("No printer address: pass a peer or set PRINTER_IP");
   const variant: Variant = await detectVariant({
-    printerIp: args.config.printerIp,
+    printerIp,
     port: 1865,
     override: args.config.printerProtocol,
     timeoutMs: 3000,
@@ -196,7 +214,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
   }
   if (variant === "esci2") {
     return runEsci2Scan({
-      printerIp: args.config.printerIp,
+      printerIp,
       port: 1865,
       destId: args.config.scanDestId,
       outputDir: args.config.outputDir,
@@ -219,7 +237,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     // ignored on this path (no TLS layer); config-time Zod validation
     // rejects the combo at startup.
     return runEsci2ScanOverPlain({
-      printerIp: args.config.printerIp,
+      printerIp,
       port: 1865,
       destId: args.config.scanDestId,
       outputDir: args.config.outputDir,
@@ -250,7 +268,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     );
   }
   return runEsciScan({
-    printerIp: args.config.printerIp,
+    printerIp,
     port: 1865,
     outputDir: args.config.outputDir,
     tempDir: args.config.tempDir,

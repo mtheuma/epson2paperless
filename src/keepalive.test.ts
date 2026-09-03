@@ -1,5 +1,5 @@
 import { PID_FF680W, PID_DS575W } from "./printer-ids.js";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import dgram from "node:dgram";
 import {
   buildKeepalivePacket,
@@ -383,6 +383,69 @@ describe("createKeepaliveResponder", () => {
     await new Promise((r) => setTimeout(r, 80));
 
     expect(h.received).toHaveLength(0);
+
+    h.teardown();
+  });
+
+  it("warns once (throttled) naming observed and expected peer for a mismatched announcement", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    // Fixed-IP target the loopback announcer can never match, so every beacon
+    // from 127.0.0.1 is rejected.
+    const responder = createKeepaliveResponder({
+      keepalive: KEEPALIVE_OPTS,
+      printerIp: "192.0.2.1",
+      printerPort: 12345,
+      multicastAddress: "239.255.255.250",
+      multicastPort: 0,
+      burstCount: 1,
+      burstIntervalMs: 10,
+    });
+    await responder.start();
+    const announcer = dgram.createSocket("udp4");
+    await new Promise<void>((r) => announcer.bind(0, "127.0.0.1", () => r()));
+    const send = (pkt: Buffer) =>
+      new Promise<void>((r) => announcer.send(pkt, responder.boundPort, "127.0.0.1", () => r()));
+
+    await send(makeAnnouncement(0x50));
+    await new Promise((r) => setTimeout(r, 20));
+    // Same peer, different seq — the per-address throttle should suppress it.
+    await send(makeAnnouncement(0x51));
+    await new Promise((r) => setTimeout(r, 20));
+
+    const rejectionWarns = warnSpy.mock.calls
+      .map((c) => c.map(String).join(" "))
+      .filter((line) => line.includes("unrecognised peer"));
+    expect(rejectionWarns).toHaveLength(1);
+    expect(rejectionWarns[0]).toContain("127.0.0.1");
+    expect(rejectionWarns[0]).toContain("192.0.2.1");
+
+    responder.stop();
+    announcer.close();
+    warnSpy.mockRestore();
+  });
+
+  it("drops the dedup entry on a local-route failure so the next cycle retries", async () => {
+    let calls = 0;
+    const h = await setupHarness({
+      burstCount: 1,
+      localIpForTarget: (): Promise<string> => {
+        calls++;
+        if (calls === 1)
+          return Promise.reject(Object.assign(new Error("no route"), { code: "EHOSTUNREACH" }));
+        return Promise.resolve("127.0.0.1");
+      },
+    });
+    // First attempt: route resolution rejects → no burst, no unhandled rejection.
+    await sendAnnouncement(h, makeAnnouncement(0x60));
+    await new Promise((r) => setTimeout(r, 40));
+    expect(h.received).toHaveLength(0);
+
+    // Same seq again: must NOT be skipped as a duplicate — the failed attempt
+    // cleared the dedup entry — so it retries and now succeeds.
+    await sendAnnouncement(h, makeAnnouncement(0x60));
+    await new Promise((r) => setTimeout(r, 40));
+    expect(h.received).toHaveLength(1);
+    expect(h.received[0][11]).toBe(0x60);
 
     h.teardown();
   });

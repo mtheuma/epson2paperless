@@ -14,6 +14,7 @@ import { buildPaperlessOptions } from "./startup.js";
 describe("loadConfig", () => {
   beforeEach(() => {
     delete process.env.PRINTER_IP;
+    delete process.env.PRINTER_HOSTNAME;
     delete process.env.SCAN_DEST_NAME;
     delete process.env.SCAN_DEST_ID;
     delete process.env.OUTPUT_DIR;
@@ -92,6 +93,47 @@ describe("loadConfig", () => {
 
   it("throws if PRINTER_IP is missing", () => {
     expect(() => loadConfig()).toThrow("PRINTER_IP");
+  });
+
+  it("accepts a hostname target", () => {
+    process.env.PRINTER_HOSTNAME = "printer.example.lan";
+    expect(loadConfig().printerHostname).toBe("printer.example.lan");
+  });
+
+  it("accepts a fully-qualified hostname with a trailing dot", () => {
+    process.env.PRINTER_HOSTNAME = "printer.home.arpa.";
+    expect(loadConfig().printerHostname).toBe("printer.home.arpa.");
+  });
+
+  it("rejects both printer target variables", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.PRINTER_HOSTNAME = "printer.example.lan";
+    expect(() => loadConfig()).toThrow(/Exactly one/);
+  });
+
+  it("rejects malformed hostnames", () => {
+    const malformed = [
+      "bad host",
+      ".example.com",
+      "foo..bar",
+      "foo.-bar",
+      "foo-.bar",
+      "-foo.bar",
+      "foo.bar-",
+      `${"a".repeat(64)}.example.com`,
+      `${"a.".repeat(127)}example.com`,
+    ];
+    for (const hostname of malformed) {
+      process.env.PRINTER_HOSTNAME = hostname;
+      expect(() => loadConfig()).toThrow(/PRINTER_HOSTNAME/);
+    }
+  });
+
+  it("rejects all-numeric-dotted hostnames and points at PRINTER_IP", () => {
+    for (const hostname of ["0.0.0.0", "192.168.01.1", "10.0.0.1."]) {
+      process.env.PRINTER_HOSTNAME = hostname;
+      expect(() => loadConfig()).toThrow(/PRINTER_IP/);
+    }
   });
 
   it("loads required PRINTER_IP and applies defaults", () => {
@@ -681,6 +723,7 @@ describe("buildPaperlessOptions", () => {
 describe("PRINTER_CERT_FINGERPRINT", () => {
   beforeEach(() => {
     delete process.env.PRINTER_IP;
+    delete process.env.PRINTER_HOSTNAME;
     delete process.env.PRINTER_CERT_FINGERPRINT;
     delete process.env.PRINTER_PROTOCOL;
     delete process.env.ESCI_FORCE_SOURCE;
