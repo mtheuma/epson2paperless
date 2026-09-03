@@ -1,6 +1,6 @@
 import dgram from "node:dgram";
 import { createLogger } from "./logger.js";
-import { PID_FF680W, PID_DS575W } from "./printer-ids.js";
+import { PID_FF680W, PID_DS575W, extractPid } from "./printer-ids.js";
 import { getLocalIpForTarget, normalizeIPv4, type PrinterTarget } from "./network.js";
 
 const log = createLogger("keepalive");
@@ -90,8 +90,7 @@ export function parsePrinterAnnouncement(
   if (data[0] !== 0x02 || data[1] !== 0x06 || data[2] !== 0x00 || data[3] !== 0x00) {
     return null;
   }
-  const productMatch = data.toString("latin1").match(/PID [0-9A-Fa-f]{4}/);
-  return { seq: data[11], productName: productMatch ? productMatch[0].toUpperCase() : null };
+  return { seq: data[11], productName: extractPid(data.toString("latin1")) };
 }
 
 export interface KeepaliveResponderOptions {

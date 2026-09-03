@@ -76,6 +76,7 @@ export function makeParaSpec(
   action: ParaSpec["action"],
   resolution?: number,
   colorMode?: ParaSpec["colorMode"],
+  jpegQuality?: number,
 ): ParaSpec {
   return {
     source,
@@ -90,5 +91,6 @@ export function makeParaSpec(
     resolution,
     colorMode,
     monoGammaClass: entry.monoGammaClass,
+    jpegQuality,
   };
 }

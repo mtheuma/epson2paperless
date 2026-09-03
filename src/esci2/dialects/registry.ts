@@ -57,6 +57,17 @@ export interface RegistryEntry {
    * omitted printers get the adaptive white-point clip only.
    */
   toneCurve?: ToneCurveName;
+  /**
+   * Wire DPIs confirmed to work on this model — either a committed replay
+   * fixture drives that exact DPI to completion, or a hardware report
+   * documents it (README compatibility row / linked issue). Read by
+   * buildParaSend: an explicit SCAN_RESOLUTION that resolves (via
+   * selectWireDpi) to a DPI NOT in this list gets a one-line warn inviting a
+   * report (issue #81) — it still scans, this is a heads-up, not a guard.
+   * Empty means no wire DPI beyond the dialect's pinned default has been
+   * confirmed, so every explicit SCAN_RESOLUTION warns.
+   */
+  verifiedWireDpis: number[];
 }
 
 /**
@@ -89,6 +100,13 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       cmxClass: { jpg: null, pdf: null },
       optionalSegments: { qit: true, cct: true },
       toneCurve: "et4950-family",
+      // 300: Frida-captured replay fixtures drive it end-to-end. The rest:
+      // ET-4956 hardware verification, 2026-09-02 (issue #81 runbook) —
+      // flatbed at 75/150/600/1200 and ADF at 75/150/200/600 all accepted on
+      // the wire with linearly-scaled dimensions and centred registration
+      // marks; 1200 is flatbed-only (the ADF source list caps at 600, and a
+      // 1200 request on the ADF was confirmed to cap to 600).
+      verifiedWireDpis: [75, 150, 200, 300, 600, 1200],
     },
   ],
   [
@@ -112,6 +130,8 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
       optionalSegments: { qit: false, cct: false },
+      // Committed pcap-extracted replay fixture drives 300 DPI end-to-end.
+      verifiedWireDpis: [300],
     },
   ],
   [
@@ -128,6 +148,8 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
       cmxClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
       optionalSegments: { qit: true, cct: false },
+      // Committed pcap-extracted replay fixture drives 300 DPI end-to-end.
+      verifiedWireDpis: [300],
     },
   ],
   [
@@ -144,6 +166,10 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: null, pdf: null },
       optionalSegments: { qit: true, cct: true },
+      // No replay fixture and no reporter retest (README: 🟡 Experimental,
+      // inferred dialect, issue #92) — seed empty per the verification-posture
+      // rule until a hardware report confirms a wire DPI.
+      verifiedWireDpis: [],
     },
   ],
   [
@@ -160,6 +186,8 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
       optionalSegments: { qit: false, cct: false },
+      // Committed pcap-extracted replay fixture drives 300 DPI end-to-end.
+      verifiedWireDpis: [300],
     },
   ],
   [
@@ -182,6 +210,8 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
       optionalSegments: { qit: false, cct: false },
+      // Live-validated on real hardware (PID 116E, FW FB 1.01) at 300 DPI.
+      verifiedWireDpis: [300],
     },
   ],
   [
@@ -205,6 +235,8 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
       optionalSegments: { qit: false, cct: false },
       paraProfile: "adf-crp",
+      // Committed pcap-extracted replay fixtures drive 200 and 300 DPI end-to-end.
+      verifiedWireDpis: [200, 300],
     },
   ],
   [
@@ -241,6 +273,13 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       optionalSegments: { qit: false, cct: false },
       paraProfile: "adf-crp",
       monoGammaClass: "ds575w-mono",
+      // 400 and 600: committed pcap-extracted replay fixtures drive these
+      // end-to-end. 200: not fixture-covered, but README-recorded as the one
+      // DPI actually hardware-verified on this model (compatibility table row:
+      // "only duplex colour PDF @ 200 DPI hardware-verified"); 400/600 are
+      // capture/replay-tested only. All three qualify under the
+      // verification-posture rule.
+      verifiedWireDpis: [200, 400, 600],
     },
   ],
   [
@@ -305,6 +344,8 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
       optionalSegments: { qit: false, cct: false },
+      // Live-validated on real hardware at 300 DPI (issue #132).
+      verifiedWireDpis: [300],
     },
   ],
   [
@@ -340,6 +381,8 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
       optionalSegments: { qit: true, cct: false },
+      // Confirmed working by the reporter at 300 DPI (issue #120).
+      verifiedWireDpis: [300],
     },
   ],
   [
@@ -379,6 +422,56 @@ export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map([
       gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
       cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
       optionalSegments: { qit: true, cct: false },
+      // Committed pcap-extracted replay fixtures drive 300 DPI end-to-end (issue #145).
+      verifiedWireDpis: [300],
+    },
+  ],
+  [
+    // WF-3835: A4 WorkForce office AIO (WF-3820/3830 series). Flatbed + ADF
+    // simplex (CAPA reports duplex: N — the series' 35-sheet ADF scans one
+    // side), ESC/I-2 over plain TCP. Speculative from the issue #174 diagnostic
+    // (PID 117A, FW FB 2.03): CAPA advertises GMM "UG10UG18" and CMX "UNITUM08"
+    // with QIT present (PREFON OFF) and CCT absent — an ET-15000-shaped dialect
+    // that additionally carries the optional QIT segment (equivalently, an
+    // ET-8500 with an ADF). Both AREA values are byte-identical to the
+    // ET-4950/ET-4800 family ("d850i0001170" FB, "d850i0001400" ADF), so the
+    // extents are reused from the ET-4800, as is its matching UNITUM08 CMX
+    // class (et4800-um08).
+    //
+    // Gamma is not advertised in CAPA, so it can't be pinned from the
+    // diagnostic, and here the two candidate curves disagree about which
+    // sibling to follow. By segment shape (QIT present, CCT absent) the
+    // nearest entries are the ET-8500 and ET-7700, which run the flat
+    // et4950-stock; by hardware class the WF-3835 is a working-document AIO
+    // like the ET-4800 and ET-15000, which run et4800-stock — as do the
+    // flatbed-only ET-2810 / XP-3200 that inherited it (#132). We follow
+    // hardware class, on the reading that Epson tunes the curve to the
+    // scanner's purpose rather than to which optional segments its firmware
+    // advertises: the ET-8500 and ET-7700 are photo scanners, where the flat
+    // curve was chosen deliberately, and the WF-3835 is not one.
+    //
+    // This is the one field in the entry that is a judgement call rather than
+    // a transcription, so it is what a reporter retest should exercise first:
+    // et4800-stock crushes shadows if it turns out to be the wrong pick, which
+    // a compatibility-test-page scan would show as a lifted black floor.
+    // Awaiting reporter validation on real hardware (#174).
+    "860a899be9dc4fc27b68f8aed21a49ccfe87733a3974813f0c2ade6810e89dc7",
+    {
+      displayName: "WF-3835 (ESC/I-2 over plain TCP)",
+      sourceDetection: "stat-length",
+      initPollIterations: 3,
+      fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
+      adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
+      adfDuplex: false, // ADF simplex (CAPA duplex: N)
+      duplexBackRotated: false, // ADF simplex — no back sides
+      gmm: "UG18",
+      gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
+      cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
+      optionalSegments: { qit: true, cct: false },
+      // Awaiting reporter validation (#174) — the flatbed evidence isn't
+      // recorded in the tree yet. Flip to [300] in the PR that flips the
+      // README row to ✅.
+      verifiedWireDpis: [],
     },
   ],
 ]);

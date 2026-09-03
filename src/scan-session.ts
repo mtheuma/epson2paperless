@@ -10,6 +10,7 @@ import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import type { PostProcessProfile } from "./postprocess/index.js";
 import type { ToneCurveName } from "./postprocess/tone-curves.js";
 import type { WhitePoint } from "./postprocess/auto-color.js";
+import type { Downsample } from "./postprocess/downsample.js";
 import { DEFAULT_JPEG_QUALITY, type GrayscaleConversion } from "./config.js";
 
 /**
@@ -357,6 +358,27 @@ export interface RunScanSessionOpts<Ctx> {
    * resolveToneCurve, because the dialect is only known mid-scan.
    */
   resolveBackPageRotated?: (ctx: Ctx) => boolean;
+  /**
+   * Resolves the finalize-time host-side DPI downsample fallback from the
+   * final context — set when the wire couldn't reach the requested
+   * SCAN_RESOLUTION (the dialect's max, or the wire's own DPI vocabulary, is
+   * only known mid-scan). Undefined means no fallback is needed: the wire hit
+   * the requested DPI, or the transport has no such notion.
+   */
+  resolveDownsample?: (ctx: Ctx) => Downsample | undefined;
+  /**
+   * Resolves the finalize-time lossless JFIF-density-only stamp from the
+   * final context — the legacy ESC/I path's counterpart to
+   * `resolveDownsample`: an explicit SCAN_RESOLUTION that exactly matches
+   * (or is capped above) the delivered DPI produces no resize on that wire,
+   * so without a stamp the host-encoded JPEG carries no real density and
+   * reads as 72 DPI. Mutually exclusive with `resolveDownsample` by
+   * construction — a resolver that would return a downsample never also
+   * returns a stamp. Omitted (or returning undefined) means no stamp; the
+   * ESC/I-2 shells never set this — their JPEGs are printer-encoded
+   * passthrough we don't patch.
+   */
+  resolveStampDpi?: (ctx: Ctx) => number | undefined;
   paperless?: PaperlessUploadOptions;
   /**
    * Test-only: allow reaching DONE without any flushPage having fired.
@@ -429,6 +451,8 @@ export async function runScanSession<Ctx>(
         grayscaleConversion: opts.resolveGrayscaleConversion?.(ctx),
         toneCurve: opts.resolveToneCurve?.(ctx),
         whitePoint: opts.whitePoint,
+        downsample: opts.resolveDownsample?.(ctx),
+        stampDpi: opts.resolveStampDpi?.(ctx),
       });
     }
 

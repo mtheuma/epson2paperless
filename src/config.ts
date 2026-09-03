@@ -1,14 +1,6 @@
 import { readFileSync } from "node:fs";
 import { z } from "zod";
 
-// FF-680W CAPA-advertised resolutions (#RSMLIST). SCAN_RESOLUTION is validated
-// against this set and consumed by the adf-crp dialects (FF-680W and DS-575W —
-// their #RSM/#RSS/#ACQ fields scale with it). FF-680W 200/300 and DS-575W
-// 400/600 are wire-verified by PARA capture; the rest rely on the linear
-// DPI-scaling formula in para-composer.ts. Other models ignore SCAN_RESOLUTION
-// and scan at their dialect's fixed resolution.
-export const ADF_CRP_RESOLUTIONS = [50, 75, 100, 150, 200, 240, 300, 360, 400, 600] as const;
-export const DEFAULT_SCAN_RESOLUTION = 200;
 export const DEFAULT_JPEG_QUALITY = 90;
 
 /**
@@ -119,13 +111,15 @@ const configSchema = z
     // the FF-680W job-number flow, and every host-triggered scan (scan-now).
     scanFormat: z.enum(["jpg", "pdf"]).default("pdf"),
     scanSides: z.enum(["simplex", "duplex"]).default("duplex"),
+    // Universal target DPI. Sanity-bounded only — the real validity check is
+    // per-printer at session time (CAPA-advertised lists on ESC/I-2; fixed
+    // rasters on legacy). Unset = each dialect's pinned default.
     scanResolution: z.coerce
       .number()
       .int()
-      .refine((v) => (ADF_CRP_RESOLUTIONS as readonly number[]).includes(v), {
-        message: `SCAN_RESOLUTION must be one of the advertised DPIs (FF-680W / DS-575W): ${ADF_CRP_RESOLUTIONS.join(", ")}`,
-      })
-      .default(DEFAULT_SCAN_RESOLUTION),
+      .min(50, "SCAN_RESOLUTION must be 50-1200")
+      .max(1200, "SCAN_RESOLUTION must be 50-1200")
+      .optional(),
     scanColorMode: z.enum(["color", "grayscale", "auto"]).default(DEFAULT_SCAN_COLOR_MODE),
     esciForceSource: z.enum(["flatbed", "adf-simplex", "adf-duplex"]).optional(),
     printerProtocol: z.enum(["auto", "esci2", "esci2-plain", "esci"]).default("auto"),

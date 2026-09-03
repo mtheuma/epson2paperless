@@ -83,6 +83,19 @@ describe("parsePushScanRequest", () => {
     expect(result.duplex).toBe(false);
   });
 
+  it("canonicalises a variant-cased ProductNameIn PID at the parse point", () => {
+    // Every downstream PID consumer (dialect resolution, job-control routing,
+    // the probe hint) exact-matches on canonical `PID XXXX`, so casing and
+    // spacing variance is absorbed here, once.
+    const soap = `<s:Body><p:PushScan><ProductNameIn>  pid 11d1 </ProductNameIn><PushScanIDIn>01</PushScanIDIn></p:PushScan></s:Body>`;
+    expect(parsePushScanRequest(soap).productName).toBe("PID 11D1");
+  });
+
+  it("passes a non-PID ProductNameIn through raw for diagnosability", () => {
+    const soap = `<s:Body><p:PushScan><ProductNameIn>ET-7700 Series</ProductNameIn><PushScanIDIn>01</PushScanIDIn></p:PushScan></s:Body>`;
+    expect(parsePushScanRequest(soap).productName).toBe("ET-7700 Series");
+  });
+
   it("classifies '11' as duplex", () => {
     const result = parsePushScanRequest(body("11"));
     expect(result.pushScanId).toBe("11");

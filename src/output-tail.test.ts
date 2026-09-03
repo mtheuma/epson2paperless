@@ -230,6 +230,55 @@ describe("output-tail", () => {
     );
   });
 
+  it("passes downsample through to postProcessTempPages and logs it once", async () => {
+    const fakeJpeg = Buffer.from("ffd8ffe000104a464946", "hex");
+    writeFileSync(path.join(tempDir, "page_001.jpg"), fakeJpeg);
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await finalizeSession({
+      sessionTempDir: tempDir,
+      outputDir,
+      sessionTs: new Date("2026-08-09T09:09:09Z"),
+      action: "jpg",
+      backPageIndices: [],
+      paperless: undefined,
+      downsample: { fromDpi: 300, toDpi: 150 },
+    });
+
+    expect(postProcessMock).toHaveBeenCalledWith(
+      tempDir,
+      "none",
+      expect.objectContaining({ downsample: { fromDpi: 300, toDpi: 150 } }),
+      expect.anything(),
+    );
+    const logged = consoleSpy.mock.calls.some((call) =>
+      call.some((arg) => typeof arg === "string" && arg.includes("downsampling 300 → 150 DPI")),
+    );
+    expect(logged).toBe(true);
+    consoleSpy.mockRestore();
+  });
+
+  it("does not log a downsample message when none is configured", async () => {
+    const fakeJpeg = Buffer.from("ffd8ffe000104a464946", "hex");
+    writeFileSync(path.join(tempDir, "page_001.jpg"), fakeJpeg);
+    const consoleSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+
+    await finalizeSession({
+      sessionTempDir: tempDir,
+      outputDir,
+      sessionTs: new Date("2026-08-10T10:10:10Z"),
+      action: "jpg",
+      backPageIndices: [],
+      paperless: undefined,
+    });
+
+    const logged = consoleSpy.mock.calls.some((call) =>
+      call.some((arg) => typeof arg === "string" && arg.includes("downsampling")),
+    );
+    expect(logged).toBe(false);
+    consoleSpy.mockRestore();
+  });
+
   it("removes the temp dir even when promotion fails", async () => {
     // Point outputDir at a plain file so mkdirSync inside writeOutputFile throws
     const blockingFile = path.join(outputDir, "not-a-dir");
