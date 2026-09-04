@@ -772,6 +772,48 @@ describe("createPushScanServer request bounds (#185)", () => {
     server.close();
   });
 
+  it("applies the idle timeout while peer validation is still pending", async () => {
+    // In hostname mode the validator may be waiting on a DNS refresh, which
+    // has no bound of its own. The socket is paused meanwhile, so without the
+    // timeout armed first a peer could park connections behind the lookup.
+    let called = false;
+    const server = createPushScanServer(
+      0,
+      () => {
+        called = true;
+      },
+      { validatePeer: () => new Promise<boolean>(() => {}), idleTimeoutMs: 40 },
+    );
+    const port = await listen(server);
+    const client = await connect(port);
+
+    expect(await closedWithin(client, 2000)).toBe(true);
+    expect(called).toBe(false);
+    server.close();
+  });
+
+  it("releases a paused connection whose peer sent a partial request then FIN", async () => {
+    // A paused socket does not process EOF, so a half-closed peer would be
+    // retained for as long as validation takes; the timeout has to cover it.
+    let called = false;
+    const server = createPushScanServer(
+      0,
+      () => {
+        called = true;
+      },
+      { validatePeer: () => new Promise<boolean>(() => {}), idleTimeoutMs: 40 },
+    );
+    const port = await listen(server);
+    const client = await connect(port);
+    const closed = closedWithin(client, 2000);
+
+    client.end("POST /PushScan HTTP/1.0\r\n");
+
+    expect(await closed).toBe(true);
+    expect(called).toBe(false);
+    server.close();
+  });
+
   it("drops the connection when the peer validator throws, with no unhandled rejection", async () => {
     const rejections: unknown[] = [];
     const onRejection = (reason: unknown): void => {

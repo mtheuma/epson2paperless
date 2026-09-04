@@ -290,6 +290,18 @@ export function createPushScanServer(
       return;
     }
 
+    // Armed before anything can wait, including peer validation below: the
+    // stock validator may sit on a DNS refresh, which has no bound of its own,
+    // and a paused socket does not even process a peer's FIN. The timer is
+    // reset by socket activity, so a live request is never cut short by it.
+    socket.setTimeout(idleTimeoutMs, () => {
+      // A complete request whose response is still pending is our delay
+      // (the beforeResponse job-control round-trip), not the peer's.
+      if (handled && !socket.writableEnded) return;
+      if (!handled) drop(`no complete request within ${idleTimeoutMs}ms`);
+      else socket.destroy();
+    });
+
     // Validate the kernel-observed peer before reading anything. The stock
     // validator may refresh DNS, so the socket stays paused (bytes wait in the
     // kernel, bounded by TCP flow control) until it answers; a rejected peer
@@ -307,15 +319,7 @@ export function createPushScanServer(
         drop("peer validation failed", err);
         return;
       }
-      if (socket.destroyed) return;
-      socket.setTimeout(idleTimeoutMs, () => {
-        // A complete request whose response is still pending is our delay
-        // (the beforeResponse job-control round-trip), not the peer's.
-        if (handled && !socket.writableEnded) return;
-        if (!handled) drop(`no complete request within ${idleTimeoutMs}ms`);
-        else socket.destroy();
-      });
-      socket.resume();
+      if (!socket.destroyed) socket.resume();
     })();
 
     function onData(chunk: Buffer): void {
