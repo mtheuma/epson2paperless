@@ -221,6 +221,16 @@ Discovery is working (keepalive lines in the log) but the printer's scan trigger
 - A firewall on the host is blocking inbound **TCP** port `2968`. Discovery only needs UDP; the scan trigger arrives on TCP. Allow both.
 - "Scan to Computer" was declined during the printer's initial network setup. It can't be re-enabled from the settings menus afterwards. Reset the printer's network settings and accept the Scan to Computer prompt when setting it up again.
 
+**`PRINTER_HOSTNAME=EPSONXXXX.local` doesn't resolve in Docker.**
+`EPSONXXXX.local` is the name the printer advertises over mDNS, so it's the first thing most people try — but the container image has no built-in mDNS resolution. Its `/etc/nsswitch.conf` is `hosts: files dns`, with no `libnss_mdns` module and no Avahi daemon, so a `.local` lookup never reaches multicast DNS. `network_mode: host` doesn't change that: name resolution is a libc/NSS concern inside the container, not a network-namespace one.
+
+`files` and `dns` both still work, so any of these gets you a resolvable name:
+
+- Add the printer to the container's hosts file via compose: `extra_hosts: ["epson-scanner:192.0.2.58"]`, then set `PRINTER_HOSTNAME=epson-scanner`.
+- Bind-mount or bake in an `/etc/hosts` entry with the same effect.
+- Use a unicast DNS name instead of the `.local` one — many routers publish DHCP client names in their own resolver (e.g. `epsonxxxx.lan`), and those resolve normally.
+- Or skip the hostname: give the printer a DHCP reservation and set `PRINTER_IP` to it.
+
 **Service hangs after a scan.**
 Rare edge case. Restart the service with `Ctrl-C` and relaunch.
 
