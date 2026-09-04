@@ -20,7 +20,7 @@ What you get:
 
 | Model                 | Status               | Notes                                                                                                                         |
 | --------------------- | -------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| **DS-575W**           | 🟡&nbsp;Experimental | Requires [pairing](#button-only-scanner-pairing); ADF-only; only duplex colour PDF @ 200 DPI hardware-verified                |
+| **DS-575W**           | 🟡&nbsp;Experimental | Requires [pairing](docs/BUTTON-ONLY-SCANNERS.md); ADF-only; only duplex colour PDF @ 200 DPI hardware-verified                |
 | **ET-2550**           | ✅&nbsp;Verified     | Flatbed-only hardware                                                                                                         |
 | **ET-2750**           | ✅&nbsp;Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS                                                                         |
 | **ET-2810**           | ✅&nbsp;Verified     | Flatbed-only hardware; no panel trigger — needs `scan:now`                                                                    |
@@ -31,7 +31,7 @@ What you get:
 | **ET-7700**           | ✅&nbsp;Verified     | Flatbed-only hardware                                                                                                         |
 | **ET-8500**           | ✅&nbsp;Verified     | Flatbed-only hardware                                                                                                         |
 | **ET-15000**          | 🟡&nbsp;Experimental | Flatbed verified; ADF simplex untested                                                                                        |
-| **FF-680W**           | 🟡&nbsp;Experimental | Requires [pairing](#button-only-scanner-pairing); ADF-only; 200/300 DPI verified                                              |
+| **FF-680W**           | 🟡&nbsp;Experimental | Requires [pairing](docs/BUTTON-ONLY-SCANNERS.md); ADF-only; 200/300 DPI verified                                              |
 | **WF-2845**           | ✅&nbsp;Verified     | ADF simplex ([#178](https://github.com/mtheuma/epson2paperless/issues/178))                                                   |
 | **WF-3620**           | ✅&nbsp;Verified     | Plain TCP scanner, no TLS pinning                                                                                             |
 | **WF-3835**           | 🟡&nbsp;Experimental | ADF simplex; inferred dialect, no reporter retest yet ([#174](https://github.com/mtheuma/epson2paperless/issues/174))         |
@@ -140,7 +140,7 @@ Each setting's **Scope** column shows which printers it affects: `All`, `Panel` 
 | --------------------- | ---------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PRINTER_IP`          | All                          | —                | Fixed printer IPv4 address. Mutually exclusive with `PRINTER_HOSTNAME`; retained for compatibility.                                                                                                                                                      |
 | `PRINTER_HOSTNAME`    | All                          | —                | DNS hostname for the printer. IPv4 results are loaded at startup, refreshed every 30 seconds, and refreshed on demand for an unknown peer; the last known-good set is retained after transient DNS failure. Mutually exclusive with `PRINTER_IP`.        |
-| `SCAN_DEST_NAME`      | All                          | `Paperless`      | The label the printer shows on its panel. Give each instance a distinct name. On button-only scanners (FF-680W, DS-575W) it must also match the scanner's stored paired name; see [Button-only scanner pairing](#button-only-scanner-pairing).           |
+| `SCAN_DEST_NAME`      | All                          | `Paperless`      | The label the printer shows on its panel. Give each instance a distinct name. On button-only scanners (FF-680W, DS-575W) it must also match the scanner's stored paired name; see [Button-only scanners](docs/BUTTON-ONLY-SCANNERS.md).                  |
 | `OUTPUT_DIR`          | All                          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                                                                                                                         |
 | `TZ`                  | All                          | system           | Timezone for scan filename timestamps. The standard Docker variable, read by Node directly — no app-side validation. Unset uses the container/system zone, which is UTC in the published image.                                                          |
 | `LOG_LEVEL`           | All                          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                                                                                                                     |
@@ -224,11 +224,11 @@ Discovery is working (keepalive lines in the log) but the printer's scan trigger
 - "Scan to Computer" was declined during the printer's initial network setup. It can't be re-enabled from the settings menus afterwards. Reset the printer's network settings and accept the Scan to Computer prompt when setting it up again.
 
 **`PRINTER_HOSTNAME=EPSONXXXX.local` doesn't resolve.**
-The image has no mDNS resolver of its own: `/etc/nsswitch.conf` is `hosts: files dns`, with no `libnss_mdns` and no Avahi. It can still work where the resolver your host points at bridges mDNS itself — systemd-resolved can, but only with `MulticastDNS=` enabled globally and on the link, which most distros leave off — and `network_mode: host` means the container inherits whatever the host has. That varies by host, so don't build on it. More dependable:
+The image ships no mDNS resolver, so `.local` works only where the host's own resolver bridges mDNS (systemd-resolved can, with `MulticastDNS=` enabled globally and on the link, which most distros leave off). That varies by host, so prefer:
 
-- A unicast DNS name. Many routers publish DHCP client names in their own resolver, e.g. `epsonxxxx.lan`.
+- A unicast DNS name. Many routers publish DHCP client names, e.g. `epsonxxxx.lan`.
 - A DHCP reservation plus `PRINTER_IP`, if your router doesn't publish names.
-- An `/etc/hosts` entry, or compose `extra_hosts`. Resolves fine, but pins the name to one address, which gives up the address tracking `PRINTER_HOSTNAME` is there for.
+- An `/etc/hosts` entry or compose `extra_hosts`. Works, but pins the name to one address, giving up the address tracking `PRINTER_HOSTNAME` is for.
 
 **Service hangs after a scan.**
 Rare edge case. Restart the service with `Ctrl-C` and relaunch.
@@ -236,32 +236,9 @@ Rare edge case. Restart the service with `Ctrl-C` and relaunch.
 **Output folder fills with duplicates named `scan_..._1.jpg`.**
 Normal. If two scans land in the same second, the service appends `_1`, `_2` to avoid overwriting.
 
-## Button-only scanner pairing
-
-Button-only scanners — the **FF-680W** and **DS-575W** — have no panel to pick a destination from. The scanner stores a single paired host name and routes every button press to it, so the `ClientName` advertised by `epson2paperless` (i.e. `SCAN_DEST_NAME`) must match that stored name exactly. If it doesn't, the button press never reaches the service — you'll see healthy keepalives in the log but no scan.
-
-Read the current paired name with SNMP:
-
-```bash
-snmpget -v1 -c epson <printer-ip> \
-  1.3.6.1.4.1.1248.1.1.3.1.10.2.5.0
-```
-
-- **A name comes back** — common on the FF-680W if you've run Epson's software, which stores the PC's hostname. Either set `SCAN_DEST_NAME` to that value, or overwrite the stored name (below). Note the current value first if you may want to restore it.
-- **An empty string comes back** — common on the DS-575W, whose button is not paired to a network destination out of the box. You must set it before any button press will reach the service.
-
-Set the stored name to match `SCAN_DEST_NAME`:
-
-```bash
-snmpset -v1 -c epson <printer-ip> \
-  1.3.6.1.4.1.1248.1.1.3.1.10.2.5.0 \
-  s 'Paperless'
-```
-
-For example, with `SCAN_DEST_NAME=Paperless`, set the SNMP value to `Paperless` too. To undo, `snmpset` the original value back (or an empty string if it started empty).
-
 ## Further reading
 
+- **[docs/BUTTON-ONLY-SCANNERS.md](docs/BUTTON-ONLY-SCANNERS.md)** — pairing the FF-680W and DS-575W over SNMP so their Start button reaches the service.
 - **[docs/MULTIPLE-DESTINATIONS.md](docs/MULTIPLE-DESTINATIONS.md)** — running several presets as separate panel entries (one container per MAC on `macvlan`).
 - **[docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md)** — architecture overview and map of the main service flow.
 - **[docs/PROTOCOL-REFERENCE.md](docs/PROTOCOL-REFERENCE.md)** — byte-level protocol details, scanner state machines, and printer-family differences.
