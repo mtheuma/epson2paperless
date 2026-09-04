@@ -60,7 +60,7 @@ Notes:
 
 - Uses host networking. The printer's multicast beacon can't reach a bridged container. [Why](docs/PROTOCOL-REFERENCE.md#discovery-and-keepalive-udp-multicast).
 - Listens on all interfaces: TCP `2968` for the scan trigger, plus `HEALTH_PORT` (default `3000`). The trigger is unauthenticated — the printer has no way to log in — so any device on your LAN can start a scan, not just the printer. Keep the service on a network you trust.
-- Running several instances against one printer: each container needs its own MAC address. Use a `macvlan` network, not `ipvlan` or a shared bridge.
+- Several destinations on the panel (e.g. a greyscale-PDF preset and a colour-JPG preset): one container per entry, each with its own MAC on a `macvlan` network. Compose example and caveats in [MULTIPLE-DESTINATIONS.md](docs/MULTIPLE-DESTINATIONS.md).
 - Container runs as UID 1000 (`node`). If your mount has a different owner, `chown` it to match.
 - Docker Desktop on macOS / Windows has caveats around host networking; the primary deployment target is a Linux server.
 
@@ -262,6 +262,7 @@ For example, with `SCAN_DEST_NAME=Paperless`, set the SNMP value to `Paperless` 
 
 ## Further reading
 
+- **[docs/MULTIPLE-DESTINATIONS.md](docs/MULTIPLE-DESTINATIONS.md)** — running several presets as separate panel entries (one container per MAC on `macvlan`).
 - **[docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md)** — architecture overview and map of the main service flow.
 - **[docs/PROTOCOL-REFERENCE.md](docs/PROTOCOL-REFERENCE.md)** — byte-level protocol details, scanner state machines, and printer-family differences.
 - **[docs/REVERSE-ENGINEERING.md](docs/REVERSE-ENGINEERING.md)** — capture methodology, Frida/Ghidra notes, pcap fixture workflow, and replay strategy.
