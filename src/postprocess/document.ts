@@ -52,7 +52,7 @@ export function estimatePaperWhite(pixels: Buffer, channels: number): [number, n
   return [pct(hist[0]), pct(hist[1]), pct(hist[2])];
 }
 
-/** Per-channel LUT: identity below the knee, smoothstep up to a 255 plateau. */
+/** Clip LUT: identity below the knee, smoothstep up to a 255 plateau. */
 export function buildLut(paperWhite: number): Uint8Array {
   const clipPoint = Math.max(1, paperWhite - CLIP_BELOW_PAPER);
   const kneeStart = Math.max(0, clipPoint - KNEE_WIDTH);
@@ -70,15 +70,21 @@ export function buildLut(paperWhite: number): Uint8Array {
 }
 
 /**
- * Stage-1 clip LUTs anchored on the measured paper white-point, or null when
- * the low-paper guard trips (paper too dim, or too little near-white present)
- * — the tone curve's domain assumes a clipped input, so nothing is applied
- * without stage 1.
+ * Stage-1 clip LUT anchored on the measured paper white-point's MIN channel,
+ * or null when the low-paper guard trips (paper too dim, or too little
+ * near-white present) — the tone curve's domain assumes a clipped input, so
+ * nothing is applied without stage 1.
+ *
+ * One shared LUT rather than three per-channel ones: applyClip derives a
+ * single lift per pixel from it and adds that lift to all three channels
+ * equally, so a neutral pixel stays neutral through the knee and existing
+ * small channel differences pass through unamplified. Per-channel LUTs used
+ * to multiply near-white chroma noise by the knee's local slope (and, on a
+ * paper cast, lift the three channels of a neutral grey unevenly), pushing
+ * physically neutral pages over the auto-colour classifier's floor — the 9x
+ * amplification recorded in issue #164's DS-575W baseline.
  */
-function computeClipLuts(
-  pixels: Buffer,
-  channels: number,
-): [Uint8Array, Uint8Array, Uint8Array] | null {
+function computeClipLut(pixels: Buffer, channels: number): Uint8Array | null {
   const paperWhite = estimatePaperWhite(pixels, channels);
   const minWhite = Math.min(paperWhite[0], paperWhite[1], paperWhite[2]);
 
@@ -95,25 +101,51 @@ function computeClipLuts(
   if (minWhite < MIN_PAPER_WHITE || nearWhite / sampled < MIN_NEAR_WHITE_FRACTION) {
     return null;
   }
-  return [buildLut(paperWhite[0]), buildLut(paperWhite[1]), buildLut(paperWhite[2])];
+  return buildLut(minWhite);
 }
 
-/** Compose a pinned tone curve onto the adaptive clip LUT: final = tone∘clip. */
-function composeToneCurve(
-  clip: [Uint8Array, Uint8Array, Uint8Array],
-  toneCurve: ToneCurveName,
-): [Uint8Array, Uint8Array, Uint8Array] {
-  const tone = TONE_CURVES[toneCurve];
-  const out: Uint8Array[] = [];
-  for (let c = 0; c < 3; c++) {
-    const composed = new Uint8Array(256);
-    for (let v = 0; v < 256; v++) composed[v] = tone[c][clip[c][v]];
-    out.push(composed);
+/**
+ * Apply the stage-1 clip: per pixel, look the MIN channel up in the shared
+ * LUT and add the resulting lift to all three channels, clamped at 255.
+ *
+ * The min channel is the one scalar that keeps both halves of the old
+ * per-channel behaviour. Flattening: at and above the clip point the LUT
+ * plateaus at 255, so the lift is 255 - min and every channel saturates —
+ * paper (cast included) still lands on pure white. Neutrality: the lift is
+ * the same for all three channels, so equal inputs stay equal and existing
+ * differences never grow (the clamp can only shrink them). A max- or
+ * luma-derived lift would leave the lower channels short of 255 on cast
+ * paper, losing the flattening. Anchoring the shared LUT on the min-channel
+ * paper white keeps the plateau a superset of the old per-channel one, so no
+ * previously-flattened paper pixel comes back.
+ *
+ * Below the knee the lift is zero and the pixel copies through untouched, so
+ * the identity region stays as cheap as the old LUT path.
+ */
+function applyClip(pixels: Buffer, channels: number, lut: Uint8Array): Buffer {
+  // allocUnsafe as in applyLuts: 3-channel pixels are fully overwritten, and
+  // anything else falls back to a copy so extra channels survive.
+  const out = channels === 3 ? Buffer.allocUnsafe(pixels.length) : Buffer.from(pixels);
+  for (let i = 0; i < pixels.length; i += channels) {
+    const r = pixels[i];
+    const g = pixels[i + 1];
+    const b = pixels[i + 2];
+    const min = r < g ? (r < b ? r : b) : g < b ? g : b;
+    const lift = lut[min] - min;
+    if (lift === 0) {
+      out[i] = r;
+      out[i + 1] = g;
+      out[i + 2] = b;
+    } else {
+      out[i] = r + lift > 255 ? 255 : r + lift;
+      out[i + 1] = g + lift > 255 ? 255 : g + lift;
+      out[i + 2] = b + lift > 255 ? 255 : b + lift;
+    }
   }
-  return [out[0], out[1], out[2]];
+  return out;
 }
 
-/** Apply a per-channel LUT triplet to an RGB pixel buffer. */
+/** Apply a per-channel LUT triplet (a pinned tone curve) to an RGB pixel buffer. */
 function applyLuts(pixels: Buffer, channels: number, lut: readonly Uint8Array[]): Buffer {
   // allocUnsafe avoids copying pixels we're about to overwrite entirely; every
   // byte of the 3-channel loop below is written, so no stale memory leaks
@@ -130,13 +162,14 @@ function applyLuts(pixels: Buffer, channels: number, lut: readonly Uint8Array[])
 }
 
 /**
- * Stage 1 (all printers): per-channel near-white clip anchored on the measured
- * paper white-point — neutralizes the paper cast and flattens the paper band
- * (column dips + show-through) to pure white, leaving below-knee content
- * unchanged. Stage 2 (printers with a pinned curve): compose the perceptual
- * tone curve onto the clip so content matches how the printed page actually
- * looks. Returns applied=false (pixels copied unchanged) when the low-paper
- * guard trips — the tone curve's domain assumes a clipped input, so it is not
+ * Stage 1 (all printers): near-white clip anchored on the measured paper
+ * white-point — flattens the paper band (column dips + show-through +
+ * device cast) to pure white via a shared per-pixel lift that keeps neutral
+ * content neutral (#164), leaving below-knee content unchanged. Stage 2
+ * (printers with a pinned curve): apply the perceptual tone curve to the
+ * clipped pixels so content matches how the printed page actually looks.
+ * Returns applied=false (pixels copied unchanged) when the low-paper guard
+ * trips — the tone curve's domain assumes a clipped input, so it is not
  * applied without stage 1.
  */
 export function correctDocumentPixels(
@@ -144,10 +177,13 @@ export function correctDocumentPixels(
   channels: number,
   toneCurve?: ToneCurveName,
 ): CorrectionResult {
-  const clip = computeClipLuts(pixels, channels);
+  const clip = computeClipLut(pixels, channels);
   if (!clip) return { data: Buffer.from(pixels), applied: false };
-  const lut = toneCurve ? composeToneCurve(clip, toneCurve) : clip;
-  return { data: applyLuts(pixels, channels, lut), applied: true };
+  const clipped = applyClip(pixels, channels, clip);
+  return {
+    data: toneCurve ? applyLuts(clipped, channels, TONE_CURVES[toneCurve]) : clipped,
+    applied: true,
+  };
 }
 
 /**
@@ -156,12 +192,13 @@ export function correctDocumentPixels(
  * → single re-encode (3-channel colour or 1-channel greyscale).
  *
  * With conversion "auto", the greyscale verdict runs on the CLIP-stage
- * pixels, after stage 1 but before the tone curve: the clip amplifies real
- * colour content (small saturated marks survive), while a pinned perceptual
- * tone curve maps neutral mid-greys to slightly divergent RGB (chroma up to
- * 30 on the et4950-family curve — above the classifier's floor) and would
- * keep every anti-aliased text page in colour. When the guard trips,
- * classification falls back to the decoded pixels. Conversion "force"
+ * pixels, after stage 1 but before the tone curve: the clip's plateau
+ * neutralises the device cast for free (below-knee colour content passes
+ * through untouched, and since #164 the knee adds no chroma of its own),
+ * while a pinned perceptual tone curve maps neutral mid-greys to slightly
+ * divergent RGB (chroma up to 30 on the et4950-family curve — above the
+ * classifier's floor) and would keep every anti-aliased text page in colour.
+ * When the guard trips, classification falls back to the decoded pixels. Conversion "force"
  * (SCAN_COLOR_MODE=grayscale without greyscale wire support) skips the
  * verdict entirely — every page encodes single-channel.
  */
@@ -183,7 +220,7 @@ async function transformDocumentImage(
       .toBuffer({ resolveWithObject: true }),
   ]);
 
-  const clip = computeClipLuts(data, info.channels);
+  const clip = computeClipLut(data, info.channels);
   const applied = clip !== null;
 
   // A source that is already single-channel (e.g. a DS-575W wire-greyscale
@@ -192,10 +229,9 @@ async function transformDocumentImage(
   const sourceGrayscale = sourceChannels === 1;
   let grayscale = conversion === "force" || sourceGrayscale;
   let verdict: ChromaVerdict | undefined;
-  let corrected: Buffer;
+  const clipped = clip ? applyClip(data, info.channels, clip) : null;
   if (conversion === "auto") {
-    const clipped = clip ? applyLuts(data, info.channels, clip) : null;
-    // The clip anchors each channel on the page's own paper white, which
+    // The clip's plateau saturates every channel of a paper pixel, which
     // neutralises the device cast as a side effect — so clipped pixels are
     // already balanced and applying PRINTER_WHITE_POINT on top would correct
     // twice, injecting chroma into neutral mid-tones (~0.123*v on a cast of
@@ -210,18 +246,12 @@ async function transformDocumentImage(
       clipped ? undefined : whitePoint,
     );
     grayscale = verdict.grayscale || sourceGrayscale;
-    // tone∘clip applied in two passes equals the composed LUT of the
-    // non-auto path — the clip-stage buffer had to exist for classification.
-    corrected = clipped
-      ? toneCurve
-        ? applyLuts(clipped, info.channels, TONE_CURVES[toneCurve])
-        : clipped
-      : data;
-  } else {
-    corrected = clip
-      ? applyLuts(data, info.channels, toneCurve ? composeToneCurve(clip, toneCurve) : clip)
-      : data;
   }
+  const corrected = clipped
+    ? toneCurve
+      ? applyLuts(clipped, info.channels, TONE_CURVES[toneCurve])
+      : clipped
+    : data;
 
   // Skip the re-encode only when it would be a pure no-op: the LUT
   // correction didn't fire AND there's no EXIF orientation baked into the

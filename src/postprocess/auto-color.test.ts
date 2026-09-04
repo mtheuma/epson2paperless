@@ -206,6 +206,16 @@ describe("thresholds against the measured ET-4956 corpus (#146)", () => {
   // `npm run scan:compare`. Source scans are private, so the measurements are
   // pinned here instead: they are what the thresholds were chosen against, and
   // a change that reclassifies any of these rows needs fresh evidence.
+  //
+  // Measured with the pre-#164 per-channel clip. The neutral-preserving knee
+  // can only lower a page's post-clip chroma (per-pixel chroma never grows
+  // through it), which moves the neutral rows further from the cut point.
+  // The colour rows' readings come from saturated content below the knee,
+  // which both formulations pass through identically — #146 recorded the pen
+  // mark at 0.059% under Epson's own processing, so its 0.062% was never
+  // knee amplification. The one row that could drift is cream stock, whose
+  // paper the clip flattens either way; its reading is content-edge chroma
+  // from the cast (44), far above the 0.03% cut point.
   const CORPUS: { page: string; broad: number; strong: number; neutral: boolean }[] = [
     { page: "plain black-and-white text", broad: 0.00005, strong: 0.00002, neutral: true },
     { page: "small text (binding noise floor)", broad: 0.00013, strong: 0, neutral: true },
