@@ -211,6 +211,38 @@ describe("printer target", () => {
     expect(Date.now() - started).toBeLessThan(2000);
   });
 
+  it("never has more than one lookup outstanding, however many refreshes time out", async () => {
+    // Timing the caller out does not cancel the getaddrinfo behind it, and
+    // `inFlight` is cleared as soon as the timeout fires. Without a separate
+    // handle on the abandoned lookup, every later refresh would start another
+    // one against a wedged resolver -- once per interval, or ~1 Hz through
+    // accepts() -- and park the whole four-thread pool that sharp encodes on.
+    // That is the exact starvation the timeout was added to prevent.
+    let calls = 0;
+    const lookup = (): Promise<string[]> => {
+      calls++;
+      // First call succeeds so construction has a last-known-good set to
+      // retain; everything after it hangs forever.
+      return calls === 1 ? Promise.resolve(["192.0.2.58"]) : new Promise<string[]>(() => {});
+    };
+
+    const target = await createPrinterTarget(
+      { printerHostname: "printer.lan" },
+      { lookup, lookupTimeoutMs: 20, refreshIntervalMs: 0 },
+    );
+    expect(calls).toBe(1);
+
+    // Each of these times out and abandons its wait, but must join the one
+    // already-parked lookup rather than starting a fresh one.
+    await target.refresh(true);
+    await target.refresh(true);
+    await target.refresh(true);
+
+    expect(calls).toBe(2);
+    expect([...target.addresses]).toEqual(["192.0.2.58"]);
+    target.stop();
+  });
+
   it("lets a second unknown peer join an in-flight lookup instead of being throttled", async () => {
     let calls = 0;
     let resolveRefresh!: (addresses: string[]) => void;

@@ -250,6 +250,22 @@ export function createPushScanServer(
     });
 
     socket.on("data", (chunk: Buffer) => {
+      // This body runs synchronously inside the 'data' listener, so a throw
+      // here would escape `emit` as an uncaughtException — which
+      // installCrashHandlers turns into process.exit(1) for the whole daemon.
+      // Port 2968 binds all interfaces and there is no request-size cap, so an
+      // unauthenticated LAN peer streaming a headerless request can make
+      // Buffer.concat raise RangeError. Contain the blast radius to the one
+      // socket that caused it.
+      try {
+        handleChunk(chunk);
+      } catch (err) {
+        log.error(`Dropping push-scan connection from ${peer} after a read error`, err);
+        socket.destroy();
+      }
+    });
+
+    function handleChunk(chunk: Buffer): void {
       chunks.push(chunk);
       totalBytes += chunk.length;
 
@@ -360,7 +376,7 @@ export function createPushScanServer(
 
         sendResponse("OK");
       })();
-    });
+    }
 
     socket.on("error", (err) => {
       log.error("PushScan socket error", err);

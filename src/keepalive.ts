@@ -210,22 +210,22 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
               // cause. Warn (parity with the push-scan rejection), naming the
               // observed and expected addresses, throttled per address.
               const observed = rinfo.address;
-              if (!warnedPeers.has(observed)) {
-                // Unlike seenSeqs, which is only ever fed by accepted peers,
-                // this map is keyed on an unvalidated source address: any host
-                // that can put a well-formed announcement on the group adds an
-                // entry. Entries expire after dedupWindowMs, so growth was
-                // already bounded by 30 s of traffic, but a sprayed source list
-                // could fill it freely inside that window. Cap it, evicting
-                // oldest-first — Map iteration is insertion-ordered — and clear
-                // the evicted entry's timer so nothing is left pending.
-                while (warnedPeers.size >= WARNED_PEERS_MAX) {
-                  const oldest = warnedPeers.keys().next();
-                  if (oldest.done) break;
-                  const staleTimer = warnedPeers.get(oldest.value);
-                  if (staleTimer) clearTimeout(staleTimer);
-                  warnedPeers.delete(oldest.value);
-                }
+              // Unlike seenSeqs, which is only ever fed by accepted peers, this
+              // map is keyed on an unvalidated source address: any host that can
+              // put a well-formed announcement on the group adds an entry.
+              // Entries expire after dedupWindowMs, so growth was already
+              // bounded by 30 s of traffic, but a sprayed source list could fill
+              // it freely inside that window.
+              //
+              // At the cap we stop admitting new addresses rather than evicting
+              // the oldest. Evicting would bound memory while unbounding the
+              // log: against a spray of more than WARNED_PEERS_MAX rotating
+              // addresses, every address is evicted before it recurs, so each
+              // one warns afresh and the throttle this map exists for stops
+              // working exactly when it is needed. Declining to admit keeps both
+              // memory and log volume bounded; the genuine single-mismatch case
+              // this warning is for never approaches the cap.
+              if (!warnedPeers.has(observed) && warnedPeers.size < WARNED_PEERS_MAX) {
                 const expected = opts.target
                   ? `${opts.target.hostname ?? "configured target"} [${[...opts.target.addresses].join(", ") || "unresolved"}]`
                   : (normalizeIPv4(opts.printerIp) ?? opts.printerIp);

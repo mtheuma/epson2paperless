@@ -424,11 +424,14 @@ describe("createKeepaliveResponder", () => {
     warnSpy.mockRestore();
   });
 
-  it("caps the rejected-peer warn throttle, evicting oldest-first", async () => {
+  it("caps the rejected-peer warn throttle, bounding log volume as well as memory", async () => {
     // warnedPeers is keyed on an unvalidated source address, so it needs a
-    // ceiling. The map isn't exported; prove the cap behaviourally — after
-    // enough distinct rejected peers, the oldest entry is gone (it warns
-    // again) while the newest is still throttled (it doesn't).
+    // ceiling. At the cap we decline to admit new addresses rather than
+    // evicting the oldest: evicting would bound memory while unbounding the
+    // log, because against a spray wider than the cap every address is evicted
+    // before it recurs and so warns afresh every time. The map isn't exported,
+    // so prove it behaviourally — warnings stop at the cap and stay stopped,
+    // and an address admitted before the cap is still throttled.
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const responder = createKeepaliveResponder({
       keepalive: KEEPALIVE_OPTS,
@@ -458,19 +461,22 @@ describe("createKeepaliveResponder", () => {
         .map((c) => c.map(String).join(" "))
         .filter((line) => line.includes("unrecognised peer")).length;
 
-    const OLDEST = "127.0.0.2";
-    const NEWEST = "127.0.0.71";
-    // 70 distinct peers — comfortably past the 64-entry cap.
+    const FIRST = "127.0.0.2";
+    const BEYOND_CAP = "127.0.0.71";
+    // 70 distinct peers — comfortably past the 64-entry cap. Only the first 64
+    // are admitted, so the log stops growing rather than tracking the spray.
     for (let i = 2; i <= 71; i++) await sendFrom(`127.0.0.${i}`, 0x60 + (i % 8));
-    expect(warnCount()).toBe(70);
+    expect(warnCount()).toBe(64);
 
-    // The oldest entry was evicted to make room, so it warns afresh...
-    await sendFrom(OLDEST, 0x70);
-    expect(warnCount()).toBe(71);
+    // An address the spray pushed past the cap never warns, however often it
+    // repeats — this is the log-volume bound eviction would have lost.
+    await sendFrom(BEYOND_CAP, 0x70);
+    await sendFrom(BEYOND_CAP, 0x71);
+    expect(warnCount()).toBe(64);
 
-    // ...while a peer still inside the window stays throttled to once.
-    await sendFrom(NEWEST, 0x71);
-    expect(warnCount()).toBe(71);
+    // And one admitted before the cap is still throttled to its single warn.
+    await sendFrom(FIRST, 0x72);
+    expect(warnCount()).toBe(64);
 
     responder.stop();
     warnSpy.mockRestore();

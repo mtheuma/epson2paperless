@@ -37,9 +37,11 @@ async function lookupIPv4(hostname: string): Promise<string[]> {
 }
 
 /**
- * Bounds a lookup that may never settle. The losing promise is left pending —
- * there is no way to cancel an in-flight `dns.lookup` — but the caller is freed
- * and the timer is always cleared, so nothing accumulates per call.
+ * Bounds a lookup that may never settle, freeing the caller without pretending
+ * the work stopped. There is no way to cancel an in-flight `dns.lookup`, so the
+ * losing promise stays pending and keeps its threadpool slot; only the timer is
+ * cleaned up here. Not starting a *second* lookup on top of the abandoned one
+ * is the caller's job — see `startOrJoinLookup`.
  */
 async function withLookupTimeout(
   pending: Promise<string[]>,
@@ -90,6 +92,31 @@ export async function createPrinterTarget(
   let lastRefresh = config.printerIp ? now() : 0;
   let lastOnDemand = 0;
   let inFlight: Promise<void> | null = null;
+  // The raw, uncancellable lookup, held separately from `inFlight`.
+  // `dns.lookup` cannot be aborted, so a hung resolver keeps its libuv
+  // threadpool slot until the OS gives up. Timing the *caller* out must not
+  // start a second one: `inFlight` is cleared when the timeout fires, so
+  // without this a wedged resolver would park a fresh thread on every
+  // refresh — once per interval, or ~1 Hz via `accepts()` — and starve the
+  // four-thread pool it shares with sharp. Holding the promise here means at
+  // most one `getaddrinfo` is ever outstanding, however long it hangs.
+  let pendingLookup: Promise<string[]> | null = null;
+
+  const startOrJoinLookup = (): Promise<string[]> => {
+    if (!pendingLookup) {
+      const started = lookup(config.printerHostname!);
+      pendingLookup = started;
+      void started
+        .finally(() => {
+          if (pendingLookup === started) pendingLookup = null;
+        })
+        .catch(() => {
+          // Settlement is handled by whoever awaited `started`; this arm only
+          // exists so clearing the slot can't surface as an unhandled rejection.
+        });
+    }
+    return pendingLookup;
+  };
 
   const refresh = async (force = false): Promise<void> => {
     if (config.printerIp || (!force && now() - lastRefresh < intervalMs)) return;
@@ -97,13 +124,7 @@ export async function createPrinterTarget(
     inFlight = (async () => {
       try {
         const resolved = new Set(
-          (
-            await withLookupTimeout(
-              lookup(config.printerHostname!),
-              config.printerHostname!,
-              lookupTimeoutMs,
-            )
-          )
+          (await withLookupTimeout(startOrJoinLookup(), config.printerHostname!, lookupTimeoutMs))
             .map((a) => normalizeIPv4(a))
             .filter((a): a is string => a !== null),
         );
@@ -154,8 +175,16 @@ export async function createPrinterTarget(
         // this, a second unknown peer arriving inside the resolver window
         // (~100-200 ms) would skip the refresh and be tested against the
         // stale set.
-        if (inFlight) await inFlight;
-        else if (now() - lastOnDemand >= 1000) {
+        // Both arms stamp the throttle, because both end with a just-completed
+        // resolution: without stamping the join, a peer arriving right after
+        // the joined refresh finishes would immediately force a second lookup.
+        // The throttled-out path deliberately does not stamp, so a spray of
+        // unknown peers can't keep pushing the window forward and starve a
+        // genuine new address of its refresh.
+        if (inFlight) {
+          await inFlight;
+          lastOnDemand = now();
+        } else if (now() - lastOnDemand >= 1000) {
           lastOnDemand = now();
           await refresh(true);
         }

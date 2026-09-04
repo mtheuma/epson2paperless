@@ -52,6 +52,12 @@ async function main() {
     signalled,
     shutdownTimeoutMs: config.shutdownTimeoutMs,
   });
+  // The third entry point that builds a PrinterTarget, and the one without a
+  // responder for `shutdown()` to tear down alongside. The refresh interval is
+  // unref()'d and process.exit follows immediately, so this is consistency
+  // rather than a leak: it stops a slow scan from emitting a stray
+  // "Unable to refresh …" warning on the way out.
+  target.stop();
   process.exit(exitCode);
 }
 
