@@ -221,6 +221,13 @@ Discovery is working (keepalive lines in the log) but the printer's scan trigger
 - A firewall on the host is blocking inbound **TCP** port `2968`. Discovery only needs UDP; the scan trigger arrives on TCP. Allow both.
 - "Scan to Computer" was declined during the printer's initial network setup. It can't be re-enabled from the settings menus afterwards. Reset the printer's network settings and accept the Scan to Computer prompt when setting it up again.
 
+**`PRINTER_HOSTNAME=EPSONXXXX.local` doesn't resolve.**
+The image has no mDNS resolver of its own: `/etc/nsswitch.conf` is `hosts: files dns`, with no `libnss_mdns` and no Avahi. It can still work where the resolver your host points at bridges mDNS itself — systemd-resolved can, but only with `MulticastDNS=` enabled globally and on the link, which most distros leave off — and `network_mode: host` means the container inherits whatever the host has. That varies by host, so don't build on it. More dependable:
+
+- A unicast DNS name. Many routers publish DHCP client names in their own resolver, e.g. `epsonxxxx.lan`.
+- A DHCP reservation plus `PRINTER_IP`, if your router doesn't publish names.
+- An `/etc/hosts` entry, or compose `extra_hosts`. Resolves fine, but pins the name to one address, which gives up the address tracking `PRINTER_HOSTNAME` is there for.
+
 **Service hangs after a scan.**
 Rare edge case. Restart the service with `Ctrl-C` and relaunch.
 
