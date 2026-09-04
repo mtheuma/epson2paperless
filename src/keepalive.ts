@@ -15,8 +15,9 @@ const V3_KEEPALIVE_PRODUCTS = new Set([PID_FF680W, PID_DS575W]);
  * Upper bound on the rejected-peer warn-throttle map. Keyed on an unvalidated
  * source address, so it needs a ceiling that doesn't depend on the sender
  * behaving. 64 is far more distinct misdirected sources than a real LAN
- * produces inside one dedup window, and the eviction is oldest-first, so a
- * spray only costs the warn-once throttle for peers already warned about.
+ * produces inside one dedup window. At the cap, new addresses are declined
+ * rather than evicted — see the admission check in the announcement handler
+ * for why evicting bounds memory but unbounds the log.
  */
 const WARNED_PEERS_MAX = 64;
 
