@@ -190,7 +190,6 @@ describe("parsePrinterAnnouncement", () => {
 describe("createKeepaliveResponder", () => {
   const KEEPALIVE_OPTS = {
     clientName: "TestClient",
-    ipAddress: "127.0.0.1",
     eventPort: 12345,
     destId: 0x02,
     language: "en",

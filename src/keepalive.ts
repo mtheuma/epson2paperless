@@ -94,8 +94,13 @@ export function parsePrinterAnnouncement(
 }
 
 export interface KeepaliveResponderOptions {
-  /** Existing KeepaliveOptions: clientName, ipAddress, eventPort, destId, language */
-  keepalive: KeepaliveOptions;
+  /**
+   * clientName, eventPort, destId, language, and optionally version. No
+   * ipAddress: the advertised address is computed per announcement, against
+   * that announcement's source, so a fixed value here would never reach the
+   * wire (and would be wrong on a multi-homed host).
+   */
+  keepalive: Omit<KeepaliveOptions, "ipAddress">;
   /** Unicast destination — the printer's IP address */
   printerIp: string;
   target?: PrinterTarget;
@@ -229,7 +234,7 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
 
             // Packet bytes are identical across all N packets in the burst —
             // build once and reuse.
-            const keepalive: KeepaliveOptions = {
+            const keepalive: Omit<KeepaliveOptions, "ipAddress"> = {
               ...opts.keepalive,
               version:
                 opts.keepalive.version ??
