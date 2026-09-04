@@ -93,14 +93,30 @@ export async function createPrinterTarget(
       const normalized = normalizeIPv4(peer);
       if (!normalized) return false;
       if (config.printerIp) return normalized === config.printerIp;
-      if (!addresses.has(normalized) && now() - lastOnDemand >= 1000) {
-        lastOnDemand = now();
-        await refresh(true);
+      if (!addresses.has(normalized)) {
+        // A refresh already in flight will publish its result to the shared
+        // set, so join it rather than being throttled against it: without
+        // this, a second unknown peer arriving inside the resolver window
+        // (~100-200 ms) would skip the refresh and be tested against the
+        // stale set. Both arms stamp the throttle, because both end with a
+        // just-completed resolution. The throttled-out path deliberately does
+        // not stamp, so a spray of unknown peers can't keep pushing the window
+        // forward and starve a genuine new address of its refresh.
+        if (inFlight) {
+          await inFlight;
+          lastOnDemand = now();
+        } else if (now() - lastOnDemand >= 1000) {
+          lastOnDemand = now();
+          await refresh(true);
+        }
       }
       return addresses.has(normalized);
     },
     async target() {
-      await refresh(true);
+      // Unforced: construction already resolved once, and honouring the
+      // staleness guard here is what keeps that from becoming two
+      // back-to-back lookups on every daemon start and every scan:now.
+      await refresh();
       const value = config.printerIp ?? [...addresses][0];
       if (!value) throw new Error(`PRINTER_HOSTNAME=${config.printerHostname} has no IPv4 address`);
       return value;
