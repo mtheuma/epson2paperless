@@ -68,12 +68,19 @@ export async function startPrinterDiscovery(
 ): Promise<KeepaliveResponder> {
   const target = existingTarget ?? (await createPrinterTarget(config));
   const printerIp = await target.target();
+  // Fail-fast reachability check: if the host has no route to the printer at
+  // all, say so now rather than at the first beacon. The address it returns is
+  // NOT what gets advertised — the keepalive handler recomputes the local
+  // address per announcement, against that announcement's source, and spreads
+  // that over `keepalive.ipAddress`. On a multi-homed host the two can differ,
+  // so the log must not read as "this is the address we advertise".
   const localIp = await getLocalIpForTarget(printerIp);
-  log.info(`Local IP: ${localIp}`);
+  log.info(`Route to printer ${printerIp}: via local address ${localIp}`);
 
   const responder = createKeepaliveResponder({
     keepalive: {
       clientName: config.scanDestName,
+      // Seed value only — never reaches the wire. See the recompute note above.
       ipAddress: localIp,
       eventPort: 2968,
       destId: config.scanDestId,

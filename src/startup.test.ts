@@ -462,3 +462,100 @@ describe("dispatchScanSession", () => {
     ).rejects.toThrow("scan failed");
   });
 });
+
+/**
+ * Hostname mode has no configured literal to fall back on, so the
+ * kernel-observed push-scan peer is the only routing input there is. A
+ * button-only scan touches it three times, not once — JOBW and JOBR in
+ * beforeResponse, then the dispatch — and every one of them has to land on the
+ * same address, or the job-control round-trips and the scan itself would talk
+ * to different hosts.
+ */
+describe("observed-peer propagation (DS-575W button scan, hostname mode)", () => {
+  const OBSERVED = "192.0.2.77";
+
+  beforeEach(() => {
+    runJobListCommitMock.mockReset().mockResolvedValue(undefined);
+    runJobNumberCommitMock.mockReset().mockResolvedValue(Buffer.from("0300020000020001", "hex"));
+    detectVariantMock.mockReset().mockResolvedValue("esci2-plain");
+    runEsci2ScanOverPlainMock.mockReset().mockResolvedValue(undefined);
+  });
+
+  it("routes JOBW, JOBR and the scan itself to the observed peer", async () => {
+    const config = makeConfig({ printerIp: undefined, printerHostname: "scanner.lan" });
+    const options = buildPushScanServerOptions(config);
+
+    // 1. JobList → the JOBW commit opens its own TCP/1865 round-trip.
+    await options.beforeResponse?.({
+      kind: "jobList",
+      headers: "",
+      body: "",
+      xuid: "9",
+      info: { ...DS575W_JOB_NUMBER_INFO, jobNumber: null },
+      capabilities: ["OfficeFormat"],
+      peerAddress: OBSERVED,
+    });
+
+    // 2. JobNumberIn PushScan → the JOBR commit, a second round-trip.
+    await options.beforeResponse?.({
+      kind: "pushScan",
+      headers: "",
+      body: "",
+      xuid: "10",
+      info: DS575W_JOB_NUMBER_INFO,
+      capabilities: [],
+      peerAddress: OBSERVED,
+    });
+
+    // 3. The scan session.
+    await dispatchScanSession({
+      config,
+      duplex: true,
+      action: "pdf",
+      paperless: undefined,
+      productName: PID_DS575W,
+      printerIp: OBSERVED,
+    });
+
+    expect(runJobListCommitMock).toHaveBeenCalledTimes(1);
+    expect(runJobListCommitMock).toHaveBeenCalledWith({ printerIp: OBSERVED });
+    expect(runJobNumberCommitMock).toHaveBeenCalledTimes(1);
+    expect(runJobNumberCommitMock).toHaveBeenCalledWith({ printerIp: OBSERVED });
+
+    // The probe and the scanner share dispatchScanSession's single resolution,
+    // so the routing address can't diverge between deciding the variant and
+    // running it.
+    expect(detectVariantMock).toHaveBeenCalledTimes(1);
+    expect(detectVariantMock.mock.calls[0][0]).toMatchObject({ printerIp: OBSERVED });
+    expect(runEsci2ScanOverPlainMock).toHaveBeenCalledTimes(1);
+    expect(runEsci2ScanOverPlainMock.mock.calls[0][0]).toMatchObject({ printerIp: OBSERVED });
+  });
+
+  it("has nothing to fall back on when the peer is missing in hostname mode", async () => {
+    // The corollary of the above: with no PRINTER_IP configured, dropping the
+    // observed peer is a hard error, never a silent guess at an address.
+    const config = makeConfig({ printerIp: undefined, printerHostname: "scanner.lan" });
+    const options = buildPushScanServerOptions(config);
+
+    await expect(
+      options.beforeResponse?.({
+        kind: "jobList",
+        headers: "",
+        body: "",
+        xuid: "11",
+        info: { ...DS575W_JOB_NUMBER_INFO, jobNumber: null },
+        capabilities: ["OfficeFormat"],
+      }),
+    ).rejects.toThrow(/peer address is required/);
+
+    await expect(
+      dispatchScanSession({
+        config,
+        duplex: true,
+        action: "pdf",
+        paperless: undefined,
+        productName: PID_DS575W,
+      }),
+    ).rejects.toThrow(/No printer address/);
+  });
+});
