@@ -1,6 +1,7 @@
 import { loadConfig } from "./config.js";
 import { setLogLevel, setLogFormat, createLogger } from "./logger.js";
 import { runScanNowLifecycle } from "./lifecycle.js";
+import { createPrinterTarget } from "./network.js";
 import {
   logStartupBanner,
   installCrashHandlers,
@@ -17,6 +18,8 @@ async function main() {
 
   logStartupBanner(config, "epson2paperless scan-now — host-triggered single scan");
   installCrashHandlers();
+  const target = await createPrinterTarget(config);
+  const printerIp = await target.target();
 
   // No panel to ask, so the env-var fallbacks decide. Same vars the FF-680W
   // job-number branch already uses (see resolveScanDispatch in startup.ts).
@@ -36,6 +39,7 @@ async function main() {
     // XP-620 via `scan:now` is out of scope; run with a real panel-triggered
     // path (daemon / one-shot) to get PID-based dialect selection.
     productName: null,
+    printerIp,
   });
 
   const signalled = new Promise<NodeJS.Signals>((resolve) => {

@@ -1,5 +1,6 @@
 import net from "node:net";
 import { createLogger } from "./logger.js";
+import { normalizeIPv4 } from "./network.js";
 import { extractPid } from "./printer-ids.js";
 
 const log = createLogger("pushscan");
@@ -191,7 +192,7 @@ export function resolveEffectiveAction(
   return null;
 }
 
-export type PushScanCallback = (info: PushScanInfo) => void;
+export type PushScanCallback = (info: PushScanInfo, peerAddress: string) => void;
 
 export interface PushScanPreResponseContext {
   kind: PushScanRequestKind;
@@ -200,54 +201,145 @@ export interface PushScanPreResponseContext {
   xuid: string;
   info: PushScanInfo;
   capabilities: string[];
+  peerAddress: string;
 }
 
 export type PushScanPreResponseHook = (ctx: PushScanPreResponseContext) => Promise<void> | void;
 
+/**
+ * Cap on bytes buffered per connection, headers plus body. A real request is
+ * under 2 KB (a FF-680W JobList with its CapabilityIn list is the largest
+ * seen), so this is generous while keeping the listener's memory use in the
+ * peer's hands no longer than one small read.
+ */
+export const DEFAULT_MAX_REQUEST_BYTES = 64 * 1024;
+
+/**
+ * How long a connection may stay silent before a complete request has
+ * arrived. The printer writes its whole request immediately after connecting;
+ * only a stalled or hostile peer sits idle.
+ */
+export const DEFAULT_IDLE_TIMEOUT_MS = 10_000;
+
 export interface PushScanServerOptions {
   beforeResponse?: PushScanPreResponseHook;
+  validatePeer?: (peerAddress: string) => Promise<boolean> | boolean;
+  /** Per-connection buffer cap in bytes. Default {@link DEFAULT_MAX_REQUEST_BYTES}. */
+  maxRequestBytes?: number;
+  /** Idle bound before a complete request. Default {@link DEFAULT_IDLE_TIMEOUT_MS}. */
+  idleTimeoutMs?: number;
 }
 
 /**
  * Creates a raw TCP server on the given port that handles POST /PushScan.
  * Uses net.createServer (not http) because Epson's protocol requires
  * non-standard header formatting with spaces before colons.
+ *
+ * Port 2968 binds all interfaces and is unauthenticated by design (the printer
+ * has no host-side credential), so every bound here is enforced before the
+ * peer can make us hold anything: the peer address is checked before a byte is
+ * read, buffered bytes and the declared Content-Length are capped, and a
+ * connection that never completes a request is closed after an idle timeout.
  */
 export function createPushScanServer(
   port: number,
   onPushScan: PushScanCallback,
   options: PushScanServerOptions = {},
 ): net.Server {
+  const maxRequestBytes = options.maxRequestBytes ?? DEFAULT_MAX_REQUEST_BYTES;
+  const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+  const HEADER_TERMINATOR = Buffer.from("\r\n\r\n");
+
   const server = net.createServer((socket) => {
     const chunks: Buffer[] = [];
-
     let totalBytes = 0;
     let handled = false;
-    const HEADER_TERMINATOR = Buffer.from("\r\n\r\n");
+    const peerAddress = normalizeIPv4(socket.remoteAddress ?? "");
     const peer = `${socket.remoteAddress}:${socket.remotePort}`;
 
     log.debug(`Connection opened from ${peer}`);
 
+    socket.on("error", (err) => {
+      log.error("PushScan socket error", err);
+    });
+
     // Nothing below logs until a complete header block + body has arrived, so
     // a printer that connects and aborts (or sends a shape we never finish
     // parsing) would otherwise vanish without a trace — exactly the case
-    // compatibility triage needs to see.
+    // compatibility triage needs to see. `chunks` never exceeds the byte cap,
+    // so the concat here is bounded.
     socket.on("close", () => {
       if (handled) return;
-      const buffered = chunks.length === 0 ? Buffer.alloc(0) : Buffer.concat(chunks, totalBytes);
+      const prefix = Buffer.concat(chunks).subarray(0, 256);
       log.debug(
         `Connection from ${peer} closed before a complete request arrived — ` +
           `${totalBytes} bytes received${
-            totalBytes > 0
-              ? `: ${buffered.subarray(0, 256).toString("hex")}${totalBytes > 256 ? "…" : ""}`
-              : ""
+            totalBytes > 0 ? `: ${prefix.toString("hex")}${totalBytes > 256 ? "…" : ""}` : ""
           }`,
       );
     });
 
-    socket.on("data", (chunk: Buffer) => {
-      chunks.push(chunk);
+    const drop = (reason: string, err?: unknown): void => {
+      log.warn(`Dropping push-scan connection from ${peer}: ${reason}`, err);
+      socket.destroy();
+    };
+
+    if (!peerAddress) {
+      log.warn(`Rejecting non-IPv4 push-scan peer ${peer}`);
+      socket.destroy();
+      return;
+    }
+
+    // Armed before anything can wait, including peer validation below: the
+    // stock validator may sit on a DNS refresh, which has no bound of its own,
+    // and a paused socket does not even process a peer's FIN. The timer is
+    // reset by socket activity, so a live request is never cut short by it.
+    socket.setTimeout(idleTimeoutMs, () => {
+      // A complete request whose response is still pending is our delay
+      // (the beforeResponse job-control round-trip), not the peer's.
+      if (handled && !socket.writableEnded) return;
+      if (!handled) drop(`no complete request within ${idleTimeoutMs}ms`);
+      else socket.destroy();
+    });
+
+    // Validate the kernel-observed peer before reading anything. The stock
+    // validator may refresh DNS, so the socket stays paused (bytes wait in the
+    // kernel, bounded by TCP flow control) until it answers; a rejected peer
+    // gets no response, just a close.
+    socket.pause();
+    socket.on("data", onData);
+    void (async () => {
+      try {
+        if (options.validatePeer && !(await options.validatePeer(peerAddress))) {
+          log.warn(`Rejecting push-scan from unauthorized peer ${peerAddress}`);
+          socket.destroy();
+          return;
+        }
+      } catch (err) {
+        drop("peer validation failed", err);
+        return;
+      }
+      if (!socket.destroyed) socket.resume();
+    })();
+
+    function onData(chunk: Buffer): void {
+      // A throw here would escape the 'data' emit as an uncaughtException and
+      // take the daemon down; keep any parse failure to the one connection.
+      try {
+        handleChunk(chunk);
+      } catch (err) {
+        drop("request handling failed", err);
+      }
+    }
+
+    function handleChunk(chunk: Buffer): void {
+      if (handled) return; // Response in flight; anything more from the peer is noise.
       totalBytes += chunk.length;
+      if (totalBytes > maxRequestBytes) {
+        drop(`request exceeds ${maxRequestBytes} bytes`);
+        return;
+      }
+      chunks.push(chunk);
 
       // Merge chunks into a single Buffer so indexOf / subarray can scan
       // across TCP fragment boundaries without re-decoding UTF-8 each event.
@@ -265,9 +357,12 @@ export function createPushScanServer(
       const contentLength = clMatch ? parseInt(clMatch[1], 10) : 0;
       const bodyStart = headerEnd + HEADER_TERMINATOR.length;
 
+      if (bodyStart + contentLength > maxRequestBytes) {
+        drop(`declared Content-Length ${contentLength} exceeds the ${maxRequestBytes}-byte cap`);
+        return;
+      }
       if (combined.length - bodyStart < contentLength) return; // Still waiting for body
 
-      if (handled) return;
       handled = true;
 
       const body = combined.subarray(bodyStart, bodyStart + contentLength).toString("utf-8");
@@ -315,13 +410,21 @@ export function createPushScanServer(
           log.info(
             `Scan requested: product=${info.productName}, id=${info.pushScanId}, job=${info.jobNumber}`,
           );
-          onPushScan(info);
+          onPushScan(info, peerAddress!);
         });
       };
 
       void (async () => {
         try {
-          await options.beforeResponse?.({ kind, headers, body, xuid, info, capabilities });
+          await options.beforeResponse?.({
+            kind,
+            headers,
+            body,
+            xuid,
+            info,
+            capabilities,
+            peerAddress: peerAddress!,
+          });
         } catch (err) {
           log.error(`Pre-response hook failed for ${kind}`, err);
           sendResponse("ERROR");
@@ -330,11 +433,7 @@ export function createPushScanServer(
 
         sendResponse("OK");
       })();
-    });
-
-    socket.on("error", (err) => {
-      log.error("PushScan socket error", err);
-    });
+    }
   });
 
   server.listen(port, () => {

@@ -32,9 +32,7 @@ What you get:
 | **ET-8500**           | ✅&nbsp;Verified     | Flatbed-only hardware                                                                                                         |
 | **ET-15000**          | 🟡&nbsp;Experimental | Flatbed verified; ADF simplex untested                                                                                        |
 | **FF-680W**           | 🟡&nbsp;Experimental | Requires [pairing](#button-only-scanner-pairing); ADF-only; 200/300 DPI verified                                              |
-| **WF-2845**           | ✅&nbsp;Verified     | ADF simplex ([#178](https://github.com/mtheuma/epson2paperless/issues/178))                                                   |
 | **WF-3620**           | ✅&nbsp;Verified     | Plain TCP scanner, no TLS pinning                                                                                             |
-| **WF-3835**           | 🟡&nbsp;Experimental | ADF simplex; inferred dialect, no reporter retest yet ([#174](https://github.com/mtheuma/epson2paperless/issues/174))         |
 | **XP-620**            | 🟡&nbsp;Experimental | Flatbed-only hardware                                                                                                         |
 | **XP-3200**           | ✅&nbsp;Verified     | Flatbed-only hardware; shares the ET-2810 dialect over TLS; panel lists the destination but errors "Invalid" — use `scan:now` |
 | **XP-4100**           | ✅&nbsp;Verified     | Flatbed-only hardware; shares the ET-2750 dialect ([#139](https://github.com/mtheuma/epson2paperless/issues/139))             |
@@ -52,7 +50,7 @@ Compatibility reports are welcome whether your model works or doesn't. [Open an 
 
 Image: **`ghcr.io/mtheuma/epson2paperless`**. Multi-arch (`linux/amd64`, `linux/arm64`). Published to GHCR on every `main` push (`:main`) and every `v*` git tag (`:vX.Y.Z` + `:latest`).
 
-1. In `compose.yaml`, set `PRINTER_IP` to your printer's IPv4 address and `./output` to wherever you want scans written.
+1. In `compose.yaml`, set exactly one of `PRINTER_IP` (fixed IPv4) or `PRINTER_HOSTNAME` (IPv4-resolvable DNS name), and `./output` to wherever you want scans written.
 2. `docker compose up -d`.
 3. Follow the logs: `docker compose logs -f epson2paperless`.
 
@@ -94,10 +92,10 @@ first, bounded by `SHUTDOWN_TIMEOUT_MS`.
 
 There's no panel to pick the format, so `SCAN_FORMAT` (`jpg`/`pdf`, default `pdf`) and
 `SCAN_SIDES` (`simplex`/`duplex`, default `duplex`) decide. `scan:now` reads these and
-`PRINTER_IP` from the environment like the daemon and takes no command-line arguments, so
+the printer target (`PRINTER_IP` or `PRINTER_HOSTNAME`) from the environment like the daemon and takes no command-line arguments, so
 set them however you set any env var. From source:
 
-    PRINTER_IP=192.0.2.58 npm run scan:now                                    # defaults: pdf, duplex
+    PRINTER_HOSTNAME=printer.lan npm run scan:now                              # defaults: pdf, duplex
     PRINTER_IP=192.0.2.58 SCAN_FORMAT=jpg SCAN_SIDES=simplex npm run scan:now
 
 In Docker `PRINTER_IP` already lives in your compose file / env-file, and you override per
@@ -132,29 +130,30 @@ skips. On ADF models without duplex hardware (ET-4800, ET-15000), set `SCAN_SIDE
 
 ## Configure
 
-Configuration is via environment variables. Only `PRINTER_IP` is required.
+Configuration is via environment variables. Exactly one of `PRINTER_IP` and `PRINTER_HOSTNAME` is required.
 
 Each setting's **Scope** column shows which printers it affects: `All`, `Panel` (panel-driven models), `FF-680W`, `DS-575W`, `Legacy ESC/I` (WF-3620 family, XP-620, ET-2550), or `ESC/I-2 TLS` (ET-4950 family). A setting outside a printer's path is simply ignored.
 
-| Variable                    | Scope                        | Default          | What it does                                                                                                                                                                                                                                             |
-| --------------------------- | ---------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `PRINTER_IP`<br>✅ required | All                          | —                | The printer's IPv4 address.                                                                                                                                                                                                                              |
-| `SCAN_DEST_NAME`            | All                          | `Paperless`      | The label the printer shows on its panel. Give each instance a distinct name. On button-only scanners (FF-680W, DS-575W) it must also match the scanner's stored paired name; see [Button-only scanner pairing](#button-only-scanner-pairing).           |
-| `OUTPUT_DIR`                | All                          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                                                                                                                         |
-| `TZ`                        | All                          | system           | Timezone for scan filename timestamps. The standard Docker variable, read by Node directly — no app-side validation. Unset uses the container/system zone, which is UTC in the published image.                                                          |
-| `LOG_LEVEL`                 | All                          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                                                                                                                     |
-| `LOG_FORMAT`                | All                          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line, for `docker logs` + Loki / `jq`).                                                                                                                                                        |
-| `PREVIEW_ACTION`            | Panel                        | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen.                                                                                                  |
-| `SCAN_FORMAT`               | FF-680W, DS-575W, `scan:now` | `pdf`            | Output format (`jpg` / `pdf`) when no panel choice reaches us: button-only scanners, and every host-triggered scan.                                                                                                                                      |
-| `SCAN_SIDES`                | FF-680W, DS-575W, `scan:now` | `duplex`         | `simplex` or `duplex` when no panel choice reaches us. Button-only scanners have no panel Sides selector. Set `simplex` for host-triggered scans on ADF models without duplex hardware.                                                                  |
-| `SCAN_RESOLUTION`           | All                          | unset            | Target scan DPI (50-1200). Honoured on the wire where the printer advertises it; otherwise scans at the model's fixed DPI and downsamples. Unset = model default.                                                                                        |
-| `SCAN_COLOR_MODE`           | All                          | `color`          | `color`, `grayscale`, or `auto`. `grayscale` always yields greyscale: requested on the wire where supported (DS-575W), converted host-side elsewhere. `auto` works on any model: scans in colour, then saves colourless pages as greyscale.              |
-| `PRINTER_WHITE_POINT`       | All                          | unset            | How this scanner renders white paper, `R:G:B` (e.g. `227:232:255`). Only affects `SCAN_COLOR_MODE=auto`, correcting the device's colour cast before deciding colour vs greyscale. Measure once with `npm run scan:calibrate`; unset means no correction. |
-| `PRINTER_PROTOCOL`          | All                          | `auto`           | `auto` (probe each session), `esci2` (force ESC/I-2 over TLS), `esci2-plain` (force ESC/I-2 over plain TCP), `esci` (force plain-TCP ESC/I).                                                                                                             |
-| `JPEG_QUALITY`              | All                          | `90`             | JPEG encoder quality 1–100 (host-encoded raw pixels), and the ESC/I-2 wire request (clamped to what the printer advertises). Also sets the re-encode quality when `POST_PROCESS=document`.                                                               |
-| `POST_PROCESS`              | All                          | `none`           | `document` neutralizes the paper white-point (removes blue cast, show-through, ADF sensor lines) and re-encodes at `JPEG_QUALITY`; `none` leaves the printer's raw JPEG untouched.                                                                       |
-| `TEMP_DIR`                  | All                          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                                                                                                                                |
-| `HEALTH_PORT`               | All                          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                                                                                                                    |
+| Variable              | Scope                        | Default          | What it does                                                                                                                                                                                                                                             |
+| --------------------- | ---------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `PRINTER_IP`          | All                          | —                | Fixed printer IPv4 address. Mutually exclusive with `PRINTER_HOSTNAME`; retained for compatibility.                                                                                                                                                      |
+| `PRINTER_HOSTNAME`    | All                          | —                | DNS hostname for the printer. IPv4 results are loaded at startup, refreshed every 30 seconds, and refreshed on demand for an unknown peer; the last known-good set is retained after transient DNS failure. Mutually exclusive with `PRINTER_IP`.        |
+| `SCAN_DEST_NAME`      | All                          | `Paperless`      | The label the printer shows on its panel. Give each instance a distinct name. On button-only scanners (FF-680W, DS-575W) it must also match the scanner's stored paired name; see [Button-only scanner pairing](#button-only-scanner-pairing).           |
+| `OUTPUT_DIR`          | All                          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                                                                                                                         |
+| `TZ`                  | All                          | system           | Timezone for scan filename timestamps. The standard Docker variable, read by Node directly — no app-side validation. Unset uses the container/system zone, which is UTC in the published image.                                                          |
+| `LOG_LEVEL`           | All                          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                                                                                                                     |
+| `LOG_FORMAT`          | All                          | `text`           | `text` (human-readable) or `json` (ndjson, one record per line, for `docker logs` + Loki / `jq`).                                                                                                                                                        |
+| `PREVIEW_ACTION`      | Panel                        | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen.                                                                                                  |
+| `SCAN_FORMAT`         | FF-680W, DS-575W, `scan:now` | `pdf`            | Output format (`jpg` / `pdf`) when no panel choice reaches us: button-only scanners, and every host-triggered scan.                                                                                                                                      |
+| `SCAN_SIDES`          | FF-680W, DS-575W, `scan:now` | `duplex`         | `simplex` or `duplex` when no panel choice reaches us. Button-only scanners have no panel Sides selector. Set `simplex` for host-triggered scans on ADF models without duplex hardware.                                                                  |
+| `SCAN_RESOLUTION`     | All                          | unset            | Target scan DPI (50-1200). Honoured on the wire where the printer advertises it; otherwise scans at the model's fixed DPI and downsamples. Unset = model default.                                                                                        |
+| `SCAN_COLOR_MODE`     | All                          | `color`          | `color`, `grayscale`, or `auto`. `grayscale` always yields greyscale: requested on the wire where supported (DS-575W), converted host-side elsewhere. `auto` works on any model: scans in colour, then saves colourless pages as greyscale.              |
+| `PRINTER_WHITE_POINT` | All                          | unset            | How this scanner renders white paper, `R:G:B` (e.g. `227:232:255`). Only affects `SCAN_COLOR_MODE=auto`, correcting the device's colour cast before deciding colour vs greyscale. Measure once with `npm run scan:calibrate`; unset means no correction. |
+| `PRINTER_PROTOCOL`    | All                          | `auto`           | `auto` (probe each session), `esci2` (force ESC/I-2 over TLS), `esci2-plain` (force ESC/I-2 over plain TCP), `esci` (force plain-TCP ESC/I).                                                                                                             |
+| `JPEG_QUALITY`        | All                          | `90`             | JPEG encoder quality 1–100 (host-encoded raw pixels), and the ESC/I-2 wire request (clamped to what the printer advertises). Also sets the re-encode quality when `POST_PROCESS=document`.                                                               |
+| `POST_PROCESS`        | All                          | `none`           | `document` neutralizes the paper white-point (removes blue cast, show-through, ADF sensor lines) and re-encodes at `JPEG_QUALITY`; `none` leaves the printer's raw JPEG untouched.                                                                       |
+| `TEMP_DIR`            | All                          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                                                                                                                                |
+| `HEALTH_PORT`         | All                          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                                                                                                                    |
 
 <details>
 <summary>Advanced (leave as default unless you know why)</summary>
@@ -221,6 +220,13 @@ Discovery is working (keepalive lines in the log) but the printer's scan trigger
 
 - A firewall on the host is blocking inbound **TCP** port `2968`. Discovery only needs UDP; the scan trigger arrives on TCP. Allow both.
 - "Scan to Computer" was declined during the printer's initial network setup. It can't be re-enabled from the settings menus afterwards. Reset the printer's network settings and accept the Scan to Computer prompt when setting it up again.
+
+**`PRINTER_HOSTNAME=EPSONXXXX.local` doesn't resolve.**
+The image has no mDNS resolver of its own: `/etc/nsswitch.conf` is `hosts: files dns`, with no `libnss_mdns` and no Avahi. It can still work where the resolver your host points at bridges mDNS itself — systemd-resolved can, but only with `MulticastDNS=` enabled globally and on the link, which most distros leave off — and `network_mode: host` means the container inherits whatever the host has. That varies by host, so don't build on it. More dependable:
+
+- A unicast DNS name. Many routers publish DHCP client names in their own resolver, e.g. `epsonxxxx.lan`.
+- A DHCP reservation plus `PRINTER_IP`, if your router doesn't publish names.
+- An `/etc/hosts` entry, or compose `extra_hosts`. Resolves fine, but pins the name to one address, which gives up the address tracking `PRINTER_HOSTNAME` is there for.
 
 **Service hangs after a scan.**
 Rare edge case. Restart the service with `Ctrl-C` and relaunch.

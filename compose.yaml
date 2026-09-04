@@ -1,5 +1,5 @@
 # epson2paperless — sample compose file.
-# Edit PRINTER_IP and the output volume, then: docker compose up -d
+# Set exactly one printer target and edit the output volume, then: docker compose up -d
 
 services:
   epson2paperless:
@@ -10,6 +10,7 @@ services:
     init: true
     environment:
       PRINTER_IP: 192.0.2.58
+      # PRINTER_HOSTNAME: printer.example.lan  # mutually exclusive with PRINTER_IP
       SCAN_DEST_NAME: Paperless
       LOG_LEVEL: info
       # TZ: Europe/London       # scan-filename timestamps; unset = container zone (UTC in this image)
@@ -24,6 +25,7 @@ services:
       # PAPERLESS_TOKEN_FILE: /run/secrets/paperless_token   # alternative to _TOKEN; takes precedence if both set
       # PAPERLESS_DELETE_AFTER_UPLOAD: "true"                # default; set "false" to keep local file after upload
       # PRINTER_CERT_FINGERPRINT: AB:CD:EF:01:23:45:67:89:0A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78:9A:BC:DE:F0:12:34:56:78
+      # PRINTER_PROTOCOL: esci2                 # required when using certificate pinning
     volumes:
       - ./output:/output
     healthcheck:

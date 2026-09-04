@@ -349,6 +349,46 @@ describe("createPushScanServer", () => {
     server.close();
   });
 
+  it("rejects a push-scan from an unauthorized peer without invoking the callback", async () => {
+    let called = false;
+    const server = createPushScanServer(
+      0,
+      () => {
+        called = true;
+      },
+      { validatePeer: () => false },
+    );
+    await new Promise<void>((r) => {
+      if (server.listening) r();
+      else server.once("listening", () => r());
+    });
+    const port = (server.address() as AddressInfo).port;
+
+    const body = buildSoapBody("01", "PID 11D1", "C0A8013A");
+    const request =
+      `POST /PushScan HTTP/1.0\r\n` +
+      `Content-Type: application/octet-stream\r\n` +
+      `Content-Length: ${Buffer.byteLength(body, "utf-8")}\r\n` +
+      `\r\n` +
+      body;
+
+    const client = net.createConnection(port, "127.0.0.1");
+    await new Promise<void>((r) => client.once("connect", () => r()));
+    client.on("error", () => {}); // the server-side destroy can surface as ECONNRESET
+    const responsePromise = readFullHttpResponse(client);
+    client.write(request);
+    const response = await responsePromise;
+
+    // Peer is a valid IPv4 (loopback) so it clears the non-IPv4 guard and
+    // reaches validatePeer at connect time; the rejection closes the
+    // connection with no response and never scans.
+    expect(response).toBe("");
+    expect(called).toBe(false);
+
+    client.destroy();
+    server.close();
+  });
+
   it("handles body arriving in multiple TCP chunks", async () => {
     let callbackInfo: PushScanInfo | null = null;
     const server = createPushScanServer(0, (info) => {
@@ -604,6 +644,200 @@ describe("createPushScanServer", () => {
     expect(response).toContain("x-uid : 1\r\n");
 
     client.destroy();
+    server.close();
+  });
+});
+
+describe("createPushScanServer request bounds (#185)", () => {
+  // Port 2968 binds all interfaces and is unauthenticated by design, so any
+  // LAN host can drive the listener's memory. These pin the bounds that keep
+  // that from becoming "any LAN host can stop the service".
+  async function listen(server: net.Server): Promise<number> {
+    await new Promise<void>((r) => {
+      if (server.listening) r();
+      else server.once("listening", () => r());
+    });
+    return (server.address() as AddressInfo).port;
+  }
+
+  async function connect(port: number): Promise<net.Socket> {
+    const client = net.createConnection(port, "127.0.0.1");
+    client.on("error", () => {}); // ECONNRESET from a server-side destroy is the expected outcome
+    await new Promise<void>((r) => client.once("connect", () => r()));
+    return client;
+  }
+
+  // True if the server closed the connection within `ms`; false if it is
+  // still being held open — the failure mode every test here is guarding.
+  function closedWithin(client: net.Socket, ms: number): Promise<boolean> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), ms);
+      client.once("close", () => {
+        clearTimeout(timer);
+        resolve(true);
+      });
+    });
+  }
+
+  it("drops a connection once buffered bytes exceed the request cap, before parsing", async () => {
+    let called = false;
+    const server = createPushScanServer(
+      0,
+      () => {
+        called = true;
+      },
+      { maxRequestBytes: 1024 },
+    );
+    const port = await listen(server);
+    const client = await connect(port);
+    const closed = closedWithin(client, 2000);
+
+    // A headerless stream: no terminator ever arrives, so nothing but the
+    // byte cap can end this.
+    client.write(Buffer.alloc(600, 0x41));
+    client.write(Buffer.alloc(600, 0x41));
+
+    expect(await closed).toBe(true);
+    expect(called).toBe(false);
+    server.close();
+  });
+
+  it("drops a request whose declared Content-Length exceeds the cap without waiting for the body", async () => {
+    let called = false;
+    const server = createPushScanServer(
+      0,
+      () => {
+        called = true;
+      },
+      { maxRequestBytes: 1024 },
+    );
+    const port = await listen(server);
+    const client = await connect(port);
+    const closed = closedWithin(client, 2000);
+
+    client.write(
+      `POST /PushScan HTTP/1.0\r\n` +
+        `Content-Type: application/octet-stream\r\n` +
+        `Content-Length: 99999999999\r\n` +
+        `\r\n`,
+    );
+
+    expect(await closed).toBe(true);
+    expect(called).toBe(false);
+    server.close();
+  });
+
+  it("drops a connection that goes idle before a complete request arrives", async () => {
+    let called = false;
+    const server = createPushScanServer(
+      0,
+      () => {
+        called = true;
+      },
+      { idleTimeoutMs: 50 },
+    );
+    const port = await listen(server);
+    const client = await connect(port);
+    const closed = closedWithin(client, 2000);
+
+    client.write("POST /PushScan HTTP/1.0\r\n"); // then silence
+
+    expect(await closed).toBe(true);
+    expect(called).toBe(false);
+    server.close();
+  });
+
+  it("drops an unauthorized peer at connect time, before reading any request", async () => {
+    let called = false;
+    let validated: string | null = null;
+    const server = createPushScanServer(
+      0,
+      () => {
+        called = true;
+      },
+      {
+        validatePeer: (peer) => {
+          validated = peer;
+          return false;
+        },
+      },
+    );
+    const port = await listen(server);
+    const client = await connect(port);
+
+    // Nothing is written: the drop has to happen on the peer address alone.
+    expect(await closedWithin(client, 2000)).toBe(true);
+    expect(validated).toBe("127.0.0.1");
+    expect(called).toBe(false);
+    server.close();
+  });
+
+  it("applies the idle timeout while peer validation is still pending", async () => {
+    // In hostname mode the validator may be waiting on a DNS refresh, which
+    // has no bound of its own. The socket is paused meanwhile, so without the
+    // timeout armed first a peer could park connections behind the lookup.
+    let called = false;
+    const server = createPushScanServer(
+      0,
+      () => {
+        called = true;
+      },
+      { validatePeer: () => new Promise<boolean>(() => {}), idleTimeoutMs: 40 },
+    );
+    const port = await listen(server);
+    const client = await connect(port);
+
+    expect(await closedWithin(client, 2000)).toBe(true);
+    expect(called).toBe(false);
+    server.close();
+  });
+
+  it("releases a paused connection whose peer sent a partial request then FIN", async () => {
+    // A paused socket does not process EOF, so a half-closed peer would be
+    // retained for as long as validation takes; the timeout has to cover it.
+    let called = false;
+    const server = createPushScanServer(
+      0,
+      () => {
+        called = true;
+      },
+      { validatePeer: () => new Promise<boolean>(() => {}), idleTimeoutMs: 40 },
+    );
+    const port = await listen(server);
+    const client = await connect(port);
+    const closed = closedWithin(client, 2000);
+
+    client.end("POST /PushScan HTTP/1.0\r\n");
+
+    expect(await closed).toBe(true);
+    expect(called).toBe(false);
+    server.close();
+  });
+
+  it("drops the connection when the peer validator throws, with no unhandled rejection", async () => {
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown): void => {
+      rejections.push(reason);
+    };
+    process.on("unhandledRejection", onRejection);
+
+    let called = false;
+    const server = createPushScanServer(
+      0,
+      () => {
+        called = true;
+      },
+      { validatePeer: () => Promise.reject(new Error("resolver exploded")) },
+    );
+    const port = await listen(server);
+    const client = await connect(port);
+
+    expect(await closedWithin(client, 2000)).toBe(true);
+    expect(called).toBe(false);
+    await new Promise((r) => setImmediate(r));
+    expect(rejections).toEqual([]);
+
+    process.off("unhandledRejection", onRejection);
     server.close();
   });
 });

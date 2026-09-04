@@ -31,7 +31,7 @@ See:
 
 ## Configuration
 
-Env-var driven, Zod-validated in `src/config.ts`. Required: `PRINTER_IP`. Full table in `README.md`.
+Env-var driven, Zod-validated in `src/config.ts`. Exactly one of `PRINTER_IP` (fixed IPv4) or `PRINTER_HOSTNAME` (DNS name, resolved to IPv4 and refreshed at runtime) is required. Full table in `README.md`.
 
 Noteworthy for dev:
 
