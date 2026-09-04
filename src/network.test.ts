@@ -211,13 +211,11 @@ describe("printer target", () => {
     expect(Date.now() - started).toBeLessThan(2000);
   });
 
-  it("never has more than one lookup outstanding, however many refreshes time out", async () => {
-    // Timing the caller out does not cancel the getaddrinfo behind it, and
-    // `inFlight` is cleared as soon as the timeout fires. Without a separate
-    // handle on the abandoned lookup, every later refresh would start another
-    // one against a wedged resolver -- once per interval, or ~1 Hz through
-    // accepts() -- and park the whole four-thread pool that sharp encodes on.
-    // That is the exact starvation the timeout was added to prevent.
+  it("caps how many wedged lookups can be parked at once", async () => {
+    // Timing the caller out does not cancel the getaddrinfo behind it, so
+    // starting a fresh lookup on every refresh would park a new thread each
+    // time -- once per interval, or ~1 Hz through accepts() -- until the
+    // four-thread pool sharp encodes on is full.
     let calls = 0;
     const lookup = (): Promise<string[]> => {
       calls++;
@@ -232,14 +230,39 @@ describe("printer target", () => {
     );
     expect(calls).toBe(1);
 
-    // Each of these times out and abandons its wait, but must join the one
-    // already-parked lookup rather than starting a fresh one.
-    await target.refresh(true);
-    await target.refresh(true);
-    await target.refresh(true);
+    // Far more refreshes than the cap. Each times out; once two lookups are
+    // parked the rest are refused outright rather than parking more.
+    for (let i = 0; i < 6; i++) await target.refresh(true);
 
-    expect(calls).toBe(2);
+    expect(calls).toBe(3); // the initial success, plus MAX_OUTSTANDING_LOOKUPS
     expect([...target.addresses]).toEqual(["192.0.2.58"]);
+    target.stop();
+  });
+
+  it("still resolves once a wedged lookup's successor succeeds", async () => {
+    // The other half of the tradeoff: bounding parked lookups must not pin
+    // resolution forever. A lookup that never settles has to release the join
+    // slot when its caller-facing budget expires, so the next refresh issues a
+    // genuinely new query — otherwise every later refresh joins a dead promise,
+    // the address set can never change, and only a restart recovers.
+    let calls = 0;
+    const lookup = (): Promise<string[]> => {
+      calls++;
+      if (calls === 1) return Promise.resolve(["192.0.2.10"]);
+      if (calls === 2) return new Promise<string[]>(() => {}); // wedges forever
+      return Promise.resolve(["192.0.2.99"]); // resolver has recovered
+    };
+
+    const target = await createPrinterTarget(
+      { printerHostname: "printer.lan" },
+      { lookup, lookupTimeoutMs: 20, refreshIntervalMs: 0 },
+    );
+
+    await target.refresh(true); // call 2 — wedges, times out, releases the slot
+    await target.refresh(true); // call 3 — succeeds against the healthy resolver
+
+    expect([...target.addresses]).toEqual(["192.0.2.99"]);
+    expect(await target.accepts("192.0.2.99")).toBe(true);
     target.stop();
   });
 

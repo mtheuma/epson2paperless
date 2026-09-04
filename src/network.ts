@@ -40,8 +40,8 @@ async function lookupIPv4(hostname: string): Promise<string[]> {
  * Bounds a lookup that may never settle, freeing the caller without pretending
  * the work stopped. There is no way to cancel an in-flight `dns.lookup`, so the
  * losing promise stays pending and keeps its threadpool slot; only the timer is
- * cleaned up here. Not starting a *second* lookup on top of the abandoned one
- * is the caller's job — see `startOrJoinLookup`.
+ * cleaned up here. Keeping the number of abandoned lookups bounded, while still
+ * allowing a later one to succeed, is the caller's job — see `resolveOnce`.
  */
 async function withLookupTimeout(
   pending: Promise<string[]>,
@@ -92,30 +92,59 @@ export async function createPrinterTarget(
   let lastRefresh = config.printerIp ? now() : 0;
   let lastOnDemand = 0;
   let inFlight: Promise<void> | null = null;
-  // The raw, uncancellable lookup, held separately from `inFlight`.
-  // `dns.lookup` cannot be aborted, so a hung resolver keeps its libuv
-  // threadpool slot until the OS gives up. Timing the *caller* out must not
-  // start a second one: `inFlight` is cleared when the timeout fires, so
-  // without this a wedged resolver would park a fresh thread on every
-  // refresh — once per interval, or ~1 Hz via `accepts()` — and starve the
-  // four-thread pool it shares with sharp. Holding the promise here means at
-  // most one `getaddrinfo` is ever outstanding, however long it hangs.
-  let pendingLookup: Promise<string[]> | null = null;
+  // `dns.lookup` cannot be aborted, so timing a caller out does not stop the
+  // `getaddrinfo` behind it: that keeps a libuv threadpool slot until the OS
+  // resolver gives up. Two failure modes sit either side of this, and the two
+  // counters below exist to avoid both.
+  //
+  // Start a fresh lookup on every refresh and a wedged resolver parks a new
+  // thread each time — once per interval, or ~1 Hz through `accepts()` — until
+  // the four-thread pool shared with sharp's JPEG encode is full and page
+  // encoding stalls. Never start a second one and a single wedged lookup pins
+  // resolution forever: every later refresh joins a promise that will never
+  // settle, so the address set can never change and only a restart recovers.
+  //
+  // So: `joinable` is the lookup callers may share, released as soon as the
+  // *caller-facing* budget expires, which lets the next refresh try again.
+  // `outstanding` counts lookups whose raw promise has still not settled, and
+  // caps how many may be parked at once. The cap is a deliberate stop, not a
+  // cure: past it we refuse to resolve until one settles, trading a stalled
+  // refresh for a guaranteed-live threadpool. Two leaves half the default pool
+  // for sharp.
+  const MAX_OUTSTANDING_LOOKUPS = 2;
+  let joinable: Promise<string[]> | null = null;
+  let outstanding = 0;
 
-  const startOrJoinLookup = (): Promise<string[]> => {
-    if (!pendingLookup) {
-      const started = lookup(config.printerHostname!);
-      pendingLookup = started;
-      void started
-        .finally(() => {
-          if (pendingLookup === started) pendingLookup = null;
-        })
-        .catch(() => {
-          // Settlement is handled by whoever awaited `started`; this arm only
-          // exists so clearing the slot can't surface as an unhandled rejection.
-        });
+  const resolveOnce = (): Promise<string[]> => {
+    if (joinable) return joinable;
+    if (outstanding >= MAX_OUTSTANDING_LOOKUPS) {
+      return Promise.reject(
+        new Error(
+          `${outstanding} DNS lookups for ${config.printerHostname} are still unsettled — ` +
+            `not starting another until one completes`,
+        ),
+      );
     }
-    return pendingLookup;
+
+    const started = lookup(config.printerHostname!);
+    outstanding++;
+    void started
+      .finally(() => {
+        outstanding--;
+      })
+      .catch(() => {
+        // Settlement is the awaiter's business; this arm only keeps the
+        // bookkeeping from surfacing as an unhandled rejection.
+      });
+
+    const timed = withLookupTimeout(started, config.printerHostname!, lookupTimeoutMs);
+    joinable = timed;
+    void timed
+      .finally(() => {
+        if (joinable === timed) joinable = null;
+      })
+      .catch(() => {});
+    return timed;
   };
 
   const refresh = async (force = false): Promise<void> => {
@@ -124,9 +153,7 @@ export async function createPrinterTarget(
     inFlight = (async () => {
       try {
         const resolved = new Set(
-          (await withLookupTimeout(startOrJoinLookup(), config.printerHostname!, lookupTimeoutMs))
-            .map((a) => normalizeIPv4(a))
-            .filter((a): a is string => a !== null),
+          (await resolveOnce()).map((a) => normalizeIPv4(a)).filter((a): a is string => a !== null),
         );
         if (resolved.size === 0) throw new Error("hostname has no IPv4 address");
         const added = [...resolved].filter((a) => !addresses.has(a));
