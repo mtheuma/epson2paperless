@@ -250,111 +250,115 @@ export function createPushScanServer(
     });
 
     socket.on("data", (chunk: Buffer) => {
+      chunks.push(chunk);
+      totalBytes += chunk.length;
+
+      // Merge chunks into a single Buffer so indexOf / subarray can scan
+      // across TCP fragment boundaries without re-decoding UTF-8 each event.
+      const combined = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, totalBytes);
+      if (chunks.length > 1) {
+        chunks.length = 0;
+        chunks.push(combined);
+      }
+
+      const headerEnd = combined.indexOf(HEADER_TERMINATOR);
+      if (headerEnd === -1) return; // Still waiting for headers
+
+      const headers = combined.subarray(0, headerEnd).toString("utf-8");
+      const clMatch = headers.match(/Content-Length\s*:\s*(\d+)/i);
+      const contentLength = clMatch ? parseInt(clMatch[1], 10) : 0;
+      const bodyStart = headerEnd + HEADER_TERMINATOR.length;
+
+      if (combined.length - bodyStart < contentLength) return; // Still waiting for body
+
+      if (handled) return;
+      handled = true;
+
+      const body = combined.subarray(bodyStart, bodyStart + contentLength).toString("utf-8");
+      log.info("Received PushScan request");
+      log.debug("Request headers", headers);
+      log.debug("Request body", body);
+
+      const kind = parsePushScanRequestKind(body);
+      const info = parsePushScanRequest(body);
+      const capabilities = kind === "jobList" ? parseCapabilityIns(body) : [];
+
+      // Echo the printer's x-uid into our response so the printer can
+      // correlate our 200 OK with the scan it triggered. Falls back to "1"
+      // if the header is missing (matches the pre-fix hardcoded value and
+      // keeps existing tests working).
+      const xuidMatch = headers.match(/x-uid\s*:\s*(\S+)/i);
+      const xuid = xuidMatch ? xuidMatch[1] : "1";
+      log.debug(`Echoing x-uid : ${xuid}`);
+
+      // Mirror the printer's own protocol version (2.00 fleet / 3.00 FF-680W)
+      // rather than advertising a fixed version to every device.
+      const verMatch = headers.match(/x-protocol-version\s*:\s*(\S+)/i);
+      const protocolVersion = verMatch ? verMatch[1] : "2.00";
+
+      if (!peerAddress) {
+        log.warn(`Rejecting non-IPv4 push-scan peer ${peer}`);
+        socket.destroy();
+        return;
+      }
+
+      const sendResponse = (status: "OK" | "ERROR") => {
+        // The pre-response hook can run for a few hundred ms (an out-of-band
+        // job-control round-trip); if the printer closed the trigger socket
+        // meanwhile, writing would error and onPushScan must not fire.
+        if (socket.destroyed || socket.writableEnded) {
+          log.warn(`Push-scan socket closed before ${kind} response could be sent`);
+          return;
+        }
+        const response = buildPushScanResponse(xuid, {
+          status,
+          protocolVersion,
+          capabilities: status === "OK" ? capabilities : [],
+        });
+
+        // Send the per-request response, then half-close the TCP socket (FIN)
+        // so the printer sees a clean HTTP/1.0 close.
+        socket.end(response, "utf-8", () => {
+          log.debug(`Sent ${kind} response`);
+          if (status !== "OK" || kind !== "pushScan") return;
+
+          log.info(
+            `Scan requested: product=${info.productName}, id=${info.pushScanId}, job=${info.jobNumber}`,
+          );
+          onPushScan(info, peerAddress);
+        });
+      };
+
+      // Peer validation and the pre-response hook share one try/catch, so
+      // either one throwing lands on the same path: log, answer ERROR (or,
+      // if the printer already closed the socket, let sendResponse drop it),
+      // never leave the request unanswered. The stock validator —
+      // `(peer) => target.accepts(peer)` — cannot throw once the target is
+      // constructed, so this is robustness, not a live failure being fixed.
       void (async () => {
-        chunks.push(chunk);
-        totalBytes += chunk.length;
-
-        // Merge chunks into a single Buffer so indexOf / subarray can scan
-        // across TCP fragment boundaries without re-decoding UTF-8 each event.
-        const combined = chunks.length === 1 ? chunks[0] : Buffer.concat(chunks, totalBytes);
-        if (chunks.length > 1) {
-          chunks.length = 0;
-          chunks.push(combined);
-        }
-
-        const headerEnd = combined.indexOf(HEADER_TERMINATOR);
-        if (headerEnd === -1) return; // Still waiting for headers
-
-        const headers = combined.subarray(0, headerEnd).toString("utf-8");
-        const clMatch = headers.match(/Content-Length\s*:\s*(\d+)/i);
-        const contentLength = clMatch ? parseInt(clMatch[1], 10) : 0;
-        const bodyStart = headerEnd + HEADER_TERMINATOR.length;
-
-        if (combined.length - bodyStart < contentLength) return; // Still waiting for body
-
-        if (handled) return;
-        handled = true;
-
-        const body = combined.subarray(bodyStart, bodyStart + contentLength).toString("utf-8");
-        log.info("Received PushScan request");
-        log.debug("Request headers", headers);
-        log.debug("Request body", body);
-
-        const kind = parsePushScanRequestKind(body);
-        const info = parsePushScanRequest(body);
-        const capabilities = kind === "jobList" ? parseCapabilityIns(body) : [];
-
-        // Echo the printer's x-uid into our response so the printer can
-        // correlate our 200 OK with the scan it triggered. Falls back to "1"
-        // if the header is missing (matches the pre-fix hardcoded value and
-        // keeps existing tests working).
-        const xuidMatch = headers.match(/x-uid\s*:\s*(\S+)/i);
-        const xuid = xuidMatch ? xuidMatch[1] : "1";
-        log.debug(`Echoing x-uid : ${xuid}`);
-
-        // Mirror the printer's own protocol version (2.00 fleet / 3.00 FF-680W)
-        // rather than advertising a fixed version to every device.
-        const verMatch = headers.match(/x-protocol-version\s*:\s*(\S+)/i);
-        const protocolVersion = verMatch ? verMatch[1] : "2.00";
-
-        if (!peerAddress) {
-          log.warn(`Rejecting non-IPv4 push-scan peer ${peer}`);
-          socket.destroy();
-          return;
-        }
-
-        const sendResponse = (status: "OK" | "ERROR") => {
-          // The pre-response hook can run for a few hundred ms (an out-of-band
-          // job-control round-trip); if the printer closed the trigger socket
-          // meanwhile, writing would error and onPushScan must not fire.
-          if (socket.destroyed || socket.writableEnded) {
-            log.warn(`Push-scan socket closed before ${kind} response could be sent`);
-            return;
-          }
-          const response = buildPushScanResponse(xuid, {
-            status,
-            protocolVersion,
-            capabilities: status === "OK" ? capabilities : [],
-          });
-
-          // Send the per-request response, then half-close the TCP socket (FIN)
-          // so the printer sees a clean HTTP/1.0 close.
-          socket.end(response, "utf-8", () => {
-            log.debug(`Sent ${kind} response`);
-            if (status !== "OK" || kind !== "pushScan") return;
-
-            log.info(
-              `Scan requested: product=${info.productName}, id=${info.pushScanId}, job=${info.jobNumber}`,
-            );
-            onPushScan(info, peerAddress);
-          });
-        };
-
-        if (options.validatePeer && !(await options.validatePeer(peerAddress))) {
-          log.warn(`Rejecting push-scan from unauthorized peer ${peerAddress}`);
-          sendResponse("ERROR");
-          return;
-        }
-
-        void (async () => {
-          try {
-            await options.beforeResponse?.({
-              kind,
-              headers,
-              body,
-              xuid,
-              info,
-              capabilities,
-              peerAddress,
-            });
-          } catch (err) {
-            log.error(`Pre-response hook failed for ${kind}`, err);
+        try {
+          if (options.validatePeer && !(await options.validatePeer(peerAddress))) {
+            log.warn(`Rejecting push-scan from unauthorized peer ${peerAddress}`);
             sendResponse("ERROR");
             return;
           }
 
-          sendResponse("OK");
-        })();
+          await options.beforeResponse?.({
+            kind,
+            headers,
+            body,
+            xuid,
+            info,
+            capabilities,
+            peerAddress,
+          });
+        } catch (err) {
+          log.error(`Pre-response handling failed for ${kind}`, err);
+          sendResponse("ERROR");
+          return;
+        }
+
+        sendResponse("OK");
       })();
     });
 

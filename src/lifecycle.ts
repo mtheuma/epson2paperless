@@ -156,6 +156,11 @@ export interface ShutdownDeps {
   pushscanServer: { close: () => void };
   healthServer: { close: () => void };
   responder: { stop: () => void };
+  /**
+   * The printer target's DNS refresh timer. Optional: entry points that never
+   * build one (or tear down by hand) simply omit it.
+   */
+  target?: { stop: () => void };
   inflight: InflightTracker;
   shutdownTimeoutMs: number;
   signal: string;
@@ -191,6 +196,12 @@ export async function shutdown(deps: ShutdownDeps): Promise<void> {
 
   safeCall("health", () => deps.healthServer.close());
   safeCall("responder", () => deps.responder.stop());
+  // The printer target's refresh interval is unref()'d, so leaving it running
+  // never held the process open — but it was the one startup resource with no
+  // teardown, and a still-ticking refresh can log "Unable to refresh …;
+  // retaining last-known-good addresses" in the middle of a shutdown.
+  const printerTarget = deps.target;
+  if (printerTarget) safeCall("printer target", () => printerTarget.stop());
 
   deps.exit(0);
 }

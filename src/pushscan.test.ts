@@ -387,6 +387,57 @@ describe("createPushScanServer", () => {
     server.close();
   });
 
+  it("answers ERROR when the peer validator throws, with no unhandled rejection", async () => {
+    // The stock validator — target.accepts() — can't throw once the target is
+    // constructed, so this is robustness rather than a live failure. Before the
+    // validator moved inside the try, a rejecting one escaped as an unhandled
+    // rejection: no response, no close, and a client socket left hanging.
+    const rejections: unknown[] = [];
+    const onRejection = (reason: unknown): void => {
+      rejections.push(reason);
+    };
+    process.on("unhandledRejection", onRejection);
+
+    let called = false;
+    const server = createPushScanServer(
+      0,
+      () => {
+        called = true;
+      },
+      { validatePeer: () => Promise.reject(new Error("resolver exploded")) },
+    );
+    await new Promise<void>((r) => {
+      if (server.listening) r();
+      else server.once("listening", () => r());
+    });
+    const port = (server.address() as AddressInfo).port;
+
+    const body = buildSoapBody("01", "PID 11D1", "C0A8013A");
+    const request =
+      `POST /PushScan HTTP/1.0\r\n` +
+      `Content-Type: application/octet-stream\r\n` +
+      `Content-Length: ${Buffer.byteLength(body, "utf-8")}\r\n` +
+      `\r\n` +
+      body;
+
+    const client = net.createConnection(port, "127.0.0.1");
+    await new Promise<void>((r) => client.once("connect", () => r()));
+    const responsePromise = readFullHttpResponse(client);
+    client.write(request);
+    const response = await responsePromise;
+
+    expect(response).toContain("<StatusOut>ERROR</StatusOut>");
+    expect(called).toBe(false);
+
+    // Give any stray rejection a turn of the loop to surface.
+    await new Promise((r) => setImmediate(r));
+    expect(rejections).toEqual([]);
+
+    process.off("unhandledRejection", onRejection);
+    client.destroy();
+    server.close();
+  });
+
   it("handles body arriving in multiple TCP chunks", async () => {
     let callbackInfo: PushScanInfo | null = null;
     const server = createPushScanServer(0, (info) => {

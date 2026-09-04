@@ -109,6 +109,7 @@ async function main() {
       );
     }
     responder.stop();
+    target.stop();
   } catch (err) {
     log.error("Teardown failed", err);
   }

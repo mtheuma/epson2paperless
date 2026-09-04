@@ -64,6 +64,7 @@ async function main() {
       pushscanServer,
       healthServer,
       responder,
+      target,
       inflight,
       shutdownTimeoutMs: config.shutdownTimeoutMs,
       signal,

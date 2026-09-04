@@ -134,15 +134,111 @@ describe("printer target", () => {
     target.stop();
   });
 
-  it("uses changed DNS results for the next target operation", async () => {
+  it("uses changed DNS results once the staleness window has elapsed", async () => {
+    let address = "192.0.2.10";
+    let clock = 1_000_000;
+    const target = await createPrinterTarget(
+      { printerHostname: "printer.lan" },
+      { lookup: () => Promise.resolve([address]), now: () => clock, refreshIntervalMs: 30_000 },
+    );
+    expect(await target.target()).toBe("192.0.2.10");
+
+    address = "192.0.2.11";
+    clock += 30_000;
+
+    expect(await target.target()).toBe("192.0.2.11");
+    expect(await target.accepts("192.0.2.11")).toBe(true);
+    target.stop();
+  });
+
+  /**
+   * The feature's headline claim: a printer that moves address is followed
+   * without a restart. Two successive scans, the hostname resolving to a
+   * different literal each time — the second scan must use the new one.
+   */
+  it("routes a second scan to the printer's new address after it moves", async () => {
     let address = "192.0.2.10";
     const target = await createPrinterTarget(
       { printerHostname: "printer.lan" },
       { lookup: () => Promise.resolve([address]) },
     );
+
+    // Scan 1: the printer is where DNS said it was.
+    expect(await target.accepts("192.0.2.10")).toBe(true);
+
+    // It renumbers, and DNS follows.
     address = "192.0.2.11";
-    expect(await target.target()).toBe("192.0.2.11");
+
+    // Scan 2 arrives from an address not in the known set, which forces the
+    // on-demand refresh: the new peer validates, the old one no longer does,
+    // and the connect target follows without a restart.
     expect(await target.accepts("192.0.2.11")).toBe(true);
+    expect(await target.accepts("192.0.2.10")).toBe(false);
+    expect(await target.target()).toBe("192.0.2.11");
+    target.stop();
+  });
+
+  it("resolves exactly once across construction and a first target()", async () => {
+    let calls = 0;
+    const target = await createPrinterTarget(
+      { printerHostname: "printer.lan" },
+      {
+        lookup: () => {
+          calls++;
+          return Promise.resolve(["192.0.2.10"]);
+        },
+      },
+    );
+
+    expect(await target.target()).toBe("192.0.2.10");
+    // target() honours the staleness guard, so it reuses the address the
+    // constructor already resolved instead of paying a second lookup on
+    // every daemon start and every scan:now.
+    expect(calls).toBe(1);
+    target.stop();
+  });
+
+  it("gives up on a lookup that never settles, naming the hostname", async () => {
+    const started = Date.now();
+    await expect(
+      createPrinterTarget(
+        { printerHostname: "printer.lan" },
+        { lookup: () => new Promise<string[]>(() => {}), lookupTimeoutMs: 50 },
+      ),
+    ).rejects.toThrow(/printer\.lan.*timed out after 50ms/);
+    // dns.lookup has no timeout of its own; without the bound this would hang
+    // for as long as the OS resolver takes, holding a libuv threadpool slot.
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it("lets a second unknown peer join an in-flight lookup instead of being throttled", async () => {
+    let calls = 0;
+    let resolveRefresh!: (addresses: string[]) => void;
+    const target = await createPrinterTarget(
+      { printerHostname: "printer.lan" },
+      {
+        lookup: () => {
+          calls++;
+          if (calls === 1) return Promise.resolve(["192.0.2.10"]);
+          return new Promise<string[]>((resolve) => {
+            resolveRefresh = resolve;
+          });
+        },
+      },
+    );
+
+    // Both peers arrive inside the resolver window. The first starts the
+    // refresh; the second used to be turned away by the 1 s throttle — whose
+    // timestamp is stamped before the lookup resolves — and tested against the
+    // stale set. It must join the in-flight lookup instead.
+    const first = target.accepts("192.0.2.11");
+    const second = target.accepts("192.0.2.11");
+    await Promise.resolve();
+    resolveRefresh(["192.0.2.11"]);
+
+    expect(await first).toBe(true);
+    expect(await second).toBe(true);
+    expect(calls).toBe(2);
     target.stop();
   });
 });

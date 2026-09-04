@@ -182,6 +182,41 @@ describe("shutdown", () => {
     expect(deps.exitCalls).toEqual([0]);
   });
 
+  it("stops the printer target's DNS refresh alongside the responder", async () => {
+    const deps = makeDeps({
+      target: {
+        stop: () => {
+          deps.callOrder.push("target");
+        },
+      },
+    });
+    await shutdown(deps);
+    expect(deps.callOrder).toEqual(["pushscan", "health", "responder", "target"]);
+    expect(deps.exitCalls).toEqual([0]);
+  });
+
+  it("tolerates a missing printer target", async () => {
+    // Not every entry point builds one, and the refresh interval is unref()'d,
+    // so its absence must not break teardown.
+    const deps = makeDeps({ target: undefined });
+    await shutdown(deps);
+    expect(deps.callOrder).toEqual(["pushscan", "health", "responder"]);
+    expect(deps.exitCalls).toEqual([0]);
+  });
+
+  it("logs and continues when the printer target's stop throws", async () => {
+    const deps = makeDeps({
+      target: {
+        stop: () => {
+          throw new Error("target stop failed");
+        },
+      },
+    });
+    await shutdown(deps);
+    expect(deps.callOrder).toEqual(["pushscan", "health", "responder"]);
+    expect(deps.exitCalls).toEqual([0]);
+  });
+
   it("is idempotent — second call is a no-op", async () => {
     const deps = makeDeps();
     await shutdown(deps);

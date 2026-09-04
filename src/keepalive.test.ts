@@ -424,6 +424,58 @@ describe("createKeepaliveResponder", () => {
     warnSpy.mockRestore();
   });
 
+  it("caps the rejected-peer warn throttle, evicting oldest-first", async () => {
+    // warnedPeers is keyed on an unvalidated source address, so it needs a
+    // ceiling. The map isn't exported; prove the cap behaviourally — after
+    // enough distinct rejected peers, the oldest entry is gone (it warns
+    // again) while the newest is still throttled (it doesn't).
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const responder = createKeepaliveResponder({
+      keepalive: KEEPALIVE_OPTS,
+      printerIp: "192.0.2.1", // nothing on loopback can ever match
+      printerPort: 12345,
+      multicastAddress: "239.255.255.250",
+      multicastPort: 0,
+      burstCount: 1,
+      burstIntervalMs: 10,
+    });
+    await responder.start();
+
+    // 127.0.0.0/8 is entirely local, so each bind gives a distinct source
+    // address — one map entry per sender, as a spray would produce.
+    const sendFrom = async (address: string, seq: number): Promise<void> => {
+      const sock = dgram.createSocket("udp4");
+      await new Promise<void>((r) => sock.bind(0, address, () => r()));
+      await new Promise<void>((r) =>
+        sock.send(makeAnnouncement(seq), responder.boundPort, "127.0.0.1", () => r()),
+      );
+      await new Promise((r) => setTimeout(r, 2));
+      sock.close();
+    };
+
+    const warnCount = (): number =>
+      warnSpy.mock.calls
+        .map((c) => c.map(String).join(" "))
+        .filter((line) => line.includes("unrecognised peer")).length;
+
+    const OLDEST = "127.0.0.2";
+    const NEWEST = "127.0.0.71";
+    // 70 distinct peers — comfortably past the 64-entry cap.
+    for (let i = 2; i <= 71; i++) await sendFrom(`127.0.0.${i}`, 0x60 + (i % 8));
+    expect(warnCount()).toBe(70);
+
+    // The oldest entry was evicted to make room, so it warns afresh...
+    await sendFrom(OLDEST, 0x70);
+    expect(warnCount()).toBe(71);
+
+    // ...while a peer still inside the window stays throttled to once.
+    await sendFrom(NEWEST, 0x71);
+    expect(warnCount()).toBe(71);
+
+    responder.stop();
+    warnSpy.mockRestore();
+  });
+
   it("drops the dedup entry on a local-route failure so the next cycle retries", async () => {
     let calls = 0;
     const h = await setupHarness({

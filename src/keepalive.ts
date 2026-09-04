@@ -11,6 +11,15 @@ const log = createLogger("keepalive");
 // v2.0. `NETSCAN_VERSION` still overrides this per the config docs.
 const V3_KEEPALIVE_PRODUCTS = new Set([PID_FF680W, PID_DS575W]);
 
+/**
+ * Upper bound on the rejected-peer warn-throttle map. Keyed on an unvalidated
+ * source address, so it needs a ceiling that doesn't depend on the sender
+ * behaving. 64 is far more distinct misdirected sources than a real LAN
+ * produces inside one dedup window, and the eviction is oldest-first, so a
+ * spray only costs the warn-once throttle for peers already warned about.
+ */
+const WARNED_PEERS_MAX = 64;
+
 export interface KeepaliveOptions {
   clientName: string;
   ipAddress: string;
@@ -202,6 +211,21 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
               // observed and expected addresses, throttled per address.
               const observed = rinfo.address;
               if (!warnedPeers.has(observed)) {
+                // Unlike seenSeqs, which is only ever fed by accepted peers,
+                // this map is keyed on an unvalidated source address: any host
+                // that can put a well-formed announcement on the group adds an
+                // entry. Entries expire after dedupWindowMs, so growth was
+                // already bounded by 30 s of traffic, but a sprayed source list
+                // could fill it freely inside that window. Cap it, evicting
+                // oldest-first — Map iteration is insertion-ordered — and clear
+                // the evicted entry's timer so nothing is left pending.
+                while (warnedPeers.size >= WARNED_PEERS_MAX) {
+                  const oldest = warnedPeers.keys().next();
+                  if (oldest.done) break;
+                  const staleTimer = warnedPeers.get(oldest.value);
+                  if (staleTimer) clearTimeout(staleTimer);
+                  warnedPeers.delete(oldest.value);
+                }
                 const expected = opts.target
                   ? `${opts.target.hostname ?? "configured target"} [${[...opts.target.addresses].join(", ") || "unresolved"}]`
                   : (normalizeIPv4(opts.printerIp) ?? opts.printerIp);
