@@ -59,7 +59,7 @@ Image: **`ghcr.io/mtheuma/epson2paperless`**. Multi-arch (`linux/amd64`, `linux/
 Notes:
 
 - Uses host networking. The printer's multicast beacon can't reach a bridged container. [Why](docs/PROTOCOL-REFERENCE.md#discovery-and-keepalive-udp-multicast).
-- Listens on all interfaces: TCP `2968` for the scan trigger, plus `HEALTH_PORT` (default `3000`). The trigger is unauthenticated — the printer has no way to log in — so any device on your LAN can start a scan, not just the printer. Keep the service on a network you trust.
+- Listens on all interfaces: TCP `2968` for the scan trigger, plus `HEALTH_PORT` (default `3000`). The trigger carries no credential — the printer has no way to log in — so since v0.9.0 the service only accepts connections on `2968` from the configured printer address (`PRINTER_IP`, or whatever `PRINTER_HOSTNAME` currently resolves to); any other LAN host is dropped at connect. That is source filtering, not authentication. Keep the service on a network you trust.
 - Several destinations on the panel (e.g. a greyscale-PDF preset and a colour-JPG preset): one container per entry, each with its own MAC on a `macvlan` network. Compose example and caveats in [MULTIPLE-DESTINATIONS.md](docs/MULTIPLE-DESTINATIONS.md).
 - Container runs as UID 1000 (`node`). If your mount has a different owner, `chown` it to match.
 - Docker Desktop on macOS / Windows has caveats around host networking; the primary deployment target is a Linux server.
