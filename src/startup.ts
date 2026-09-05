@@ -10,6 +10,7 @@ import { resolveLegacyEntry } from "./esci/dialects/registry.js";
 import { runJobListCommit, runJobNumberCommit } from "./job-control.js";
 import { PID_FF680W, PID_DS575W } from "./printer-ids.js";
 import {
+  PushScanRefusedError,
   resolveEffectiveAction,
   type PushScanInfo,
   type PushScanServerOptions,
@@ -137,10 +138,27 @@ function usesJobControl(productName: string | null): boolean {
 export function buildPushScanServerOptions(
   config: Config,
   target?: PrinterTarget,
+  isBusy?: () => boolean,
 ): PushScanServerOptions {
   return {
     validatePeer: target ? (peer) => target.accepts(peer) : undefined,
     beforeResponse: async ({ kind, info, peerAddress }) => {
+      // Shared admission with the POST /scan webhook (issue #137): the printer
+      // serves one scan at a time, so a panel press during a running scan is
+      // refused here, before any job-control round-trip and before the OK
+      // response — refusing in the onPushScan callback would be too late, the
+      // printer would already be waiting for a session that never opens.
+      // JobList is destination selection, not a scan, so it is never gated.
+      //
+      // Residual window, accepted: between the OK response being written and
+      // onPushScan registering the scan with the inflight tracker there is a
+      // sub-millisecond gap in which a webhook request could still be admitted.
+      // The result is the collision the project already tolerates (the printer
+      // refuses the second session and one scan fails with a logged error).
+      if (kind === "pushScan" && isBusy?.()) {
+        throw new PushScanRefusedError("another scan is in flight");
+      }
+
       const targetIp = peerAddress || config.printerIp;
       if (!targetIp) throw new Error("Push-scan peer address is required");
       if (!usesJobControl(info.productName)) return;

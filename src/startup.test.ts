@@ -16,6 +16,7 @@ vi.mock("./job-control.js", () => ({
 }));
 
 import { buildPushScanServerOptions, dispatchScanSession, resolveScanDispatch } from "./startup.js";
+import { PushScanRefusedError } from "./pushscan.js";
 import { detectVariant } from "./protocol-probe.js";
 import { runEsci2Scan, runEsci2ScanOverPlain } from "./esci2/scanner.js";
 import { runEsciScan } from "./esci/scanner.js";
@@ -203,6 +204,59 @@ describe("buildPushScanServerOptions", () => {
 
     expect(runJobListCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.22" });
     expect(runJobNumberCommitMock).not.toHaveBeenCalled();
+  });
+
+  describe("busy admission (#137)", () => {
+    const PANEL_INFO: PushScanInfo = {
+      pushScanId: "02",
+      jobNumber: null,
+      productName: "PID 11D1",
+      ipAddress: "C0A8013A",
+      duplex: false,
+      action: "pdf",
+    };
+    const hookArgs = (kind: "pushScan" | "jobList", info: PushScanInfo) => ({
+      kind,
+      headers: "",
+      body: "",
+      xuid: "1",
+      info,
+      capabilities: [] as string[],
+      peerAddress: "203.0.113.20",
+    });
+
+    it("refuses a panel PushScan while another scan is in flight", async () => {
+      const options = buildPushScanServerOptions(makeConfig(), undefined, () => true);
+      await expect(options.beforeResponse?.(hookArgs("pushScan", PANEL_INFO))).rejects.toBeInstanceOf(
+        PushScanRefusedError,
+      );
+    });
+
+    it("refuses before the FF-680W JOBR read so job-control never touches a busy printer", async () => {
+      const options = buildPushScanServerOptions(makeConfig(), undefined, () => true);
+      await expect(
+        options.beforeResponse?.(hookArgs("pushScan", FF680W_JOB_NUMBER_INFO)),
+      ).rejects.toBeInstanceOf(PushScanRefusedError);
+      expect(runJobNumberCommitMock).not.toHaveBeenCalled();
+    });
+
+    it("does not gate JobList (destination selection is not a scan)", async () => {
+      const options = buildPushScanServerOptions(makeConfig(), undefined, () => true);
+      await expect(
+        options.beforeResponse?.(hookArgs("jobList", { ...FF680W_JOB_NUMBER_INFO, jobNumber: null })),
+      ).resolves.toBeUndefined();
+      expect(runJobListCommitMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("admits a panel PushScan when idle", async () => {
+      const options = buildPushScanServerOptions(makeConfig(), undefined, () => false);
+      await expect(options.beforeResponse?.(hookArgs("pushScan", PANEL_INFO))).resolves.toBeUndefined();
+    });
+
+    it("admits everything when no busy predicate is supplied", async () => {
+      const options = buildPushScanServerOptions(makeConfig());
+      await expect(options.beforeResponse?.(hookArgs("pushScan", PANEL_INFO))).resolves.toBeUndefined();
+    });
   });
 
   it("does not run job-control for other products", async () => {

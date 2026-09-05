@@ -5,6 +5,19 @@ import { extractPid } from "./printer-ids.js";
 
 const log = createLogger("pushscan");
 
+/**
+ * Thrown from a `beforeResponse` hook to refuse a trigger on purpose (e.g.
+ * another scan is already in flight, issue #137). The printer still gets the
+ * protocol ERROR response and the callback never fires, but the refusal is
+ * logged at WARN rather than as a hook failure.
+ */
+export class PushScanRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PushScanRefusedError";
+  }
+}
+
 const XML_NAMESPACE = "http://schema.epson.net/EpsonNet/Scan/2004/pushscan";
 
 export type PushScanRequestKind = "jobList" | "pushScan" | "scanEnd" | "unknown";
@@ -426,7 +439,11 @@ export function createPushScanServer(
             peerAddress: peerAddress!,
           });
         } catch (err) {
-          log.error(`Pre-response hook failed for ${kind}`, err);
+          if (err instanceof PushScanRefusedError) {
+            log.warn(`Refusing ${kind} from ${peer}: ${err.message}`);
+          } else {
+            log.error(`Pre-response hook failed for ${kind}`, err);
+          }
           sendResponse("ERROR");
           return;
         }
