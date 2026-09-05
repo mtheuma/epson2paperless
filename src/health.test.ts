@@ -1,6 +1,11 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import http from "node:http";
-import { createHealthServer, setLastScanTime, type HealthServerOptions } from "./health.js";
+import {
+  createHealthServer,
+  peerAddressOf,
+  setLastScanTime,
+  type HealthServerOptions,
+} from "./health.js";
 
 function fetch(url: string): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
@@ -214,5 +219,25 @@ describe("POST /scan webhook", () => {
     server = s;
     const res = await request("POST", `${base}/other`, AUTH);
     expect(res.status).toBe(404);
+  });
+});
+
+describe("peerAddressOf", () => {
+  it("returns a plain IPv4 address unchanged", () => {
+    expect(peerAddressOf("192.0.2.10")).toBe("192.0.2.10");
+  });
+
+  it("unmaps an IPv4-mapped IPv6 address (dual-stack listener, as on CI runners)", () => {
+    expect(peerAddressOf("::ffff:127.0.0.1")).toBe("127.0.0.1");
+    expect(peerAddressOf("::FFFF:192.0.2.10")).toBe("192.0.2.10");
+  });
+
+  it("leaves a native IPv6 address alone", () => {
+    expect(peerAddressOf("::1")).toBe("::1");
+    expect(peerAddressOf("2001:db8::7")).toBe("2001:db8::7");
+  });
+
+  it("falls back to 'unknown' when the socket has no address", () => {
+    expect(peerAddressOf(undefined)).toBe("unknown");
   });
 });

@@ -1,5 +1,6 @@
 import http from "node:http";
 import { createLogger } from "./logger.js";
+import { normalizeIPv4 } from "./network.js";
 import {
   authorize,
   parseScanParams,
@@ -14,6 +15,16 @@ let lastScan: string | null = null;
 /** Records when the most recent scan was *triggered* (panel or webhook) — not its outcome. */
 export function setLastScanTime(time: string | null): void {
   lastScan = time;
+}
+
+/**
+ * The caller's address as the push-scan path reports it: a dual-stack listener
+ * (Node binds `::` when IPv6 is available, as on CI runners) presents IPv4
+ * peers as `::ffff:a.b.c.d`, which is unmapped; native IPv6 passes through.
+ */
+export function peerAddressOf(remoteAddress: string | undefined): string {
+  if (!remoteAddress) return "unknown";
+  return normalizeIPv4(remoteAddress) ?? remoteAddress;
 }
 
 export interface ScanTriggerOptions {
@@ -73,7 +84,7 @@ function handleScan(
   url: URL,
   trigger: ScanTriggerOptions,
 ): void {
-  const peer = req.socket.remoteAddress ?? "unknown";
+  const peer = peerAddressOf(req.socket.remoteAddress);
 
   if (req.method !== "POST") {
     sendJson(res, 405, { error: "method not allowed" }, { Allow: "POST" });
