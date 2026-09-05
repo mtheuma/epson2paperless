@@ -9,10 +9,12 @@ import {
   installCrashHandlers,
   buildPaperlessOptions,
   buildPushScanServerOptions,
+  buildScanTriggerOptions,
   resolveScanDispatch,
   dispatchScanSession,
 } from "./startup.js";
 import { createPrinterTarget } from "./network.js";
+import { createScanAdmission } from "./scan-admission.js";
 
 const log = createLogger("main");
 
@@ -26,6 +28,8 @@ async function main() {
   const responder = await startPrinterDiscovery(config, target);
 
   const inflight = createInflightTracker();
+  // One scan at a time, whichever door it came through (issue #137).
+  const admission = createScanAdmission(inflight);
 
   const pushscanServer = createPushScanServer(
     2968,
@@ -35,6 +39,7 @@ async function main() {
         log.warn(
           `Ignoring push-scan: action=${info.action}, previewAction=${config.previewAction}`,
         );
+        admission.release(); // admitted at beforeResponse, but nothing will scan
         return;
       }
       log.info(
@@ -50,12 +55,22 @@ async function main() {
         productName: info.productName,
         printerIp: peerAddress,
       });
-      void inflight.track(scanPromise);
+      // Converts the reservation taken at beforeResponse into a tracked scan.
+      admission.commit(scanPromise);
     },
-    buildPushScanServerOptions(config, target),
+    buildPushScanServerOptions(config, target, admission),
   );
 
-  const healthServer = createHealthServer(config.healthPort);
+  const healthServer = createHealthServer(config.healthPort, {
+    scanTrigger: buildScanTriggerOptions({ config, target, admission }),
+  });
+  // Logged here rather than in the shared startup banner: scan:now and
+  // one-shot print that banner too, and neither opens an HTTP server.
+  log.info(
+    config.scanTriggerToken
+      ? `Scan webhook enabled: POST /scan on port ${config.healthPort}`
+      : "Scan webhook disabled (SCAN_TRIGGER_TOKEN unset)",
+  );
 
   log.info("epson2paperless ready — waiting for scan from printer panel");
 

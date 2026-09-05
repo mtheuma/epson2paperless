@@ -5,6 +5,19 @@ import { extractPid } from "./printer-ids.js";
 
 const log = createLogger("pushscan");
 
+/**
+ * Thrown from a `beforeResponse` hook to refuse a trigger on purpose (e.g.
+ * another scan is already in flight, issue #137). The printer still gets the
+ * protocol ERROR response and the callback never fires, but the refusal is
+ * logged at WARN rather than as a hook failure.
+ */
+export class PushScanRefusedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "PushScanRefusedError";
+  }
+}
+
 const XML_NAMESPACE = "http://schema.epson.net/EpsonNet/Scan/2004/pushscan";
 
 export type PushScanRequestKind = "jobList" | "pushScan" | "scanEnd" | "unknown";
@@ -204,7 +217,19 @@ export interface PushScanPreResponseContext {
   peerAddress: string;
 }
 
-export type PushScanPreResponseHook = (ctx: PushScanPreResponseContext) => Promise<void> | void;
+/**
+ * Returned by a `beforeResponse` hook that reserved the scan slot for this
+ * trigger (issue #137). The server calls it if the trigger ends without the
+ * `onPushScan` callback running — socket closed while the hook was pending,
+ * response not deliverable, ERROR response, or a non-PushScan kind — so a
+ * reservation can never outlive the trigger that took it. Never called once
+ * the callback has fired: from then on the callback owns the slot.
+ */
+export type PushScanReleaseHook = () => void;
+
+export type PushScanPreResponseHook = (
+  ctx: PushScanPreResponseContext,
+) => Promise<void | PushScanReleaseHook> | void | PushScanReleaseHook;
 
 /**
  * Cap on bytes buffered per connection, headers plus body. A real request is
@@ -257,6 +282,16 @@ export function createPushScanServer(
     const peerAddress = normalizeIPv4(socket.remoteAddress ?? "");
     const peer = `${socket.remoteAddress}:${socket.remotePort}`;
 
+    // Admission hand-off (see PushScanReleaseHook). `callbackFired` marks the
+    // point after which the reservation belongs to onPushScan's caller.
+    let releaseAdmission: PushScanReleaseHook | undefined;
+    let callbackFired = false;
+    const abandonAdmission = (): void => {
+      const release = releaseAdmission;
+      releaseAdmission = undefined;
+      release?.();
+    };
+
     log.debug(`Connection opened from ${peer}`);
 
     socket.on("error", (err) => {
@@ -269,6 +304,9 @@ export function createPushScanServer(
     // compatibility triage needs to see. `chunks` never exceeds the byte cap,
     // so the concat here is bounded.
     socket.on("close", () => {
+      // The one signal that always fires: whatever path the trigger took, a
+      // reservation not handed to the callback is dropped here at the latest.
+      if (!callbackFired) abandonAdmission();
       if (handled) return;
       const prefix = Buffer.concat(chunks).subarray(0, 256);
       log.debug(
@@ -393,6 +431,7 @@ export function createPushScanServer(
         // meanwhile, writing would error and onPushScan must not fire.
         if (socket.destroyed || socket.writableEnded) {
           log.warn(`Push-scan socket closed before ${kind} response could be sent`);
+          abandonAdmission();
           return;
         }
         const response = buildPushScanResponse(xuid, {
@@ -405,18 +444,22 @@ export function createPushScanServer(
         // so the printer sees a clean HTTP/1.0 close.
         socket.end(response, "utf-8", () => {
           log.debug(`Sent ${kind} response`);
-          if (status !== "OK" || kind !== "pushScan") return;
+          if (status !== "OK" || kind !== "pushScan") {
+            abandonAdmission();
+            return;
+          }
 
           log.info(
             `Scan requested: product=${info.productName}, id=${info.pushScanId}, job=${info.jobNumber}`,
           );
+          callbackFired = true;
           onPushScan(info, peerAddress!);
         });
       };
 
       void (async () => {
         try {
-          await options.beforeResponse?.({
+          const hookResult = await options.beforeResponse?.({
             kind,
             headers,
             body,
@@ -425,8 +468,13 @@ export function createPushScanServer(
             capabilities,
             peerAddress: peerAddress!,
           });
+          if (typeof hookResult === "function") releaseAdmission = hookResult;
         } catch (err) {
-          log.error(`Pre-response hook failed for ${kind}`, err);
+          if (err instanceof PushScanRefusedError) {
+            log.warn(`Refusing ${kind} from ${peer}: ${err.message}`);
+          } else {
+            log.error(`Pre-response hook failed for ${kind}`, err);
+          }
           sendResponse("ERROR");
           return;
         }

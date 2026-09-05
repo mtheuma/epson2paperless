@@ -18,6 +18,7 @@ services:
       # PREVIEW_ACTION: reject    # default; override to jpg|pdf to rewrite panel's "Preview on Computer"
       # TEMP_DIR: /tmp            # default; override if /tmp is tmpfs-constrained
       # SHUTDOWN_TIMEOUT_MS: 30000
+      # SCAN_TRIGGER_TOKEN: change-me   # enables POST /scan on HEALTH_PORT for Home Assistant etc.; see README § Webhook trigger
       #
       # Paperless-ngx direct upload (optional — see README § Direct upload).
       # PAPERLESS_URL: http://paperless:8000

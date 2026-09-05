@@ -38,6 +38,7 @@ describe("loadConfig", () => {
     delete process.env.PRINTER_PROTOCOL;
     delete process.env.LEGACY_FORCE_SOURCE;
     delete process.env.ESCI_FORCE_SOURCE;
+    delete process.env.SCAN_TRIGGER_TOKEN;
     delete process.env.NETSCAN_VERSION;
     delete process.env.POST_PROCESS;
     delete process.env.PRINTER_WHITE_POINT;
@@ -755,5 +756,39 @@ describe("PRINTER_CERT_FINGERPRINT", () => {
     process.env.PRINTER_IP = "192.0.2.58";
     process.env.PRINTER_CERT_FINGERPRINT = "AB:CD:EF"; // too short
     expect(() => loadConfig()).toThrow(/PRINTER_CERT_FINGERPRINT/);
+  });
+});
+
+describe("SCAN_TRIGGER_TOKEN", () => {
+  beforeEach(() => {
+    // Earlier blocks leave printer/paperless vars behind; start from a clean slate.
+    for (const key of Object.keys(process.env)) {
+      if (
+        /^(PRINTER_|PAPERLESS_|SCAN_|PREVIEW_|POST_|ESCI_|LEGACY_|JPEG_|DIAGNOSE_|NETSCAN_|TEMP_DIR|OUTPUT_DIR|HEALTH_PORT|LOG_|LANGUAGE|SHUTDOWN_)/.test(
+          key,
+        )
+      )
+        delete process.env[key];
+    }
+    process.env.PRINTER_IP = "192.0.2.5";
+  });
+
+  it("is undefined when unset (webhook disabled)", () => {
+    expect(loadConfig().scanTriggerToken).toBeUndefined();
+  });
+
+  it("is undefined when set to the empty string", () => {
+    process.env.SCAN_TRIGGER_TOKEN = "";
+    expect(loadConfig().scanTriggerToken).toBeUndefined();
+  });
+
+  it("carries the token through verbatim", () => {
+    process.env.SCAN_TRIGGER_TOKEN = "s3cret-Token_value";
+    expect(loadConfig().scanTriggerToken).toBe("s3cret-Token_value");
+  });
+
+  it("rejects a whitespace-only token as a misconfiguration", () => {
+    process.env.SCAN_TRIGGER_TOKEN = "   ";
+    expect(() => loadConfig()).toThrow();
   });
 });

@@ -1,6 +1,6 @@
 import net from "node:net";
 import type { AddressInfo } from "node:net";
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   buildPushScanResponse,
   parsePushScanRequest,
@@ -9,6 +9,7 @@ import {
   parsePushScanRequestKind,
   computeActionFromId,
   resolveEffectiveAction,
+  PushScanRefusedError,
   type PushScanInfo,
 } from "./pushscan.js";
 
@@ -839,6 +840,146 @@ describe("createPushScanServer request bounds (#185)", () => {
 
     process.off("unhandledRejection", onRejection);
     server.close();
+  });
+});
+
+describe("createPushScanServer deliberate refusal (#137)", () => {
+  function buildSoapBody(id: string): string {
+    return (
+      `<?xml version="1.0" ?>` +
+      `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope">` +
+      `<s:Body>` +
+      `<p:PushScan xmlns:p="http://schema.epson.net/EpsonNet/Scan/2004/pushscan">` +
+      `<ProductNameIn>PID 11D1</ProductNameIn>` +
+      `<PushScanIDIn>${id}</PushScanIDIn>` +
+      `</p:PushScan>` +
+      `</s:Body>` +
+      `</s:Envelope>`
+    );
+  }
+
+  function readAll(client: net.Socket): Promise<string> {
+    return new Promise((resolve) => {
+      let data = "";
+      client.on("data", (chunk) => (data += chunk.toString("utf-8")));
+      client.on("end", () => resolve(data));
+      client.on("close", () => resolve(data));
+    });
+  }
+
+  it("answers ERROR, skips the callback, and logs at WARN when the hook throws PushScanRefusedError", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    let callbacks = 0;
+    const server = createPushScanServer(0, () => callbacks++, {
+      beforeResponse: () => {
+        throw new PushScanRefusedError("another scan is in flight");
+      },
+    });
+    await new Promise<void>((r) => server.once("listening", () => r()));
+    const port = (server.address() as AddressInfo).port;
+
+    try {
+      const body = buildSoapBody("02");
+      const client = net.createConnection(port, "127.0.0.1");
+      await new Promise<void>((r) => client.once("connect", () => r()));
+      const responsePromise = readAll(client);
+      client.write(
+        `POST /PushScan HTTP/1.0\r\nContent-Type: application/octet-stream\r\n` +
+          `Content-Length: ${Buffer.byteLength(body, "utf-8")}\r\nx-uid: 3\r\n\r\n` +
+          body,
+      );
+      const response = await responsePromise;
+      expect(response).toContain("<StatusOut>ERROR</StatusOut>");
+      expect(callbacks).toBe(0);
+      const warned = warnSpy.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+      expect(warned).toContain("another scan is in flight");
+      const errored = errorSpy.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+      expect(errored).not.toContain("Pre-response hook failed");
+      client.destroy();
+    } finally {
+      server.close();
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+});
+
+describe("createPushScanServer admission release hook (#137)", () => {
+  function soap(id: string): string {
+    return (
+      `<?xml version="1.0" ?>` +
+      `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body>` +
+      `<p:PushScan xmlns:p="http://schema.epson.net/EpsonNet/Scan/2004/pushscan">` +
+      `<ProductNameIn>PID 11D1</ProductNameIn><PushScanIDIn>${id}</PushScanIDIn>` +
+      `</p:PushScan></s:Body></s:Envelope>`
+    );
+  }
+  function requestFor(body: string): string {
+    return (
+      `POST /PushScan HTTP/1.0\r\nContent-Type: application/octet-stream\r\n` +
+      `Content-Length: ${Buffer.byteLength(body, "utf-8")}\r\nx-uid: 5\r\n\r\n` +
+      body
+    );
+  }
+  async function listen(server: net.Server): Promise<number> {
+    await new Promise<void>((r) => server.once("listening", () => r()));
+    return (server.address() as AddressInfo).port;
+  }
+  const settle = () => new Promise((r) => setImmediate(r));
+
+  it("does not fire the release hook when the OK response is delivered and the callback runs", async () => {
+    const release = vi.fn();
+    let callbacks = 0;
+    const server = createPushScanServer(0, () => callbacks++, {
+      beforeResponse: () => release,
+    });
+    const port = await listen(server);
+    try {
+      const client = net.createConnection(port, "127.0.0.1");
+      await new Promise<void>((r) => client.once("connect", () => r()));
+      let response = "";
+      client.on("data", (c) => (response += c.toString("utf-8"))); // consume, or 'end' never fires
+      const closed = new Promise<void>((r) => client.on("close", () => r()));
+      client.write(requestFor(soap("02")));
+      await closed; // server half-closes after the response; client sees end + close
+      expect(response).toContain("<StatusOut>OK</StatusOut>");
+      await settle();
+      expect(callbacks).toBe(1);
+      expect(release).not.toHaveBeenCalled();
+    } finally {
+      server.close();
+    }
+  });
+
+  it("fires the release hook once when the trigger socket closes while the hook is pending", async () => {
+    const release = vi.fn();
+    let callbacks = 0;
+    let finishHook!: () => void;
+    const server = createPushScanServer(0, () => callbacks++, {
+      beforeResponse: () =>
+        new Promise<() => void>((resolve) => {
+          finishHook = () => resolve(release);
+        }),
+    });
+    const port = await listen(server);
+    try {
+      const client = net.createConnection(port, "127.0.0.1");
+      await new Promise<void>((r) => client.once("connect", () => r()));
+      client.write(requestFor(soap("02")));
+      await settle();
+      await settle();
+      client.destroy(); // printer gives up while we are still in job-control
+      await settle();
+      await settle();
+      finishHook();
+      await settle();
+      await settle();
+      expect(callbacks).toBe(0);
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      server.close();
+    }
   });
 });
 

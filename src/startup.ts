@@ -10,10 +10,14 @@ import { resolveLegacyEntry } from "./esci/dialects/registry.js";
 import { runJobListCommit, runJobNumberCommit } from "./job-control.js";
 import { PID_FF680W, PID_DS575W } from "./printer-ids.js";
 import {
+  PushScanRefusedError,
   resolveEffectiveAction,
   type PushScanInfo,
+  type PushScanReleaseHook,
   type PushScanServerOptions,
 } from "./pushscan.js";
+import { setLastScanTime, type ScanTriggerOptions } from "./health.js";
+import type { ScanAdmission } from "./scan-admission.js";
 
 const log = createLogger("startup");
 
@@ -137,26 +141,109 @@ function usesJobControl(productName: string | null): boolean {
 export function buildPushScanServerOptions(
   config: Config,
   target?: PrinterTarget,
+  admission?: Pick<ScanAdmission, "isBusy" | "reserve">,
 ): PushScanServerOptions {
   return {
     validatePeer: target ? (peer) => target.accepts(peer) : undefined,
     beforeResponse: async ({ kind, info, peerAddress }) => {
-      const targetIp = peerAddress || config.printerIp;
-      if (!targetIp) throw new Error("Push-scan peer address is required");
-      if (!usesJobControl(info.productName)) return;
-
-      if (kind === "jobList") {
-        log.debug(`${info.productName} JobList received — committing dummy job over TCP/1865`);
-        await runJobListCommit({ printerIp: targetIp });
-        return;
+      // Shared admission with the POST /scan webhook (issue #137): the printer
+      // serves one scan at a time. A panel press while a scan runs is refused
+      // here, before any job-control round-trip and before the OK response —
+      // refusing in the onPushScan callback would be too late, the printer
+      // would already be waiting for a session that never opens.
+      //
+      // Admitting also *reserves* the slot from this moment. The trigger only
+      // becomes a tracked scan once the OK has been flushed and the callback
+      // runs; on the FF-680W / DS-575W that gap holds the JOBR read below (a
+      // network round-trip with a 3 s timeout), and on every model it holds
+      // the response write. Without the reservation a webhook arriving in
+      // that gap would be admitted and two scans would start. The hook we
+      // return lets pushscan.ts drop the reservation if this trigger ends
+      // without the callback firing; the callback itself converts it into a
+      // tracked scan via admission.commit(). JobList is destination selection,
+      // not a scan, so it is never gated and never reserves.
+      let release: PushScanReleaseHook | undefined;
+      if (kind === "pushScan" && admission) {
+        if (admission.isBusy()) throw new PushScanRefusedError("another scan is in flight");
+        release = admission.reserve();
       }
 
-      if (kind === "pushScan" && info.jobNumber !== null && info.pushScanId === null) {
-        log.debug(
-          `${info.productName} JobNumberIn=${info.jobNumber} received — reading selected job over TCP/1865`,
-        );
-        await runJobNumberCommit({ printerIp: targetIp });
+      try {
+        const targetIp = peerAddress || config.printerIp;
+        if (!targetIp) throw new Error("Push-scan peer address is required");
+        if (!usesJobControl(info.productName)) return release;
+
+        if (kind === "jobList") {
+          log.debug(`${info.productName} JobList received — committing dummy job over TCP/1865`);
+          await runJobListCommit({ printerIp: targetIp });
+          return release;
+        }
+
+        if (kind === "pushScan" && info.jobNumber !== null && info.pushScanId === null) {
+          log.debug(
+            `${info.productName} JobNumberIn=${info.jobNumber} received — reading selected job over TCP/1865`,
+          );
+          await runJobNumberCommit({ printerIp: targetIp });
+        }
+        return release;
+      } catch (err) {
+        // The printer gets ERROR and no callback will fire, so nothing else
+        // would ever drop this reservation.
+        release?.();
+        throw err;
       }
+    },
+  };
+}
+
+export interface ScanWebhookDeps {
+  config: Config;
+  target: Pick<PrinterTarget, "target">;
+  /** Shared with the panel path so admission is mutual (see scan-admission.ts). */
+  admission: Pick<ScanAdmission, "isBusy" | "track">;
+  /** Injectable for tests; defaults to {@link dispatchScanSession}. */
+  dispatch?: (args: DispatchArgs) => Promise<void>;
+}
+
+/**
+ * Wires the POST /scan webhook (issue #137) to the scan pipeline. Returns
+ * undefined when SCAN_TRIGGER_TOKEN is unset, which leaves the health server
+ * as a pure read-only probe. The scan runs exactly as `scan:now` does: no
+ * panel, so format/sides come from the request (defaulting to SCAN_FORMAT /
+ * SCAN_SIDES), no PID hint, printer address from the resolved target.
+ */
+export function buildScanTriggerOptions(deps: ScanWebhookDeps): ScanTriggerOptions | undefined {
+  const { config, target, admission } = deps;
+  if (!config.scanTriggerToken) return undefined;
+  const dispatch = deps.dispatch ?? dispatchScanSession;
+
+  return {
+    token: config.scanTriggerToken,
+    defaults: { scanFormat: config.scanFormat, scanSides: config.scanSides },
+    isBusy: () => admission.isBusy(),
+    onScan: (request, peerAddress) => {
+      log.info(
+        `Webhook scan accepted from ${peerAddress} (format=${request.format}, sides=${request.sides})`,
+      );
+      setLastScanTime(new Date().toISOString());
+      // The busy check in health.ts and this track() share one synchronous
+      // turn, so two simultaneous POSTs cannot both be admitted. target() is
+      // awaited *inside* the tracked promise for exactly that reason: the
+      // slot is taken before anything yields. No reservation is needed on
+      // this side — unlike a panel trigger, the webhook has no response
+      // round-trip between admission and tracking.
+      const scan = (async () => {
+        const printerIp = await target.target();
+        await dispatch({
+          config,
+          duplex: request.sides === "duplex",
+          action: request.format,
+          paperless: buildPaperlessOptions(config),
+          productName: null,
+          printerIp,
+        });
+      })();
+      admission.track(scan);
     },
   };
 }

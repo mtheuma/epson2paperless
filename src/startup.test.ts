@@ -16,6 +16,9 @@ vi.mock("./job-control.js", () => ({
 }));
 
 import { buildPushScanServerOptions, dispatchScanSession, resolveScanDispatch } from "./startup.js";
+import { PushScanRefusedError } from "./pushscan.js";
+import { createScanAdmission } from "./scan-admission.js";
+import { createInflightTracker } from "./lifecycle.js";
 import { detectVariant } from "./protocol-probe.js";
 import { runEsci2Scan, runEsci2ScanOverPlain } from "./esci2/scanner.js";
 import { runEsciScan } from "./esci/scanner.js";
@@ -203,6 +206,102 @@ describe("buildPushScanServerOptions", () => {
 
     expect(runJobListCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.22" });
     expect(runJobNumberCommitMock).not.toHaveBeenCalled();
+  });
+
+  describe("shared admission (#137)", () => {
+    const PANEL_INFO: PushScanInfo = {
+      pushScanId: "02",
+      jobNumber: null,
+      productName: "PID 11D1",
+      ipAddress: "C0A8013A",
+      duplex: false,
+      action: "pdf",
+    };
+    const hookArgs = (kind: "pushScan" | "jobList", info: PushScanInfo) => ({
+      kind,
+      headers: "",
+      body: "",
+      xuid: "1",
+      info,
+      capabilities: [] as string[],
+      peerAddress: "203.0.113.20",
+    });
+    const busyAdmission = () => {
+      const admission = createScanAdmission(createInflightTracker());
+      admission.reserve();
+      return admission;
+    };
+
+    it("refuses a panel PushScan while another scan holds the slot", async () => {
+      const options = buildPushScanServerOptions(makeConfig(), undefined, busyAdmission());
+      await expect(
+        options.beforeResponse?.(hookArgs("pushScan", PANEL_INFO)),
+      ).rejects.toBeInstanceOf(PushScanRefusedError);
+    });
+
+    it("refuses before the FF-680W JOBR read so job-control never touches a busy printer", async () => {
+      const options = buildPushScanServerOptions(makeConfig(), undefined, busyAdmission());
+      await expect(
+        options.beforeResponse?.(hookArgs("pushScan", FF680W_JOB_NUMBER_INFO)),
+      ).rejects.toBeInstanceOf(PushScanRefusedError);
+      expect(runJobNumberCommitMock).not.toHaveBeenCalled();
+    });
+
+    it("does not gate JobList and takes no reservation for it", async () => {
+      const admission = busyAdmission();
+      const options = buildPushScanServerOptions(makeConfig(), undefined, admission);
+      await expect(
+        options.beforeResponse?.(
+          hookArgs("jobList", { ...FF680W_JOB_NUMBER_INFO, jobNumber: null }),
+        ),
+      ).resolves.toBeUndefined();
+      expect(runJobListCommitMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("reserves the slot when admitting a panel PushScan and returns the release hook", async () => {
+      const admission = createScanAdmission(createInflightTracker());
+      const options = buildPushScanServerOptions(makeConfig(), undefined, admission);
+      const release = await options.beforeResponse?.(hookArgs("pushScan", PANEL_INFO));
+      expect(admission.isBusy()).toBe(true);
+      expect(typeof release).toBe("function");
+      (release as () => void)();
+      expect(admission.isBusy()).toBe(false);
+    });
+
+    it("holds the slot across the FF-680W JOBR round-trip", async () => {
+      const admission = createScanAdmission(createInflightTracker());
+      let finishJobr!: (b: Buffer) => void;
+      runJobNumberCommitMock.mockImplementation(
+        () =>
+          new Promise<Buffer>((r) => {
+            finishJobr = r;
+          }),
+      );
+      const options = buildPushScanServerOptions(makeConfig(), undefined, admission);
+      const pending = options.beforeResponse?.(hookArgs("pushScan", FF680W_JOB_NUMBER_INFO));
+      await new Promise((r) => setImmediate(r));
+      expect(admission.isBusy()).toBe(true); // JOBR still in flight
+      finishJobr(Buffer.from("0300020000020001", "hex"));
+      await pending;
+      expect(admission.isBusy()).toBe(true); // still held until commit/release
+    });
+
+    it("drops the reservation when job-control fails", async () => {
+      const admission = createScanAdmission(createInflightTracker());
+      runJobNumberCommitMock.mockRejectedValue(new Error("JOBR timeout"));
+      const options = buildPushScanServerOptions(makeConfig(), undefined, admission);
+      await expect(
+        options.beforeResponse?.(hookArgs("pushScan", FF680W_JOB_NUMBER_INFO)),
+      ).rejects.toThrow("JOBR timeout");
+      expect(admission.isBusy()).toBe(false);
+    });
+
+    it("admits everything and reserves nothing when no admission is supplied", async () => {
+      const options = buildPushScanServerOptions(makeConfig());
+      await expect(
+        options.beforeResponse?.(hookArgs("pushScan", PANEL_INFO)),
+      ).resolves.toBeUndefined();
+    });
   });
 
   it("does not run job-control for other products", async () => {
