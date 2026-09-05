@@ -111,6 +111,13 @@ const configSchema = z
     // the FF-680W job-number flow, and every host-triggered scan (scan-now).
     scanFormat: z.enum(["jpg", "pdf"]).default("pdf"),
     scanSides: z.enum(["simplex", "duplex"]).default("duplex"),
+    // Shared secret for the POST /scan webhook on the health port. Unset =
+    // endpoint off (404). Whitespace-only is a misconfiguration, not "off".
+    scanTriggerToken: z
+      .string()
+      .trim()
+      .min(1, "SCAN_TRIGGER_TOKEN must not be blank")
+      .optional(),
     // Universal target DPI. Sanity-bounded only — the real validity check is
     // per-printer at session time (CAPA-advertised lists on ESC/I-2; fixed
     // rasters on legacy). Unset = each dialect's pinned default.
@@ -274,6 +281,7 @@ export function loadConfig(): Config {
     postProcess: process.env.POST_PROCESS || undefined,
     scanFormat: process.env.SCAN_FORMAT || undefined,
     scanSides: process.env.SCAN_SIDES || undefined,
+    scanTriggerToken: process.env.SCAN_TRIGGER_TOKEN || undefined,
     scanResolution: process.env.SCAN_RESOLUTION || undefined,
     scanColorMode: process.env.SCAN_COLOR_MODE || undefined,
     tempDir: process.env.TEMP_DIR || undefined,
