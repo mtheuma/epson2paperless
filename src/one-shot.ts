@@ -1,7 +1,7 @@
 import { loadConfig } from "./config.js";
 import { setLogLevel, setLogFormat, createLogger } from "./logger.js";
 import { createPushScanServer } from "./pushscan.js";
-import { createInflightTracker } from "./lifecycle.js";
+import { runScanNowLifecycle } from "./lifecycle.js";
 import {
   logStartupBanner,
   startPrinterDiscovery,
@@ -24,17 +24,15 @@ async function main() {
   const target = await createPrinterTarget(config);
   const responder = await startPrinterDiscovery(config, target);
 
-  type ExitReason =
-    | { kind: "complete" }
-    | { kind: "fail"; err: unknown }
-    | { kind: "signal"; signal: NodeJS.Signals };
-
-  let settle!: (reason: ExitReason) => void;
-  const settled = new Promise<ExitReason>((res) => {
-    settle = res;
+  // Resolves once the panel's first accepted push-scan has started a session.
+  // The scan promise is wrapped in an object on purpose: resolving a Promise
+  // *with* another promise would adopt it, and scanStarted would then wait for
+  // the whole scan instead of just its start.
+  let onScanStarted!: (started: { scan: Promise<void> }) => void;
+  const scanStarted = new Promise<{ scan: Promise<void> }>((resolve) => {
+    onScanStarted = resolve;
   });
-
-  const inflight = createInflightTracker();
+  let started = false;
 
   const pushscanServer = createPushScanServer(
     2968,
@@ -46,68 +44,60 @@ async function main() {
         );
         return;
       }
-      if (inflight.count > 0) {
+      if (started) {
         log.warn("Additional push-scan received — ignoring (one-shot already in progress)");
         return;
       }
+      started = true;
       log.info(
         `PushScan received (duplex=${scan.duplex}, action=${scan.action}) — starting scan session`,
       );
 
-      const scanPromise = dispatchScanSession({
-        config,
-        duplex: scan.duplex,
-        action: scan.action,
-        paperless: buildPaperlessOptions(config),
-        productName: info.productName,
-        printerIp: peerAddress,
+      onScanStarted({
+        scan: dispatchScanSession({
+          config,
+          duplex: scan.duplex,
+          action: scan.action,
+          paperless: buildPaperlessOptions(config),
+          productName: info.productName,
+          printerIp: peerAddress,
+        }),
       });
-      void inflight.track(scanPromise);
-      scanPromise.then(
-        () => settle({ kind: "complete" }),
-        (err) => settle({ kind: "fail", err }),
-      );
     },
     buildPushScanServerOptions(config, target),
   );
 
   log.info("epson2paperless ready — waiting for one scan from printer panel");
 
-  const onSignal = (signal: NodeJS.Signals): void => {
-    log.info(`Received ${signal} — interrupting one-shot`);
-    settle({ kind: "signal", signal });
-  };
-  process.on("SIGINT", onSignal);
-  process.on("SIGTERM", onSignal);
+  const signalled = new Promise<NodeJS.Signals>((resolve) => {
+    process.once("SIGINT", () => resolve("SIGINT"));
+    process.once("SIGTERM", () => resolve("SIGTERM"));
+  });
   installCrashHandlers();
 
-  const reason = await settled;
-  process.off("SIGINT", onSignal);
-  process.off("SIGTERM", onSignal);
+  // Nothing to drain until the panel has pushed, so a signal before then exits
+  // straight away with the signal code. Once a scan is running, the shared
+  // coordinator owns the signal → drain → exit-code decision, same as
+  // scan:now (issue #134).
+  const first = await Promise.race([
+    scanStarted.then(({ scan }) => ({ kind: "scan", scan }) as const),
+    signalled.then((signal) => ({ kind: "signal", signal }) as const),
+  ]);
 
   let exitCode: number;
-  switch (reason.kind) {
-    case "complete":
-      log.info("Scan complete — shutting down");
-      exitCode = 0;
-      break;
-    case "fail":
-      log.error("Scan failed — shutting down", reason.err);
-      exitCode = 1;
-      break;
-    case "signal":
-      exitCode = reason.signal === "SIGTERM" ? 143 : 130;
-      break;
+  if (first.kind === "signal") {
+    log.info(`Received ${first.signal} before any scan started — shutting down`);
+    exitCode = first.signal === "SIGTERM" ? 143 : 130;
+  } else {
+    exitCode = await runScanNowLifecycle({
+      scan: first.scan,
+      signalled,
+      shutdownTimeoutMs: config.shutdownTimeoutMs,
+    });
   }
 
   try {
     pushscanServer.close();
-    const drainResult = await inflight.waitAll(config.shutdownTimeoutMs);
-    if (drainResult.timedOut > 0) {
-      log.warn(
-        `${drainResult.timedOut} scan(s) still in flight after ${config.shutdownTimeoutMs}ms — exiting anyway`,
-      );
-    }
     responder.stop();
   } catch (err) {
     log.error("Teardown failed", err);
