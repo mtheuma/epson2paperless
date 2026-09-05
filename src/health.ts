@@ -55,15 +55,19 @@ export function createHealthServer(port: number, options: HealthServerOptions = 
     // the query string. Draining keeps an unread body from stalling the socket.
     req.resume();
 
-    const url = new URL(req.url ?? "/", "http://localhost");
+    // Route on the raw request target, split at the first "?". Nothing here
+    // can throw: a WHATWG URL parse would reject targets like "//[/" and, with
+    // no catch in an http 'request' handler, take the whole daemon down via
+    // the uncaughtException crash handler. URLSearchParams never throws.
+    const { pathname, search } = splitTarget(req.url ?? "/");
 
-    if (url.pathname === "/health" && req.method === "GET") {
+    if (pathname === "/health" && req.method === "GET") {
       sendJson(res, 200, { status: "ok", lastScan });
       return;
     }
 
-    if (url.pathname === "/scan" && trigger) {
-      handleScan(req, res, url, trigger);
+    if (pathname === "/scan" && trigger) {
+      handleScan(req, res, new URLSearchParams(search), trigger);
       return;
     }
 
@@ -78,10 +82,18 @@ export function createHealthServer(port: number, options: HealthServerOptions = 
   return server;
 }
 
+/** Splits an HTTP request target into path and query without parsing either. */
+export function splitTarget(target: string): { pathname: string; search: string } {
+  const q = target.indexOf("?");
+  return q === -1
+    ? { pathname: target, search: "" }
+    : { pathname: target.slice(0, q), search: target.slice(q + 1) };
+}
+
 function handleScan(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  url: URL,
+  query: URLSearchParams,
   trigger: ScanTriggerOptions,
 ): void {
   const peer = peerAddressOf(req.socket.remoteAddress);
@@ -95,7 +107,7 @@ function handleScan(
     sendJson(res, 401, { error: "unauthorized" }, { "WWW-Authenticate": "Bearer" });
     return;
   }
-  const parsed = parseScanParams(url.searchParams, trigger.defaults);
+  const parsed = parseScanParams(query, trigger.defaults);
   if ("error" in parsed) {
     sendJson(res, 400, { error: parsed.error });
     return;

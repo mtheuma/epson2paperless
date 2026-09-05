@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import http from "node:http";
+import net from "node:net";
 import {
   createHealthServer,
   peerAddressOf,
@@ -219,6 +220,63 @@ describe("POST /scan webhook", () => {
     server = s;
     const res = await request("POST", `${base}/other`, AUTH);
     expect(res.status).toBe(404);
+  });
+});
+
+describe("malformed request paths", () => {
+  let server: http.Server | undefined;
+  afterEach(() => {
+    server?.close();
+    server = undefined;
+  });
+
+  function rawRequest(port: number, requestLine: string): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const client = net.createConnection(port, "127.0.0.1", () => {
+        client.write(`${requestLine}\r\nHost: x\r\nConnection: close\r\n\r\n`);
+      });
+      let data = "";
+      client.on("data", (c) => (data += c.toString()));
+      client.on("end", () => resolve(data));
+      client.on("close", () => resolve(data));
+      client.on("error", reject);
+    });
+  }
+
+  it("answers a path the URL parser would reject instead of throwing (daemon must not exit)", async () => {
+    const { server: s, base } = await listen();
+    server = s;
+    const port = Number(new URL(base).port);
+    const uncaught = vi.fn();
+    process.once("uncaughtException", uncaught);
+    try {
+      const response = await rawRequest(port, "GET //[/ HTTP/1.1");
+      expect(response).toMatch(/^HTTP\/1\.1 404/);
+      expect(uncaught).not.toHaveBeenCalled();
+      // The server is still alive and serving.
+      const health = await fetch(`${base}/health`);
+      expect(health.status).toBe(200);
+    } finally {
+      process.removeListener("uncaughtException", uncaught);
+    }
+  });
+
+  it("routes /scan by path regardless of a hostile query string when enabled", async () => {
+    const onScan = vi.fn();
+    const { server: s, base } = await listen({
+      scanTrigger: {
+        token: "t",
+        defaults: { scanFormat: "pdf", scanSides: "duplex" },
+        isBusy: () => false,
+        onScan,
+      },
+    });
+    server = s;
+    const res = await request("POST", `${base}/scan?%%%=[&format=jpg`, {
+      Authorization: "Bearer t",
+    });
+    expect(res.status).toBe(202);
+    expect(onScan).toHaveBeenCalledWith({ format: "jpg", sides: "duplex" }, "127.0.0.1");
   });
 });
 
