@@ -57,3 +57,44 @@ export function createScanAdmission(inflight: InflightTracker): ScanAdmission {
     },
   };
 }
+
+/**
+ * One-shot's variant (issue #198): the process serves exactly one scan and
+ * then exits, so once a trigger is committed the slot stays busy for good.
+ * Same reserve/release contract as `createScanAdmission` for the gap between
+ * `beforeResponse` and the callback, but there is no tracker to consult: the
+ * scan's own lifetime is owned by `runScanNowLifecycle`.
+ */
+export interface SingleScanAdmission {
+  /** True while a trigger holds the slot, or forever once one has committed. */
+  isBusy(): boolean;
+  /** Same as `ScanAdmission.reserve()`: returns a release hook for this hold only. */
+  reserve(): () => void;
+  /** The admitted trigger became the scan. Nothing reopens the slot after this. */
+  commit(): void;
+  /** The admitted trigger will not scan (e.g. PREVIEW_ACTION=reject). */
+  release(): void;
+}
+
+export function createSingleScanAdmission(): SingleScanAdmission {
+  let current: symbol | null = null;
+  let committed = false;
+
+  return {
+    isBusy: () => committed || current !== null,
+    reserve() {
+      const token = Symbol("scan-reservation");
+      current = token;
+      return () => {
+        if (current === token) current = null;
+      };
+    },
+    commit() {
+      committed = true;
+      current = null;
+    },
+    release() {
+      current = null;
+    },
+  };
+}

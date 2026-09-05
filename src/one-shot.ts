@@ -12,6 +12,7 @@ import {
   dispatchScanSession,
 } from "./startup.js";
 import { createPrinterTarget } from "./network.js";
+import { createSingleScanAdmission } from "./scan-admission.js";
 
 const log = createLogger("one-shot");
 
@@ -33,6 +34,11 @@ async function main() {
     onScanStarted = resolve;
   });
   let started = false;
+  // A second panel press while the scan runs is refused at beforeResponse so
+  // the panel errors at once, instead of getting an OK and then waiting for a
+  // session that never opens (issue #198). The slot never reopens: this
+  // process exits after its one scan.
+  const admission = createSingleScanAdmission();
 
   const pushscanServer = createPushScanServer(
     2968,
@@ -42,6 +48,7 @@ async function main() {
         log.warn(
           `Ignoring push-scan: action=${info.action}, previewAction=${config.previewAction}`,
         );
+        admission.release(); // admitted at beforeResponse, but nothing will scan
         return;
       }
       if (started) {
@@ -49,6 +56,7 @@ async function main() {
         return;
       }
       started = true;
+      admission.commit();
       log.info(
         `PushScan received (duplex=${scan.duplex}, action=${scan.action}) — starting scan session`,
       );
@@ -64,7 +72,7 @@ async function main() {
         }),
       });
     },
-    buildPushScanServerOptions(config, target),
+    buildPushScanServerOptions(config, target, admission),
   );
 
   log.info("epson2paperless ready — waiting for one scan from printer panel");
