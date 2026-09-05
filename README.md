@@ -83,7 +83,7 @@ Within about 60 seconds, your destination (default `Paperless`) appears in the p
 
 **Windows:** copy `command.bat.example` to `command.bat` (gitignored, so your local `PRINTER_IP` / paths stay private), edit the values, then double-click. The script tees output to `scan.log`.
 
-**One-shot mode.** `npm run scan` runs a single scan and exits, handy for cron jobs or end-to-end tests. Exit codes: `0` success, `1` scan failure. On `SIGINT`/`SIGTERM` an in-flight scan is allowed to finish first (bounded by `SHUTDOWN_TIMEOUT_MS`) and its result is reported; `130`/`143` only when no scan had started or the drain timed out. No health endpoint is opened, and a second panel press while the scan runs is refused (the panel shows an error).
+**One-shot mode.** `npm run scan` runs a single scan and exits, handy for cron jobs or end-to-end tests. Exit codes: `0` success, `1` scan failure. On `SIGINT`/`SIGTERM` an in-flight scan is allowed to finish first (bounded by `SHUTDOWN_TIMEOUT_MS`) and its result is reported; `130`/`143` only when no scan had started or the drain timed out. No health endpoint is opened, and a second panel press while the scan runs is refused immediately.
 
 **Host-triggered scan.** `npm run scan:now` scans immediately and exits, without waiting
 for a panel button. It skips discovery and the push-scan listener entirely and pulls the

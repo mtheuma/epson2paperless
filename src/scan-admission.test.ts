@@ -73,16 +73,10 @@ describe("createScanAdmission", () => {
 });
 
 describe("createSingleScanAdmission", () => {
+  // The reservation slot is shared with createScanAdmission and pinned above;
+  // these cover only what is different: the commit latch.
   it("is idle before any trigger is admitted", () => {
     const admission = createSingleScanAdmission();
-    expect(admission.isBusy()).toBe(false);
-  });
-
-  it("is busy from reserve() until the reservation is released", () => {
-    const admission = createSingleScanAdmission();
-    const release = admission.reserve();
-    expect(admission.isBusy()).toBe(true);
-    release();
     expect(admission.isBusy()).toBe(false);
   });
 
@@ -101,15 +95,6 @@ describe("createSingleScanAdmission", () => {
     release();
     expect(admission.isBusy()).toBe(true);
     admission.release();
-    expect(admission.isBusy()).toBe(true);
-  });
-
-  it("a stale release hook cannot drop a newer reservation", () => {
-    const admission = createSingleScanAdmission();
-    const staleRelease = admission.reserve();
-    admission.release();
-    admission.reserve();
-    staleRelease();
     expect(admission.isBusy()).toBe(true);
   });
 });
