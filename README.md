@@ -113,6 +113,45 @@ the scan is written inside the container and lost on exit.
 The printer serves one scan at a time, so don't trigger `scan:now` while a panel scan (or
 another `scan:now`) is already running.
 
+<a id="webhook-trigger"></a>
+**Webhook trigger.** For callers that can't spawn a container, such as a Home Assistant
+install without Docker access or an ESP32 on the LAN, the running daemon can accept the
+same host-triggered scan over HTTP. Set `SCAN_TRIGGER_TOKEN` to a long random secret and
+the daemon opens `POST /scan` on `HEALTH_PORT` (default `3000`). Without the token the path
+is a plain 404 and nothing else changes. Every request must carry the token as a bearer
+header; `format` (`jpg`/`pdf`) and `sides` (`simplex`/`duplex`) are optional query
+parameters that default to `SCAN_FORMAT` / `SCAN_SIDES`, exactly like `scan:now`:
+
+    curl -X POST -H "Authorization: Bearer $SCAN_TRIGGER_TOKEN" \
+      "http://<host>:3000/scan?format=pdf&sides=simplex"
+
+Responses: `202` accepted (the scan starts after the response; watch the logs for the
+result), `401` bad or missing token, `400` bad parameter, `409` a scan is already running,
+`405` anything other than POST. `/health` keeps reporting `lastScan`, which is the time the
+last scan was _triggered_ (panel or webhook), not whether it succeeded.
+
+One scan at a time is enforced both ways: the webhook answers `409` while a panel scan runs,
+and the printer panel shows an error if Scan is pressed while a webhook scan runs.
+
+A Home Assistant `rest_command`, with the whole header value kept in `secrets.yaml`
+(Home Assistant's `!secret` must replace the entire value, not part of it):
+
+```yaml
+# configuration.yaml
+rest_command:
+  scan_to_paperless:
+    url: "http://<host>:3000/scan?sides=simplex"
+    method: POST
+    headers:
+      Authorization: !secret scan_trigger_authorization
+
+# secrets.yaml
+scan_trigger_authorization: "Bearer YOUR_LONG_RANDOM_TOKEN"
+```
+
+The webhook takes the same path as `scan:now`, so the model caveats below apply to it too.
+`HEALTH_PORT` listens on every interface; if the LAN is not trusted, firewall it.
+
 The host trigger is validated end-to-end on the ET-2810, XP-3200 and ET-4956. Other models are
 untested over this path: it may work, and reports are welcome either way. The FF-680W is
 expected to fail, because its panel flow does job preparation that a host-triggered scan
@@ -155,7 +194,8 @@ Each setting's **Scope** column shows which printers it affects: `All`, `Panel` 
 | `JPEG_QUALITY`        | All                          | `90`             | JPEG encoder quality 1–100 (host-encoded raw pixels), and the ESC/I-2 wire request (clamped to what the printer advertises). Also sets the re-encode quality when `POST_PROCESS=document`.                                                               |
 | `POST_PROCESS`        | All                          | `none`           | `document` neutralizes the paper white-point (removes blue cast, show-through, ADF sensor lines) and re-encodes at `JPEG_QUALITY`; `none` leaves the printer's raw JPEG untouched.                                                                       |
 | `TEMP_DIR`            | All                          | (system default) | Where per-scan temp files go. Leave empty for the OS default (`os.tmpdir()`). Override for Docker if `/tmp` is in memory.                                                                                                                                |
-| `HEALTH_PORT`         | All                          | `3000`           | HTTP port for the `/health` endpoint.                                                                                                                                                                                                                    |
+| `HEALTH_PORT`         | All                          | `3000`           | HTTP port for the `/health` endpoint and, when enabled, `POST /scan`.                                                                                                                                                                                    |
+| `SCAN_TRIGGER_TOKEN`  | All                          | unset            | Enables the `POST /scan` webhook on `HEALTH_PORT`. Requests must send `Authorization: Bearer <token>`. Unset = endpoint off (404). See [Webhook trigger](#webhook-trigger).                                                                              |
 
 <details>
 <summary>Advanced (leave as default unless you know why)</summary>
