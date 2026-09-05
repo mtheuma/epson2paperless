@@ -3,6 +3,11 @@
 // the inflight tracker, the panel-side admission gate and the shutdown drain.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import http from "node:http";
+
+vi.mock("./job-control.js", () => ({
+  runJobListCommit: vi.fn(() => Promise.resolve()),
+  runJobNumberCommit: vi.fn(() => Promise.resolve(Buffer.from("0300020000020001", "hex"))),
+}));
 import { createHealthServer, setLastScanTime } from "./health.js";
 import {
   createInflightTracker,
@@ -14,6 +19,11 @@ import { buildPushScanServerOptions, buildScanTriggerOptions } from "./startup.j
 import type { Config } from "./config.js";
 import type { DispatchArgs } from "./startup.js";
 import type { PushScanInfo } from "./pushscan.js";
+import { createScanAdmission, type ScanAdmission } from "./scan-admission.js";
+import { runJobNumberCommit } from "./job-control.js";
+import { PID_FF680W, PID_DS575W } from "./printer-ids.js";
+
+const runJobNumberCommitMock = vi.mocked(runJobNumberCommit);
 
 const TOKEN = "t0ken";
 const AUTH = { Authorization: `Bearer ${TOKEN}` };
@@ -82,7 +92,7 @@ interface Harness {
   inflight: InflightTracker;
   dispatch: ReturnType<typeof vi.fn<(args: DispatchArgs) => Promise<void>>>;
   targetCalls: number;
-  isBusy: () => boolean;
+  admission: ScanAdmission;
 }
 
 async function harness(opts: {
@@ -92,6 +102,7 @@ async function harness(opts: {
 }): Promise<Harness> {
   const config = opts.config ?? makeConfig();
   const inflight = createInflightTracker();
+  const admission = createScanAdmission(inflight);
   const dispatch = vi.fn<(args: DispatchArgs) => Promise<void>>(
     opts.dispatch ?? (() => Promise.resolve()),
   );
@@ -105,7 +116,7 @@ async function harness(opts: {
         return targetFn();
       },
     },
-    inflight,
+    admission,
     dispatch,
   });
   const server = createHealthServer(0, { scanTrigger });
@@ -119,7 +130,7 @@ async function harness(opts: {
     get targetCalls() {
       return state.targetCalls;
     },
-    isBusy: scanTrigger!.isBusy,
+    admission,
   };
 }
 
@@ -144,7 +155,7 @@ describe("scan webhook wiring", () => {
     const options = buildScanTriggerOptions({
       config: makeConfig({ scanTriggerToken: undefined }),
       target: { target: () => Promise.resolve("192.0.2.5") },
-      inflight: createInflightTracker(),
+      admission: createScanAdmission(createInflightTracker()),
     });
     expect(options).toBeUndefined();
   });
@@ -198,7 +209,7 @@ describe("scan webhook wiring", () => {
     const scan = deferred();
     h = await harness({ dispatch: () => scan.promise });
     expect(await post(h.base)).toBe(202);
-    const panel = buildPushScanServerOptions(makeConfig(), undefined, h.isBusy);
+    const panel = buildPushScanServerOptions(makeConfig(), undefined, h.admission);
     const hookArgs = (kind: "pushScan" | "jobList") => ({
       kind,
       headers: "",
@@ -212,7 +223,12 @@ describe("scan webhook wiring", () => {
     await expect(panel.beforeResponse?.(hookArgs("jobList"))).resolves.toBeUndefined();
     scan.resolve();
     await settle();
-    await expect(panel.beforeResponse?.(hookArgs("pushScan"))).resolves.toBeUndefined();
+    // Idle again: the panel is admitted and now holds the slot via a reservation.
+    const release = await panel.beforeResponse?.(hookArgs("pushScan"));
+    expect(typeof release).toBe("function");
+    expect(await post(h.base)).toBe(409);
+    (release as () => void)();
+    expect(await post(h.base)).toBe(202);
   });
 
   it("a tracked panel scan makes the webhook answer 409", async () => {
@@ -256,6 +272,76 @@ describe("scan webhook wiring", () => {
     expect(await post(h.base)).toBe(202);
     await settle();
     expect(h.dispatch).toHaveBeenCalledTimes(2);
+  });
+
+  const hookArgs = (info: PushScanInfo) => ({
+    kind: "pushScan" as const,
+    headers: "",
+    body: "",
+    xuid: "1",
+    info,
+    capabilities: [] as string[],
+    peerAddress: "192.0.2.5",
+  });
+  const jobInfo = (productName: string): PushScanInfo => ({
+    pushScanId: null,
+    jobNumber: "0",
+    productName,
+    ipAddress: "C0A80A08",
+    duplex: false,
+    action: "unknown",
+  });
+
+  for (const [model, pid] of [
+    ["FF-680W", PID_FF680W],
+    ["DS-575W", PID_DS575W],
+  ] as const) {
+    it(`${model}: a webhook during the panel's JOBR round-trip gets 409, and only the panel scans`, async () => {
+      h = await harness({ dispatch: () => new Promise<void>(() => {}) });
+      let finishJobr!: (b: Buffer) => void;
+      runJobNumberCommitMock.mockImplementationOnce(
+        () =>
+          new Promise<Buffer>((r) => {
+            finishJobr = r;
+          }),
+      );
+      const panel = buildPushScanServerOptions(makeConfig(), undefined, h.admission);
+      const pendingHook = panel.beforeResponse!(hookArgs(jobInfo(pid)));
+      await settle(); // panel is now waiting on JOBR over 1865
+
+      expect(await post(h.base)).toBe(409);
+      expect(h.dispatch).not.toHaveBeenCalled();
+
+      finishJobr(Buffer.from("0300020000020001", "hex"));
+      const release = await pendingHook;
+      expect(typeof release).toBe("function");
+      // Still held between OK and the callback: the webhook stays out.
+      expect(await post(h.base)).toBe(409);
+
+      // The daemon callback commits the real scan; the hold converts to a tracked scan.
+      h.admission.commit(new Promise<void>(() => {}));
+      expect(await post(h.base)).toBe(409);
+      expect(h.dispatch).not.toHaveBeenCalled();
+    });
+  }
+
+  it("a panel trigger whose dispatch is skipped (preview reject) releases the slot", async () => {
+    h = await harness({});
+    const panel = buildPushScanServerOptions(makeConfig(), undefined, h.admission);
+    const release = await panel.beforeResponse!(hookArgs(jobInfo("PID 11D1")));
+    expect(typeof release).toBe("function");
+    expect(await post(h.base)).toBe(409);
+    h.admission.release(); // what index.ts does when resolveScanDispatch returns null
+    expect(await post(h.base)).toBe(202);
+  });
+
+  it("a panel trigger that ends without a callback releases the slot via the hook", async () => {
+    h = await harness({});
+    const panel = buildPushScanServerOptions(makeConfig(), undefined, h.admission);
+    const release = (await panel.beforeResponse!(hookArgs(jobInfo("PID 11D1")))) as () => void;
+    expect(await post(h.base)).toBe(409);
+    release(); // what pushscan.ts does on socket close without a callback
+    expect(await post(h.base)).toBe(202);
   });
 
   it("participates in graceful shutdown: the drain waits for the webhook scan", async () => {

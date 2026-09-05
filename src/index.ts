@@ -14,6 +14,7 @@ import {
   dispatchScanSession,
 } from "./startup.js";
 import { createPrinterTarget } from "./network.js";
+import { createScanAdmission } from "./scan-admission.js";
 
 const log = createLogger("main");
 
@@ -28,7 +29,7 @@ async function main() {
 
   const inflight = createInflightTracker();
   // One scan at a time, whichever door it came through (issue #137).
-  const isBusy = () => inflight.count > 0;
+  const admission = createScanAdmission(inflight);
 
   const pushscanServer = createPushScanServer(
     2968,
@@ -38,6 +39,7 @@ async function main() {
         log.warn(
           `Ignoring push-scan: action=${info.action}, previewAction=${config.previewAction}`,
         );
+        admission.release(); // admitted at beforeResponse, but nothing will scan
         return;
       }
       log.info(
@@ -53,13 +55,14 @@ async function main() {
         productName: info.productName,
         printerIp: peerAddress,
       });
-      void inflight.track(scanPromise);
+      // Converts the reservation taken at beforeResponse into a tracked scan.
+      admission.commit(scanPromise);
     },
-    buildPushScanServerOptions(config, target, isBusy),
+    buildPushScanServerOptions(config, target, admission),
   );
 
   const healthServer = createHealthServer(config.healthPort, {
-    scanTrigger: buildScanTriggerOptions({ config, target, inflight }),
+    scanTrigger: buildScanTriggerOptions({ config, target, admission }),
   });
   // Logged here rather than in the shared startup banner: scan:now and
   // one-shot print that banner too, and neither opens an HTTP server.

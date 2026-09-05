@@ -39,7 +39,7 @@ Implemented in `src/keepalive.ts`, with local-interface selection in `src/networ
 
 When the user selects the Paperless destination and presses Scan, the printer opens a TCP connection to the service on port `2968` and sends an HTTP-shaped SOAP request. Epson's headers are not valid HTTP/1.1 because they include whitespace before the colon (`Header : value`), so the project uses a raw `net.createServer` rather than Node's HTTP server.
 
-Only the configured printer's address is accepted on this port (`PRINTER_IP`, or whatever `PRINTER_HOSTNAME` currently resolves to); any other peer is dropped at connect time before a byte is read. A trigger that arrives while another scan is already running is answered with the protocol `ERROR` response and the panel shows an error, so the printer is never asked to serve two sessions at once.
+Only the configured printer's address is accepted on this port (`PRINTER_IP`, or whatever `PRINTER_HOSTNAME` currently resolves to); any other peer is dropped at connect time before a byte is read. A trigger that arrives while another scan is already running is answered with the protocol `ERROR` response and the panel shows an error, so the printer is never asked to serve two sessions at once. An admitted trigger holds the scan slot from that moment (`src/scan-admission.ts`), so a webhook request arriving during the response, or during the FF-680W / DS-575W job-control read that precedes it, is refused rather than started alongside.
 
 The SOAP body's `PushScanIDIn` value carries the panel choices:
 
@@ -130,7 +130,7 @@ When `PAPERLESS_URL` and `PAPERLESS_TOKEN` are configured, completed output file
 | Process entry points  | `src/index.ts`, `src/one-shot.ts`, `src/startup.ts`, `src/lifecycle.ts`                                                                 |
 | Discovery             | `src/keepalive.ts`, `src/network.ts`                                                                                                    |
 | Push-scan trigger     | `src/pushscan.ts`                                                                                                                       |
-| Webhook trigger       | `src/scan-trigger.ts`, `src/health.ts`                                                                                                  |
+| Webhook trigger       | `src/scan-trigger.ts`, `src/health.ts`, `src/scan-admission.ts`                                                                         |
 | Protocol selection    | `src/protocol-probe.ts`                                                                                                                 |
 | Shared session engine | `src/scan-session.ts`, `src/protocol.ts`, `src/graph-helpers.ts`                                                                        |
 | ESC/I-2 path          | `src/esci2/scanner.ts`, `src/esci2/graph.ts`, `src/esci2/commands.ts`, `src/esci2/transport.ts`, `src/esci2/dialects/`                  |

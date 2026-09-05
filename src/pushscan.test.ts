@@ -905,6 +905,84 @@ describe("createPushScanServer deliberate refusal (#137)", () => {
   });
 });
 
+describe("createPushScanServer admission release hook (#137)", () => {
+  function soap(id: string): string {
+    return (
+      `<?xml version="1.0" ?>` +
+      `<s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body>` +
+      `<p:PushScan xmlns:p="http://schema.epson.net/EpsonNet/Scan/2004/pushscan">` +
+      `<ProductNameIn>PID 11D1</ProductNameIn><PushScanIDIn>${id}</PushScanIDIn>` +
+      `</p:PushScan></s:Body></s:Envelope>`
+    );
+  }
+  function requestFor(body: string): string {
+    return (
+      `POST /PushScan HTTP/1.0\r\nContent-Type: application/octet-stream\r\n` +
+      `Content-Length: ${Buffer.byteLength(body, "utf-8")}\r\nx-uid: 5\r\n\r\n` +
+      body
+    );
+  }
+  async function listen(server: net.Server): Promise<number> {
+    await new Promise<void>((r) => server.once("listening", () => r()));
+    return (server.address() as AddressInfo).port;
+  }
+  const settle = () => new Promise((r) => setImmediate(r));
+
+  it("does not fire the release hook when the OK response is delivered and the callback runs", async () => {
+    const release = vi.fn();
+    let callbacks = 0;
+    const server = createPushScanServer(0, () => callbacks++, {
+      beforeResponse: () => release,
+    });
+    const port = await listen(server);
+    try {
+      const client = net.createConnection(port, "127.0.0.1");
+      await new Promise<void>((r) => client.once("connect", () => r()));
+      let response = "";
+      client.on("data", (c) => (response += c.toString("utf-8"))); // consume, or 'end' never fires
+      const closed = new Promise<void>((r) => client.on("close", () => r()));
+      client.write(requestFor(soap("02")));
+      await closed; // server half-closes after the response; client sees end + close
+      expect(response).toContain("<StatusOut>OK</StatusOut>");
+      await settle();
+      expect(callbacks).toBe(1);
+      expect(release).not.toHaveBeenCalled();
+    } finally {
+      server.close();
+    }
+  });
+
+  it("fires the release hook once when the trigger socket closes while the hook is pending", async () => {
+    const release = vi.fn();
+    let callbacks = 0;
+    let finishHook!: () => void;
+    const server = createPushScanServer(0, () => callbacks++, {
+      beforeResponse: () =>
+        new Promise<() => void>((resolve) => {
+          finishHook = () => resolve(release);
+        }),
+    });
+    const port = await listen(server);
+    try {
+      const client = net.createConnection(port, "127.0.0.1");
+      await new Promise<void>((r) => client.once("connect", () => r()));
+      client.write(requestFor(soap("02")));
+      await settle();
+      await settle();
+      client.destroy(); // printer gives up while we are still in job-control
+      await settle();
+      await settle();
+      finishHook();
+      await settle();
+      await settle();
+      expect(callbacks).toBe(0);
+      expect(release).toHaveBeenCalledTimes(1);
+    } finally {
+      server.close();
+    }
+  });
+});
+
 describe("resolveEffectiveAction", () => {
   // Maps (action from panel, PREVIEW_ACTION config) → 'jpg' | 'pdf' | null.
   // null signals "do not start a scan — skip this push-scan event entirely".
