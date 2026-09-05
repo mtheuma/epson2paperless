@@ -118,7 +118,7 @@ another `scan:now`) is already running.
 install without Docker access or an ESP32 on the LAN, the running daemon can accept the
 same host-triggered scan over HTTP. Set `SCAN_TRIGGER_TOKEN` to a long random secret and
 the daemon opens `POST /scan` on `HEALTH_PORT` (default `3000`). Without the token the path
-is a plain 404 and nothing else changes. Every request must carry the token as a bearer
+is a plain 404. Every request must carry the token as a bearer
 header; `format` (`jpg`/`pdf`) and `sides` (`simplex`/`duplex`) are optional query
 parameters that default to `SCAN_FORMAT` / `SCAN_SIDES`, exactly like `scan:now`:
 
@@ -131,7 +131,10 @@ result), `401` bad or missing token, `400` bad parameter, `409` a scan is alread
 last scan was _triggered_ (panel or webhook), not whether it succeeded.
 
 One scan at a time is enforced both ways: the webhook answers `409` while a panel scan runs,
-and the printer panel shows an error if Scan is pressed while a webhook scan runs.
+and the printer panel shows an error if Scan is pressed while a webhook scan runs. The panel
+side of this applies whether or not the webhook is enabled: pressing Scan while a previous
+scan is still running is now refused at the trigger (panel error, nothing sent to the printer)
+where earlier versions opened a second session that the printer then rejected.
 
 A Home Assistant `rest_command`, with the whole header value kept in `secrets.yaml`
 (Home Assistant's `!secret` must replace the entire value, not part of it):
