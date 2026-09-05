@@ -763,7 +763,11 @@ describe("SCAN_TRIGGER_TOKEN", () => {
   beforeEach(() => {
     // Earlier blocks leave printer/paperless vars behind; start from a clean slate.
     for (const key of Object.keys(process.env)) {
-      if (/^(PRINTER_|PAPERLESS_|SCAN_|PREVIEW_|POST_|ESCI_|LEGACY_|JPEG_|DIAGNOSE_|NETSCAN_|TEMP_DIR|OUTPUT_DIR|HEALTH_PORT|LOG_|LANGUAGE|SHUTDOWN_)/.test(key))
+      if (
+        /^(PRINTER_|PAPERLESS_|SCAN_|PREVIEW_|POST_|ESCI_|LEGACY_|JPEG_|DIAGNOSE_|NETSCAN_|TEMP_DIR|OUTPUT_DIR|HEALTH_PORT|LOG_|LANGUAGE|SHUTDOWN_)/.test(
+          key,
+        )
+      )
         delete process.env[key];
     }
     process.env.PRINTER_IP = "192.0.2.5";

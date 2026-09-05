@@ -15,6 +15,8 @@ import {
   type PushScanInfo,
   type PushScanServerOptions,
 } from "./pushscan.js";
+import { setLastScanTime, type ScanTriggerOptions } from "./health.js";
+import type { InflightTracker } from "./lifecycle.js";
 
 const log = createLogger("startup");
 
@@ -175,6 +177,55 @@ export function buildPushScanServerOptions(
         );
         await runJobNumberCommit({ printerIp: targetIp });
       }
+    },
+  };
+}
+
+export interface ScanWebhookDeps {
+  config: Config;
+  target: Pick<PrinterTarget, "target">;
+  inflight: InflightTracker;
+  /** Injectable for tests; defaults to {@link dispatchScanSession}. */
+  dispatch?: (args: DispatchArgs) => Promise<void>;
+}
+
+/**
+ * Wires the POST /scan webhook (issue #137) to the scan pipeline. Returns
+ * undefined when SCAN_TRIGGER_TOKEN is unset, which leaves the health server
+ * as a pure read-only probe. The scan runs exactly as `scan:now` does: no
+ * panel, so format/sides come from the request (defaulting to SCAN_FORMAT /
+ * SCAN_SIDES), no PID hint, printer address from the resolved target.
+ */
+export function buildScanTriggerOptions(deps: ScanWebhookDeps): ScanTriggerOptions | undefined {
+  const { config, target, inflight } = deps;
+  if (!config.scanTriggerToken) return undefined;
+  const dispatch = deps.dispatch ?? dispatchScanSession;
+
+  return {
+    token: config.scanTriggerToken,
+    defaults: { scanFormat: config.scanFormat, scanSides: config.scanSides },
+    isBusy: () => inflight.count > 0,
+    onScan: (request, peerAddress) => {
+      log.info(
+        `Webhook scan accepted from ${peerAddress} (format=${request.format}, sides=${request.sides})`,
+      );
+      setLastScanTime(new Date().toISOString());
+      // The busy check in health.ts and this track() share one synchronous
+      // turn, so two simultaneous POSTs cannot both be admitted. target() is
+      // awaited *inside* the tracked promise for exactly that reason: the
+      // slot is taken before anything yields.
+      const scan = (async () => {
+        const printerIp = await target.target();
+        await dispatch({
+          config,
+          duplex: request.sides === "duplex",
+          action: request.format,
+          paperless: buildPaperlessOptions(config),
+          productName: null,
+          printerIp,
+        });
+      })();
+      void inflight.track(scan);
     },
   };
 }

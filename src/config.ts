@@ -113,11 +113,7 @@ const configSchema = z
     scanSides: z.enum(["simplex", "duplex"]).default("duplex"),
     // Shared secret for the POST /scan webhook on the health port. Unset =
     // endpoint off (404). Whitespace-only is a misconfiguration, not "off".
-    scanTriggerToken: z
-      .string()
-      .trim()
-      .min(1, "SCAN_TRIGGER_TOKEN must not be blank")
-      .optional(),
+    scanTriggerToken: z.string().trim().min(1, "SCAN_TRIGGER_TOKEN must not be blank").optional(),
     // Universal target DPI. Sanity-bounded only — the real validity check is
     // per-printer at session time (CAPA-advertised lists on ESC/I-2; fixed
     // rasters on legacy). Unset = each dialect's pinned default.

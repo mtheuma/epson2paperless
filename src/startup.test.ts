@@ -227,9 +227,9 @@ describe("buildPushScanServerOptions", () => {
 
     it("refuses a panel PushScan while another scan is in flight", async () => {
       const options = buildPushScanServerOptions(makeConfig(), undefined, () => true);
-      await expect(options.beforeResponse?.(hookArgs("pushScan", PANEL_INFO))).rejects.toBeInstanceOf(
-        PushScanRefusedError,
-      );
+      await expect(
+        options.beforeResponse?.(hookArgs("pushScan", PANEL_INFO)),
+      ).rejects.toBeInstanceOf(PushScanRefusedError);
     });
 
     it("refuses before the FF-680W JOBR read so job-control never touches a busy printer", async () => {
@@ -243,19 +243,25 @@ describe("buildPushScanServerOptions", () => {
     it("does not gate JobList (destination selection is not a scan)", async () => {
       const options = buildPushScanServerOptions(makeConfig(), undefined, () => true);
       await expect(
-        options.beforeResponse?.(hookArgs("jobList", { ...FF680W_JOB_NUMBER_INFO, jobNumber: null })),
+        options.beforeResponse?.(
+          hookArgs("jobList", { ...FF680W_JOB_NUMBER_INFO, jobNumber: null }),
+        ),
       ).resolves.toBeUndefined();
       expect(runJobListCommitMock).toHaveBeenCalledTimes(1);
     });
 
     it("admits a panel PushScan when idle", async () => {
       const options = buildPushScanServerOptions(makeConfig(), undefined, () => false);
-      await expect(options.beforeResponse?.(hookArgs("pushScan", PANEL_INFO))).resolves.toBeUndefined();
+      await expect(
+        options.beforeResponse?.(hookArgs("pushScan", PANEL_INFO)),
+      ).resolves.toBeUndefined();
     });
 
     it("admits everything when no busy predicate is supplied", async () => {
       const options = buildPushScanServerOptions(makeConfig());
-      await expect(options.beforeResponse?.(hookArgs("pushScan", PANEL_INFO))).resolves.toBeUndefined();
+      await expect(
+        options.beforeResponse?.(hookArgs("pushScan", PANEL_INFO)),
+      ).resolves.toBeUndefined();
     });
   });
 

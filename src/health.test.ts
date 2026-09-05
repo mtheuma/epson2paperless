@@ -31,7 +31,9 @@ function request(
   });
 }
 
-async function listen(options?: HealthServerOptions): Promise<{ server: http.Server; base: string }> {
+async function listen(
+  options?: HealthServerOptions,
+): Promise<{ server: http.Server; base: string }> {
   const server = createHealthServer(0, options);
   await new Promise<void>((r) => server.once("listening", r));
   const addr = server.address() as { port: number };
