@@ -69,6 +69,11 @@ const PAPERLESS_OPTS: PaperlessUploadOptions = {
   deleteAfterUpload: true,
 };
 
+// Job-control routing and peer validation are independent of the admission
+// gate, so those cases pass an explicit no-gate stub rather than a live
+// admission: never busy, and its reservations are no-ops.
+const NO_GATE = { isBusy: () => false, reserve: () => () => {} };
+
 const FF680W_JOB_NUMBER_INFO: PushScanInfo = {
   pushScanId: null,
   jobNumber: "0",
@@ -145,7 +150,11 @@ describe("buildPushScanServerOptions", () => {
   });
 
   it("runs the FF-680W JOBW commit before replying to JobList", async () => {
-    const options = buildPushScanServerOptions(makeConfig({ printerIp: "203.0.113.20" }));
+    const options = buildPushScanServerOptions(
+      makeConfig({ printerIp: "203.0.113.20" }),
+      undefined,
+      NO_GATE,
+    );
 
     await options.beforeResponse?.({
       kind: "jobList",
@@ -161,7 +170,11 @@ describe("buildPushScanServerOptions", () => {
   });
 
   it("runs the FF-680W JOBR commit before replying to JobNumberIn PushScan", async () => {
-    const options = buildPushScanServerOptions(makeConfig({ printerIp: "203.0.113.21" }));
+    const options = buildPushScanServerOptions(
+      makeConfig({ printerIp: "203.0.113.21" }),
+      undefined,
+      NO_GATE,
+    );
 
     await options.beforeResponse?.({
       kind: "pushScan",
@@ -177,7 +190,11 @@ describe("buildPushScanServerOptions", () => {
   });
 
   it("runs the JOBR commit for the DS-575W JobNumberIn PushScan (PID 0169)", async () => {
-    const options = buildPushScanServerOptions(makeConfig({ printerIp: "203.0.113.23" }));
+    const options = buildPushScanServerOptions(
+      makeConfig({ printerIp: "203.0.113.23" }),
+      undefined,
+      NO_GATE,
+    );
 
     await options.beforeResponse?.({
       kind: "pushScan",
@@ -193,7 +210,11 @@ describe("buildPushScanServerOptions", () => {
   });
 
   it("runs the JOBW commit for the DS-575W JobList (PID 0169)", async () => {
-    const options = buildPushScanServerOptions(makeConfig({ printerIp: "203.0.113.22" }));
+    const options = buildPushScanServerOptions(
+      makeConfig({ printerIp: "203.0.113.22" }),
+      undefined,
+      NO_GATE,
+    );
 
     await options.beforeResponse?.({
       kind: "jobList",
@@ -295,17 +316,10 @@ describe("buildPushScanServerOptions", () => {
       ).rejects.toThrow("JOBR timeout");
       expect(admission.isBusy()).toBe(false);
     });
-
-    it("admits everything and reserves nothing when no admission is supplied", async () => {
-      const options = buildPushScanServerOptions(makeConfig());
-      await expect(
-        options.beforeResponse?.(hookArgs("pushScan", PANEL_INFO)),
-      ).resolves.toBeUndefined();
-    });
   });
 
   it("does not run job-control for other products", async () => {
-    const options = buildPushScanServerOptions(makeConfig());
+    const options = buildPushScanServerOptions(makeConfig(), undefined, NO_GATE);
 
     await options.beforeResponse?.({
       kind: "jobList",
@@ -582,7 +596,7 @@ describe("observed-peer propagation (DS-575W button scan, hostname mode)", () =>
 
   it("routes JOBW, JOBR and the scan itself to the observed peer", async () => {
     const config = makeConfig({ printerIp: undefined, printerHostname: "scanner.lan" });
-    const options = buildPushScanServerOptions(config);
+    const options = buildPushScanServerOptions(config, undefined, NO_GATE);
 
     // 1. JobList → the JOBW commit opens its own TCP/1865 round-trip.
     await options.beforeResponse?.({
@@ -634,7 +648,7 @@ describe("observed-peer propagation (DS-575W button scan, hostname mode)", () =>
     // The corollary of the above: with no PRINTER_IP configured, dropping the
     // observed peer is a hard error, never a silent guess at an address.
     const config = makeConfig({ printerIp: undefined, printerHostname: "scanner.lan" });
-    const options = buildPushScanServerOptions(config);
+    const options = buildPushScanServerOptions(config, undefined, NO_GATE);
 
     await expect(
       options.beforeResponse?.({

@@ -12,12 +12,13 @@ import { PID_FF680W, PID_DS575W } from "./printer-ids.js";
 import {
   PushScanRefusedError,
   resolveEffectiveAction,
+  type PushScanCallback,
   type PushScanInfo,
   type PushScanReleaseHook,
   type PushScanServerOptions,
 } from "./pushscan.js";
 import { setLastScanTime, type ScanTriggerOptions } from "./health.js";
-import type { ScanAdmission } from "./scan-admission.js";
+import type { ScanAdmission, SingleScanAdmission } from "./scan-admission.js";
 
 const log = createLogger("startup");
 
@@ -138,10 +139,19 @@ function usesJobControl(productName: string | null): boolean {
   return productName !== null && JOB_CONTROL_PRODUCTS.has(productName);
 }
 
+/**
+ * Options for the push-scan server on TCP 2968.
+ *
+ * `admission` is required, and `target` therefore takes an explicit
+ * `undefined` rather than being optional: an omitted gate used to admit every
+ * push-scan silently, which is how one-shot shipped without one (issue #198)
+ * past both the compiler and the suite. Callers with genuinely nothing to gate
+ * pass an explicit no-gate stub so the intent is visible at the call site.
+ */
 export function buildPushScanServerOptions(
   config: Config,
-  target?: PrinterTarget,
-  admission?: Pick<ScanAdmission, "isBusy" | "reserve">,
+  target: PrinterTarget | undefined,
+  admission: Pick<ScanAdmission, "isBusy" | "reserve">,
 ): PushScanServerOptions {
   return {
     validatePeer: target ? (peer) => target.accepts(peer) : undefined,
@@ -163,7 +173,7 @@ export function buildPushScanServerOptions(
       // tracked scan via admission.commit(). JobList is destination selection,
       // not a scan, so it is never gated and never reserves.
       let release: PushScanReleaseHook | undefined;
-      if (kind === "pushScan" && admission) {
+      if (kind === "pushScan") {
         if (admission.isBusy()) throw new PushScanRefusedError("another scan is in flight");
         release = admission.reserve();
       }
@@ -193,6 +203,102 @@ export function buildPushScanServerOptions(
         throw err;
       }
     },
+  };
+}
+
+export interface DaemonPushScanDeps {
+  config: Config;
+  /** Holds the reservation taken for this trigger at `beforeResponse`. */
+  admission: Pick<ScanAdmission, "commit" | "release">;
+  /** Injectable for tests; defaults to {@link dispatchScanSession}. */
+  dispatch?: (args: DispatchArgs) => Promise<void>;
+}
+
+/**
+ * The daemon's onPushScan callback (index.ts). Every admitted panel trigger
+ * arrives holding a reservation, so both arms have to dispose of it: the scan
+ * converts it into a tracked promise via commit(), and a trigger that resolves
+ * to no scan drops it via release(). Leaking it would wedge the shared gate
+ * (issue #137) for the life of the process.
+ */
+export function buildDaemonPushScanCallback(deps: DaemonPushScanDeps): PushScanCallback {
+  const { config, admission } = deps;
+  const dispatch = deps.dispatch ?? dispatchScanSession;
+
+  return (info, peerAddress) => {
+    const scan = resolveScanDispatch(info, config);
+    if (scan === null) {
+      log.warn(`Ignoring push-scan: action=${info.action}, previewAction=${config.previewAction}`);
+      admission.release(); // admitted at beforeResponse, but nothing will scan
+      return;
+    }
+    log.info(
+      `PushScan received (duplex=${scan.duplex}, action=${scan.action}) — starting scan session`,
+    );
+    setLastScanTime(new Date().toISOString());
+
+    const scanPromise = dispatch({
+      config,
+      duplex: scan.duplex,
+      action: scan.action,
+      paperless: buildPaperlessOptions(config),
+      productName: info.productName,
+      printerIp: peerAddress,
+    });
+    // Converts the reservation taken at beforeResponse into a tracked scan.
+    admission.commit(scanPromise);
+  };
+}
+
+export interface OneShotPushScanDeps {
+  config: Config;
+  /** Holds the reservation taken for this trigger at `beforeResponse`. */
+  admission: Pick<SingleScanAdmission, "commit" | "release">;
+  /** Resolved exactly once, with the first accepted trigger's scan promise. */
+  onScanStarted: (started: { scan: Promise<void> }) => void;
+  /** Injectable for tests; defaults to {@link dispatchScanSession}. */
+  dispatch?: (args: DispatchArgs) => Promise<void>;
+}
+
+/**
+ * One-shot's onPushScan callback (one-shot.ts). Same reject arm as the daemon,
+ * but the accepted arm fires once for the life of the process: commit() here
+ * is permanent (the slot never reopens) and `onScanStarted` is a promise
+ * resolver, so a second trigger that reached the callback anyway — the panel
+ * press that raced `beforeResponse` — has to be dropped before either.
+ */
+export function buildOneShotPushScanCallback(deps: OneShotPushScanDeps): PushScanCallback {
+  const { config, admission, onScanStarted } = deps;
+  const dispatch = deps.dispatch ?? dispatchScanSession;
+  let started = false;
+
+  return (info, peerAddress) => {
+    const scan = resolveScanDispatch(info, config);
+    if (scan === null) {
+      log.warn(`Ignoring push-scan: action=${info.action}, previewAction=${config.previewAction}`);
+      admission.release(); // admitted at beforeResponse, but nothing will scan
+      return;
+    }
+    if (started) {
+      log.warn("Additional push-scan received — ignoring (one-shot already in progress)");
+      return;
+    }
+    started = true;
+    admission.commit();
+    log.info(
+      `PushScan received (duplex=${scan.duplex}, action=${scan.action}) — starting scan session`,
+    );
+
+    onScanStarted({
+      scan: dispatch({
+        config,
+        duplex: scan.duplex,
+        action: scan.action,
+        paperless: buildPaperlessOptions(config),
+        productName: info.productName,
+        printerIp: peerAddress,
+      }),
+    });
   };
 }
 

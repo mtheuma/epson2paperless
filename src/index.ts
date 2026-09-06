@@ -1,17 +1,15 @@
 import { loadConfig } from "./config.js";
 import { setLogLevel, setLogFormat, createLogger } from "./logger.js";
 import { createPushScanServer } from "./pushscan.js";
-import { createHealthServer, setLastScanTime } from "./health.js";
+import { createHealthServer } from "./health.js";
 import { createInflightTracker, shutdown as runShutdown } from "./lifecycle.js";
 import {
   logStartupBanner,
   startPrinterDiscovery,
   installCrashHandlers,
-  buildPaperlessOptions,
+  buildDaemonPushScanCallback,
   buildPushScanServerOptions,
   buildScanTriggerOptions,
-  resolveScanDispatch,
-  dispatchScanSession,
 } from "./startup.js";
 import { createPrinterTarget } from "./network.js";
 import { createScanAdmission } from "./scan-admission.js";
@@ -33,31 +31,7 @@ async function main() {
 
   const pushscanServer = createPushScanServer(
     2968,
-    (info, peerAddress) => {
-      const scan = resolveScanDispatch(info, config);
-      if (scan === null) {
-        log.warn(
-          `Ignoring push-scan: action=${info.action}, previewAction=${config.previewAction}`,
-        );
-        admission.release(); // admitted at beforeResponse, but nothing will scan
-        return;
-      }
-      log.info(
-        `PushScan received (duplex=${scan.duplex}, action=${scan.action}) — starting scan session`,
-      );
-      setLastScanTime(new Date().toISOString());
-
-      const scanPromise = dispatchScanSession({
-        config,
-        duplex: scan.duplex,
-        action: scan.action,
-        paperless: buildPaperlessOptions(config),
-        productName: info.productName,
-        printerIp: peerAddress,
-      });
-      // Converts the reservation taken at beforeResponse into a tracked scan.
-      admission.commit(scanPromise);
-    },
+    buildDaemonPushScanCallback({ config, admission }),
     buildPushScanServerOptions(config, target, admission),
   );
 

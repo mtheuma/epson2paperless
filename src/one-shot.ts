@@ -6,10 +6,8 @@ import {
   logStartupBanner,
   startPrinterDiscovery,
   installCrashHandlers,
-  buildPaperlessOptions,
+  buildOneShotPushScanCallback,
   buildPushScanServerOptions,
-  resolveScanDispatch,
-  dispatchScanSession,
 } from "./startup.js";
 import { createPrinterTarget } from "./network.js";
 import { createSingleScanAdmission } from "./scan-admission.js";
@@ -33,7 +31,6 @@ async function main() {
   const scanStarted = new Promise<{ scan: Promise<void> }>((resolve) => {
     onScanStarted = resolve;
   });
-  let started = false;
   // A second panel press while the scan runs is refused at beforeResponse so
   // the panel errors at once, instead of getting an OK and then waiting for a
   // session that never opens (issue #198). The slot never reopens: this
@@ -42,36 +39,7 @@ async function main() {
 
   const pushscanServer = createPushScanServer(
     2968,
-    (info, peerAddress) => {
-      const scan = resolveScanDispatch(info, config);
-      if (scan === null) {
-        log.warn(
-          `Ignoring push-scan: action=${info.action}, previewAction=${config.previewAction}`,
-        );
-        admission.release(); // admitted at beforeResponse, but nothing will scan
-        return;
-      }
-      if (started) {
-        log.warn("Additional push-scan received — ignoring (one-shot already in progress)");
-        return;
-      }
-      started = true;
-      admission.commit();
-      log.info(
-        `PushScan received (duplex=${scan.duplex}, action=${scan.action}) — starting scan session`,
-      );
-
-      onScanStarted({
-        scan: dispatchScanSession({
-          config,
-          duplex: scan.duplex,
-          action: scan.action,
-          paperless: buildPaperlessOptions(config),
-          productName: info.productName,
-          printerIp: peerAddress,
-        }),
-      });
-    },
+    buildOneShotPushScanCallback({ config, admission, onScanStarted }),
     buildPushScanServerOptions(config, target, admission),
   );
 
