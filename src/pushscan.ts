@@ -440,9 +440,22 @@ export function createPushScanServer(
           capabilities: status === "OK" ? capabilities : [],
         });
 
-        // Send the per-request response, then half-close the TCP socket (FIN)
-        // so the printer sees a clean HTTP/1.0 close.
-        socket.end(response, "utf-8", () => {
+        // Node invokes a `writable.end()` callback with an error — code
+        // ERR_STREAM_DESTROYED — when the stream is destroyed before the write
+        // flushes; the idle-timeout handler above and a peer reset both hit
+        // that window. `@types/node` declares the callback as `() => void` and
+        // omits the argument, so the type is written out here (an optional
+        // parameter keeps it assignable to the declared signature).
+        const onResponseWritten = (err?: Error | null): void => {
+          if (err) {
+            // The printer never got its response, so this trigger is not a
+            // scan: no callback, and `callbackFired` stays false so the close
+            // handler drops the reservation too (abandonAdmission is
+            // idempotent).
+            log.warn(`Push-scan ${kind} response could not be delivered`, err);
+            abandonAdmission();
+            return;
+          }
           log.debug(`Sent ${kind} response`);
           if (status !== "OK" || kind !== "pushScan") {
             abandonAdmission();
@@ -454,7 +467,11 @@ export function createPushScanServer(
           );
           callbackFired = true;
           onPushScan(info, peerAddress!);
-        });
+        };
+
+        // Send the per-request response, then half-close the TCP socket (FIN)
+        // so the printer sees a clean HTTP/1.0 close.
+        socket.end(response, "utf-8", onResponseWritten);
       };
 
       void (async () => {

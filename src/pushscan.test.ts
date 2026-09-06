@@ -981,6 +981,56 @@ describe("createPushScanServer admission release hook (#137)", () => {
       server.close();
     }
   });
+
+  it("drops the trigger without firing onPushScan when the OK write fails (#201)", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const release = vi.fn();
+    let callbacks = 0;
+    const server = createPushScanServer(0, () => callbacks++, {
+      beforeResponse: () => release,
+    });
+    // Node invokes a `writable.end()` callback with an ERR_STREAM_DESTROYED
+    // error when the socket is destroyed before the data flushes. Reproduce
+    // that window deterministically by destroying the server-side socket
+    // synchronously from inside `end()` — the same shape the idle-timeout
+    // handler and a peer reset produce on real hardware. A second `connection`
+    // listener is public API; the module's own handler still runs.
+    server.on("connection", (s) => {
+      const originalEnd = s.end.bind(s);
+      const patchedEnd = (...args: Parameters<net.Socket["end"]>): net.Socket => {
+        const result = originalEnd(...args);
+        s.destroy(); // synchronous, so the response never flushes
+        return result;
+      };
+      // One cast: `end` is overloaded, and a single-signature wrapper is not
+      // structurally assignable to an overload set without it.
+      s.end = patchedEnd as net.Socket["end"];
+    });
+    const port = await listen(server);
+    try {
+      const client = net.createConnection(port, "127.0.0.1");
+      await new Promise<void>((r) => client.once("connect", () => r()));
+      client.on("error", () => {}); // the server-side destroy can land as ECONNRESET
+      client.on("data", () => {}); // consume, or 'close' never fires
+      const closed = new Promise<void>((r) => client.on("close", () => r()));
+      client.write(requestFor(soap("01")));
+      await closed;
+      await settle();
+      await settle();
+      // Whether any bytes physically left the box is not observable to us (on
+      // loopback they may still flush); an errored write callback means the
+      // response was not delivered, so the trigger must not become a scan.
+      expect(callbacks).toBe(0);
+      // Released from the end-callback path, and again (idempotently) from the
+      // close handler now that `callbackFired` stays false.
+      expect(release).toHaveBeenCalled();
+      const warned = warnSpy.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+      expect(warned).toContain("response could not be delivered");
+    } finally {
+      server.close();
+      warnSpy.mockRestore();
+    }
+  });
 });
 
 describe("resolveEffectiveAction", () => {
