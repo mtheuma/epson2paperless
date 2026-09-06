@@ -952,7 +952,7 @@ describe("createPushScanServer admission release hook (#137)", () => {
     }
   });
 
-  it("fires the release hook once when the trigger socket closes while the hook is pending", async () => {
+  it("holds the reservation through a socket close while the hook is pending, then releases once", async () => {
     const release = vi.fn();
     let callbacks = 0;
     let finishHook!: () => void;
@@ -974,6 +974,10 @@ describe("createPushScanServer admission release hook (#137)", () => {
       client.destroy(); // printer gives up while we are still in job-control
       await settle();
       await settle();
+      // The hook is a job-control transaction holding the printer's lock:
+      // releasing now would admit a webhook scan against a locked printer, or
+      // let one-shot exit mid-transaction (issue #202).
+      expect(release).not.toHaveBeenCalled();
       finishHook();
       await settle();
       await settle();

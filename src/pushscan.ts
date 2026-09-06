@@ -230,10 +230,12 @@ export interface PushScanPreResponseContext {
  * the trigger ends without the `onPushScan` callback running — socket closed
  * while the hook was pending, response not deliverable, ERROR response, or a
  * non-PushScan kind — so a reservation can never outlive the trigger that took
- * it. It fires only once the response has flushed or the socket has closed,
- * never mid-response: one-shot exits as soon as an admitted trigger is
- * abandoned (issue #202), and the printer must have its ERROR by then. Never
- * called once the callback has fired: from then on the callback owns the slot.
+ * it. It fires only once the hook has settled and the response has flushed or
+ * the socket has closed — never mid-hook or mid-response: one-shot exits as
+ * soon as an admitted trigger is abandoned (issue #202), the job-control hook
+ * holds the printer's lock while it runs, and the printer must have its ERROR
+ * before we go. Never called once the callback has fired: from then on the
+ * callback owns the slot.
  */
 export type PushScanReleaseHook = () => void;
 
@@ -294,6 +296,14 @@ export function createPushScanServer(
     // point after which the reservation belongs to onPushScan's caller.
     let releaseAdmission: PushScanReleaseHook | undefined;
     let callbackFired = false;
+    // True while beforeResponse runs. The hook hands over its release the
+    // moment it reserves, but the reservation must outlive the hook: on the
+    // FF-680W / DS-575W the hook is a job-control transaction that holds the
+    // printer's lock, and releasing on a mid-transaction socket close would
+    // admit a webhook scan against a locked printer (daemon) or let one-shot
+    // exit inside the transaction (issue #202). sendResponse drops it once
+    // the hook settles and finds the socket gone.
+    let hookPending = false;
     const abandonAdmission = (): void => {
       const release = releaseAdmission;
       releaseAdmission = undefined;
@@ -313,8 +323,10 @@ export function createPushScanServer(
     // so the concat here is bounded.
     socket.on("close", () => {
       // The one signal that always fires: whatever path the trigger took, a
-      // reservation not handed to the callback is dropped here at the latest.
-      if (!callbackFired) abandonAdmission();
+      // reservation not handed to the callback is dropped here at the latest —
+      // unless the hook is still running, in which case sendResponse drops it
+      // as soon as the hook settles (see hookPending).
+      if (!callbackFired && !hookPending) abandonAdmission();
       if (handled) return;
       const prefix = Buffer.concat(chunks).subarray(0, 256);
       log.debug(
@@ -483,6 +495,7 @@ export function createPushScanServer(
       };
 
       void (async () => {
+        hookPending = true;
         try {
           await options.beforeResponse?.({
             kind,
@@ -502,10 +515,12 @@ export function createPushScanServer(
           } else {
             log.error(`Pre-response hook failed for ${kind}`, err);
           }
+          hookPending = false;
           sendResponse("ERROR");
           return;
         }
 
+        hookPending = false;
         sendResponse("OK");
       })();
     }
