@@ -21,11 +21,6 @@ import { setLastScanTime, type ScanTriggerOptions } from "./health.js";
 import type { ScanAdmission, SingleScanAdmission } from "./scan-admission.js";
 
 const log = createLogger("startup");
-// The push-scan callbacks below moved here out of index.ts / one-shot.ts
-// (issue #200) but still speak for those processes, so they keep logging under
-// the tags an operator's log filters already expect.
-const daemonLog = createLogger("main");
-const oneShotLog = createLogger("one-shot");
 
 export function logStartupBanner(config: Config, modeMessage: string): void {
   log.info(modeMessage);
@@ -233,13 +228,11 @@ export function buildDaemonPushScanCallback(deps: DaemonPushScanDeps): PushScanC
   return (info, peerAddress) => {
     const scan = resolveScanDispatch(info, config);
     if (scan === null) {
-      daemonLog.warn(
-        `Ignoring push-scan: action=${info.action}, previewAction=${config.previewAction}`,
-      );
+      log.warn(`Ignoring push-scan: action=${info.action}, previewAction=${config.previewAction}`);
       admission.release(); // admitted at beforeResponse, but nothing will scan
       return;
     }
-    daemonLog.info(
+    log.info(
       `PushScan received (duplex=${scan.duplex}, action=${scan.action}) — starting scan session`,
     );
     setLastScanTime(new Date().toISOString());
@@ -282,19 +275,17 @@ export function buildOneShotPushScanCallback(deps: OneShotPushScanDeps): PushSca
   return (info, peerAddress) => {
     const scan = resolveScanDispatch(info, config);
     if (scan === null) {
-      oneShotLog.warn(
-        `Ignoring push-scan: action=${info.action}, previewAction=${config.previewAction}`,
-      );
+      log.warn(`Ignoring push-scan: action=${info.action}, previewAction=${config.previewAction}`);
       admission.release(); // admitted at beforeResponse, but nothing will scan
       return;
     }
     if (started) {
-      oneShotLog.warn("Additional push-scan received — ignoring (one-shot already in progress)");
+      log.warn("Additional push-scan received — ignoring (one-shot already in progress)");
       return;
     }
     started = true;
     admission.commit();
-    oneShotLog.info(
+    log.info(
       `PushScan received (duplex=${scan.duplex}, action=${scan.action}) — starting scan session`,
     );
 
