@@ -214,11 +214,15 @@ describe("scan webhook wiring", () => {
     h = await harness({ dispatch: () => scan.promise });
     expect(await post(h.base)).toBe(202);
     const panel = buildPushScanServerOptions(makeConfig(), undefined, h.admission);
+    const handed: { release?: () => void } = {};
     const hookArgs = (kind: "pushScan" | "jobList") => ({
       kind,
       headers: "",
       body: "",
       xuid: "1",
+      onAbandon: (release: () => void) => {
+        handed.release = release;
+      },
       info: PANEL_INFO,
       capabilities: [] as string[],
       peerAddress: "192.0.2.5",
@@ -228,10 +232,10 @@ describe("scan webhook wiring", () => {
     scan.resolve();
     await settle();
     // Idle again: the panel is admitted and now holds the slot via a reservation.
-    const release = await panel.beforeResponse?.(hookArgs("pushScan"));
-    expect(typeof release).toBe("function");
+    await panel.beforeResponse?.(hookArgs("pushScan"));
+    expect(typeof handed.release).toBe("function");
     expect(await post(h.base)).toBe(409);
-    (release as () => void)();
+    handed.release!();
     expect(await post(h.base)).toBe(202);
   });
 
@@ -278,11 +282,16 @@ describe("scan webhook wiring", () => {
     expect(h.dispatch).toHaveBeenCalledTimes(2);
   });
 
+  // What pushscan.ts does with the hook a panel trigger hands it via onAbandon.
+  const handed: { release?: () => void } = {};
   const hookArgs = (info: PushScanInfo) => ({
     kind: "pushScan" as const,
     headers: "",
     body: "",
     xuid: "1",
+    onAbandon: (release: () => void) => {
+      handed.release = release;
+    },
     info,
     capabilities: [] as string[],
     peerAddress: "192.0.2.5",
@@ -327,8 +336,8 @@ describe("scan webhook wiring", () => {
       expect(h.dispatch).not.toHaveBeenCalled();
 
       finishJobr(Buffer.from("0300020000020001", "hex"));
-      const release = await pendingHook;
-      expect(typeof release).toBe("function");
+      await pendingHook;
+      expect(typeof handed.release).toBe("function");
       // Still held between OK and the callback: the webhook stays out.
       expect(await post(h.base)).toBe(409);
 
@@ -352,8 +361,8 @@ describe("scan webhook wiring", () => {
     });
     // A non-job-control product sending JobNumberIn with no PushScanIDIn is
     // ignored, so this trigger reaches the callback's reject arm.
-    const release = await panel.beforeResponse!(hookArgs(jobInfo("PID 11D1")));
-    expect(typeof release).toBe("function");
+    await panel.beforeResponse!(hookArgs(jobInfo("PID 11D1")));
+    expect(typeof handed.release).toBe("function");
     expect(await post(h.base)).toBe(409);
     onPushScan(jobInfo("PID 11D1"), "192.0.2.5");
     expect(panelDispatch).not.toHaveBeenCalled();
@@ -363,9 +372,9 @@ describe("scan webhook wiring", () => {
   it("a panel trigger that ends without a callback releases the slot via the hook", async () => {
     h = await harness({});
     const panel = buildPushScanServerOptions(makeConfig(), undefined, h.admission);
-    const release = (await panel.beforeResponse!(hookArgs(jobInfo("PID 11D1")))) as () => void;
+    await panel.beforeResponse!(hookArgs(jobInfo("PID 11D1")));
     expect(await post(h.base)).toBe(409);
-    release(); // what pushscan.ts does on socket close without a callback
+    handed.release!(); // what pushscan.ts does on socket close without a callback
     expect(await post(h.base)).toBe(202);
   });
 

@@ -215,21 +215,29 @@ export interface PushScanPreResponseContext {
   info: PushScanInfo;
   capabilities: string[];
   peerAddress: string;
+  /**
+   * Hand the server the hook that drops this trigger's admission reservation
+   * (see {@link PushScanReleaseHook}). Call it as soon as the slot is
+   * reserved, not when the hook returns: the server then owns the release for
+   * every way the trigger can end, including the hook itself throwing.
+   */
+  onAbandon: (release: PushScanReleaseHook) => void;
 }
 
 /**
- * Returned by a `beforeResponse` hook that reserved the scan slot for this
- * trigger (issue #137). The server calls it if the trigger ends without the
- * `onPushScan` callback running — socket closed while the hook was pending,
- * response not deliverable, ERROR response, or a non-PushScan kind — so a
- * reservation can never outlive the trigger that took it. Never called once
- * the callback has fired: from then on the callback owns the slot.
+ * Handed to the server through `ctx.onAbandon` by a `beforeResponse` hook that
+ * reserved the scan slot for this trigger (issue #137). The server calls it if
+ * the trigger ends without the `onPushScan` callback running — socket closed
+ * while the hook was pending, response not deliverable, ERROR response, or a
+ * non-PushScan kind — so a reservation can never outlive the trigger that took
+ * it. It fires only once the response has flushed or the socket has closed,
+ * never mid-response: one-shot exits as soon as an admitted trigger is
+ * abandoned (issue #202), and the printer must have its ERROR by then. Never
+ * called once the callback has fired: from then on the callback owns the slot.
  */
 export type PushScanReleaseHook = () => void;
 
-export type PushScanPreResponseHook = (
-  ctx: PushScanPreResponseContext,
-) => Promise<void | PushScanReleaseHook> | void | PushScanReleaseHook;
+export type PushScanPreResponseHook = (ctx: PushScanPreResponseContext) => Promise<void> | void;
 
 /**
  * Cap on bytes buffered per connection, headers plus body. A real request is
@@ -476,7 +484,7 @@ export function createPushScanServer(
 
       void (async () => {
         try {
-          const hookResult = await options.beforeResponse?.({
+          await options.beforeResponse?.({
             kind,
             headers,
             body,
@@ -484,8 +492,10 @@ export function createPushScanServer(
             info,
             capabilities,
             peerAddress: peerAddress!,
+            onAbandon: (release) => {
+              releaseAdmission = release;
+            },
           });
-          if (typeof hookResult === "function") releaseAdmission = hookResult;
         } catch (err) {
           if (err instanceof PushScanRefusedError) {
             log.warn(`Refusing ${kind} from ${peer}: ${err.message}`);

@@ -14,7 +14,6 @@ import {
   resolveEffectiveAction,
   type PushScanCallback,
   type PushScanInfo,
-  type PushScanReleaseHook,
   type PushScanServerOptions,
 } from "./pushscan.js";
 import { setLastScanTime, type ScanTriggerOptions } from "./health.js";
@@ -155,7 +154,7 @@ export function buildPushScanServerOptions(
 ): PushScanServerOptions {
   return {
     validatePeer: target ? (peer) => target.accepts(peer) : undefined,
-    beforeResponse: async ({ kind, info, peerAddress }) => {
+    beforeResponse: async ({ kind, info, peerAddress, onAbandon }) => {
       // Shared admission with the POST /scan webhook (issue #137): the printer
       // serves one scan at a time. A panel press while a scan runs is refused
       // here, before any job-control round-trip and before the OK response —
@@ -167,40 +166,34 @@ export function buildPushScanServerOptions(
       // runs; on the FF-680W / DS-575W that gap holds the JOBR read below (a
       // network round-trip with a 3 s timeout), and on every model it holds
       // the response write. Without the reservation a webhook arriving in
-      // that gap would be admitted and two scans would start. The hook we
-      // return lets pushscan.ts drop the reservation if this trigger ends
-      // without the callback firing; the callback itself converts it into a
-      // tracked scan via admission.commit(). JobList is destination selection,
-      // not a scan, so it is never gated and never reserves.
-      let release: PushScanReleaseHook | undefined;
+      // that gap would be admitted and two scans would start. The release
+      // hook goes to pushscan.ts at once via onAbandon, so the server drops
+      // the reservation if this trigger ends without the callback firing —
+      // including a job-control failure below, where it waits for the ERROR
+      // response to flush first (releasing here would let one-shot exit
+      // mid-response, issue #202). The callback itself converts the hold into
+      // a tracked scan via admission.commit(). JobList is destination
+      // selection, not a scan, so it is never gated and never reserves.
       if (kind === "pushScan") {
         if (admission.isBusy()) throw new PushScanRefusedError("another scan is in flight");
-        release = admission.reserve();
+        onAbandon(admission.reserve());
       }
 
-      try {
-        const targetIp = peerAddress || config.printerIp;
-        if (!targetIp) throw new Error("Push-scan peer address is required");
-        if (!usesJobControl(info.productName)) return release;
+      const targetIp = peerAddress || config.printerIp;
+      if (!targetIp) throw new Error("Push-scan peer address is required");
+      if (!usesJobControl(info.productName)) return;
 
-        if (kind === "jobList") {
-          log.debug(`${info.productName} JobList received — committing dummy job over TCP/1865`);
-          await runJobListCommit({ printerIp: targetIp });
-          return release;
-        }
+      if (kind === "jobList") {
+        log.debug(`${info.productName} JobList received — committing dummy job over TCP/1865`);
+        await runJobListCommit({ printerIp: targetIp });
+        return;
+      }
 
-        if (kind === "pushScan" && info.jobNumber !== null && info.pushScanId === null) {
-          log.debug(
-            `${info.productName} JobNumberIn=${info.jobNumber} received — reading selected job over TCP/1865`,
-          );
-          await runJobNumberCommit({ printerIp: targetIp });
-        }
-        return release;
-      } catch (err) {
-        // The printer gets ERROR and no callback will fire, so nothing else
-        // would ever drop this reservation.
-        release?.();
-        throw err;
+      if (kind === "pushScan" && info.jobNumber !== null && info.pushScanId === null) {
+        log.debug(
+          `${info.productName} JobNumberIn=${info.jobNumber} received — reading selected job over TCP/1865`,
+        );
+        await runJobNumberCommit({ printerIp: targetIp });
       }
     },
   };
