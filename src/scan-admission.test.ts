@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { createInflightTracker } from "./lifecycle.js";
 import { createScanAdmission, createSingleScanAdmission } from "./scan-admission.js";
 
@@ -96,5 +96,59 @@ describe("createSingleScanAdmission", () => {
     expect(admission.isBusy()).toBe(true);
     admission.release();
     expect(admission.isBusy()).toBe(true);
+  });
+});
+
+describe("createSingleScanAdmission — onReleased", () => {
+  // One-shot's shutdown coordinator waits on this instead of polling isBusy():
+  // a signal landing in the admission→callback gap has to learn promptly that
+  // the trigger ended (issue #202).
+  it("fires when release() drops the reservation", () => {
+    const admission = createSingleScanAdmission();
+    const listener = vi.fn();
+    admission.onReleased(listener);
+    admission.reserve();
+    admission.release();
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires when the trigger's own release hook drops the reservation", () => {
+    const admission = createSingleScanAdmission();
+    const listener = vi.fn();
+    admission.onReleased(listener);
+    const release = admission.reserve();
+    release();
+    expect(listener).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not fire for a stale release hook that drops nothing", () => {
+    const admission = createSingleScanAdmission();
+    const staleRelease = admission.reserve();
+    admission.release(); // first trigger abandoned
+    const listener = vi.fn();
+    admission.onReleased(listener);
+    admission.reserve(); // second trigger admitted
+    staleRelease(); // late close of the first socket
+    expect(listener).not.toHaveBeenCalled();
+    expect(admission.isBusy()).toBe(true);
+  });
+
+  it("does not fire on commit(), nor on a hook that runs after it", () => {
+    const admission = createSingleScanAdmission();
+    const listener = vi.fn();
+    admission.onReleased(listener);
+    const release = admission.reserve();
+    admission.commit();
+    release();
+    admission.release();
+    expect(listener).not.toHaveBeenCalled();
+  });
+
+  it("does not fire when nothing is reserved", () => {
+    const admission = createSingleScanAdmission();
+    const listener = vi.fn();
+    admission.onReleased(listener);
+    admission.release();
+    expect(listener).not.toHaveBeenCalled();
   });
 });

@@ -1,7 +1,7 @@
 import { loadConfig } from "./config.js";
 import { setLogLevel, setLogFormat, createLogger } from "./logger.js";
 import { createPushScanServer } from "./pushscan.js";
-import { runScanNowLifecycle } from "./lifecycle.js";
+import { runOneShotLifecycle } from "./lifecycle.js";
 import {
   logStartupBanner,
   startPrinterDiscovery,
@@ -51,26 +51,19 @@ async function main() {
   });
   installCrashHandlers();
 
-  // Nothing to drain until the panel has pushed, so a signal before then exits
-  // straight away with the signal code. Once a scan is running, the shared
-  // coordinator owns the signal → drain → exit-code decision, same as
-  // scan:now (issue #134).
-  const first = await Promise.race([
-    scanStarted.then(({ scan }) => ({ kind: "scan", scan }) as const),
-    signalled.then((signal) => ({ kind: "signal", signal }) as const),
-  ]);
-
-  let exitCode: number;
-  if (first.kind === "signal") {
-    log.info(`Received ${first.signal} before any scan started — shutting down`);
-    exitCode = first.signal === "SIGTERM" ? 143 : 130;
-  } else {
-    exitCode = await runScanNowLifecycle({
-      scan: first.scan,
-      signalled,
-      shutdownTimeoutMs: config.shutdownTimeoutMs,
-    });
-  }
+  // The coordinator owns the signal → drain → exit-code decision. A signal
+  // with nothing admitted exits straight away; one that lands after a panel
+  // trigger was admitted but before its callback ran gives that trigger the
+  // rest of SHUTDOWN_TIMEOUT_MS to start (issue #202); a running scan drains
+  // like scan:now (issue #134). close() stops new connections being accepted
+  // and leaves the admitted trigger's own socket alone.
+  const exitCode = await runOneShotLifecycle({
+    scanStarted,
+    signalled,
+    admission,
+    stopAcceptingTriggers: () => pushscanServer.close(),
+    shutdownTimeoutMs: config.shutdownTimeoutMs,
+  });
 
   try {
     pushscanServer.close();

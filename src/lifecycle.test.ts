@@ -1,11 +1,14 @@
-import { describe, it, expect, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
   createInflightTracker,
   runScanNowLifecycle,
+  runOneShotLifecycle,
   shutdown,
+  type OneShotDeps,
   type ShutdownDeps,
   __resetShutdownStateForTesting,
 } from "./lifecycle.js";
+import { createSingleScanAdmission } from "./scan-admission.js";
 
 describe("InflightTracker", () => {
   it("starts with count 0", () => {
@@ -264,5 +267,182 @@ describe("runScanNowLifecycle", () => {
     await expect(
       runScanNowLifecycle(deps(scan, Promise.resolve("SIGINT" as NodeJS.Signals), 500)),
     ).resolves.toBe(1);
+  });
+});
+
+describe("runOneShotLifecycle", () => {
+  const never = new Promise<NodeJS.Signals>(() => {});
+  const neverStarted = new Promise<{ scan: Promise<void> }>(() => {});
+  const sigterm = (): Promise<NodeJS.Signals> => Promise.resolve("SIGTERM" as NodeJS.Signals);
+  const sigint = (): Promise<NodeJS.Signals> => Promise.resolve("SIGINT" as NodeJS.Signals);
+
+  function defer<T>() {
+    let resolve!: (value: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  }
+
+  /** Advance no fake time, but let every pending microtask chain run. */
+  const flush = () => vi.advanceTimersByTimeAsync(0);
+
+  function makeOneShotDeps(overrides: Partial<OneShotDeps> = {}) {
+    const admission = createSingleScanAdmission();
+    const stopAcceptingTriggers = vi.fn();
+    const deps: OneShotDeps = {
+      scanStarted: neverStarted,
+      signalled: never,
+      admission,
+      stopAcceptingTriggers,
+      shutdownTimeoutMs: 30_000,
+      ...overrides,
+    };
+    return { deps, admission: deps.admission, stopAcceptingTriggers };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // The whole budget calculation depends on Date.now() moving with the fake
+  // clock. Pin that assumption rather than trusting the default `toFake` list.
+  it("runs on a faked Date.now, so deadline maths is deterministic", () => {
+    const before = Date.now();
+    vi.advanceTimersByTime(5_000);
+    expect(Date.now() - before).toBe(5_000);
+  });
+
+  it("exits 143 at once on SIGTERM with nothing admitted", async () => {
+    const { deps, stopAcceptingTriggers } = makeOneShotDeps({ signalled: sigterm() });
+    await expect(runOneShotLifecycle(deps)).resolves.toBe(143);
+    expect(stopAcceptingTriggers).toHaveBeenCalledTimes(1);
+  });
+
+  it("exits 130 at once on SIGINT with nothing admitted", async () => {
+    const { deps, stopAcceptingTriggers } = makeOneShotDeps({ signalled: sigint() });
+    await expect(runOneShotLifecycle(deps)).resolves.toBe(130);
+    expect(stopAcceptingTriggers).toHaveBeenCalledTimes(1);
+  });
+
+  it("delegates to runScanNowLifecycle when a scan started first (0 on success)", async () => {
+    const { deps, stopAcceptingTriggers } = makeOneShotDeps({
+      scanStarted: Promise.resolve({ scan: Promise.resolve() }),
+    });
+    await expect(runOneShotLifecycle(deps)).resolves.toBe(0);
+    expect(stopAcceptingTriggers).not.toHaveBeenCalled();
+  });
+
+  it("delegates to runScanNowLifecycle when a scan started first (1 on failure)", async () => {
+    const { deps } = makeOneShotDeps({
+      scanStarted: Promise.resolve({ scan: Promise.reject(new Error("boom")) }),
+    });
+    await expect(runOneShotLifecycle(deps)).resolves.toBe(1);
+  });
+
+  // The #202 case: SIGTERM lands after beforeResponse reserved the slot but
+  // before the callback ran. The scan does start, and its real result wins.
+  it("waits for an admitted trigger to start, then reports the scan's own result", async () => {
+    const started = defer<{ scan: Promise<void> }>();
+    const scan = defer<void>();
+    const { deps, admission, stopAcceptingTriggers } = makeOneShotDeps({
+      scanStarted: started.promise,
+      signalled: sigterm(),
+    });
+    admission.reserve();
+
+    let settled: number | undefined;
+    const result = runOneShotLifecycle(deps);
+    void result.then((code) => (settled = code));
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(settled).toBeUndefined();
+
+    admission.commit();
+    started.resolve({ scan: scan.promise });
+    await flush();
+    scan.resolve();
+
+    await expect(result).resolves.toBe(0);
+    expect(stopAcceptingTriggers).toHaveBeenCalledTimes(1);
+  });
+
+  // One budget, measured from signal receipt — not one for the wait plus a
+  // fresh one for the drain. Start at +2000 must still end at +30000.
+  it("shares one SHUTDOWN_TIMEOUT_MS budget across the wait and the drain", async () => {
+    const started = defer<{ scan: Promise<void> }>();
+    const { deps, admission } = makeOneShotDeps({
+      scanStarted: started.promise,
+      signalled: sigterm(),
+      shutdownTimeoutMs: 30_000,
+    });
+    admission.reserve();
+
+    let settled: number | undefined;
+    void runOneShotLifecycle(deps).then((code) => (settled = code));
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    admission.commit();
+    started.resolve({ scan: new Promise<void>(() => {}) }); // never settles
+    await flush();
+
+    await vi.advanceTimersByTimeAsync(27_000); // t = 29_000
+    expect(settled).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1_000); // t = 30_000
+    expect(settled).toBe(143);
+  });
+
+  it("exits promptly when the admitted trigger is abandoned via its release hook", async () => {
+    const { deps, admission } = makeOneShotDeps({ signalled: sigint() });
+    const release = admission.reserve();
+
+    let settled: number | undefined;
+    void runOneShotLifecycle(deps).then((code) => (settled = code));
+    await flush();
+    expect(settled).toBeUndefined();
+
+    release();
+    await flush();
+    expect(settled).toBe(130);
+  });
+
+  it("exits promptly when the callback's reject arm releases the admission", async () => {
+    const { deps, admission } = makeOneShotDeps({ signalled: sigterm() });
+    admission.reserve();
+
+    let settled: number | undefined;
+    void runOneShotLifecycle(deps).then((code) => (settled = code));
+    await flush();
+    expect(settled).toBeUndefined();
+
+    admission.release(); // e.g. PREVIEW_ACTION=reject
+    await flush();
+    expect(settled).toBe(143);
+  });
+
+  it("warns and exits with the signal code when the trigger never starts a scan", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { deps, admission } = makeOneShotDeps({ signalled: sigterm() });
+      admission.reserve();
+
+      let settled: number | undefined;
+      void runOneShotLifecycle(deps).then((code) => (settled = code));
+
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(settled).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1);
+      expect(settled).toBe(143);
+
+      const warned = warnSpy.mock.calls.map((args) => args.join(" ")).join("\n");
+      expect(warned).toContain("[WARN]");
+      expect(warned).toContain("30000ms");
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
