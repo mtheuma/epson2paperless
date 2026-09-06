@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { createInflightTracker } from "./lifecycle.js";
-import { createScanAdmission } from "./scan-admission.js";
+import { createScanAdmission, createSingleScanAdmission } from "./scan-admission.js";
 
 function deferred() {
   let resolve!: () => void;
@@ -69,5 +69,32 @@ describe("createScanAdmission", () => {
     release();
     release();
     expect(admission.isBusy()).toBe(false);
+  });
+});
+
+describe("createSingleScanAdmission", () => {
+  // The reservation slot is shared with createScanAdmission and pinned above;
+  // these cover only what is different: the commit latch.
+  it("is idle before any trigger is admitted", () => {
+    const admission = createSingleScanAdmission();
+    expect(admission.isBusy()).toBe(false);
+  });
+
+  it("release() on the admission drops the current reservation (dispatch skipped)", () => {
+    const admission = createSingleScanAdmission();
+    admission.reserve();
+    admission.release();
+    expect(admission.isBusy()).toBe(false);
+  });
+
+  it("commit() keeps the slot busy for good, even after the release hook fires", () => {
+    const admission = createSingleScanAdmission();
+    const release = admission.reserve();
+    admission.commit();
+    expect(admission.isBusy()).toBe(true);
+    release();
+    expect(admission.isBusy()).toBe(true);
+    admission.release();
+    expect(admission.isBusy()).toBe(true);
   });
 });

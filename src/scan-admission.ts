@@ -32,28 +32,68 @@ export interface ScanAdmission {
   track(scan: Promise<void>): void;
 }
 
-export function createScanAdmission(inflight: InflightTracker): ScanAdmission {
+/**
+ * The reservation itself, shared by both admissions below. Each reserve()
+ * mints a fresh token so a hook from an earlier, abandoned trigger cannot
+ * drop a newer trigger's hold.
+ */
+function createReservationSlot() {
   let current: symbol | null = null;
-
   return {
-    isBusy: () => current !== null || inflight.count > 0,
-    reserve() {
+    held: (): boolean => current !== null,
+    reserve: (): (() => void) => {
       const token = Symbol("scan-reservation");
       current = token;
       return () => {
         if (current === token) current = null;
       };
     },
+    clear: (): void => {
+      current = null;
+    },
+  };
+}
+
+export function createScanAdmission(inflight: InflightTracker): ScanAdmission {
+  const slot = createReservationSlot();
+
+  return {
+    isBusy: () => slot.held() || inflight.count > 0,
+    reserve: slot.reserve,
     commit(scan) {
       // Track before clearing so isBusy() never reads false in between.
       void inflight.track(scan);
-      current = null;
+      slot.clear();
     },
-    release() {
-      current = null;
-    },
+    release: slot.clear,
     track(scan) {
       void inflight.track(scan);
     },
+  };
+}
+
+/**
+ * One-shot's variant (issue #198): the process serves exactly one scan and
+ * then exits, so once a trigger is committed the slot stays busy for good.
+ * Same reservation for the gap between `beforeResponse` and the callback,
+ * but there is no tracker to consult: the scan's own lifetime is owned by
+ * `runScanNowLifecycle`.
+ */
+export interface SingleScanAdmission extends Pick<ScanAdmission, "isBusy" | "reserve" | "release"> {
+  /** The admitted trigger became the scan. Nothing reopens the slot after this. */
+  commit(): void;
+}
+
+export function createSingleScanAdmission(): SingleScanAdmission {
+  const slot = createReservationSlot();
+  let committed = false;
+
+  return {
+    isBusy: () => committed || slot.held(),
+    reserve: slot.reserve,
+    commit() {
+      committed = true;
+    },
+    release: slot.clear,
   };
 }
