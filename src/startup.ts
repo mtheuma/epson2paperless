@@ -206,6 +206,38 @@ export function buildPushScanServerOptions(
   };
 }
 
+/**
+ * Counts `beforeResponse` hooks in flight, for one-shot's shutdown coordinator
+ * (issue #202). A trigger holds the admission slot only from the moment its
+ * `pushScan` hook reserves it, but on the FF-680W / DS-575W the panel press
+ * first sends a JobList whose JOBW round-trip over TCP/1865 reserves nothing —
+ * a signal there would otherwise look like "nothing pending" and exit inside a
+ * job-control transaction that holds the printer's lock. The count is the
+ * hook's own lifetime; the response write that follows it is local and brief.
+ */
+export function trackPendingHooks(options: PushScanServerOptions): {
+  options: PushScanServerOptions;
+  pending: () => number;
+} {
+  const inner = options.beforeResponse;
+  if (!inner) return { options, pending: () => 0 };
+  let pending = 0;
+  return {
+    pending: () => pending,
+    options: {
+      ...options,
+      beforeResponse: async (ctx) => {
+        pending++;
+        try {
+          return await inner(ctx);
+        } finally {
+          pending--;
+        }
+      },
+    },
+  };
+}
+
 export interface DaemonPushScanDeps {
   config: Config;
   /** Holds the reservation taken for this trigger at `beforeResponse`. */

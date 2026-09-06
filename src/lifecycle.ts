@@ -1,5 +1,4 @@
 import { createLogger } from "./logger.js";
-import type { SingleScanAdmission } from "./scan-admission.js";
 
 const log = createLogger("lifecycle");
 
@@ -79,6 +78,12 @@ export interface ScanNowDeps {
   /** Resolves with the first SIGINT/SIGTERM seen. Never rejects. */
   signalled: Promise<NodeJS.Signals>;
   shutdownTimeoutMs: number;
+  /**
+   * Set when the caller has already logged the signal's receipt (one-shot's
+   * admitted-trigger wait), so the drain does not announce it a second time
+   * with what would look like a different timeout.
+   */
+  signalLogged?: boolean;
 }
 
 /**
@@ -126,7 +131,9 @@ export async function runScanNowLifecycle(deps: ScanNowDeps): Promise<number> {
   ]);
 
   if (first.kind === "signal") {
-    log.info(`Received ${first.signal} — waiting up to ${deps.shutdownTimeoutMs}ms for the scan`);
+    if (!deps.signalLogged) {
+      log.info(`Received ${first.signal} — waiting up to ${deps.shutdownTimeoutMs}ms for the scan`);
+    }
     const drain = await inflight.waitAll(deps.shutdownTimeoutMs);
     if (drain.timedOut > 0) {
       // Scan genuinely still running — the signal is what ends the process.
@@ -158,85 +165,82 @@ export interface OneShotDeps {
   scanStarted: Promise<{ scan: Promise<void> }>;
   /** Resolves with the first SIGINT/SIGTERM seen. Never rejects. */
   signalled: Promise<NodeJS.Signals>;
-  /** One-shot's admission gate — read for the admission gap, not mutated here. */
-  admission: Pick<SingleScanAdmission, "isBusy" | "onReleased">;
   /**
-   * Stop admitting new panel triggers. `net.Server.close()` stops accepting
-   * new connections and leaves established ones alone, so the trigger already
-   * being admitted is unaffected.
+   * True while a panel trigger is somewhere between its first byte and the
+   * onPushScan callback: a `beforeResponse` hook in flight (the FF-680W /
+   * DS-575W JobList and JobNumber round-trips over TCP/1865) or the admission
+   * slot held. The JobList half reserves nothing, so the hook count is what
+   * makes it visible here.
    */
-  stopAcceptingTriggers: () => void;
+  triggerPending: () => boolean;
+  /** Fires when an admitted trigger ends without becoming a scan. */
+  onTriggerAbandoned: (listener: () => void) => void;
   shutdownTimeoutMs: number;
 }
 
 /**
  * Drives one-shot (`npm run scan`) to an exit code.
  *
- * A signal that arrives before any scan started used to exit at once on the
- * grounds that there was nothing to drain. But a panel press is admitted — and
- * *reserved* — in `beforeResponse`, well before the `onPushScan` callback that
- * resolves `scanStarted`: on the FF-680W / DS-575W that gap holds a JOBR
- * round-trip, and on every model it holds the OK write. Exiting inside it
- * tears the trigger socket down mid-response (the panel shows an error), or
- * leaves the printer holding an OK for a session that never opens (issue
- * #202). `admission.isBusy()` is what distinguishes the two cases.
+ * A signal with no trigger pending exits at once. One that lands while a panel
+ * trigger is still being answered — admitted but not yet started, or in the
+ * JobList round-trip that precedes admission on button-only scanners — gives
+ * that trigger the rest of one SHUTDOWN_TIMEOUT_MS budget to start (issue
+ * #202). Exiting inside that window tears a socket down mid-response, aborts a
+ * job-control transaction that holds the printer's lock, or leaves the printer
+ * holding an OK for a session that never opens.
  *
- * So when a signal lands inside the gap, new triggers stop being accepted and
- * the admitted one is given the rest of the SHUTDOWN_TIMEOUT_MS budget to
- * start. A fixed "wait a few seconds" delay would not do: job-control applies
- * its 3 s timeout separately to the connect and to each successive read, so a
- * failing JOBR gap can run to roughly 15 s. The budget is a deadline measured
- * from signal receipt, and only what is left of it is passed into the scan
- * drain — the wait and the drain share one SHUTDOWN_TIMEOUT_MS, they don't get
- * one each.
- *
- * The wait ends early if the reservation is dropped without a commit (socket
- * closed, ERROR response, undeliverable response, or the callback's reject
- * arm), which `admission.onReleased` reports without polling.
+ * The budget is a monotonic deadline from signal receipt, and only what is left
+ * of it goes to the scan drain: a start at +2 s still ends the process at
+ * +30 s. A fixed delay would not do — job-control applies its 3 s timeout per
+ * step, so a failing round-trip can run to roughly 15 s. The wait ends early
+ * when an admitted trigger is abandoned (socket closed, ERROR, undeliverable
+ * response, or the callback's reject arm). New presses need no special
+ * handling: the admission gate refuses them, and the listener stays open so a
+ * JobList's follow-up PushScan can still arrive.
  */
 export async function runOneShotLifecycle(deps: OneShotDeps): Promise<number> {
+  const scanStarted = deps.scanStarted.then(({ scan }) => ({ kind: "scan", scan }) as const);
+  const drain = (scan: Promise<void>, budgetMs: number, signalLogged: boolean): Promise<number> =>
+    runScanNowLifecycle({
+      scan,
+      signalled: deps.signalled,
+      shutdownTimeoutMs: budgetMs,
+      signalLogged,
+    });
+
   const first = await Promise.race([
-    deps.scanStarted.then(({ scan }) => ({ kind: "scan", scan }) as const),
+    scanStarted,
     deps.signalled.then((signal) => ({ kind: "signal", signal }) as const),
   ]);
+  if (first.kind === "scan") return drain(first.scan, deps.shutdownTimeoutMs, false);
 
-  if (first.kind === "scan") {
-    return runScanNowLifecycle({
-      scan: first.scan,
-      signalled: deps.signalled,
-      shutdownTimeoutMs: deps.shutdownTimeoutMs,
-    });
-  }
-
-  // The single budget for everything that follows, from signal receipt.
-  const deadline = Date.now() + deps.shutdownTimeoutMs;
   const signalCode = first.signal === "SIGTERM" ? 143 : 130;
-  // Safe in both branches: the process is on its way out either way, and an
-  // already-established trigger connection is not affected.
-  deps.stopAcceptingTriggers();
-
-  if (!deps.admission.isBusy()) {
+  if (!deps.triggerPending()) {
     log.info(`Received ${first.signal} before any scan started — shutting down`);
     return signalCode;
   }
 
+  // One budget for everything that follows. performance.now() is monotonic, so
+  // a wall-clock step cannot stretch or collapse it.
+  const deadline = performance.now() + deps.shutdownTimeoutMs;
+  const remaining = (): number => Math.max(0, Math.round(deadline - performance.now()));
   log.info(
-    `Received ${first.signal} while a panel trigger is being admitted — ` +
-      `waiting up to ${deps.shutdownTimeoutMs}ms for it to start`,
+    `Received ${first.signal} while a panel trigger is being answered — ` +
+      `waiting up to ${deps.shutdownTimeoutMs}ms for it to start a scan`,
   );
 
   let timer: ReturnType<typeof setTimeout> | null = null;
-  let outcome: { kind: "scan"; scan: Promise<void> } | { kind: "released" } | { kind: "deadline" };
+  let outcome: { kind: "scan"; scan: Promise<void> } | { kind: "abandoned" } | { kind: "deadline" };
   try {
     outcome = await Promise.race([
-      deps.scanStarted.then(({ scan }) => ({ kind: "scan", scan }) as const),
-      new Promise<{ kind: "released" }>((resolve) => {
-        deps.admission.onReleased(() => resolve({ kind: "released" }));
+      scanStarted,
+      new Promise<{ kind: "abandoned" }>((resolve) => {
+        deps.onTriggerAbandoned(() => resolve({ kind: "abandoned" }));
       }),
       new Promise<{ kind: "deadline" }>((resolve) => {
         // Not unref'd on purpose: node must not exit naturally with 0 while
         // this exit code is still pending (same reasoning as waitAll).
-        timer = setTimeout(() => resolve({ kind: "deadline" }), Math.max(0, deadline - Date.now()));
+        timer = setTimeout(() => resolve({ kind: "deadline" }), remaining());
       }),
     ]);
   } finally {
@@ -244,16 +248,12 @@ export async function runOneShotLifecycle(deps: OneShotDeps): Promise<number> {
   }
 
   if (outcome.kind === "scan") {
-    // `signalled` is already resolved, so this goes straight into its drain —
-    // with what is left of the budget, not a fresh one.
-    return runScanNowLifecycle({
-      scan: outcome.scan,
-      signalled: deps.signalled,
-      shutdownTimeoutMs: Math.max(0, deadline - Date.now()),
-    });
+    const budgetMs = remaining();
+    log.info(`Panel trigger started a scan with ${budgetMs}ms of the budget left — draining`);
+    return drain(outcome.scan, budgetMs, true);
   }
 
-  if (outcome.kind === "released") {
+  if (outcome.kind === "abandoned") {
     log.info(`Panel trigger ended without starting a scan — shutting down on ${first.signal}`);
     return signalCode;
   }

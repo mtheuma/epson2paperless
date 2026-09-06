@@ -287,20 +287,32 @@ describe("runOneShotLifecycle", () => {
   /** Advance no fake time, but let every pending microtask chain run. */
   const flush = () => vi.advanceTimersByTimeAsync(0);
 
-  function makeOneShotDeps(overrides: Partial<OneShotDeps> = {}) {
+  /**
+   * Real admission, wired the way one-shot.ts wires it; `hooksPending` stands
+   * in for the trackPendingHooks count (a JobList round-trip in flight).
+   */
+  function makeOneShotDeps(overrides: Partial<OneShotDeps> = {}, hooksPending = { count: 0 }) {
     const admission = createSingleScanAdmission();
-    const stopAcceptingTriggers = vi.fn();
     const deps: OneShotDeps = {
       scanStarted: neverStarted,
       signalled: never,
-      admission,
-      stopAcceptingTriggers,
+      triggerPending: () => admission.isBusy() || hooksPending.count > 0,
+      onTriggerAbandoned: (listener) => admission.onReleased(listener),
       shutdownTimeoutMs: 30_000,
       ...overrides,
     };
-    return { deps, admission: deps.admission, stopAcceptingTriggers };
+    return { deps, admission, hooksPending };
   }
 
+  /** All log lines written to `spy` so far that contain `needle`. */
+  function logLines(spy: { mock: { calls: unknown[][] } }, needle: string): string[] {
+    return spy.mock.calls
+      .map((args) => args.map(String).join(" "))
+      .filter((line) => line.includes(needle));
+  }
+
+  // The deadline maths relies on vi.useFakeTimers() faking performance.now()
+  // in lockstep with the timer queue, which vitest does by default.
   beforeEach(() => {
     vi.useFakeTimers();
   });
@@ -309,32 +321,21 @@ describe("runOneShotLifecycle", () => {
     vi.useRealTimers();
   });
 
-  // The whole budget calculation depends on Date.now() moving with the fake
-  // clock. Pin that assumption rather than trusting the default `toFake` list.
-  it("runs on a faked Date.now, so deadline maths is deterministic", () => {
-    const before = Date.now();
-    vi.advanceTimersByTime(5_000);
-    expect(Date.now() - before).toBe(5_000);
-  });
-
-  it("exits 143 at once on SIGTERM with nothing admitted", async () => {
-    const { deps, stopAcceptingTriggers } = makeOneShotDeps({ signalled: sigterm() });
+  it("exits 143 at once on SIGTERM with nothing pending", async () => {
+    const { deps } = makeOneShotDeps({ signalled: sigterm() });
     await expect(runOneShotLifecycle(deps)).resolves.toBe(143);
-    expect(stopAcceptingTriggers).toHaveBeenCalledTimes(1);
   });
 
-  it("exits 130 at once on SIGINT with nothing admitted", async () => {
-    const { deps, stopAcceptingTriggers } = makeOneShotDeps({ signalled: sigint() });
+  it("exits 130 at once on SIGINT with nothing pending", async () => {
+    const { deps } = makeOneShotDeps({ signalled: sigint() });
     await expect(runOneShotLifecycle(deps)).resolves.toBe(130);
-    expect(stopAcceptingTriggers).toHaveBeenCalledTimes(1);
   });
 
   it("delegates to runScanNowLifecycle when a scan started first (0 on success)", async () => {
-    const { deps, stopAcceptingTriggers } = makeOneShotDeps({
+    const { deps } = makeOneShotDeps({
       scanStarted: Promise.resolve({ scan: Promise.resolve() }),
     });
     await expect(runOneShotLifecycle(deps)).resolves.toBe(0);
-    expect(stopAcceptingTriggers).not.toHaveBeenCalled();
   });
 
   it("delegates to runScanNowLifecycle when a scan started first (1 on failure)", async () => {
@@ -347,28 +348,66 @@ describe("runOneShotLifecycle", () => {
   // The #202 case: SIGTERM lands after beforeResponse reserved the slot but
   // before the callback ran. The scan does start, and its real result wins.
   it("waits for an admitted trigger to start, then reports the scan's own result", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const started = defer<{ scan: Promise<void> }>();
+      const scan = defer<void>();
+      const { deps, admission } = makeOneShotDeps({
+        scanStarted: started.promise,
+        signalled: sigterm(),
+      });
+      admission.reserve();
+
+      let settled: number | undefined;
+      const result = runOneShotLifecycle(deps);
+      void result.then((code) => (settled = code));
+
+      await vi.advanceTimersByTimeAsync(2_000);
+      expect(settled).toBeUndefined();
+
+      admission.commit();
+      started.resolve({ scan: scan.promise });
+      await flush();
+      scan.resolve();
+
+      await expect(result).resolves.toBe(0);
+      // One signal, one "Received" line: the delegated drain must not announce
+      // it again with the remainder as if it were a different timeout.
+      expect(logLines(logSpy, "Received SIGTERM")).toHaveLength(1);
+      expect(logLines(logSpy, "28000ms of the budget left")).toHaveLength(1);
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
+  // Button-only scanners send a JobList first, whose JOBW round-trip reserves
+  // nothing. The hook count is what keeps the coordinator waiting there.
+  it("waits while a JobList hook is in flight even though nothing is reserved", async () => {
     const started = defer<{ scan: Promise<void> }>();
     const scan = defer<void>();
-    const { deps, admission, stopAcceptingTriggers } = makeOneShotDeps({
-      scanStarted: started.promise,
-      signalled: sigterm(),
-    });
-    admission.reserve();
+    const { deps, admission, hooksPending } = makeOneShotDeps(
+      { scanStarted: started.promise, signalled: sigterm() },
+      { count: 1 },
+    );
 
     let settled: number | undefined;
     const result = runOneShotLifecycle(deps);
     void result.then((code) => (settled = code));
 
-    await vi.advanceTimersByTimeAsync(2_000);
+    await vi.advanceTimersByTimeAsync(1_000);
     expect(settled).toBeUndefined();
 
+    // JobList answered; the printer's follow-up PushScan reserves and starts.
+    hooksPending.count = 0;
+    await vi.advanceTimersByTimeAsync(500);
+    expect(settled).toBeUndefined();
+    admission.reserve();
     admission.commit();
     started.resolve({ scan: scan.promise });
     await flush();
     scan.resolve();
 
     await expect(result).resolves.toBe(0);
-    expect(stopAcceptingTriggers).toHaveBeenCalledTimes(1);
   });
 
   // One budget, measured from signal receipt — not one for the wait plus a
@@ -438,9 +477,9 @@ describe("runOneShotLifecycle", () => {
       await vi.advanceTimersByTimeAsync(1);
       expect(settled).toBe(143);
 
-      const warned = warnSpy.mock.calls.map((args) => args.join(" ")).join("\n");
-      expect(warned).toContain("[WARN]");
-      expect(warned).toContain("30000ms");
+      const warned = logLines(warnSpy, "[WARN]");
+      expect(warned).toHaveLength(1);
+      expect(warned[0]).toContain("30000ms");
     } finally {
       warnSpy.mockRestore();
     }

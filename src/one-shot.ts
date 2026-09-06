@@ -8,6 +8,7 @@ import {
   installCrashHandlers,
   buildOneShotPushScanCallback,
   buildPushScanServerOptions,
+  trackPendingHooks,
 } from "./startup.js";
 import { createPrinterTarget } from "./network.js";
 import { createSingleScanAdmission } from "./scan-admission.js";
@@ -36,11 +37,16 @@ async function main() {
   // session that never opens (issue #198). The slot never reopens: this
   // process exits after its one scan.
   const admission = createSingleScanAdmission();
+  // The hook count covers the JobList round-trip that precedes admission on
+  // button-only scanners, which the shutdown coordinator must also wait out.
+  const { options: pushscanOptions, pending: hooksPending } = trackPendingHooks(
+    buildPushScanServerOptions(config, target, admission),
+  );
 
   const pushscanServer = createPushScanServer(
     2968,
     buildOneShotPushScanCallback({ config, admission, onScanStarted }),
-    buildPushScanServerOptions(config, target, admission),
+    pushscanOptions,
   );
 
   log.info("epson2paperless ready — waiting for one scan from printer panel");
@@ -52,16 +58,16 @@ async function main() {
   installCrashHandlers();
 
   // The coordinator owns the signal → drain → exit-code decision. A signal
-  // with nothing admitted exits straight away; one that lands after a panel
-  // trigger was admitted but before its callback ran gives that trigger the
-  // rest of SHUTDOWN_TIMEOUT_MS to start (issue #202); a running scan drains
-  // like scan:now (issue #134). close() stops new connections being accepted
-  // and leaves the admitted trigger's own socket alone.
+  // with no trigger pending exits straight away; one that lands while a panel
+  // trigger is still being answered gives it the rest of SHUTDOWN_TIMEOUT_MS
+  // to start a scan (issue #202); a running scan drains like scan:now (issue
+  // #134). The listener stays open throughout: the admission gate refuses new
+  // presses, and a JobList's follow-up PushScan must still get through.
   const exitCode = await runOneShotLifecycle({
     scanStarted,
     signalled,
-    admission,
-    stopAcceptingTriggers: () => pushscanServer.close(),
+    triggerPending: () => admission.isBusy() || hooksPending() > 0,
+    onTriggerAbandoned: (listener) => admission.onReleased(listener),
     shutdownTimeoutMs: config.shutdownTimeoutMs,
   });
 

@@ -15,7 +15,12 @@ vi.mock("./job-control.js", () => ({
   runJobNumberCommit: vi.fn(() => Promise.resolve(Buffer.from("0300020000020001", "hex"))),
 }));
 
-import { buildPushScanServerOptions, dispatchScanSession, resolveScanDispatch } from "./startup.js";
+import {
+  buildPushScanServerOptions,
+  dispatchScanSession,
+  resolveScanDispatch,
+  trackPendingHooks,
+} from "./startup.js";
 import { PushScanRefusedError } from "./pushscan.js";
 import { createScanAdmission } from "./scan-admission.js";
 import { createInflightTracker } from "./lifecycle.js";
@@ -140,6 +145,51 @@ describe("resolveScanDispatch", () => {
     // is ignored.
     const otherInfo = { ...FF680W_JOB_NUMBER_INFO, productName: "PID 11D1" };
     expect(resolveScanDispatch(otherInfo, makeConfig())).toBeNull();
+  });
+});
+
+describe("trackPendingHooks (#202)", () => {
+  const ctx = {
+    kind: "jobList" as const,
+    headers: "",
+    body: "",
+    xuid: "1",
+    info: FF680W_JOB_NUMBER_INFO,
+    capabilities: [],
+    peerAddress: "192.0.2.5",
+  };
+
+  it("counts a hook from its call until it settles, and passes its result through", async () => {
+    let finish!: (hook: () => void) => void;
+    const release = () => {};
+    const { options, pending } = trackPendingHooks({
+      beforeResponse: () =>
+        new Promise<() => void>((r) => {
+          finish = r;
+        }),
+    });
+
+    expect(pending()).toBe(0);
+    const result = options.beforeResponse!(ctx);
+    expect(pending()).toBe(1); // the JobList's JOBW round-trip is in flight
+    finish(release);
+    await expect(result).resolves.toBe(release);
+    expect(pending()).toBe(0);
+  });
+
+  it("drops the count when the hook throws, and rethrows", async () => {
+    const { options, pending } = trackPendingHooks({
+      beforeResponse: () => Promise.reject(new Error("JOBW timeout")),
+    });
+    await expect(options.beforeResponse!(ctx)).rejects.toThrow("JOBW timeout");
+    expect(pending()).toBe(0);
+  });
+
+  it("leaves options without a hook untouched", () => {
+    const original = { validatePeer: () => true };
+    const { options, pending } = trackPendingHooks(original);
+    expect(options).toBe(original);
+    expect(pending()).toBe(0);
   });
 });
 

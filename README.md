@@ -83,7 +83,7 @@ Within about 60 seconds, your destination (default `Paperless`) appears in the p
 
 **Windows:** copy `command.bat.example` to `command.bat` (gitignored, so your local `PRINTER_IP` / paths stay private), edit the values, then double-click. The script tees output to `scan.log`.
 
-**One-shot mode.** `npm run scan` runs a single scan and exits, handy for cron jobs or end-to-end tests. Exit codes: `0` success, `1` scan failure. On `SIGINT`/`SIGTERM` an in-flight scan is allowed to finish first (bounded by `SHUTDOWN_TIMEOUT_MS`) and its result is reported; `130`/`143` only when no scan had started or the drain timed out. A signal arriving in the moment between a panel press being accepted and its scan starting also waits, within the same budget. No health endpoint is opened, and a second panel press while the scan runs is refused immediately.
+**One-shot mode.** `npm run scan` runs a single scan and exits, handy for cron jobs or end-to-end tests. Exit codes: `0` success, `1` scan failure. On `SIGINT`/`SIGTERM` an in-flight scan is allowed to finish first (bounded by `SHUTDOWN_TIMEOUT_MS`) and its result is reported; `130`/`143` only when no scan had started or the drain timed out. A signal arriving while a panel press is still being answered waits for its scan to start, and the scan then gets what is left of the same budget. No health endpoint is opened, and a second panel press while the scan runs is refused immediately.
 
 **Host-triggered scan.** `npm run scan:now` scans immediately and exits, without waiting
 for a panel button. It skips discovery and the push-scan listener entirely and pulls the
@@ -211,7 +211,7 @@ Each setting's **Scope** column shows which printers it affects: `All`, `Panel` 
 | `PRINTER_CERT_FINGERPRINT` | ESC/I-2 TLS  | —       | SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`); scans abort on mismatch. **Requires `PRINTER_PROTOCOL=esci2`** — `auto` can't pin reliably and the non-TLS variants have no cert.                      |
 | `DIAGNOSE_PROTOCOL`        | Legacy ESC/I | `false` | Compatibility-report aid. On a legacy `ESC @` non-ACK, sends one extra `FS Y` probe and aborts with annotated `[diagnose]` log lines. Leave off in normal use.                                                         |
 | `NETSCAN_VERSION`          | All          | `auto`  | Compatibility-triage aid. Forces the discovery keepalive wire format (`2.0` / `3.0`); `auto` picks it from the scanner's announced PID (`3.0` for the FF-680W and DS-575W, else `2.0`). Leave on `auto` in normal use. |
-| `SHUTDOWN_TIMEOUT_MS`      | All          | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                                                                                                              |
+| `SHUTDOWN_TIMEOUT_MS`      | All          | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown. One-shot also spends it on a panel press still being answered.                                                               |
 
 </details>
 
