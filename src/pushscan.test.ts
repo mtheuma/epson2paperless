@@ -932,7 +932,7 @@ describe("createPushScanServer admission release hook (#137)", () => {
     const release = vi.fn();
     let callbacks = 0;
     const server = createPushScanServer(0, () => callbacks++, {
-      beforeResponse: () => release,
+      beforeResponse: ({ onAbandon }) => onAbandon(release),
     });
     const port = await listen(server);
     try {
@@ -952,15 +952,17 @@ describe("createPushScanServer admission release hook (#137)", () => {
     }
   });
 
-  it("fires the release hook once when the trigger socket closes while the hook is pending", async () => {
+  it("holds the reservation through a socket close while the hook is pending, then releases once", async () => {
     const release = vi.fn();
     let callbacks = 0;
     let finishHook!: () => void;
     const server = createPushScanServer(0, () => callbacks++, {
-      beforeResponse: () =>
-        new Promise<() => void>((resolve) => {
-          finishHook = () => resolve(release);
-        }),
+      beforeResponse: ({ onAbandon }) => {
+        onAbandon(release);
+        return new Promise<void>((resolve) => {
+          finishHook = resolve;
+        });
+      },
     });
     const port = await listen(server);
     try {
@@ -972,6 +974,10 @@ describe("createPushScanServer admission release hook (#137)", () => {
       client.destroy(); // printer gives up while we are still in job-control
       await settle();
       await settle();
+      // The hook is a job-control transaction holding the printer's lock:
+      // releasing now would admit a webhook scan against a locked printer, or
+      // let one-shot exit mid-transaction (issue #202).
+      expect(release).not.toHaveBeenCalled();
       finishHook();
       await settle();
       await settle();
@@ -982,12 +988,54 @@ describe("createPushScanServer admission release hook (#137)", () => {
     }
   });
 
+  it("fires the release hook only after the ERROR response is written when the hook throws", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const order: string[] = [];
+    let callbacks = 0;
+    const server = createPushScanServer(0, () => callbacks++, {
+      beforeResponse: ({ onAbandon }) => {
+        onAbandon(() => order.push("release"));
+        throw new Error("JOBR timeout"); // job-control failed after reserving
+      },
+    });
+    // end() is what writes the ERROR; it must come before the release, or
+    // one-shot (which exits as soon as an admitted trigger is abandoned,
+    // issue #202) would leave the printer without its response.
+    server.on("connection", (s) => {
+      const originalEnd = s.end.bind(s);
+      const patchedEnd = (...args: Parameters<net.Socket["end"]>): net.Socket => {
+        order.push("end");
+        return originalEnd(...args);
+      };
+      s.end = patchedEnd as net.Socket["end"];
+    });
+    const port = await listen(server);
+    try {
+      const client = net.createConnection(port, "127.0.0.1");
+      await new Promise<void>((r) => client.once("connect", () => r()));
+      let response = "";
+      client.on("data", (c) => (response += c.toString("utf-8")));
+      const closed = new Promise<void>((r) => client.on("close", () => r()));
+      client.write(requestFor(soap("02")));
+      await closed;
+      await settle();
+      expect(response).toContain("<StatusOut>ERROR</StatusOut>");
+      expect(callbacks).toBe(0);
+      expect(order).toEqual(["end", "release"]);
+    } finally {
+      server.close();
+      warnSpy.mockRestore();
+      errorSpy.mockRestore();
+    }
+  });
+
   it("drops the trigger without firing onPushScan when the OK write fails (#201)", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     const release = vi.fn();
     let callbacks = 0;
     const server = createPushScanServer(0, () => callbacks++, {
-      beforeResponse: () => release,
+      beforeResponse: ({ onAbandon }) => onAbandon(release),
     });
     // Node invokes a `writable.end()` callback with an ERR_STREAM_DESTROYED
     // error when the socket is destroyed before the data flushes. Reproduce

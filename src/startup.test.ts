@@ -15,7 +15,12 @@ vi.mock("./job-control.js", () => ({
   runJobNumberCommit: vi.fn(() => Promise.resolve(Buffer.from("0300020000020001", "hex"))),
 }));
 
-import { buildPushScanServerOptions, dispatchScanSession, resolveScanDispatch } from "./startup.js";
+import {
+  buildPushScanServerOptions,
+  dispatchScanSession,
+  resolveScanDispatch,
+  trackPendingHooks,
+} from "./startup.js";
 import { PushScanRefusedError } from "./pushscan.js";
 import { createScanAdmission } from "./scan-admission.js";
 import { createInflightTracker } from "./lifecycle.js";
@@ -143,6 +148,51 @@ describe("resolveScanDispatch", () => {
   });
 });
 
+describe("trackPendingHooks (#202)", () => {
+  const ctx = {
+    kind: "jobList" as const,
+    headers: "",
+    body: "",
+    xuid: "1",
+    onAbandon: () => {},
+    info: FF680W_JOB_NUMBER_INFO,
+    capabilities: [],
+    peerAddress: "192.0.2.5",
+  };
+
+  it("counts a hook from its call until it settles", async () => {
+    let finish!: () => void;
+    const { options, pending } = trackPendingHooks({
+      beforeResponse: () =>
+        new Promise<void>((r) => {
+          finish = r;
+        }),
+    });
+
+    expect(pending()).toBe(0);
+    const result = options.beforeResponse!(ctx);
+    expect(pending()).toBe(1); // the JobList's JOBW round-trip is in flight
+    finish();
+    await expect(result).resolves.toBeUndefined();
+    expect(pending()).toBe(0);
+  });
+
+  it("drops the count when the hook throws, and rethrows", async () => {
+    const { options, pending } = trackPendingHooks({
+      beforeResponse: () => Promise.reject(new Error("JOBW timeout")),
+    });
+    await expect(options.beforeResponse!(ctx)).rejects.toThrow("JOBW timeout");
+    expect(pending()).toBe(0);
+  });
+
+  it("leaves options without a hook untouched", () => {
+    const original = { validatePeer: () => true };
+    const { options, pending } = trackPendingHooks(original);
+    expect(options).toBe(original);
+    expect(pending()).toBe(0);
+  });
+});
+
 describe("buildPushScanServerOptions", () => {
   beforeEach(() => {
     runJobListCommitMock.mockReset().mockResolvedValue(undefined);
@@ -161,6 +211,7 @@ describe("buildPushScanServerOptions", () => {
       headers: "",
       body: "",
       xuid: "4",
+      onAbandon: () => {},
       info: { ...FF680W_JOB_NUMBER_INFO, jobNumber: null },
       capabilities: ["OfficeFormat"],
     });
@@ -181,6 +232,7 @@ describe("buildPushScanServerOptions", () => {
       headers: "",
       body: "",
       xuid: "5",
+      onAbandon: () => {},
       info: FF680W_JOB_NUMBER_INFO,
       capabilities: [],
     });
@@ -201,6 +253,7 @@ describe("buildPushScanServerOptions", () => {
       headers: "",
       body: "",
       xuid: "8",
+      onAbandon: () => {},
       info: DS575W_JOB_NUMBER_INFO,
       capabilities: [],
     });
@@ -221,6 +274,7 @@ describe("buildPushScanServerOptions", () => {
       headers: "",
       body: "",
       xuid: "7",
+      onAbandon: () => {},
       info: { ...DS575W_JOB_NUMBER_INFO, jobNumber: null },
       capabilities: ["OfficeFormat"],
     });
@@ -238,11 +292,17 @@ describe("buildPushScanServerOptions", () => {
       duplex: false,
       action: "pdf",
     };
+    // pushscan.ts receives the release hook through ctx.onAbandon; `handed`
+    // stands in for the server's slot.
+    const handed: { release?: () => void } = {};
     const hookArgs = (kind: "pushScan" | "jobList", info: PushScanInfo) => ({
       kind,
       headers: "",
       body: "",
       xuid: "1",
+      onAbandon: (release: () => void) => {
+        handed.release = release;
+      },
       info,
       capabilities: [] as string[],
       peerAddress: "203.0.113.20",
@@ -279,13 +339,14 @@ describe("buildPushScanServerOptions", () => {
       expect(runJobListCommitMock).toHaveBeenCalledTimes(1);
     });
 
-    it("reserves the slot when admitting a panel PushScan and returns the release hook", async () => {
+    it("reserves the slot when admitting a panel PushScan and hands the server the release hook", async () => {
       const admission = createScanAdmission(createInflightTracker());
       const options = buildPushScanServerOptions(makeConfig(), undefined, admission);
-      const release = await options.beforeResponse?.(hookArgs("pushScan", PANEL_INFO));
+      handed.release = undefined;
+      await options.beforeResponse?.(hookArgs("pushScan", PANEL_INFO));
       expect(admission.isBusy()).toBe(true);
-      expect(typeof release).toBe("function");
-      (release as () => void)();
+      expect(typeof handed.release).toBe("function");
+      handed.release!();
       expect(admission.isBusy()).toBe(false);
     });
 
@@ -307,13 +368,19 @@ describe("buildPushScanServerOptions", () => {
       expect(admission.isBusy()).toBe(true); // still held until commit/release
     });
 
-    it("drops the reservation when job-control fails", async () => {
+    it("leaves the reservation to the server when job-control fails", async () => {
       const admission = createScanAdmission(createInflightTracker());
       runJobNumberCommitMock.mockRejectedValue(new Error("JOBR timeout"));
       const options = buildPushScanServerOptions(makeConfig(), undefined, admission);
+      handed.release = undefined;
       await expect(
         options.beforeResponse?.(hookArgs("pushScan", FF680W_JOB_NUMBER_INFO)),
       ).rejects.toThrow("JOBR timeout");
+      // Still held: pushscan.ts drops it once the ERROR response has flushed.
+      // Releasing here would let one-shot exit mid-response (issue #202).
+      expect(admission.isBusy()).toBe(true);
+      expect(typeof handed.release).toBe("function");
+      handed.release!();
       expect(admission.isBusy()).toBe(false);
     });
   });
@@ -326,6 +393,7 @@ describe("buildPushScanServerOptions", () => {
       headers: "",
       body: "",
       xuid: "6",
+      onAbandon: () => {},
       info: { ...FF680W_JOB_NUMBER_INFO, productName: "PID 11D1" },
       capabilities: ["OfficeFormat"],
     });
@@ -604,6 +672,7 @@ describe("observed-peer propagation (DS-575W button scan, hostname mode)", () =>
       headers: "",
       body: "",
       xuid: "9",
+      onAbandon: () => {},
       info: { ...DS575W_JOB_NUMBER_INFO, jobNumber: null },
       capabilities: ["OfficeFormat"],
       peerAddress: OBSERVED,
@@ -615,6 +684,7 @@ describe("observed-peer propagation (DS-575W button scan, hostname mode)", () =>
       headers: "",
       body: "",
       xuid: "10",
+      onAbandon: () => {},
       info: DS575W_JOB_NUMBER_INFO,
       capabilities: [],
       peerAddress: OBSERVED,
@@ -656,6 +726,7 @@ describe("observed-peer propagation (DS-575W button scan, hostname mode)", () =>
         headers: "",
         body: "",
         xuid: "11",
+        onAbandon: () => {},
         info: { ...DS575W_JOB_NUMBER_INFO, jobNumber: null },
         capabilities: ["OfficeFormat"],
       }),

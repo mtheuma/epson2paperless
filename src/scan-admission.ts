@@ -36,21 +36,29 @@ export interface ScanAdmission {
  * The reservation itself, shared by both admissions below. Each reserve()
  * mints a fresh token so a hook from an earlier, abandoned trigger cannot
  * drop a newer trigger's hold.
+ *
+ * `onDropped` fires only when a hold that was actually current is cleared —
+ * never for a stale hook, never for a clear() on an empty slot. One-shot uses
+ * it to learn that an admitted trigger ended (issue #202); the daemon passes
+ * nothing and behaves exactly as before.
  */
-function createReservationSlot() {
+function createReservationSlot(onDropped?: () => void) {
   let current: symbol | null = null;
+  const drop = (): void => {
+    if (current === null) return;
+    current = null;
+    onDropped?.();
+  };
   return {
     held: (): boolean => current !== null,
     reserve: (): (() => void) => {
       const token = Symbol("scan-reservation");
       current = token;
       return () => {
-        if (current === token) current = null;
+        if (current === token) drop();
       };
     },
-    clear: (): void => {
-      current = null;
-    },
+    clear: drop,
   };
 }
 
@@ -82,11 +90,25 @@ export function createScanAdmission(inflight: InflightTracker): ScanAdmission {
 export interface SingleScanAdmission extends Pick<ScanAdmission, "isBusy" | "reserve" | "release"> {
   /** The admitted trigger became the scan. Nothing reopens the slot after this. */
   commit(): void;
+  /**
+   * Register a listener for "the admitted trigger ended without becoming a
+   * scan" — release(), or the trigger's own release hook dropping a hold that
+   * is still current. Never fired by commit(), by a stale hook, or by a
+   * release once committed. One-shot's shutdown coordinator waits on this so
+   * a signal that lands in the admission→callback gap can tell an abandoned
+   * trigger from one still starting, without polling isBusy() (issue #202).
+   */
+  onReleased(listener: () => void): void;
 }
 
 export function createSingleScanAdmission(): SingleScanAdmission {
-  const slot = createReservationSlot();
   let committed = false;
+  const listeners = new Set<() => void>();
+  const slot = createReservationSlot(() => {
+    // Post-commit the slot no longer speaks for the trigger: the scan owns it.
+    if (committed) return;
+    for (const listener of listeners) listener();
+  });
 
   return {
     isBusy: () => committed || slot.held(),
@@ -95,5 +117,8 @@ export function createSingleScanAdmission(): SingleScanAdmission {
       committed = true;
     },
     release: slot.clear,
+    onReleased(listener) {
+      listeners.add(listener);
+    },
   };
 }

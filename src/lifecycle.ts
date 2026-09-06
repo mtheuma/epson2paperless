@@ -78,6 +78,12 @@ export interface ScanNowDeps {
   /** Resolves with the first SIGINT/SIGTERM seen. Never rejects. */
   signalled: Promise<NodeJS.Signals>;
   shutdownTimeoutMs: number;
+  /**
+   * Set when the caller has already logged the signal's receipt (one-shot's
+   * admitted-trigger wait), so the drain does not announce it a second time
+   * with what would look like a different timeout.
+   */
+  signalLogged?: boolean;
 }
 
 /**
@@ -125,7 +131,9 @@ export async function runScanNowLifecycle(deps: ScanNowDeps): Promise<number> {
   ]);
 
   if (first.kind === "signal") {
-    log.info(`Received ${first.signal} — waiting up to ${deps.shutdownTimeoutMs}ms for the scan`);
+    if (!deps.signalLogged) {
+      log.info(`Received ${first.signal} — waiting up to ${deps.shutdownTimeoutMs}ms for the scan`);
+    }
     const drain = await inflight.waitAll(deps.shutdownTimeoutMs);
     if (drain.timedOut > 0) {
       // Scan genuinely still running — the signal is what ends the process.
@@ -150,6 +158,110 @@ export async function runScanNowLifecycle(deps: ScanNowDeps): Promise<number> {
 
   log.error("Scan failed — shutting down", first.err);
   return 1;
+}
+
+export interface OneShotDeps {
+  /** Resolves when the first accepted panel trigger has started a session. */
+  scanStarted: Promise<{ scan: Promise<void> }>;
+  /** Resolves with the first SIGINT/SIGTERM seen. Never rejects. */
+  signalled: Promise<NodeJS.Signals>;
+  /**
+   * True while a panel trigger is somewhere between its first byte and the
+   * onPushScan callback: a `beforeResponse` hook in flight (the FF-680W /
+   * DS-575W JobList and JobNumber round-trips over TCP/1865) or the admission
+   * slot held. The JobList half reserves nothing, so the hook count is what
+   * makes it visible here.
+   */
+  triggerPending: () => boolean;
+  /** Fires when an admitted trigger ends without becoming a scan. */
+  onTriggerAbandoned: (listener: () => void) => void;
+  shutdownTimeoutMs: number;
+}
+
+/**
+ * Drives one-shot (`npm run scan`) to an exit code.
+ *
+ * A signal with no trigger pending exits at once. One that lands while a panel
+ * trigger is still being answered — admitted but not yet started, or in the
+ * JobList round-trip that precedes admission on button-only scanners — gives
+ * that trigger the rest of one SHUTDOWN_TIMEOUT_MS budget to start (issue
+ * #202). Exiting inside that window tears a socket down mid-response, aborts a
+ * job-control transaction that holds the printer's lock, or leaves the printer
+ * holding an OK for a session that never opens.
+ *
+ * The budget is a monotonic deadline from signal receipt, and only what is left
+ * of it goes to the scan drain: a start at +2 s still ends the process at
+ * +30 s. A fixed delay would not do — job-control applies its 3 s timeout per
+ * step, so a failing round-trip can run to roughly 15 s. The wait ends early
+ * when an admitted trigger is abandoned (socket closed, ERROR, undeliverable
+ * response, or the callback's reject arm). New presses need no special
+ * handling: the admission gate refuses them, and the listener stays open so a
+ * JobList's follow-up PushScan can still arrive.
+ */
+export async function runOneShotLifecycle(deps: OneShotDeps): Promise<number> {
+  const scanStarted = deps.scanStarted.then(({ scan }) => ({ kind: "scan", scan }) as const);
+  const drain = (scan: Promise<void>, budgetMs: number, signalLogged: boolean): Promise<number> =>
+    runScanNowLifecycle({
+      scan,
+      signalled: deps.signalled,
+      shutdownTimeoutMs: budgetMs,
+      signalLogged,
+    });
+
+  const first = await Promise.race([
+    scanStarted,
+    deps.signalled.then((signal) => ({ kind: "signal", signal }) as const),
+  ]);
+  if (first.kind === "scan") return drain(first.scan, deps.shutdownTimeoutMs, false);
+
+  const signalCode = first.signal === "SIGTERM" ? 143 : 130;
+  if (!deps.triggerPending()) {
+    log.info(`Received ${first.signal} before any scan started — shutting down`);
+    return signalCode;
+  }
+
+  // One budget for everything that follows. performance.now() is monotonic, so
+  // a wall-clock step cannot stretch or collapse it.
+  const deadline = performance.now() + deps.shutdownTimeoutMs;
+  const remaining = (): number => Math.max(0, Math.round(deadline - performance.now()));
+  log.info(
+    `Received ${first.signal} while a panel trigger is being answered — ` +
+      `waiting up to ${deps.shutdownTimeoutMs}ms for it to start a scan`,
+  );
+
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  let outcome: { kind: "scan"; scan: Promise<void> } | { kind: "abandoned" } | { kind: "deadline" };
+  try {
+    outcome = await Promise.race([
+      scanStarted,
+      new Promise<{ kind: "abandoned" }>((resolve) => {
+        deps.onTriggerAbandoned(() => resolve({ kind: "abandoned" }));
+      }),
+      new Promise<{ kind: "deadline" }>((resolve) => {
+        // Not unref'd on purpose: node must not exit naturally with 0 while
+        // this exit code is still pending (same reasoning as waitAll).
+        timer = setTimeout(() => resolve({ kind: "deadline" }), remaining());
+      }),
+    ]);
+  } finally {
+    if (timer !== null) clearTimeout(timer);
+  }
+
+  if (outcome.kind === "scan") {
+    const budgetMs = remaining();
+    log.info(`Panel trigger started a scan with ${budgetMs}ms of the budget left — draining`);
+    return drain(outcome.scan, budgetMs, true);
+  }
+
+  if (outcome.kind === "abandoned") {
+    log.info(`Panel trigger ended without starting a scan — shutting down on ${first.signal}`);
+    return signalCode;
+  }
+
+  log.warn(
+    `Panel trigger did not start a scan within ${deps.shutdownTimeoutMs}ms — exiting anyway`,
+  );
+  return signalCode;
 }
 
 export interface ShutdownDeps {

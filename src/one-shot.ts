@@ -1,13 +1,14 @@
 import { loadConfig } from "./config.js";
 import { setLogLevel, setLogFormat, createLogger } from "./logger.js";
 import { createPushScanServer } from "./pushscan.js";
-import { runScanNowLifecycle } from "./lifecycle.js";
+import { runOneShotLifecycle } from "./lifecycle.js";
 import {
   logStartupBanner,
   startPrinterDiscovery,
   installCrashHandlers,
   buildOneShotPushScanCallback,
   buildPushScanServerOptions,
+  trackPendingHooks,
 } from "./startup.js";
 import { createPrinterTarget } from "./network.js";
 import { createSingleScanAdmission } from "./scan-admission.js";
@@ -36,11 +37,16 @@ async function main() {
   // session that never opens (issue #198). The slot never reopens: this
   // process exits after its one scan.
   const admission = createSingleScanAdmission();
+  // The hook count covers the JobList round-trip that precedes admission on
+  // button-only scanners, which the shutdown coordinator must also wait out.
+  const { options: pushscanOptions, pending: hooksPending } = trackPendingHooks(
+    buildPushScanServerOptions(config, target, admission),
+  );
 
   const pushscanServer = createPushScanServer(
     2968,
     buildOneShotPushScanCallback({ config, admission, onScanStarted }),
-    buildPushScanServerOptions(config, target, admission),
+    pushscanOptions,
   );
 
   log.info("epson2paperless ready — waiting for one scan from printer panel");
@@ -51,26 +57,19 @@ async function main() {
   });
   installCrashHandlers();
 
-  // Nothing to drain until the panel has pushed, so a signal before then exits
-  // straight away with the signal code. Once a scan is running, the shared
-  // coordinator owns the signal → drain → exit-code decision, same as
-  // scan:now (issue #134).
-  const first = await Promise.race([
-    scanStarted.then(({ scan }) => ({ kind: "scan", scan }) as const),
-    signalled.then((signal) => ({ kind: "signal", signal }) as const),
-  ]);
-
-  let exitCode: number;
-  if (first.kind === "signal") {
-    log.info(`Received ${first.signal} before any scan started — shutting down`);
-    exitCode = first.signal === "SIGTERM" ? 143 : 130;
-  } else {
-    exitCode = await runScanNowLifecycle({
-      scan: first.scan,
-      signalled,
-      shutdownTimeoutMs: config.shutdownTimeoutMs,
-    });
-  }
+  // The coordinator owns the signal → drain → exit-code decision. A signal
+  // with no trigger pending exits straight away; one that lands while a panel
+  // trigger is still being answered gives it the rest of SHUTDOWN_TIMEOUT_MS
+  // to start a scan (issue #202); a running scan drains like scan:now (issue
+  // #134). The listener stays open throughout: the admission gate refuses new
+  // presses, and a JobList's follow-up PushScan must still get through.
+  const exitCode = await runOneShotLifecycle({
+    scanStarted,
+    signalled,
+    triggerPending: () => admission.isBusy() || hooksPending() > 0,
+    onTriggerAbandoned: (listener) => admission.onReleased(listener),
+    shutdownTimeoutMs: config.shutdownTimeoutMs,
+  });
 
   try {
     pushscanServer.close();
