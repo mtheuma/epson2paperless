@@ -15,7 +15,11 @@ import {
   __resetShutdownStateForTesting,
   type InflightTracker,
 } from "./lifecycle.js";
-import { buildPushScanServerOptions, buildScanTriggerOptions } from "./startup.js";
+import {
+  buildDaemonPushScanCallback,
+  buildPushScanServerOptions,
+  buildScanTriggerOptions,
+} from "./startup.js";
 import type { Config } from "./config.js";
 import type { DispatchArgs } from "./startup.js";
 import type { PushScanInfo } from "./pushscan.js";
@@ -305,7 +309,17 @@ describe("scan webhook wiring", () => {
             finishJobr = r;
           }),
       );
-      const panel = buildPushScanServerOptions(makeConfig(), undefined, h.admission);
+      const config = makeConfig();
+      const panel = buildPushScanServerOptions(config, undefined, h.admission);
+      // The daemon's real callback, with only the scan dispatch stubbed out.
+      const panelDispatch = vi.fn<(args: DispatchArgs) => Promise<void>>(
+        () => new Promise<void>(() => {}),
+      );
+      const onPushScan = buildDaemonPushScanCallback({
+        config,
+        admission: h.admission,
+        dispatch: panelDispatch,
+      });
       const pendingHook = panel.beforeResponse!(hookArgs(jobInfo(pid)));
       await settle(); // panel is now waiting on JOBR over 1865
 
@@ -319,7 +333,8 @@ describe("scan webhook wiring", () => {
       expect(await post(h.base)).toBe(409);
 
       // The daemon callback commits the real scan; the hold converts to a tracked scan.
-      h.admission.commit(new Promise<void>(() => {}));
+      onPushScan(jobInfo(pid), "192.0.2.5");
+      expect(panelDispatch).toHaveBeenCalledTimes(1);
       expect(await post(h.base)).toBe(409);
       expect(h.dispatch).not.toHaveBeenCalled();
     });
@@ -327,11 +342,21 @@ describe("scan webhook wiring", () => {
 
   it("a panel trigger whose dispatch is skipped (preview reject) releases the slot", async () => {
     h = await harness({});
-    const panel = buildPushScanServerOptions(makeConfig(), undefined, h.admission);
+    const config = makeConfig();
+    const panel = buildPushScanServerOptions(config, undefined, h.admission);
+    const panelDispatch = vi.fn<(args: DispatchArgs) => Promise<void>>(() => Promise.resolve());
+    const onPushScan = buildDaemonPushScanCallback({
+      config,
+      admission: h.admission,
+      dispatch: panelDispatch,
+    });
+    // A non-job-control product sending JobNumberIn with no PushScanIDIn is
+    // ignored, so this trigger reaches the callback's reject arm.
     const release = await panel.beforeResponse!(hookArgs(jobInfo("PID 11D1")));
     expect(typeof release).toBe("function");
     expect(await post(h.base)).toBe(409);
-    h.admission.release(); // what index.ts does when resolveScanDispatch returns null
+    onPushScan(jobInfo("PID 11D1"), "192.0.2.5");
+    expect(panelDispatch).not.toHaveBeenCalled();
     expect(await post(h.base)).toBe(202);
   });
 
