@@ -1,0 +1,18 @@
+{
+  // Typecheck-only view of the whole checkout: the test files, test-support
+  // helpers and tools/ scripts that tsconfig.json excludes from the build.
+  // Vitest and tsx run these as ESM through a bundler-style resolver, so
+  // they are checked the same way here (import.meta is legal, no CommonJS
+  // interop diagnostics). Production code keeps the stricter Node16 check
+  // in tsconfig.json via `npm run typecheck`.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "declaration": false,
+    "module": "ESNext",
+    "moduleResolution": "Bundler"
+  },
+  "include": ["src", "tools", "vitest.config.ts"],
+  "exclude": ["node_modules", "dist", "coverage"]
+}

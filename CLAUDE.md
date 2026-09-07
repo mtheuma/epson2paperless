@@ -26,6 +26,7 @@ See:
 - `npm run pcap:extract` / `npm run pcap:render` — convert a Wireshark pcap of an ESC/I scan session into a JSONL replay fixture, or render a captured/extracted JSONL fixture to JPEG/PDF for eyeball validation. See `tools/pcap-extract/README.md` for invocation.
 - `npm run test-page:generate` — regenerate the committed compatibility test PDF under `tools/test-page/`. Used by external compatibility reporters; rarely needed in dev.
 - `npm run build` — TypeScript compile to `dist/`. Usually not needed in dev.
+- `npm run typecheck` — `tsc --noEmit` over production code (`tsconfig.json`) plus `tsconfig.test.json`, which adds the test files, test-support helpers and `tools/` that the build excludes. Vitest transpiles without typechecking and ESLint reports only its own rules, so this is the only place a test-file type error surfaces. Runs in CI and in the pre-push hook.
 - `npm run lint` / `npm run lint:fix` — ESLint with typescript-eslint type-checked rules (`eslint.config.mjs`). Test files and `tools/` relax `no-unsafe-*` around fixture-heavy code.
 - `npm run format` / `npm run format:check` — Prettier (`.prettierrc.json`).
 
@@ -84,7 +85,7 @@ The ESC/I-2 `PARA` payload is composed per-dialect: at INIT1 the graph hashes th
 
 ### Local pre-push hook
 
-`.githooks/pre-push` runs `npm run lint` and `npm run format:check` before every push, aborting on failure. Tests are intentionally skipped locally (too slow for every push) — CI runs the full `npm test` on every push and PR. **Activate once per clone:**
+`.githooks/pre-push` runs `npm run typecheck`, `npm run lint` and `npm run format:check` before every push, aborting on failure. Tests are intentionally skipped locally (too slow for every push) — CI runs the full `npm test` on every push and PR. **Activate once per clone:**
 
 ```
 git config core.hooksPath .githooks

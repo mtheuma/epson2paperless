@@ -30,7 +30,8 @@ jobs:
       - name: Typecheck
         # Vitest transpiles without typechecking and the Docker build is the
         # only other place `tsc` runs, so without this step a type error
-        # surfaces post-merge as a failed image build.
+        # surfaces post-merge as a failed image build. The script also checks
+        # the test files (tsconfig.test.json), which the build excludes.
         run: npm run typecheck
 
       - name: Lint
