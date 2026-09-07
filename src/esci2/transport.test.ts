@@ -107,7 +107,7 @@ describe("withTlsErrorLabels wrapper", () => {
       destroy: 0,
       endData: null,
     };
-    let errorListener: ((...args: unknown[]) => void) | null = null;
+    let errorListener: ((err: Error) => void) | null = null;
     const stub: SessionTransport = {
       write() {
         return true;
@@ -119,8 +119,9 @@ describe("withTlsErrorLabels wrapper", () => {
       destroy(_err?: Error) {
         calls.destroy += 1;
       },
-      on(event: string, cb: (...args: unknown[]) => void) {
-        if (event === "error") errorListener = cb;
+      // `never[]` accepts every listener shape in SessionTransport's overloads.
+      on(event: string, cb: (...args: never[]) => void) {
+        if (event === "error") errorListener = cb as (err: Error) => void;
         return stub;
       },
     };
@@ -189,7 +190,7 @@ describe("withEsci2UnlockOnDestroy ∘ withTlsErrorLabels composition", () => {
       destroy: 0,
       endData: null,
     };
-    let errorListener: ((...args: unknown[]) => void) | null = null;
+    let errorListener: ((err: Error) => void) | null = null;
     const stub: SessionTransport = {
       write() {
         return true;
@@ -201,8 +202,9 @@ describe("withEsci2UnlockOnDestroy ∘ withTlsErrorLabels composition", () => {
       destroy() {
         calls.destroy += 1;
       },
-      on(event: string, cb: (...args: unknown[]) => void) {
-        if (event === "error") errorListener = cb;
+      // `never[]` accepts every listener shape in SessionTransport's overloads.
+      on(event: string, cb: (...args: never[]) => void) {
+        if (event === "error") errorListener = cb as (err: Error) => void;
         return stub;
       },
     };

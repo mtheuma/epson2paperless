@@ -1485,15 +1485,16 @@ describe("runScanSession (engine pump)", () => {
         this.destroyCallCount += 1;
         this.emit("close");
       }
-      override on(event: string | symbol, listener: (...args: unknown[]) => void): this {
+      // `never[]` accepts every listener shape in SessionTransport's overloads.
+      override on(event: string | symbol, listener: (...args: never[]) => void): this {
         const wasFirst = this.listenerCount(event) === 0;
-        super.on(event, listener);
+        super.on(event, listener as (...args: unknown[]) => void);
         if (event === "data" && wasFirst && this.pending.length > 0) {
           // Synchronously replay each queued chunk during the on() call —
           // before it returns. Real Node sockets don't do this, but this is
           // the contract the engine should be robust to.
           const queue = this.pending.splice(0);
-          for (const chunk of queue) listener(chunk);
+          for (const chunk of queue) (listener as (chunk: Buffer) => void)(chunk);
         }
         return this;
       }

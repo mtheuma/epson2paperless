@@ -112,10 +112,10 @@ export async function render(opts: RenderOptions): Promise<{ pageCount: number }
 }
 
 function isSource(s: string): s is Source {
-  return (VALID_SOURCES as string[]).includes(s);
+  return (VALID_SOURCES as readonly string[]).includes(s);
 }
 function isFormat(f: string): f is Format {
-  return (VALID_FORMATS as string[]).includes(f);
+  return (VALID_FORMATS as readonly string[]).includes(f);
 }
 
 export interface RenderCliArgs {

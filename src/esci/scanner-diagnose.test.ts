@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from "vitest";
 import { runEsciScan } from "./scanner.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
 import { buildIsPacket, parseIsPacket } from "../protocol.js";
@@ -38,7 +38,7 @@ describe("scanner-esci DIAGNOSE_PROTOCOL probe", () => {
   // [diagnose] log lines they can share on a compatibility-issue ticket;
   // the terminal error message asks them to do so. Pin the log output so
   // the breadcrumbs can't silently regress through a future refactor.
-  let logSpy: ReturnType<typeof vi.spyOn>;
+  let logSpy: MockInstance<typeof console.log>;
 
   beforeEach(() => {
     logSpy = vi.spyOn(console, "log").mockImplementation(() => undefined);

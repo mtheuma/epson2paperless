@@ -17,8 +17,9 @@ function makeStubTransport() {
     destroy() {
       calls.destroy += 1;
     },
-    on(event: string, cb: (...args: unknown[]) => void) {
-      if (event === "close") closeListener = cb;
+    // `never[]` accepts every listener shape in SessionTransport's overloads.
+    on(event: string, cb: (...args: never[]) => void) {
+      if (event === "close") closeListener = cb as (hadError?: boolean) => void;
       return stub;
     },
   };

@@ -294,7 +294,7 @@ describe("createPushScanServer", () => {
     return new Promise<string>((resolve) => {
       const chunks: Buffer[] = [];
       client.on("data", (chunk) => {
-        chunks.push(chunk);
+        chunks.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk);
         const so_far = Buffer.concat(chunks).toString("utf-8");
         const hdrEnd = so_far.indexOf("\r\n\r\n");
         if (hdrEnd === -1) return;

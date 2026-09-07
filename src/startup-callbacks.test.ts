@@ -44,6 +44,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
     scanColorMode: "color",
     printerProtocol: "auto",
     diagnoseProtocol: false,
+    netscanVersion: "auto",
     tempDir: "",
     shutdownTimeoutMs: 30000,
     paperlessDeleteAfterUpload: true,
