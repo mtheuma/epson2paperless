@@ -211,9 +211,10 @@ export interface OneShotDeps {
  * step, so a failing round-trip can run to roughly 15 s. The wait ends early
  * when an admitted trigger is abandoned (socket closed, ERROR, undeliverable
  * response, or the callback's reject arm) or a JobList's hand-off lapses with
- * no follow-up (issue #209). New presses need no special handling: the
- * admission gate refuses them, and the listener stays open so a JobList's
- * follow-up PushScan can still arrive.
+ * no follow-up (issue #209) — unless another trigger is still pending, in
+ * which case the wait goes on under the same deadline. New presses need no
+ * special handling: the admission gate refuses them, and the listener stays
+ * open so a JobList's follow-up PushScan can still arrive.
  */
 export async function runOneShotLifecycle(deps: OneShotDeps): Promise<number> {
   const scanStarted = deps.scanStarted.then(({ scan }) => ({ kind: "scan", scan }) as const);
@@ -249,17 +250,26 @@ export async function runOneShotLifecycle(deps: OneShotDeps): Promise<number> {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let outcome: { kind: "scan"; scan: Promise<void> } | { kind: "abandoned" } | { kind: "deadline" };
   try {
-    outcome = await Promise.race([
-      scanStarted,
-      new Promise<{ kind: "abandoned" }>((resolve) => {
-        deps.onTriggerAbandoned(() => resolve({ kind: "abandoned" }));
-      }),
-      new Promise<{ kind: "deadline" }>((resolve) => {
-        // Not unref'd on purpose: node must not exit naturally with 0 while
-        // this exit code is still pending (same reasoning as waitAll).
-        timer = setTimeout(() => resolve({ kind: "deadline" }), remaining());
-      }),
-    ]);
+    const deadlineHit = new Promise<{ kind: "deadline" }>((resolve) => {
+      // Not unref'd on purpose: node must not exit naturally with 0 while
+      // this exit code is still pending (same reasoning as waitAll).
+      timer = setTimeout(() => resolve({ kind: "deadline" }), remaining());
+    });
+    for (;;) {
+      outcome = await Promise.race([
+        scanStarted,
+        new Promise<{ kind: "abandoned" }>((resolve) => {
+          deps.onTriggerAbandoned(() => resolve({ kind: "abandoned" }));
+        }),
+        deadlineHit,
+      ]);
+      // One trigger ending is not the end of every trigger: a JobList hand-off
+      // can lapse while a newer press's JOBW round-trip is still in flight
+      // (the timer is only replaced once that round-trip completes). Recheck,
+      // and keep waiting on the same deadline rather than exit mid-transaction.
+      if (outcome.kind !== "abandoned" || !deps.triggerPending()) break;
+      log.info("Panel trigger ended, but another is still being answered — still waiting");
+    }
   } finally {
     if (timer !== null) clearTimeout(timer);
   }

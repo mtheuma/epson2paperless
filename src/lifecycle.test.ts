@@ -613,6 +613,61 @@ describe("runOneShotLifecycle", () => {
     expect(settled).toBe(130);
   });
 
+  // A hand-off's timer is only replaced once the next JobList's JOBW round-trip
+  // has completed, so a lapse can fire while that round-trip is still in
+  // flight. It is not abandonment: the coordinator rechecks and keeps waiting
+  // within the same deadline (PR #210 review).
+  it("keeps waiting when a hand-off lapses while a newer JobList hook is in flight", async () => {
+    const started = defer<{ scan: Promise<void> }>();
+    const scan = defer<void>();
+    const { deps, admission, hooksPending } = makeOneShotDeps({
+      scanStarted: started.promise,
+      signalled: sigterm(),
+    });
+    admission.expectFollowUp(5_000);
+
+    let settled: number | undefined;
+    const result = runOneShotLifecycle(deps);
+    void result.then((code) => (settled = code));
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    hooksPending.count = 1; // a second press's JobList arrives; JOBW under way
+    await vi.advanceTimersByTimeAsync(1_000); // the first hand-off lapses
+    expect(settled).toBeUndefined();
+
+    hooksPending.count = 0; // JOBW done; a fresh hand-off replaces the lapsed one
+    admission.expectFollowUp(5_000);
+    await vi.advanceTimersByTimeAsync(700);
+    admission.reserve();
+    admission.commit();
+    started.resolve({ scan: scan.promise });
+    await flush();
+    scan.resolve();
+
+    await expect(result).resolves.toBe(0);
+  });
+
+  it("a lapse during a JobList hook does not extend the original deadline", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { deps, admission, hooksPending } = makeOneShotDeps({ signalled: sigterm() });
+      admission.expectFollowUp(5_000);
+
+      let settled: number | undefined;
+      void runOneShotLifecycle(deps).then((code) => (settled = code));
+
+      await vi.advanceTimersByTimeAsync(4_000);
+      hooksPending.count = 1; // JOBW that never completes
+      await vi.advanceTimersByTimeAsync(25_999); // t = 29_999
+      expect(settled).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1); // t = 30_000
+      expect(settled).toBe(143);
+      expect(logLines(warnSpy, "[WARN]")).toHaveLength(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
   it("warns and exits with the signal code when the trigger never starts a scan", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
