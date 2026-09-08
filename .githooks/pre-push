@@ -1,43 +1,42 @@
 #!/bin/sh
-# pre-push hook: run typecheck + lint + format:check before every push.
+# pre-push hook: run format:check + typecheck + lint before every push.
 #
 # Activate (once per clone):   git config core.hooksPath .githooks
 # Bypass in a one-off case:    git push --no-verify
 #
 # Runs on every push (any branch), not just main: server-side branch
-# protection on main means the local hook can't actually gate pushes to
-# main anyway, so this is purely a fast local feedback loop — catching
-# type/lint/format issues before CI does and saving the ~60s round-trip.
+# protection on main means the local hook cannot actually gate pushes to
+# main anyway, so this is purely a fast local feedback loop, catching
+# format/type/lint issues before CI does and saving the ~60s round-trip.
 #
-# Typecheck covers production code (tsconfig.json) and the test files
-# (tsconfig.test.json). Together they take ~4s, a fraction of the
-# type-aware lint (~14s), so they earn their place here.
+# Steps run cheapest first (Prettier ~2s, tsc ~3s, type-aware ESLint ~13s)
+# so the most common slip, a formatting miss, fails within seconds.
 #
-# Tests are intentionally NOT run here — the suite is too slow (~8s)
-# to put in every push. CI runs the full four-step gate (typecheck + lint +
+# Tests are intentionally NOT run here: the suite (~8s) is left to CI so a
+# push stays quick. CI runs the full four-step gate (typecheck + lint +
 # format:check + test) via .github/workflows/test.yml on every push and PR.
 
-echo "[pre-push] Running typecheck + lint + format:check..."
+echo "[pre-push] Running format:check + typecheck + lint..."
+if ! npm run format:check; then
+  echo ""
+  echo "[pre-push] Prettier check failed - push aborted."
+  echo "[pre-push] Fix with:  npm run format  (then commit)"
+  echo "[pre-push] Or bypass with:  git push --no-verify"
+  exit 1
+fi
 if ! npm run typecheck; then
   echo ""
-  echo "[pre-push] Typecheck failed — push aborted."
+  echo "[pre-push] Typecheck failed - push aborted."
   echo "[pre-push] Or bypass with:  git push --no-verify"
   exit 1
 fi
 if ! npm run lint; then
   echo ""
-  echo "[pre-push] Lint failed — push aborted."
+  echo "[pre-push] Lint failed - push aborted."
   echo "[pre-push] Try:  npm run lint:fix"
   echo "[pre-push] Or bypass with:  git push --no-verify"
   exit 1
 fi
-if ! npm run format:check; then
-  echo ""
-  echo "[pre-push] Prettier check failed — push aborted."
-  echo "[pre-push] Fix with:  npm run format  (then commit)"
-  echo "[pre-push] Or bypass with:  git push --no-verify"
-  exit 1
-fi
-echo "[pre-push] Typecheck + lint + format clean — allowing push. (Tests run in CI.)"
+echo "[pre-push] Format + typecheck + lint clean - allowing push. (Tests run in CI.)"
 
 exit 0

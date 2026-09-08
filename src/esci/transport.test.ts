@@ -17,9 +17,9 @@ function makeStubTransport() {
     destroy() {
       calls.destroy += 1;
     },
-    // `never[]` accepts every listener shape in SessionTransport's overloads.
-    on(event: string, cb: (...args: never[]) => void) {
-      if (event === "close") closeListener = cb as (hadError?: boolean) => void;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    on(event: string, cb: (...args: any[]) => void) {
+      if (event === "close") closeListener = cb;
       return stub;
     },
   };

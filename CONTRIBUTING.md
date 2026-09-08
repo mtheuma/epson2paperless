@@ -54,9 +54,9 @@ npm test                             # full test suite
 
 - Branch off `main`. PR back to `main`.
 - Commit-message style: `type: short summary` (`feat:`, `fix:`, `docs:`, `chore:`, `refactor:`, `test:`). The body explains the _why_ when it isn't obvious from the diff.
-- The CI gate is `npm run typecheck`, `npm run lint`, `npm run format:check`, and `npm test`. All four must pass. The local pre-push hook (`git config core.hooksPath .githooks`, one-time per clone) runs the first three on every push so you catch type/lint/format issues before CI does; tests are left to CI to keep the hook fast.
+- The CI gate is `npm run typecheck`, `npm run lint`, `npm run format:check`, and `npm test`. All four must pass. The local pre-push hook (`git config core.hooksPath .githooks`, one-time per clone) runs everything but the tests on every push (cheapest first) so you catch format/type/lint issues before CI does; tests are left to CI to keep the hook fast.
 - If your PR addresses an open issue, link it in the description.
-- Protocol changes that affect wire bytes need matching updates to the Frida-capture fixtures in `tools/frida-capture/captures/`. The byte-for-byte replay test in `src/scanner.test.ts` will fail otherwise. See `tools/frida-capture/README.md` for the re-capture workflow.
+- Protocol changes that affect wire bytes need matching updates to the Frida-capture fixtures in `tools/frida-capture/captures/`. The byte-for-byte replay tests in `src/esci2/scanner.test.ts` and `src/esci/scanner.test.ts` will fail otherwise. See `tools/frida-capture/README.md` for the re-capture workflow.
 
 ## Provenance
 

@@ -150,6 +150,7 @@ Protocol edits should be treated as replay-fixture-sensitive changes. The ESC/I-
 For routine changes, run the focused Vitest file first, then the full gate before publishing:
 
 ```sh
+npm run typecheck
 npm run lint
 npm run format:check
 npm test

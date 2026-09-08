@@ -119,9 +119,9 @@ describe("withTlsErrorLabels wrapper", () => {
       destroy(_err?: Error) {
         calls.destroy += 1;
       },
-      // `never[]` accepts every listener shape in SessionTransport's overloads.
-      on(event: string, cb: (...args: never[]) => void) {
-        if (event === "error") errorListener = cb as (err: Error) => void;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      on(event: string, cb: (...args: any[]) => void) {
+        if (event === "error") errorListener = cb;
         return stub;
       },
     };
@@ -202,9 +202,9 @@ describe("withEsci2UnlockOnDestroy ∘ withTlsErrorLabels composition", () => {
       destroy() {
         calls.destroy += 1;
       },
-      // `never[]` accepts every listener shape in SessionTransport's overloads.
-      on(event: string, cb: (...args: never[]) => void) {
-        if (event === "error") errorListener = cb as (err: Error) => void;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      on(event: string, cb: (...args: any[]) => void) {
+        if (event === "error") errorListener = cb;
         return stub;
       },
     };

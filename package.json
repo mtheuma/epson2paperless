@@ -3,6 +3,7 @@
   "version": "0.10.0",
   "description": "Epson Scan to Computer protocol emulator — delivers scans to Paperless-ngx",
   "main": "dist/index.js",
+  "type": "module",
   "scripts": {
     "build": "tsc",
     "start": "node dist/index.js",
@@ -23,7 +24,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json"
+    "typecheck": "tsc -p tsconfig.all.json"
   },
   "license": "MIT",
   "engines": {

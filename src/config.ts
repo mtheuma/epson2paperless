@@ -83,7 +83,7 @@ function isValidHostname(host: string): boolean {
   return name.split(".").every((label) => hostnameLabelRegex.test(label));
 }
 
-const configSchema = z
+export const configSchema = z
   .object({
     printerIp: z.string().regex(ipv4Regex, "PRINTER_IP must be a valid IPv4 address").optional(),
     printerHostname: z

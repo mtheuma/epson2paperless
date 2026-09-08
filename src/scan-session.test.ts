@@ -1485,16 +1485,16 @@ describe("runScanSession (engine pump)", () => {
         this.destroyCallCount += 1;
         this.emit("close");
       }
-      // `never[]` accepts every listener shape in SessionTransport's overloads.
-      override on(event: string | symbol, listener: (...args: never[]) => void): this {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      override on(event: string | symbol, listener: (...args: any[]) => void): this {
         const wasFirst = this.listenerCount(event) === 0;
-        super.on(event, listener as (...args: unknown[]) => void);
+        super.on(event, listener);
         if (event === "data" && wasFirst && this.pending.length > 0) {
           // Synchronously replay each queued chunk during the on() call —
           // before it returns. Real Node sockets don't do this, but this is
           // the contract the engine should be robust to.
           const queue = this.pending.splice(0);
-          for (const chunk of queue) (listener as (chunk: Buffer) => void)(chunk);
+          for (const chunk of queue) listener(chunk);
         }
         return this;
       }
