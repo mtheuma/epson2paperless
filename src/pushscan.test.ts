@@ -293,7 +293,7 @@ describe("createPushScanServer", () => {
   function readFullHttpResponse(client: net.Socket): Promise<string> {
     return new Promise<string>((resolve) => {
       const chunks: Buffer[] = [];
-      client.on("data", (chunk) => {
+      client.on("data", (chunk: Buffer) => {
         chunks.push(chunk);
         const so_far = Buffer.concat(chunks).toString("utf-8");
         const hdrEnd = so_far.indexOf("\r\n\r\n");
@@ -503,7 +503,7 @@ describe("createPushScanServer", () => {
       body;
 
     const client = net.createConnection(port, "127.0.0.1");
-    client.on("data", (chunk) => {
+    client.on("data", (chunk: Buffer) => {
       response += chunk.toString("utf-8");
     });
     await new Promise<void>((r) => client.once("connect", () => r()));

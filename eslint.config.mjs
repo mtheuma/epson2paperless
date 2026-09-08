@@ -20,7 +20,7 @@ export default tseslint.config(
   {
     languageOptions: {
       parserOptions: {
-        project: "./tsconfig.eslint.json",
+        project: "./tsconfig.all.json",
         tsconfigRootDir: import.meta.dirname,
       },
       globals: {
@@ -71,7 +71,7 @@ export default tseslint.config(
     // Frida agent runs inside the Frida runtime, not Node. Its globals
     // (send, recv, Interceptor, Process, Memory, etc.) are provided by
     // the Frida VM and aren't resolvable as Node modules. The file also
-    // lives outside tsconfig.eslint.json's project graph, so type-aware
+    // lives outside tsconfig.all.json's project graph, so type-aware
     // parsing is disabled via `project: null`.
     files: ["tools/frida-capture/agent.js"],
     ...tseslint.configs.disableTypeChecked,

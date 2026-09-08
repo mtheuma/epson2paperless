@@ -29,7 +29,7 @@ import { runEsci2Scan, runEsci2ScanOverPlain } from "./esci2/scanner.js";
 import { runEsciScan } from "./esci/scanner.js";
 import { WF3620_ENTRY } from "./esci/dialects/wf3620.js";
 import { runJobListCommit, runJobNumberCommit } from "./job-control.js";
-import type { Config } from "./config.js";
+import { makeConfig } from "./test-support/make-config.js";
 import type { PaperlessUploadOptions } from "./paperless-upload.js";
 import type { PushScanInfo } from "./pushscan.js";
 import { PID_FF680W, PID_DS575W, PID_ET7700 } from "./printer-ids.js";
@@ -40,33 +40,6 @@ const runEsci2ScanOverPlainMock = vi.mocked(runEsci2ScanOverPlain);
 const runEsciScanMock = vi.mocked(runEsciScan);
 const runJobListCommitMock = vi.mocked(runJobListCommit);
 const runJobNumberCommitMock = vi.mocked(runJobNumberCommit);
-
-function makeConfig(overrides: Partial<Config> = {}): Config {
-  return {
-    printerIp: "192.0.2.5",
-    printerHostname: undefined,
-    scanDestName: "Paperless",
-    scanDestId: 0x02,
-    outputDir: "/test-output",
-    healthPort: 3000,
-    logLevel: "info",
-    logFormat: "text",
-    language: "en",
-    jpegQuality: 90,
-    previewAction: "reject",
-    postProcess: "none",
-    scanFormat: "pdf",
-    scanSides: "duplex",
-    scanResolution: 200,
-    scanColorMode: "color",
-    printerProtocol: "auto",
-    diagnoseProtocol: false,
-    tempDir: "",
-    shutdownTimeoutMs: 30000,
-    paperlessDeleteAfterUpload: true,
-    ...overrides,
-  };
-}
 
 const PAPERLESS_OPTS: PaperlessUploadOptions = {
   url: "http://paperless.test",
@@ -211,6 +184,7 @@ describe("buildPushScanServerOptions", () => {
       headers: "",
       body: "",
       xuid: "4",
+      peerAddress: "203.0.113.20",
       onAbandon: () => {},
       info: { ...FF680W_JOB_NUMBER_INFO, jobNumber: null },
       capabilities: ["OfficeFormat"],
@@ -232,6 +206,7 @@ describe("buildPushScanServerOptions", () => {
       headers: "",
       body: "",
       xuid: "5",
+      peerAddress: "203.0.113.21",
       onAbandon: () => {},
       info: FF680W_JOB_NUMBER_INFO,
       capabilities: [],
@@ -253,6 +228,7 @@ describe("buildPushScanServerOptions", () => {
       headers: "",
       body: "",
       xuid: "8",
+      peerAddress: "203.0.113.23",
       onAbandon: () => {},
       info: DS575W_JOB_NUMBER_INFO,
       capabilities: [],
@@ -274,6 +250,7 @@ describe("buildPushScanServerOptions", () => {
       headers: "",
       body: "",
       xuid: "7",
+      peerAddress: "203.0.113.22",
       onAbandon: () => {},
       info: { ...DS575W_JOB_NUMBER_INFO, jobNumber: null },
       capabilities: ["OfficeFormat"],
@@ -393,6 +370,7 @@ describe("buildPushScanServerOptions", () => {
       headers: "",
       body: "",
       xuid: "6",
+      peerAddress: "192.0.2.5",
       onAbandon: () => {},
       info: { ...FF680W_JOB_NUMBER_INFO, productName: "PID 11D1" },
       capabilities: ["OfficeFormat"],
@@ -726,6 +704,9 @@ describe("observed-peer propagation (DS-575W button scan, hostname mode)", () =>
         headers: "",
         body: "",
         xuid: "11",
+        // The server rejects non-IPv4 peers before this hook runs, so an empty
+        // peer only ever reaches it from here: this pins the hook's own guard.
+        peerAddress: "",
         onAbandon: () => {},
         info: { ...DS575W_JOB_NUMBER_INFO, jobNumber: null },
         capabilities: ["OfficeFormat"],

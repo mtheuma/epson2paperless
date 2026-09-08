@@ -107,7 +107,7 @@ describe("withTlsErrorLabels wrapper", () => {
       destroy: 0,
       endData: null,
     };
-    let errorListener: ((...args: unknown[]) => void) | null = null;
+    let errorListener: ((err: Error) => void) | null = null;
     const stub: SessionTransport = {
       write() {
         return true;
@@ -119,7 +119,8 @@ describe("withTlsErrorLabels wrapper", () => {
       destroy(_err?: Error) {
         calls.destroy += 1;
       },
-      on(event: string, cb: (...args: unknown[]) => void) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      on(event: string, cb: (...args: any[]) => void) {
         if (event === "error") errorListener = cb;
         return stub;
       },
@@ -189,7 +190,7 @@ describe("withEsci2UnlockOnDestroy ∘ withTlsErrorLabels composition", () => {
       destroy: 0,
       endData: null,
     };
-    let errorListener: ((...args: unknown[]) => void) | null = null;
+    let errorListener: ((err: Error) => void) | null = null;
     const stub: SessionTransport = {
       write() {
         return true;
@@ -201,7 +202,8 @@ describe("withEsci2UnlockOnDestroy ∘ withTlsErrorLabels composition", () => {
       destroy() {
         calls.destroy += 1;
       },
-      on(event: string, cb: (...args: unknown[]) => void) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      on(event: string, cb: (...args: any[]) => void) {
         if (event === "error") errorListener = cb;
         return stub;
       },

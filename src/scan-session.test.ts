@@ -1485,7 +1485,8 @@ describe("runScanSession (engine pump)", () => {
         this.destroyCallCount += 1;
         this.emit("close");
       }
-      override on(event: string | symbol, listener: (...args: unknown[]) => void): this {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      override on(event: string | symbol, listener: (...args: any[]) => void): this {
         const wasFirst = this.listenerCount(event) === 0;
         super.on(event, listener);
         if (event === "data" && wasFirst && this.pending.length > 0) {

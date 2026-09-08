@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { EventEmitter } from "node:events";
 import dgram from "node:dgram";
+import type { AddressInfo } from "node:net";
 import { createPrinterTarget, getLocalIpForTarget, normalizeIPv4 } from "./network.js";
 
 /**
@@ -35,7 +36,7 @@ class FakeUdpSocket extends EventEmitter {
     }
   }
 
-  address(): dgram.AddressInfo {
+  address(): AddressInfo {
     if (this.behavior.kind !== "success") {
       throw new Error("FakeUdpSocket.address() called on error-path fake");
     }

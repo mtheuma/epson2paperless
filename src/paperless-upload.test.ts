@@ -37,7 +37,7 @@ describe("uploadAllToPaperless", () => {
       });
 
       expect(fetchMock).toHaveBeenCalledTimes(1);
-      const [url, init] = fetchMock.mock.calls[0];
+      const [url, init = {}] = fetchMock.mock.calls[0];
       expect(url).toBe("http://paperless.lan:8000/api/documents/post_document/");
       expect(init.method).toBe("POST");
       expect(init.headers).toEqual({ Authorization: "Token abc123" });

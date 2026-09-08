@@ -19,38 +19,19 @@ import { setLastScanTime } from "./health.js";
 import { createScanAdmission, createSingleScanAdmission } from "./scan-admission.js";
 import { createInflightTracker } from "./lifecycle.js";
 import type { Config } from "./config.js";
+import { makeConfig as makeBaseConfig } from "./test-support/make-config.js";
 import type { DispatchArgs } from "./startup.js";
 import type { PushScanInfo } from "./pushscan.js";
 
 const setLastScanTimeMock = vi.mocked(setLastScanTime);
 
+/** Paperless is configured throughout so the upload branch is reachable. */
 function makeConfig(overrides: Partial<Config> = {}): Config {
-  return {
-    printerIp: "192.0.2.5",
-    printerHostname: undefined,
-    scanDestName: "Paperless",
-    scanDestId: 0x02,
-    outputDir: "/test-output",
-    healthPort: 3000,
-    logLevel: "info",
-    logFormat: "text",
-    language: "en",
-    jpegQuality: 90,
-    previewAction: "reject",
-    postProcess: "none",
-    scanFormat: "pdf",
-    scanSides: "duplex",
-    scanResolution: 200,
-    scanColorMode: "color",
-    printerProtocol: "auto",
-    diagnoseProtocol: false,
-    tempDir: "",
-    shutdownTimeoutMs: 30000,
-    paperlessDeleteAfterUpload: true,
+  return makeBaseConfig({
     paperlessUrl: "http://paperless.test",
     paperlessToken: "test-token",
     ...overrides,
-  };
+  });
 }
 
 /** A panel press: 2-sided off, Action=PDF, from a non-job-control model. */

@@ -25,7 +25,8 @@ See:
 - `npm run printer-fingerprint` — print the printer's TLS certificate sha256 fingerprint, in the colon-hex form expected by `PRINTER_CERT_FINGERPRINT`. ESC/I-2 path only; WF-3620 has no TLS layer.
 - `npm run pcap:extract` / `npm run pcap:render` — convert a Wireshark pcap of an ESC/I scan session into a JSONL replay fixture, or render a captured/extracted JSONL fixture to JPEG/PDF for eyeball validation. See `tools/pcap-extract/README.md` for invocation.
 - `npm run test-page:generate` — regenerate the committed compatibility test PDF under `tools/test-page/`. Used by external compatibility reporters; rarely needed in dev.
-- `npm run build` — TypeScript compile to `dist/`. Usually not needed in dev.
+- `npm run build` — TypeScript compile to `dist/` (ESM; the package is `"type": "module"`). Usually not needed in dev.
+- `npm run typecheck` — `tsc --noEmit` over `tsconfig.all.json`, the whole-checkout view (production code, tests, test-support helpers, `tools/`) that ESLint's type-aware rules also use. Vitest transpiles without typechecking, so this is where a test-file type error surfaces. Runs in CI and in the pre-push hook.
 - `npm run lint` / `npm run lint:fix` — ESLint with typescript-eslint type-checked rules (`eslint.config.mjs`). Test files and `tools/` relax `no-unsafe-*` around fixture-heavy code.
 - `npm run format` / `npm run format:check` — Prettier (`.prettierrc.json`).
 
@@ -78,13 +79,13 @@ The ESC/I-2 `PARA` payload is composed per-dialect: at INIT1 the graph hashes th
 - `main` is deployable and protected. There is no long-lived integration branch.
 - Branch off `main`, push, open a PR with `gh pr create --base main --head <branch>`. Merge once CI is green.
 - Never @-mention an issue reporter or contributor with a request for action (test a branch, re-run a scan, provide captures or logs) without the maintainer's explicit approval — asks to community members are the maintainer's to make. Mentioning them to reference an issue, a comment, or something they contributed is fine.
-- CI (`.github/workflows/test.yml`) runs `npm install` and then lint + format:check + test, on every push to `main` and every PR targeting `main`. Uses `npm install` (not `npm ci`) because the lockfile is generated on Windows and lacks Linux-only optional native deps — don't swap to `npm ci` without regenerating the lockfile on Linux.
+- CI (`.github/workflows/test.yml`) runs `npm install` and then typecheck + lint + format:check + test, on every push to `main` and every PR targeting `main`. Uses `npm install` (not `npm ci`) because the lockfile is generated on Windows and lacks Linux-only optional native deps — don't swap to `npm ci` without regenerating the lockfile on Linux.
 - A separate `.github/workflows/docker.yml` builds and publishes a multi-arch image to GHCR on pushes to `main` and on `v*` tags. `Dockerfile` + `compose.yaml` at the repo root are the deploy artifacts.
 - Server-side branch protection on `main`: PR required, CI status check required, linear history required.
 
 ### Local pre-push hook
 
-`.githooks/pre-push` runs `npm run lint` and `npm run format:check` before every push, aborting on failure. Tests are intentionally skipped locally (too slow for every push) — CI runs the full `npm test` on every push and PR. **Activate once per clone:**
+`.githooks/pre-push` runs `npm run format:check`, `npm run typecheck` and `npm run lint` (cheapest first) before every push, aborting on failure. Tests are intentionally skipped locally (too slow for every push) — CI runs the full `npm test` on every push and PR. **Activate once per clone:**
 
 ```
 git config core.hooksPath .githooks

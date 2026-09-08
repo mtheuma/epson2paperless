@@ -17,7 +17,8 @@ function makeStubTransport() {
     destroy() {
       calls.destroy += 1;
     },
-    on(event: string, cb: (...args: unknown[]) => void) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    on(event: string, cb: (...args: any[]) => void) {
       if (event === "close") closeListener = cb;
       return stub;
     },

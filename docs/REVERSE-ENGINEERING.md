@@ -118,6 +118,7 @@ The replay harnesses are the regression shield for protocol work:
 Run the focused replay test when changing a protocol path, then run the full project gate before publishing:
 
 ```sh
+npm run typecheck
 npm run lint
 npm run format:check
 npm test

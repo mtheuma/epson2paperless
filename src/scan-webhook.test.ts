@@ -21,6 +21,7 @@ import {
   buildScanTriggerOptions,
 } from "./startup.js";
 import type { Config } from "./config.js";
+import { makeConfig as makeBaseConfig } from "./test-support/make-config.js";
 import type { DispatchArgs } from "./startup.js";
 import type { PushScanInfo } from "./pushscan.js";
 import { createScanAdmission, type ScanAdmission } from "./scan-admission.js";
@@ -32,32 +33,9 @@ const runJobNumberCommitMock = vi.mocked(runJobNumberCommit);
 const TOKEN = "t0ken";
 const AUTH = { Authorization: `Bearer ${TOKEN}` };
 
+/** The webhook tests need the trigger enabled, so every config carries the token. */
 function makeConfig(overrides: Partial<Config> = {}): Config {
-  return {
-    printerIp: "192.0.2.5",
-    printerHostname: undefined,
-    scanDestName: "Paperless",
-    scanDestId: 0x02,
-    outputDir: "/test-output",
-    healthPort: 3000,
-    logLevel: "info",
-    logFormat: "text",
-    language: "en",
-    jpegQuality: 90,
-    previewAction: "reject",
-    postProcess: "none",
-    scanFormat: "pdf",
-    scanSides: "duplex",
-    scanResolution: 200,
-    scanColorMode: "color",
-    printerProtocol: "auto",
-    diagnoseProtocol: false,
-    tempDir: "",
-    shutdownTimeoutMs: 30000,
-    paperlessDeleteAfterUpload: true,
-    scanTriggerToken: TOKEN,
-    ...overrides,
-  };
+  return makeBaseConfig({ scanTriggerToken: TOKEN, ...overrides });
 }
 
 function deferred<T = void>() {

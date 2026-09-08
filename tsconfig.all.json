@@ -1,0 +1,14 @@
+{
+  // Whole-checkout view for `npm run typecheck` and ESLint's type-aware rules:
+  // adds the test files, test-support helpers, tools/ and the config files
+  // that the build (tsconfig.json) leaves out. Same Node16 module settings as
+  // the build, so tests and tools are checked the way Node and tsx run them.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": ".",
+    "noEmit": true,
+    "allowJs": true
+  },
+  "include": ["src/**/*", "tools/**/*.ts", "eslint.config.mjs", "vitest.config.ts"],
+  "exclude": ["node_modules", "dist", "coverage"]
+}
