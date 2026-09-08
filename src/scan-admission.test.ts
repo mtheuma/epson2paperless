@@ -26,15 +26,11 @@ describe("createScanAdmission", () => {
     expect(admission.isBusy()).toBe(false);
   });
 
-  // Dropping a hold settles a tracked promise, so — like a finished scan —
-  // isBusy() reads false a microtask later. Nothing consults it sooner: the
-  // next trigger or webhook arrives on its own socket, a macrotask away.
-  it("is busy from reserve() until the reservation is released", async () => {
+  it("is busy from reserve() until the reservation is released", () => {
     const admission = createScanAdmission(createInflightTracker());
     const release = admission.reserve();
     expect(admission.isBusy()).toBe(true);
     release();
-    await settle();
     expect(admission.isBusy()).toBe(false);
   });
 
@@ -53,11 +49,10 @@ describe("createScanAdmission", () => {
     expect(admission.isBusy()).toBe(false);
   });
 
-  it("release() on the admission drops the current reservation (dispatch skipped)", async () => {
+  it("release() on the admission drops the current reservation (dispatch skipped)", () => {
     const admission = createScanAdmission(createInflightTracker());
     admission.reserve();
     admission.release();
-    await settle();
     expect(admission.isBusy()).toBe(false);
   });
 
@@ -70,12 +65,11 @@ describe("createScanAdmission", () => {
     expect(admission.isBusy()).toBe(true);
   });
 
-  it("release hooks are idempotent", async () => {
+  it("release hooks are idempotent", () => {
     const admission = createScanAdmission(createInflightTracker());
     const release = admission.reserve();
     release();
     release();
-    await settle();
     expect(admission.isBusy()).toBe(false);
   });
 
@@ -120,6 +114,65 @@ describe("createScanAdmission", () => {
     await settle();
     expect(inflight.count).toBe(1);
     expect(admission.isBusy()).toBe(true);
+  });
+
+  // The gate and the drain answer different questions. Hooks are tracked
+  // straight into the tracker for the drain; they must not make the gate
+  // refuse the very press they belong to.
+  it("a promise tracked for the drain alone leaves the gate idle", () => {
+    const inflight = createInflightTracker();
+    const admission = createScanAdmission(inflight);
+    void inflight.track(new Promise<void>(() => {}));
+    expect(inflight.count).toBe(1);
+    expect(admission.isBusy()).toBe(false);
+  });
+});
+
+describe("createScanAdmission — expectFollowUp", () => {
+  // On the FF-680W / DS-575W a press is a JobList, then a PushScan on a fresh
+  // connection ~0.7 s later (pcap-measured). The hand-off keeps the drain
+  // waiting for that follow-up without gating it (issue #207 review).
+  it("keeps the drain waiting without making the gate busy", () => {
+    const inflight = createInflightTracker();
+    const admission = createScanAdmission(inflight);
+    admission.expectFollowUp(1000);
+    expect(inflight.count).toBe(1);
+    expect(admission.isBusy()).toBe(false);
+  });
+
+  it("the next reserve() ends the hand-off with no gap in the tracker", async () => {
+    const inflight = createInflightTracker();
+    const admission = createScanAdmission(inflight);
+    admission.expectFollowUp(1000);
+    admission.reserve();
+    expect(inflight.count).toBe(2); // hold tracked before the hand-off settles
+    expect(admission.isBusy()).toBe(true);
+    await settle();
+    expect(inflight.count).toBe(1);
+  });
+
+  it("a hand-off that no press follows ends at its timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const inflight = createInflightTracker();
+      const admission = createScanAdmission(inflight);
+      admission.expectFollowUp(50);
+      await vi.advanceTimersByTimeAsync(49);
+      expect(inflight.count).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(inflight.count).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a second JobList replaces the hand-off rather than stacking one", async () => {
+    const inflight = createInflightTracker();
+    const admission = createScanAdmission(inflight);
+    admission.expectFollowUp(1000);
+    admission.expectFollowUp(1000);
+    await settle();
+    expect(inflight.count).toBe(1);
   });
 });
 

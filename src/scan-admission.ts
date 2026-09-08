@@ -14,9 +14,13 @@
 // (the callback tracked the real scan) or by a release hook the push-scan
 // server fires when the trigger ends without a callback.
 //
-// In the daemon the reservation is also an inflight promise, so graceful
-// shutdown's drain waits out that same gap instead of exiting mid-transaction
-// (issue #207). isBusy() there is simply "the tracker is non-empty".
+// The gate and the daemon's shutdown drain answer different questions. The
+// gate (isBusy) reads the hold and the scans. The drain reads the inflight
+// tracker, which holds those and more: the reservation itself, so a signal in
+// the admission→callback gap waits instead of exiting mid-transaction, and a
+// bounded hand-off after a JobList, so the listener stays open for the
+// PushScan that follows on a fresh connection — which the gate must not
+// refuse (issue #207).
 import type { InflightTracker } from "./lifecycle.js";
 
 export interface ScanAdmission {
@@ -34,6 +38,13 @@ export interface ScanAdmission {
   release(): void;
   /** Track a scan that holds no reservation (the webhook path). */
   track(scan: Promise<void>): void;
+  /**
+   * A JobList was answered: keep the drain waiting for its follow-up PushScan
+   * for at most `timeoutMs`, without gating it. Ended early by the next
+   * reserve() — whatever press arrives is the one the process stayed up for.
+   * A newer JobList replaces the hand-off.
+   */
+  expectFollowUp(timeoutMs: number): void;
 }
 
 /**
@@ -66,47 +77,70 @@ function createReservationSlot(onDropped?: () => void) {
   };
 }
 
+/** A promise parked in the tracker until `settle` is called. */
+function trackDeferred(inflight: Pick<InflightTracker, "track">): () => void {
+  let resolve!: () => void;
+  void inflight.track(
+    new Promise<void>((r) => {
+      resolve = r;
+    }),
+  );
+  return resolve;
+}
+
 export function createScanAdmission(inflight: InflightTracker): ScanAdmission {
   // The hold is itself a tracked promise, so the daemon's shutdown drain waits
   // out the admission→callback gap with no coordinator of its own (issue
-  // #207): reserve() registers a deferred with the tracker, and whatever drops
-  // the hold — release(), the trigger's own release hook, or commit() — settles
-  // it through the slot's onDropped. The slot's token check still decides what
+  // #207): reserve() parks a deferred in the tracker, and whatever drops the
+  // hold — release(), the trigger's own release hook, or commit() — settles it
+  // through the slot's onDropped. The slot's token check still decides what
   // is current, so a stale hook drops nothing and settles nothing.
   let settleHold: (() => void) | null = null;
   const slot = createReservationSlot(() => {
     settleHold?.();
     settleHold = null;
   });
+  // Scans are counted here rather than read off the tracker: the tracker also
+  // holds the reservation, a JobList hand-off, and the hooks, none of which
+  // may gate the press they exist for.
+  let scans = 0;
+  const trackScan = (scan: Promise<void>): void => {
+    scans++;
+    void inflight.track(scan).finally(() => {
+      scans--;
+    });
+  };
+  let endHandoff: (() => void) | null = null;
 
   return {
-    // Busy is exactly "the tracker is non-empty": a scan through either door,
-    // or a held panel reservation. As with a finished scan, presence ends a
-    // microtask after the promise settles; nothing consults it sooner, since
-    // the next trigger or webhook arrives on its own socket.
-    isBusy: () => inflight.count > 0,
+    isBusy: () => slot.held() || scans > 0,
     reserve() {
+      // The follow-up (or any press) has arrived: its hold takes over, tracked
+      // before the hand-off settles so the drain never reads empty between.
       // The gate never reserves on top of a live hold, but if it ever did the
-      // old promise must not sit in the tracker for good and wedge shutdown.
+      // old deferred must not sit in the tracker for good and wedge shutdown.
       settleHold?.();
-      let resolve!: () => void;
-      void inflight.track(
-        new Promise<void>((r) => {
-          resolve = r;
-        }),
-      );
-      settleHold = resolve;
+      settleHold = trackDeferred(inflight);
+      endHandoff?.();
       return slot.reserve();
     },
     commit(scan) {
-      // Track before clearing so the tracker never reads empty in between: a
-      // drain that snapshotted the hold finds the scan on its next pass.
-      void inflight.track(scan);
+      // Track before clearing so isBusy() never reads false in between, and
+      // so a drain that snapshotted the hold finds the scan on its next pass.
+      trackScan(scan);
       slot.clear();
     },
     release: slot.clear,
-    track(scan) {
-      void inflight.track(scan);
+    track: trackScan,
+    expectFollowUp(timeoutMs) {
+      endHandoff?.();
+      const settle = trackDeferred(inflight);
+      const timer = setTimeout(() => endHandoff?.(), timeoutMs);
+      endHandoff = () => {
+        clearTimeout(timer);
+        endHandoff = null;
+        settle();
+      };
     },
   };
 }

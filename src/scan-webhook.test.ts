@@ -220,7 +220,7 @@ describe("scan webhook wiring", () => {
   it("a tracked panel scan makes the webhook answer 409", async () => {
     h = await harness({});
     const panelScan = deferred();
-    void h.inflight.track(panelScan.promise);
+    h.admission.commit(panelScan.promise); // as the daemon's onPushScan callback does
     expect(await post(h.base)).toBe(409);
     panelScan.resolve();
     await settle();

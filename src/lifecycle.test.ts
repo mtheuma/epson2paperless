@@ -261,6 +261,29 @@ describe("shutdown", () => {
     expect(deps.exitCalls).toEqual([0]);
   });
 
+  it("waits through a JobList hand-off for the follow-up press, then for its scan", async () => {
+    const deps = makeDeps();
+    const admission = createScanAdmission(deps.inflight);
+    admission.expectFollowUp(1000); // JOBW answered; the PushScan is on its way
+    const shutdownPromise = shutdown(deps);
+    await new Promise((r) => setImmediate(r));
+    expect(deps.callOrder).toEqual([]); // listener still open for the follow-up
+    expect(admission.isBusy()).toBe(false); // and the follow-up will be admitted
+    admission.reserve();
+    let resolveScan!: () => void;
+    admission.commit(
+      new Promise<void>((r) => {
+        resolveScan = r;
+      }),
+    );
+    await new Promise((r) => setImmediate(r));
+    expect(deps.exitCalls).toEqual([]);
+    resolveScan();
+    await shutdownPromise;
+    expect(deps.callOrder).toEqual(["pushscan", "health", "responder"]);
+    expect(deps.exitCalls).toEqual([0]);
+  });
+
   it("proceeds to close servers after timeout when a scan is hung", async () => {
     const deps = makeDeps({ shutdownTimeoutMs: 20 });
     deps.inflight.track(new Promise<void>(() => {}));

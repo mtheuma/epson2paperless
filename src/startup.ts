@@ -140,6 +140,14 @@ function usesJobControl(productName: string | null): boolean {
 }
 
 /**
+ * How long the daemon's shutdown drain waits, after answering a JobList, for
+ * the PushScan that follows it on a fresh connection (issue #207). The FF-680W
+ * captures put that follow-up ~0.7 s after our JobList response; a press the
+ * user cancels never sends one, so the wait is bounded rather than open.
+ */
+export const JOB_LIST_HANDOFF_MS = 5000;
+
+/**
  * Options for the push-scan server on TCP 2968.
  *
  * `admission` is required, and `target` therefore takes an explicit
@@ -151,7 +159,8 @@ function usesJobControl(productName: string | null): boolean {
 export function buildPushScanServerOptions(
   config: Config,
   target: PrinterTarget | undefined,
-  admission: Pick<ScanAdmission, "isBusy" | "reserve">,
+  admission: Pick<ScanAdmission, "isBusy" | "reserve"> &
+    Partial<Pick<ScanAdmission, "expectFollowUp">>,
 ): PushScanServerOptions {
   return {
     validatePeer: target ? (peer) => target.accepts(peer) : undefined,
@@ -187,6 +196,10 @@ export function buildPushScanServerOptions(
       if (kind === "jobList") {
         log.debug(`${info.productName} JobList received — committing dummy job over TCP/1865`);
         await runJobListCommit({ printerIp: targetIp });
+        // The PushScan that follows is the real trigger. The daemon's drain
+        // must stay up for it (one-shot's coordinator already does), and the
+        // gate must not refuse it — hence a hand-off, not a reservation.
+        admission.expectFollowUp?.(JOB_LIST_HANDOFF_MS);
         return;
       }
 
@@ -211,10 +224,11 @@ export function buildPushScanServerOptions(
  *
  * The daemon has no coordinator: its shutdown drains the inflight tracker.
  * Given `inflight`, each hook's lifetime is registered there too, so that
- * drain waits out the same JobList window (issue #207). A hook's rejection —
- * a refused press, a job-control failure — still reaches the server; only the
- * tracker's copy is settled quietly, or every refusal would log as a failed
- * scan.
+ * drain waits out the same JobList window (issue #207); the admission gate
+ * does not read the tracker, so this never refuses the press it belongs to.
+ * A hook's rejection — a refused press, a job-control failure — still reaches
+ * the server; only the tracker's copy is settled quietly, or every refusal
+ * would log as a failed scan.
  */
 export function trackPendingHooks(
   options: PushScanServerOptions,
@@ -232,9 +246,6 @@ export function trackPendingHooks(
       ...options,
       beforeResponse: async (ctx) => {
         pending++;
-        // Call the hook before registering it: a pushScan hook's first act is
-        // the admission check, which reads the tracker's count. Registering
-        // first would make every press refuse itself.
         const run = (async () => inner(ctx))();
         if (inflight) {
           void inflight.track(

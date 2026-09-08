@@ -108,7 +108,7 @@ describe("buildDaemonPushScanCallback", () => {
     expect(inflight.count).toBe(0);
   });
 
-  it("releases the reservation and dispatches nothing when the trigger resolves to no scan", async () => {
+  it("releases the reservation and dispatches nothing when the trigger resolves to no scan", () => {
     const admission = createScanAdmission(createInflightTracker());
     const dispatch = vi.fn<(args: DispatchArgs) => Promise<void>>(() => Promise.resolve());
 
@@ -119,7 +119,6 @@ describe("buildDaemonPushScanCallback", () => {
     expect(setLastScanTimeMock).not.toHaveBeenCalled();
     // Nothing else would ever drop this hold, so the next trigger would be
     // refused for good (issue #137's gate is shared with POST /scan).
-    await settle(); // the hold's tracker entry settles
     expect(admission.isBusy()).toBe(false);
   });
 });
