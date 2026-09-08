@@ -180,12 +180,16 @@ export interface OneShotDeps {
   /**
    * True while a panel trigger is somewhere between its first byte and the
    * onPushScan callback: a `beforeResponse` hook in flight (the FF-680W /
-   * DS-575W JobList and JobNumber round-trips over TCP/1865) or the admission
-   * slot held. The JobList half reserves nothing, so the hook count is what
-   * makes it visible here.
+   * DS-575W JobList and JobNumber round-trips over TCP/1865), the admission
+   * slot held, or a JobList's follow-up PushScan awaited on a fresh
+   * connection. The JobList half reserves nothing, so the hook count and the
+   * hand-off are what make it visible here (issues #202, #209).
    */
   triggerPending: () => boolean;
-  /** Fires when an admitted trigger ends without becoming a scan. */
+  /**
+   * Fires when an admitted trigger ends without becoming a scan, or a JobList
+   * hand-off lapses with no follow-up.
+   */
   onTriggerAbandoned: (listener: () => void) => void;
   shutdownTimeoutMs: number;
 }
@@ -206,9 +210,10 @@ export interface OneShotDeps {
  * +30 s. A fixed delay would not do — job-control applies its 3 s timeout per
  * step, so a failing round-trip can run to roughly 15 s. The wait ends early
  * when an admitted trigger is abandoned (socket closed, ERROR, undeliverable
- * response, or the callback's reject arm). New presses need no special
- * handling: the admission gate refuses them, and the listener stays open so a
- * JobList's follow-up PushScan can still arrive.
+ * response, or the callback's reject arm) or a JobList's hand-off lapses with
+ * no follow-up (issue #209). New presses need no special handling: the
+ * admission gate refuses them, and the listener stays open so a JobList's
+ * follow-up PushScan can still arrive.
  */
 export async function runOneShotLifecycle(deps: OneShotDeps): Promise<number> {
   const scanStarted = deps.scanStarted.then(({ scan }) => ({ kind: "scan", scan }) as const);
