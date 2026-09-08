@@ -38,7 +38,9 @@ async function main() {
   // process exits after its one scan.
   const admission = createSingleScanAdmission();
   // The hook count covers the JobList round-trip that precedes admission on
-  // button-only scanners, which the shutdown coordinator must also wait out.
+  // button-only scanners, which the shutdown coordinator must also wait out;
+  // the admission's hand-off covers the gap between that round-trip settling
+  // and the follow-up PushScan reserving (issue #209).
   const { options: pushscanOptions, pending: hooksPending } = trackPendingHooks(
     buildPushScanServerOptions(config, target, admission),
   );
@@ -66,7 +68,7 @@ async function main() {
   const exitCode = await runOneShotLifecycle({
     scanStarted,
     signalled,
-    triggerPending: () => admission.isBusy() || hooksPending() > 0,
+    triggerPending: () => admission.isBusy() || admission.followUpPending() || hooksPending() > 0,
     onTriggerAbandoned: (listener) => admission.onReleased(listener),
     shutdownTimeoutMs: config.shutdownTimeoutMs,
   });

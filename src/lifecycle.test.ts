@@ -403,7 +403,8 @@ describe("runOneShotLifecycle", () => {
     const deps: OneShotDeps = {
       scanStarted: neverStarted,
       signalled: never,
-      triggerPending: () => admission.isBusy() || hooksPending.count > 0,
+      triggerPending: () =>
+        admission.isBusy() || admission.followUpPending() || hooksPending.count > 0,
       onTriggerAbandoned: (listener) => admission.onReleased(listener),
       shutdownTimeoutMs: 30_000,
       ...overrides,
@@ -568,6 +569,103 @@ describe("runOneShotLifecycle", () => {
     admission.release(); // e.g. PREVIEW_ACTION=reject
     await flush();
     expect(settled).toBe(143);
+  });
+
+  // Between the JobList hook settling and the follow-up PushScan's hook
+  // reserving, nothing is held and no hook is in flight (~0.7 s on the
+  // FF-680W). The hand-off is what keeps the coordinator waiting there
+  // (issue #209).
+  it("waits through the JobList hand-off with nothing held, then drains the follow-up's scan", async () => {
+    const started = defer<{ scan: Promise<void> }>();
+    const scan = defer<void>();
+    const { deps, admission } = makeOneShotDeps({
+      scanStarted: started.promise,
+      signalled: sigterm(),
+    });
+    admission.expectFollowUp(5_000); // JobList answered, hook already settled
+
+    let settled: number | undefined;
+    const result = runOneShotLifecycle(deps);
+    void result.then((code) => (settled = code));
+
+    await vi.advanceTimersByTimeAsync(700);
+    expect(settled).toBeUndefined();
+
+    // The follow-up PushScan arrives on a fresh connection and starts a scan.
+    admission.reserve();
+    admission.commit();
+    started.resolve({ scan: scan.promise });
+    await flush();
+    scan.resolve();
+
+    await expect(result).resolves.toBe(0);
+  });
+
+  it("exits with the signal code when the JobList hand-off lapses with no follow-up", async () => {
+    const { deps, admission } = makeOneShotDeps({ signalled: sigint() });
+    admission.expectFollowUp(5_000);
+
+    let settled: number | undefined;
+    void runOneShotLifecycle(deps).then((code) => (settled = code));
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(settled).toBeUndefined();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toBe(130);
+  });
+
+  // A hand-off's timer is only replaced once the next JobList's JOBW round-trip
+  // has completed, so a lapse can fire while that round-trip is still in
+  // flight. It is not abandonment: the coordinator rechecks and keeps waiting
+  // within the same deadline (PR #210 review).
+  it("keeps waiting when a hand-off lapses while a newer JobList hook is in flight", async () => {
+    const started = defer<{ scan: Promise<void> }>();
+    const scan = defer<void>();
+    const { deps, admission, hooksPending } = makeOneShotDeps({
+      scanStarted: started.promise,
+      signalled: sigterm(),
+    });
+    admission.expectFollowUp(5_000);
+
+    let settled: number | undefined;
+    const result = runOneShotLifecycle(deps);
+    void result.then((code) => (settled = code));
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    hooksPending.count = 1; // a second press's JobList arrives; JOBW under way
+    await vi.advanceTimersByTimeAsync(1_000); // the first hand-off lapses
+    expect(settled).toBeUndefined();
+
+    hooksPending.count = 0; // JOBW done; a fresh hand-off replaces the lapsed one
+    admission.expectFollowUp(5_000);
+    await vi.advanceTimersByTimeAsync(700);
+    admission.reserve();
+    admission.commit();
+    started.resolve({ scan: scan.promise });
+    await flush();
+    scan.resolve();
+
+    await expect(result).resolves.toBe(0);
+  });
+
+  it("a lapse during a JobList hook does not extend the original deadline", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { deps, admission, hooksPending } = makeOneShotDeps({ signalled: sigterm() });
+      admission.expectFollowUp(5_000);
+
+      let settled: number | undefined;
+      void runOneShotLifecycle(deps).then((code) => (settled = code));
+
+      await vi.advanceTimersByTimeAsync(4_000);
+      hooksPending.count = 1; // JOBW that never completes
+      await vi.advanceTimersByTimeAsync(25_999); // t = 29_999
+      expect(settled).toBeUndefined();
+      await vi.advanceTimersByTimeAsync(1); // t = 30_000
+      expect(settled).toBe(143);
+      expect(logLines(warnSpy, "[WARN]")).toHaveLength(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 
   it("warns and exits with the signal code when the trigger never starts a scan", async () => {

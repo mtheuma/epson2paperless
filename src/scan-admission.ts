@@ -150,18 +150,29 @@ export function createScanAdmission(inflight: InflightTracker): ScanAdmission {
  * then exits, so once a trigger is committed the slot stays busy for good.
  * Same reservation for the gap between `beforeResponse` and the callback,
  * but there is no tracker to consult: the scan's own lifetime is owned by
- * `runScanNowLifecycle`.
+ * `runScanNowLifecycle`, and the JobList hand-off is a flag the shutdown
+ * coordinator reads through `followUpPending()` (issue #209).
  */
-export interface SingleScanAdmission extends Pick<ScanAdmission, "isBusy" | "reserve" | "release"> {
+export interface SingleScanAdmission extends Pick<
+  ScanAdmission,
+  "isBusy" | "reserve" | "release" | "expectFollowUp"
+> {
   /** The admitted trigger became the scan. Nothing reopens the slot after this. */
   commit(): void;
   /**
+   * True from expectFollowUp() until the next reserve() or the timeout. Never
+   * makes the gate busy: the follow-up PushScan it waits for must be admitted.
+   */
+  followUpPending(): boolean;
+  /**
    * Register a listener for "the admitted trigger ended without becoming a
    * scan" — release(), or the trigger's own release hook dropping a hold that
-   * is still current. Never fired by commit(), by a stale hook, or by a
-   * release once committed. One-shot's shutdown coordinator waits on this so
-   * a signal that lands in the admission→callback gap can tell an abandoned
-   * trigger from one still starting, without polling isBusy() (issue #202).
+   * is still current — and for a JobList hand-off lapsing with no follow-up.
+   * Never fired by commit(), by a stale hook, by a release once committed, or
+   * by a hand-off that a press ended or a newer JobList replaced. One-shot's
+   * shutdown coordinator waits on this so a signal that lands in the
+   * admission→callback gap can tell an abandoned trigger from one still
+   * starting, without polling (issue #202, issue #209).
    */
   onReleased(listener: () => void): void;
 }
@@ -169,19 +180,41 @@ export interface SingleScanAdmission extends Pick<ScanAdmission, "isBusy" | "res
 export function createSingleScanAdmission(): SingleScanAdmission {
   let committed = false;
   const listeners = new Set<() => void>();
-  const slot = createReservationSlot(() => {
+  const notify = (): void => {
     // Post-commit the slot no longer speaks for the trigger: the scan owns it.
     if (committed) return;
     for (const listener of listeners) listener();
-  });
+  };
+  const slot = createReservationSlot(notify);
+  let handoffTimer: ReturnType<typeof setTimeout> | null = null;
+  const endHandoff = (): void => {
+    if (handoffTimer === null) return;
+    clearTimeout(handoffTimer);
+    handoffTimer = null;
+  };
 
   return {
     isBusy: () => committed || slot.held(),
-    reserve: slot.reserve,
+    reserve() {
+      // The follow-up (or any press) has arrived: it is the trigger the
+      // coordinator stayed up for, and the hold takes over from here.
+      endHandoff();
+      return slot.reserve();
+    },
     commit() {
       committed = true;
     },
     release: slot.clear,
+    expectFollowUp(timeoutMs) {
+      endHandoff();
+      handoffTimer = setTimeout(() => {
+        // A cancelled press never sends the follow-up: wake the coordinator
+        // rather than leave it to its deadline.
+        handoffTimer = null;
+        notify();
+      }, timeoutMs);
+    },
+    followUpPending: () => handoffTimer !== null,
     onReleased(listener) {
       listeners.add(listener);
     },

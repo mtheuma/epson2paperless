@@ -256,3 +256,105 @@ describe("createSingleScanAdmission — onReleased", () => {
     expect(listener).not.toHaveBeenCalled();
   });
 });
+
+describe("createSingleScanAdmission — expectFollowUp", () => {
+  // Same JobList → PushScan hand-off as the daemon's, seen from one-shot's
+  // coordinator (issue #209): the follow-up arrives on a fresh connection
+  // ~0.7 s after the JobList is answered, with no hook and no hold in flight.
+  it("reports the hand-off as pending without making the gate busy", () => {
+    const admission = createSingleScanAdmission();
+    expect(admission.followUpPending()).toBe(false);
+    admission.expectFollowUp(1000);
+    expect(admission.followUpPending()).toBe(true);
+    expect(admission.isBusy()).toBe(false);
+  });
+
+  it("the next reserve() ends the hand-off", () => {
+    const admission = createSingleScanAdmission();
+    admission.expectFollowUp(1000);
+    admission.reserve();
+    expect(admission.followUpPending()).toBe(false);
+    expect(admission.isBusy()).toBe(true);
+  });
+
+  it("a second JobList replaces the hand-off rather than stacking one", () => {
+    vi.useFakeTimers();
+    try {
+      const admission = createSingleScanAdmission();
+      admission.expectFollowUp(50);
+      vi.advanceTimersByTime(40);
+      admission.expectFollowUp(50);
+      vi.advanceTimersByTime(40); // the first would have lapsed by now
+      expect(admission.followUpPending()).toBe(true);
+      vi.advanceTimersByTime(10);
+      expect(admission.followUpPending()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a hand-off that no press follows lapses at its timeout", () => {
+    vi.useFakeTimers();
+    try {
+      const admission = createSingleScanAdmission();
+      admission.expectFollowUp(50);
+      vi.advanceTimersByTime(49);
+      expect(admission.followUpPending()).toBe(true);
+      vi.advanceTimersByTime(1);
+      expect(admission.followUpPending()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A cancelled press never sends the follow-up. The coordinator waits on
+  // onReleased, so a lapse wakes it rather than leaving it to its deadline.
+  it("a lapsed hand-off fires onReleased listeners", () => {
+    vi.useFakeTimers();
+    try {
+      const admission = createSingleScanAdmission();
+      const listener = vi.fn();
+      admission.onReleased(listener);
+      admission.expectFollowUp(50);
+      vi.advanceTimersByTime(49);
+      expect(listener).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(listener).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a hand-off ended by reserve() or replaced by a newer one does not fire onReleased", () => {
+    vi.useFakeTimers();
+    try {
+      const admission = createSingleScanAdmission();
+      const listener = vi.fn();
+      admission.onReleased(listener);
+      admission.expectFollowUp(50);
+      admission.expectFollowUp(50);
+      admission.reserve();
+      vi.advanceTimersByTime(100);
+      expect(listener).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("the timer does not keep the process alive once committed", () => {
+    vi.useFakeTimers();
+    try {
+      const admission = createSingleScanAdmission();
+      const listener = vi.fn();
+      admission.onReleased(listener);
+      admission.expectFollowUp(50);
+      admission.reserve();
+      admission.commit();
+      vi.advanceTimersByTime(100);
+      expect(listener).not.toHaveBeenCalled();
+      expect(admission.isBusy()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
