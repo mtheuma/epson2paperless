@@ -13,6 +13,10 @@
 // the slot at admission, and the reservation is dropped either by commit()
 // (the callback tracked the real scan) or by a release hook the push-scan
 // server fires when the trigger ends without a callback.
+//
+// In the daemon the reservation is also an inflight promise, so graceful
+// shutdown's drain waits out that same gap instead of exiting mid-transaction
+// (issue #207). isBusy() there is simply "the tracker is non-empty".
 import type { InflightTracker } from "./lifecycle.js";
 
 export interface ScanAdmission {
@@ -39,8 +43,8 @@ export interface ScanAdmission {
  *
  * `onDropped` fires only when a hold that was actually current is cleared —
  * never for a stale hook, never for a clear() on an empty slot. One-shot uses
- * it to learn that an admitted trigger ended (issue #202); the daemon passes
- * nothing and behaves exactly as before.
+ * it to learn that an admitted trigger ended (issue #202); the daemon uses it
+ * to settle the hold's inflight promise (issue #207).
  */
 function createReservationSlot(onDropped?: () => void) {
   let current: symbol | null = null;
@@ -63,13 +67,40 @@ function createReservationSlot(onDropped?: () => void) {
 }
 
 export function createScanAdmission(inflight: InflightTracker): ScanAdmission {
-  const slot = createReservationSlot();
+  // The hold is itself a tracked promise, so the daemon's shutdown drain waits
+  // out the admission→callback gap with no coordinator of its own (issue
+  // #207): reserve() registers a deferred with the tracker, and whatever drops
+  // the hold — release(), the trigger's own release hook, or commit() — settles
+  // it through the slot's onDropped. The slot's token check still decides what
+  // is current, so a stale hook drops nothing and settles nothing.
+  let settleHold: (() => void) | null = null;
+  const slot = createReservationSlot(() => {
+    settleHold?.();
+    settleHold = null;
+  });
 
   return {
-    isBusy: () => slot.held() || inflight.count > 0,
-    reserve: slot.reserve,
+    // Busy is exactly "the tracker is non-empty": a scan through either door,
+    // or a held panel reservation. As with a finished scan, presence ends a
+    // microtask after the promise settles; nothing consults it sooner, since
+    // the next trigger or webhook arrives on its own socket.
+    isBusy: () => inflight.count > 0,
+    reserve() {
+      // The gate never reserves on top of a live hold, but if it ever did the
+      // old promise must not sit in the tracker for good and wedge shutdown.
+      settleHold?.();
+      let resolve!: () => void;
+      void inflight.track(
+        new Promise<void>((r) => {
+          resolve = r;
+        }),
+      );
+      settleHold = resolve;
+      return slot.reserve();
+    },
     commit(scan) {
-      // Track before clearing so isBusy() never reads false in between.
+      // Track before clearing so the tracker never reads empty in between: a
+      // drain that snapshotted the hold finds the scan on its next pass.
       void inflight.track(scan);
       slot.clear();
     },

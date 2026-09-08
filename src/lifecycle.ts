@@ -14,10 +14,12 @@ export interface InflightTracker {
    */
   track(p: Promise<void>): Promise<void>;
   /**
-   * Wait for every tracked promise to settle, up to `timeoutMs`. Returns
-   * the number completed vs. still outstanding when the timeout fired.
-   * `timedOut` is 0 on a clean drain. Outstanding promises are left in
-   * the set — they'll GC on process exit.
+   * Wait for every tracked promise to settle, up to `timeoutMs` — including
+   * promises tracked while the wait is under way, so a panel hold that turns
+   * into a scan mid-drain is waited for too (issue #207). Returns the number
+   * completed vs. still outstanding when the timeout fired. `timedOut` is 0
+   * on a clean drain. Outstanding promises are left in the set — they'll GC
+   * on process exit.
    */
   waitAll(timeoutMs: number): Promise<{ completed: number; timedOut: number }>;
   /** Count of tracked, not-yet-settled promises. */
@@ -49,15 +51,25 @@ export function createInflightTracker(): InflightTracker {
     const timeoutPromise = new Promise<typeof TIMEOUT>((r) => {
       timeoutHandle = setTimeout(() => r(TIMEOUT), timeoutMs);
     });
+    let completed = 0;
+    let pending = snapshot;
     try {
-      const result = await Promise.race([
-        Promise.allSettled(snapshot).then(() => "drained" as const),
-        timeoutPromise,
-      ]);
-      if (result === TIMEOUT) {
-        return { completed: 0, timedOut: set.size };
+      // One timer bounds every round. Re-snapshot until the set is empty:
+      // admission.commit() tracks the real scan and then settles the panel
+      // hold, so a drain that stopped at its first snapshot would report
+      // "drained" just as the scan starts (issue #207).
+      for (;;) {
+        const result = await Promise.race([
+          Promise.allSettled(pending).then(() => "drained" as const),
+          timeoutPromise,
+        ]);
+        if (result === TIMEOUT) {
+          return { completed, timedOut: set.size };
+        }
+        completed += pending.length;
+        if (set.size === 0) return { completed, timedOut: 0 };
+        pending = Array.from(set);
       }
-      return { completed: snapshot.length, timedOut: 0 };
     } finally {
       if (timeoutHandle !== null) clearTimeout(timeoutHandle);
     }
@@ -290,17 +302,23 @@ export async function shutdown(deps: ShutdownDeps): Promise<void> {
     }
   };
 
-  safeCall("pushscan", () => deps.pushscanServer.close());
-
+  // Nothing closes until the drain is done, the push-scan listener included.
+  // The tracker holds scans and admitted panel triggers alike (issue #207),
+  // and on the FF-680W / DS-575W a press is a JobList followed by a PushScan
+  // on a fresh connection: closing the listener first would turn a follow-up
+  // that lands mid-drain into a refused connection and a panel error. A new
+  // press while a scan drains is refused at admission as before, so the open
+  // listener adds at most a JobList round-trip, within the same budget.
   const drainResult = await deps.inflight.waitAll(deps.shutdownTimeoutMs);
   if (drainResult.timedOut > 0) {
     log.warn(
-      `${drainResult.timedOut} scan(s) still in flight after ${deps.shutdownTimeoutMs}ms — exiting anyway`,
+      `${drainResult.timedOut} scan(s) or panel trigger(s) still in flight after ${deps.shutdownTimeoutMs}ms — exiting anyway`,
     );
   } else if (drainResult.completed > 0) {
-    log.info(`Drained ${drainResult.completed} in-flight scan(s)`);
+    log.info(`Drained ${drainResult.completed} in-flight scan(s) or panel trigger(s)`);
   }
 
+  safeCall("pushscan", () => deps.pushscanServer.close());
   safeCall("health", () => deps.healthServer.close());
   safeCall("responder", () => deps.responder.stop());
 

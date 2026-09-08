@@ -18,6 +18,7 @@ import {
 } from "./pushscan.js";
 import { setLastScanTime, type ScanTriggerOptions } from "./health.js";
 import type { ScanAdmission, SingleScanAdmission } from "./scan-admission.js";
+import type { InflightTracker } from "./lifecycle.js";
 
 const log = createLogger("startup");
 
@@ -207,8 +208,18 @@ export function buildPushScanServerOptions(
  * a signal there would otherwise look like "nothing pending" and exit inside a
  * job-control transaction that holds the printer's lock. The count is the
  * hook's own lifetime; the response write that follows it is local and brief.
+ *
+ * The daemon has no coordinator: its shutdown drains the inflight tracker.
+ * Given `inflight`, each hook's lifetime is registered there too, so that
+ * drain waits out the same JobList window (issue #207). A hook's rejection —
+ * a refused press, a job-control failure — still reaches the server; only the
+ * tracker's copy is settled quietly, or every refusal would log as a failed
+ * scan.
  */
-export function trackPendingHooks(options: PushScanServerOptions): {
+export function trackPendingHooks(
+  options: PushScanServerOptions,
+  inflight?: Pick<InflightTracker, "track">,
+): {
   options: PushScanServerOptions;
   pending: () => number;
 } {
@@ -221,8 +232,20 @@ export function trackPendingHooks(options: PushScanServerOptions): {
       ...options,
       beforeResponse: async (ctx) => {
         pending++;
+        // Call the hook before registering it: a pushScan hook's first act is
+        // the admission check, which reads the tracker's count. Registering
+        // first would make every press refuse itself.
+        const run = (async () => inner(ctx))();
+        if (inflight) {
+          void inflight.track(
+            run.then(
+              () => undefined,
+              () => undefined,
+            ),
+          );
+        }
         try {
-          return await inner(ctx);
+          return await run;
         } finally {
           pending--;
         }

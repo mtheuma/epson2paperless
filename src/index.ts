@@ -10,6 +10,7 @@ import {
   buildDaemonPushScanCallback,
   buildPushScanServerOptions,
   buildScanTriggerOptions,
+  trackPendingHooks,
 } from "./startup.js";
 import { createPrinterTarget } from "./network.js";
 import { createScanAdmission } from "./scan-admission.js";
@@ -29,10 +30,19 @@ async function main() {
   // One scan at a time, whichever door it came through (issue #137).
   const admission = createScanAdmission(inflight);
 
+  // Graceful shutdown drains the tracker, which holds scans and admitted
+  // panel triggers. The hook wrapper adds the JobList round-trip that
+  // precedes admission on button-only scanners, which reserves nothing
+  // (issue #207).
+  const { options: pushscanOptions } = trackPendingHooks(
+    buildPushScanServerOptions(config, target, admission),
+    inflight,
+  );
+
   const pushscanServer = createPushScanServer(
     2968,
     buildDaemonPushScanCallback({ config, admission }),
-    buildPushScanServerOptions(config, target, admission),
+    pushscanOptions,
   );
 
   const healthServer = createHealthServer(config.healthPort, {

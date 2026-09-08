@@ -374,7 +374,7 @@ describe("scan webhook wiring", () => {
       exit: (code) => exits.push(code),
     });
     await settle();
-    expect(order).toEqual(["pushscan"]);
+    expect(order).toEqual([]); // nothing closes until the drain is done (#207)
     scan.resolve();
     await done;
     expect(order).toEqual(["pushscan", "health", "responder"]);

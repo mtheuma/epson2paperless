@@ -130,11 +130,12 @@ result), `401` bad or missing token, `400` bad parameter, `409` a scan is alread
 `405` anything other than POST. `/health` keeps reporting `lastScan`, which is the time the
 last scan was _triggered_ (panel or webhook), not whether it succeeded.
 
-One scan at a time is enforced both ways: the webhook answers `409` while a panel scan runs,
-and the printer panel shows an error if Scan is pressed while a webhook scan runs. The panel
-side of this applies whether or not the webhook is enabled: pressing Scan while a previous
-scan is still running is now refused at the trigger (panel error, nothing sent to the printer)
-where earlier versions opened a second session that the printer then rejected.
+One scan at a time is enforced both ways: the webhook answers `409` while a panel scan runs
+(or a panel press is still being answered), and the printer panel shows an error if Scan is
+pressed while a webhook scan runs. The panel side of this applies whether or not the webhook
+is enabled: pressing Scan while a previous scan is still running is now refused at the trigger
+(panel error, nothing sent to the printer) where earlier versions opened a second session that
+the printer then rejected.
 
 A Home Assistant `rest_command`, with the whole header value kept in `secrets.yaml`
 (Home Assistant's `!secret` must replace the entire value, not part of it):
@@ -211,7 +212,7 @@ Each setting's **Scope** column shows which printers it affects: `All`, `Panel` 
 | `PRINTER_CERT_FINGERPRINT` | ESC/I-2 TLS  | —       | SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`); scans abort on mismatch. **Requires `PRINTER_PROTOCOL=esci2`** — `auto` can't pin reliably and the non-TLS variants have no cert.                      |
 | `DIAGNOSE_PROTOCOL`        | Legacy ESC/I | `false` | Compatibility-report aid. On a legacy `ESC @` non-ACK, sends one extra `FS Y` probe and aborts with annotated `[diagnose]` log lines. Leave off in normal use.                                                         |
 | `NETSCAN_VERSION`          | All          | `auto`  | Compatibility-triage aid. Forces the discovery keepalive wire format (`2.0` / `3.0`); `auto` picks it from the scanner's announced PID (`3.0` for the FF-680W and DS-575W, else `2.0`). Leave on `auto` in normal use. |
-| `SHUTDOWN_TIMEOUT_MS`      | All          | `30000` | ms to wait for an in-flight scan to finish on `SIGINT`/`SIGTERM` before forcing shutdown. One-shot also spends it on a panel press still being answered.                                                               |
+| `SHUTDOWN_TIMEOUT_MS`      | All          | `30000` | ms to wait for an in-flight scan, or a panel press still being answered, to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                                                                      |
 
 </details>
 

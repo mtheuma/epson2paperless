@@ -26,11 +26,15 @@ describe("createScanAdmission", () => {
     expect(admission.isBusy()).toBe(false);
   });
 
-  it("is busy from reserve() until the reservation is released", () => {
+  // Dropping a hold settles a tracked promise, so — like a finished scan —
+  // isBusy() reads false a microtask later. Nothing consults it sooner: the
+  // next trigger or webhook arrives on its own socket, a macrotask away.
+  it("is busy from reserve() until the reservation is released", async () => {
     const admission = createScanAdmission(createInflightTracker());
     const release = admission.reserve();
     expect(admission.isBusy()).toBe(true);
     release();
+    await settle();
     expect(admission.isBusy()).toBe(false);
   });
 
@@ -40,6 +44,8 @@ describe("createScanAdmission", () => {
     admission.reserve();
     const scan = deferred();
     admission.commit(scan.promise);
+    expect(admission.isBusy()).toBe(true);
+    await settle(); // the hold's tracker entry settles; the scan remains
     expect(inflight.count).toBe(1);
     expect(admission.isBusy()).toBe(true);
     scan.resolve();
@@ -47,10 +53,11 @@ describe("createScanAdmission", () => {
     expect(admission.isBusy()).toBe(false);
   });
 
-  it("release() on the admission drops the current reservation (dispatch skipped)", () => {
+  it("release() on the admission drops the current reservation (dispatch skipped)", async () => {
     const admission = createScanAdmission(createInflightTracker());
     admission.reserve();
     admission.release();
+    await settle();
     expect(admission.isBusy()).toBe(false);
   });
 
@@ -63,12 +70,56 @@ describe("createScanAdmission", () => {
     expect(admission.isBusy()).toBe(true);
   });
 
-  it("release hooks are idempotent", () => {
+  it("release hooks are idempotent", async () => {
     const admission = createScanAdmission(createInflightTracker());
     const release = admission.reserve();
     release();
     release();
+    await settle();
     expect(admission.isBusy()).toBe(false);
+  });
+
+  // The hold is itself an inflight promise, so the daemon's shutdown drain
+  // waits out the admission→callback gap with no extra coordinator (issue
+  // #207). These pin the tracker's view of the hold.
+  it("reserve() registers the hold with the tracker until it is released", async () => {
+    const inflight = createInflightTracker();
+    const admission = createScanAdmission(inflight);
+    const release = admission.reserve();
+    expect(inflight.count).toBe(1);
+    release();
+    await settle();
+    expect(inflight.count).toBe(0);
+  });
+
+  it("commit() never lets the tracker read empty between the hold and the scan", async () => {
+    const inflight = createInflightTracker();
+    const admission = createScanAdmission(inflight);
+    admission.reserve();
+    expect(inflight.count).toBe(1);
+    const scan = deferred();
+    admission.commit(scan.promise);
+    // The scan is tracked before the hold settles: both are present for a
+    // microtask, and a drain that snapshotted the hold sees the scan next.
+    expect(inflight.count).toBe(2);
+    await settle();
+    expect(inflight.count).toBe(1);
+    scan.resolve();
+    await settle();
+    expect(inflight.count).toBe(0);
+  });
+
+  it("a stale release hook does not settle a newer reservation's hold", async () => {
+    const inflight = createInflightTracker();
+    const admission = createScanAdmission(inflight);
+    const staleRelease = admission.reserve();
+    admission.release(); // first trigger abandoned
+    admission.reserve(); // second trigger admitted
+    await settle();
+    staleRelease(); // late close of the first socket
+    await settle();
+    expect(inflight.count).toBe(1);
+    expect(admission.isBusy()).toBe(true);
   });
 });
 
