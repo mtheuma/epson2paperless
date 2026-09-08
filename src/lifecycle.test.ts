@@ -8,7 +8,7 @@ import {
   type ShutdownDeps,
   __resetShutdownStateForTesting,
 } from "./lifecycle.js";
-import { createSingleScanAdmission } from "./scan-admission.js";
+import { createScanAdmission, createSingleScanAdmission } from "./scan-admission.js";
 
 describe("InflightTracker", () => {
   it("starts with count 0", () => {
@@ -113,6 +113,54 @@ describe("InflightTracker", () => {
     expect(result).toEqual({ completed: 0, timedOut: 2 });
     expect(tracker.count).toBe(2);
   });
+
+  // A panel trigger's hold converts into the real scan while a drain may
+  // already be under way (issue #207): admission.commit() tracks the scan and
+  // then settles the hold. A drain that snapshotted only the hold must go on
+  // to wait for the scan.
+  it("waitAll keeps draining promises tracked while it waits", async () => {
+    const tracker = createInflightTracker();
+    let resolveHold!: () => void;
+    let resolveScan!: () => void;
+    tracker.track(
+      new Promise<void>((r) => {
+        resolveHold = r;
+      }),
+    );
+    const waitPromise = tracker.waitAll(1000);
+    let drained = false;
+    void waitPromise.then(() => {
+      drained = true;
+    });
+    setImmediate(() => {
+      tracker.track(
+        new Promise<void>((r) => {
+          resolveScan = r;
+        }),
+      );
+      resolveHold();
+    });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(drained).toBe(false);
+    resolveScan();
+    expect(await waitPromise).toEqual({ completed: 2, timedOut: 0 });
+  });
+
+  it("waitAll times out counting everything still tracked, including late additions", async () => {
+    const tracker = createInflightTracker();
+    let resolveHold!: () => void;
+    tracker.track(
+      new Promise<void>((r) => {
+        resolveHold = r;
+      }),
+    );
+    const waitPromise = tracker.waitAll(20);
+    setImmediate(() => {
+      tracker.track(new Promise<void>(() => {}));
+      resolveHold();
+    });
+    expect(await waitPromise).toEqual({ completed: 1, timedOut: 1 });
+  });
 });
 
 function makeDeps(overrides: Partial<ShutdownDeps> = {}): ShutdownDeps & {
@@ -161,7 +209,10 @@ describe("shutdown", () => {
     expect(deps.exitCalls).toEqual([0]);
   });
 
-  it("waits for in-flight scans to drain before closing health server", async () => {
+  // Nothing closes until the drain is done — the push-scan listener included,
+  // so a JobList answered during the drain can still be followed by its
+  // PushScan on a fresh connection (issue #207).
+  it("waits for in-flight scans to drain before closing any server", async () => {
     const deps = makeDeps();
     let resolveScan!: () => void;
     deps.inflight.track(
@@ -171,10 +222,66 @@ describe("shutdown", () => {
     );
     const shutdownPromise = shutdown(deps);
     await new Promise((r) => setImmediate(r));
-    expect(deps.callOrder).toEqual(["pushscan"]);
+    expect(deps.callOrder).toEqual([]);
     resolveScan();
     await shutdownPromise;
     expect(deps.callOrder).toEqual(["pushscan", "health", "responder"]);
+  });
+
+  it("drains a held panel reservation before exiting (issue #207)", async () => {
+    const deps = makeDeps();
+    const admission = createScanAdmission(deps.inflight);
+    const release = admission.reserve(); // admitted, OK not yet flushed
+    const shutdownPromise = shutdown(deps);
+    await new Promise((r) => setImmediate(r));
+    expect(deps.exitCalls).toEqual([]);
+    release(); // the trigger ended without a callback
+    await shutdownPromise;
+    expect(deps.exitCalls).toEqual([0]);
+  });
+
+  it("waits for a scan committed while the drain is under way", async () => {
+    const deps = makeDeps();
+    const admission = createScanAdmission(deps.inflight);
+    admission.reserve();
+    const shutdownPromise = shutdown(deps);
+    await new Promise((r) => setImmediate(r));
+    let resolveScan!: () => void;
+    admission.commit(
+      new Promise<void>((r) => {
+        resolveScan = r;
+      }),
+    );
+    await new Promise((r) => setImmediate(r));
+    expect(deps.exitCalls).toEqual([]);
+    expect(deps.callOrder).toEqual([]);
+    resolveScan();
+    await shutdownPromise;
+    expect(deps.callOrder).toEqual(["pushscan", "health", "responder"]);
+    expect(deps.exitCalls).toEqual([0]);
+  });
+
+  it("waits through a JobList hand-off for the follow-up press, then for its scan", async () => {
+    const deps = makeDeps();
+    const admission = createScanAdmission(deps.inflight);
+    admission.expectFollowUp(1000); // JOBW answered; the PushScan is on its way
+    const shutdownPromise = shutdown(deps);
+    await new Promise((r) => setImmediate(r));
+    expect(deps.callOrder).toEqual([]); // listener still open for the follow-up
+    expect(admission.isBusy()).toBe(false); // and the follow-up will be admitted
+    admission.reserve();
+    let resolveScan!: () => void;
+    admission.commit(
+      new Promise<void>((r) => {
+        resolveScan = r;
+      }),
+    );
+    await new Promise((r) => setImmediate(r));
+    expect(deps.exitCalls).toEqual([]);
+    resolveScan();
+    await shutdownPromise;
+    expect(deps.callOrder).toEqual(["pushscan", "health", "responder"]);
+    expect(deps.exitCalls).toEqual([0]);
   });
 
   it("proceeds to close servers after timeout when a scan is hung", async () => {

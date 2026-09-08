@@ -40,6 +40,8 @@ describe("createScanAdmission", () => {
     admission.reserve();
     const scan = deferred();
     admission.commit(scan.promise);
+    expect(admission.isBusy()).toBe(true);
+    await settle(); // the hold's tracker entry settles; the scan remains
     expect(inflight.count).toBe(1);
     expect(admission.isBusy()).toBe(true);
     scan.resolve();
@@ -69,6 +71,108 @@ describe("createScanAdmission", () => {
     release();
     release();
     expect(admission.isBusy()).toBe(false);
+  });
+
+  // The hold is itself an inflight promise, so the daemon's shutdown drain
+  // waits out the admission→callback gap with no extra coordinator (issue
+  // #207). These pin the tracker's view of the hold.
+  it("reserve() registers the hold with the tracker until it is released", async () => {
+    const inflight = createInflightTracker();
+    const admission = createScanAdmission(inflight);
+    const release = admission.reserve();
+    expect(inflight.count).toBe(1);
+    release();
+    await settle();
+    expect(inflight.count).toBe(0);
+  });
+
+  it("commit() never lets the tracker read empty between the hold and the scan", async () => {
+    const inflight = createInflightTracker();
+    const admission = createScanAdmission(inflight);
+    admission.reserve();
+    expect(inflight.count).toBe(1);
+    const scan = deferred();
+    admission.commit(scan.promise);
+    // The scan is tracked before the hold settles: both are present for a
+    // microtask, and a drain that snapshotted the hold sees the scan next.
+    expect(inflight.count).toBe(2);
+    await settle();
+    expect(inflight.count).toBe(1);
+    scan.resolve();
+    await settle();
+    expect(inflight.count).toBe(0);
+  });
+
+  it("a stale release hook does not settle a newer reservation's hold", async () => {
+    const inflight = createInflightTracker();
+    const admission = createScanAdmission(inflight);
+    const staleRelease = admission.reserve();
+    admission.release(); // first trigger abandoned
+    admission.reserve(); // second trigger admitted
+    await settle();
+    staleRelease(); // late close of the first socket
+    await settle();
+    expect(inflight.count).toBe(1);
+    expect(admission.isBusy()).toBe(true);
+  });
+
+  // The gate and the drain answer different questions. Hooks are tracked
+  // straight into the tracker for the drain; they must not make the gate
+  // refuse the very press they belong to.
+  it("a promise tracked for the drain alone leaves the gate idle", () => {
+    const inflight = createInflightTracker();
+    const admission = createScanAdmission(inflight);
+    void inflight.track(new Promise<void>(() => {}));
+    expect(inflight.count).toBe(1);
+    expect(admission.isBusy()).toBe(false);
+  });
+});
+
+describe("createScanAdmission — expectFollowUp", () => {
+  // On the FF-680W / DS-575W a press is a JobList, then a PushScan on a fresh
+  // connection ~0.7 s later (pcap-measured). The hand-off keeps the drain
+  // waiting for that follow-up without gating it (issue #207 review).
+  it("keeps the drain waiting without making the gate busy", () => {
+    const inflight = createInflightTracker();
+    const admission = createScanAdmission(inflight);
+    admission.expectFollowUp(1000);
+    expect(inflight.count).toBe(1);
+    expect(admission.isBusy()).toBe(false);
+  });
+
+  it("the next reserve() ends the hand-off with no gap in the tracker", async () => {
+    const inflight = createInflightTracker();
+    const admission = createScanAdmission(inflight);
+    admission.expectFollowUp(1000);
+    admission.reserve();
+    expect(inflight.count).toBe(2); // hold tracked before the hand-off settles
+    expect(admission.isBusy()).toBe(true);
+    await settle();
+    expect(inflight.count).toBe(1);
+  });
+
+  it("a hand-off that no press follows ends at its timeout", async () => {
+    vi.useFakeTimers();
+    try {
+      const inflight = createInflightTracker();
+      const admission = createScanAdmission(inflight);
+      admission.expectFollowUp(50);
+      await vi.advanceTimersByTimeAsync(49);
+      expect(inflight.count).toBe(1);
+      await vi.advanceTimersByTimeAsync(1);
+      expect(inflight.count).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("a second JobList replaces the hand-off rather than stacking one", async () => {
+    const inflight = createInflightTracker();
+    const admission = createScanAdmission(inflight);
+    admission.expectFollowUp(1000);
+    admission.expectFollowUp(1000);
+    await settle();
+    expect(inflight.count).toBe(1);
   });
 });
 

@@ -100,6 +100,7 @@ describe("buildDaemonPushScanCallback", () => {
 
     // commit() really tracked the promise: busy while it runs, idle after.
     expect(admission.isBusy()).toBe(true);
+    await settle(); // the hold's tracker entry settles; the scan remains
     expect(inflight.count).toBe(1);
     scan.resolve();
     await settle();

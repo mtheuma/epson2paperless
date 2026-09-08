@@ -164,6 +164,63 @@ describe("trackPendingHooks (#202)", () => {
     expect(options).toBe(original);
     expect(pending()).toBe(0);
   });
+
+  // The daemon hands the wrapper its inflight tracker so its shutdown drain
+  // waits out a JobList's JOBW round-trip, which reserves nothing (#207).
+  describe("with an inflight tracker", () => {
+    const settle = () => new Promise((r) => setImmediate(r));
+
+    it("registers each hook with the tracker from its call until it settles", async () => {
+      const inflight = createInflightTracker();
+      let finish!: () => void;
+      const { options } = trackPendingHooks(
+        {
+          beforeResponse: () =>
+            new Promise<void>((r) => {
+              finish = r;
+            }),
+        },
+        inflight,
+      );
+      const result = options.beforeResponse!(ctx);
+      expect(inflight.count).toBe(1);
+      finish();
+      await result;
+      await settle();
+      expect(inflight.count).toBe(0);
+    });
+
+    it("a refused hook settles its tracker entry without a rejection warning", async () => {
+      const inflight = createInflightTracker();
+      const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const { options } = trackPendingHooks(
+          { beforeResponse: () => Promise.reject(new PushScanRefusedError("busy")) },
+          inflight,
+        );
+        await expect(options.beforeResponse!(ctx)).rejects.toBeInstanceOf(PushScanRefusedError);
+        await settle();
+        expect(inflight.count).toBe(0);
+        expect(warnSpy).not.toHaveBeenCalled();
+      } finally {
+        warnSpy.mockRestore();
+      }
+    });
+
+    it("leaves the admission gate to the hook: a press is still admitted under the wrapper", async () => {
+      const inflight = createInflightTracker();
+      const admission = createScanAdmission(inflight);
+      const { options } = trackPendingHooks(
+        buildPushScanServerOptions(makeConfig({ printerIp: "203.0.113.20" }), undefined, admission),
+        inflight,
+      );
+      const info: PushScanInfo = { ...FF680W_JOB_NUMBER_INFO, productName: "PID 11D1" };
+      await expect(
+        options.beforeResponse!({ ...ctx, kind: "pushScan", info }),
+      ).resolves.toBeUndefined();
+      expect(admission.isBusy()).toBe(true); // reserved for this trigger
+    });
+  });
 });
 
 describe("buildPushScanServerOptions", () => {
@@ -359,6 +416,45 @@ describe("buildPushScanServerOptions", () => {
       expect(typeof handed.release).toBe("function");
       handed.release!();
       expect(admission.isBusy()).toBe(false);
+    });
+
+    // A JobList reserves nothing, but its follow-up PushScan is ~0.7 s away on
+    // a fresh connection (pcap-measured). The daemon's drain has to wait for
+    // it, so a successful JOBW starts a bounded hand-off in the tracker that
+    // leaves the gate idle for that follow-up (issue #207 review).
+    it("starts a hand-off for the follow-up PushScan once the JobList's JOBW succeeds", async () => {
+      const inflight = createInflightTracker();
+      const admission = createScanAdmission(inflight);
+      const options = buildPushScanServerOptions(makeConfig(), undefined, admission);
+      await options.beforeResponse?.(hookArgs("jobList", FF680W_JOB_NUMBER_INFO));
+      expect(runJobListCommitMock).toHaveBeenCalledTimes(1);
+      expect(inflight.count).toBe(1);
+      expect(admission.isBusy()).toBe(false);
+      admission.reserve(); // the follow-up PushScan is admitted and takes over
+      await new Promise((r) => setImmediate(r));
+      expect(inflight.count).toBe(1);
+      expect(admission.isBusy()).toBe(true);
+    });
+
+    it("starts no hand-off when JOBW fails", async () => {
+      const inflight = createInflightTracker();
+      const admission = createScanAdmission(inflight);
+      runJobListCommitMock.mockRejectedValue(new Error("JOBW timeout"));
+      const options = buildPushScanServerOptions(makeConfig(), undefined, admission);
+      await expect(
+        options.beforeResponse?.(hookArgs("jobList", FF680W_JOB_NUMBER_INFO)),
+      ).rejects.toThrow("JOBW timeout");
+      expect(inflight.count).toBe(0);
+    });
+
+    it("starts no hand-off for a JobList from a product without job-control", async () => {
+      const inflight = createInflightTracker();
+      const admission = createScanAdmission(inflight);
+      const options = buildPushScanServerOptions(makeConfig(), undefined, admission);
+      await options.beforeResponse?.(
+        hookArgs("jobList", { ...FF680W_JOB_NUMBER_INFO, productName: "PID 11D1" }),
+      );
+      expect(inflight.count).toBe(0);
     });
   });
 
