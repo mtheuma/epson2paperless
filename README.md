@@ -1,3 +1,5 @@
+![epson2paperless: an Epson printer scanning a page, which arrives as a JPG or PDF in a Paperless-ngx document list](docs/images/hero.webp)
+
 # epson2paperless
 
 **Send scans from compatible Epson printers straight to a folder on your computer. No Epson app in the middle.**
