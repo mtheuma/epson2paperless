@@ -8,6 +8,7 @@ services:
     restart: unless-stopped
     network_mode: host
     init: true
+    stop_grace_period: 150s # must exceed SHUTDOWN_TIMEOUT_MS (default 120 s) or Docker SIGKILLs mid-scan
     environment:
       PRINTER_IP: 192.0.2.58
       # PRINTER_HOSTNAME: printer.example.lan  # mutually exclusive with PRINTER_IP
@@ -17,7 +18,7 @@ services:
       # OUTPUT_DIR: /output       # image default; override only if you change the volume target path below
       # PREVIEW_ACTION: reject    # default; override to jpg|pdf to rewrite panel's "Preview on Computer"
       # TEMP_DIR: /tmp            # default; override if /tmp is tmpfs-constrained
-      # SHUTDOWN_TIMEOUT_MS: 30000
+      # SHUTDOWN_TIMEOUT_MS: 120000   # default; raise for long ADF stacks (~15 s/page) and raise stop_grace_period to match
       # ESCI2_TIMEOUT_MS: 60000   # default; raise if a slow Wi-Fi printer times out warming up (ESC/I-2 only)
       # SCAN_TRIGGER_TOKEN: change-me   # enables POST /scan on HEALTH_PORT for Home Assistant etc.; see README § Webhook trigger
       #
