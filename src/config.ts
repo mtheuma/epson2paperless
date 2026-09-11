@@ -141,6 +141,11 @@ export const configSchema = z
     netscanVersion: z.enum(["auto", "2.0", "3.0"]).default("auto"),
     tempDir: z.string().default(""),
     shutdownTimeoutMs: z.coerce.number().int().min(100).default(30000),
+    // Rolling per-state no-response timeout for the ESC/I-2 scan session.
+    // Wi-Fi printers can spend a long time warming up before the first image
+    // bytes arrive (issue #213), so this is a knob rather than a constant.
+    // The 60 s default matches the legacy ESC/I graph.
+    esci2TimeoutMs: z.coerce.number().int().min(1000).default(60000),
     paperlessUrl: z.string().url("PAPERLESS_URL must be a valid URL").optional(),
     paperlessToken: z.string().optional(),
     paperlessDeleteAfterUpload: z.boolean().default(true),
@@ -282,6 +287,7 @@ export function loadConfig(): Config {
     scanColorMode: process.env.SCAN_COLOR_MODE || undefined,
     tempDir: process.env.TEMP_DIR || undefined,
     shutdownTimeoutMs: process.env.SHUTDOWN_TIMEOUT_MS || undefined,
+    esci2TimeoutMs: process.env.ESCI2_TIMEOUT_MS || undefined,
     paperlessUrl: process.env.PAPERLESS_URL || undefined,
     paperlessToken,
     // undefined → Zod default (true) applies. Explicit "true" / "false" override it.

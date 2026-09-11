@@ -48,6 +48,11 @@ export interface ScanSession {
    * in colour and converts colourless pages to greyscale in post-processing.
    */
   colorMode?: "color" | "grayscale" | "auto";
+  /**
+   * ESCI2_TIMEOUT_MS — rolling per-state no-response timeout. Undefined falls
+   * back to the graph's own default (`ESCI2_TIMEOUT_MS` in graph.ts).
+   */
+  timeoutMs?: number;
   paperless?: PaperlessUploadOptions;
   printerCertFingerprint?: string;
 }
@@ -226,6 +231,7 @@ export async function runEsci2Scan(
     tempDir: session.tempDir,
     sessionTs: resolveSessionTimestamp(new Date(), session.outputDir),
     action: session.action,
+    timeoutMs: session.timeoutMs,
     postProcess: session.postProcess ?? "none",
     jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
     whitePoint: session.whitePoint,
@@ -256,6 +262,7 @@ export async function runEsci2ScanOverPlain(
     tempDir: session.tempDir,
     sessionTs: resolveSessionTimestamp(new Date(), session.outputDir),
     action: session.action,
+    timeoutMs: session.timeoutMs,
     postProcess: session.postProcess ?? "none",
     jpegQuality: session.jpegQuality ?? DEFAULT_JPEG_QUALITY,
     whitePoint: session.whitePoint,

@@ -218,6 +218,57 @@ describe("runScanSession (engine pump)", () => {
     if (!result.ok) expect(result.reason.message).toMatch(/Timeout in state WAITING/);
   });
 
+  it("uses an explicit timeoutMs instead of the graph's own", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("WAITING", 500);
+    g.state("WAITING", { on: { 0xa000: { next: "DONE" } } });
+
+    const result = await runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      timeoutMs: 30,
+      allowZeroPages: true,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason.message).toMatch(/no response in 30ms/);
+  });
+
+  it("does not fire the graph's shorter timeout when a longer timeoutMs is given", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("WAITING", 20);
+    g.state("WAITING", { on: { 0xa000: { next: "DONE" } } });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      timeoutMs: 1000,
+      allowZeroPages: true,
+    });
+
+    const marker = Symbol("still running");
+    const raced = await Promise.race([
+      promise,
+      new Promise<symbol>((r) => setTimeout(() => r(marker), 150)),
+    ]);
+    expect(raced).toBe(marker);
+
+    // Let the session settle so the test leaves no live timer behind.
+    transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0)));
+    const result = await promise;
+    expect(result.ok).toBe(true);
+  });
+
   it("clears the rolling timeout when the expected packet arrives", async () => {
     const transport = new FakeTransport();
     const g = createGraph<Record<string, never>>("WAITING", 50);

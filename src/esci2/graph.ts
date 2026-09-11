@@ -112,7 +112,14 @@ export interface Esci2Ctx {
   downsampleToDpi: number | undefined;
 }
 
-export const ESCI2_TIMEOUT_MS = 30_000;
+/**
+ * Default rolling per-state no-response timeout, and the fallback when no
+ * per-session `timeoutMs` is threaded in. 60 s (not the original 30 s) because
+ * Wi-Fi printers can take longer than that to warm up before the first IMG
+ * bytes arrive (issue #213); it also matches the legacy ESC/I graph.
+ * `ESCI2_TIMEOUT_MS` overrides it per session.
+ */
+export const ESCI2_TIMEOUT_MS = 60_000;
 export const ESCI2_REPLY_SIZE = 64;
 
 const LEGACY_REPLY_SIZE = 1;

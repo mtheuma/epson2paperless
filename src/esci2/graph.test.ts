@@ -10,7 +10,7 @@ describe("esci2Graph (smoke)", () => {
   it("builds with the expected initial state and timeout", () => {
     expect(esci2Graph.initial).toBe("WELCOME");
     expect(esci2Graph.timeoutMs).toBe(ESCI2_TIMEOUT_MS);
-    expect(esci2Graph.timeoutMs).toBe(30_000);
+    expect(esci2Graph.timeoutMs).toBe(60_000);
   });
 
   it("has a WELCOME state defined", () => {

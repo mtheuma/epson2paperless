@@ -29,6 +29,7 @@ describe("loadConfig", () => {
     delete process.env.SCAN_COLOR_MODE;
     delete process.env.TEMP_DIR;
     delete process.env.SHUTDOWN_TIMEOUT_MS;
+    delete process.env.ESCI2_TIMEOUT_MS;
     delete process.env.PAPERLESS_URL;
     delete process.env.PAPERLESS_TOKEN;
     delete process.env.PAPERLESS_TOKEN_FILE;
@@ -399,6 +400,27 @@ describe("loadConfig", () => {
     process.env.PRINTER_IP = "192.0.2.58";
     process.env.SHUTDOWN_TIMEOUT_MS = "not-a-number";
     expect(() => loadConfig()).toThrow();
+  });
+
+  it("defaults esci2TimeoutMs to 60000", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    const config = loadConfig();
+    expect(config.esci2TimeoutMs).toBe(60000);
+  });
+
+  it("accepts ESCI2_TIMEOUT_MS override", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    process.env.ESCI2_TIMEOUT_MS = "120000";
+    const config = loadConfig();
+    expect(config.esci2TimeoutMs).toBe(120000);
+  });
+
+  it("rejects invalid ESCI2_TIMEOUT_MS", () => {
+    process.env.PRINTER_IP = "192.0.2.58";
+    for (const bad of ["not-a-number", "999", "1000.5"]) {
+      process.env.ESCI2_TIMEOUT_MS = bad;
+      expect(() => loadConfig()).toThrow();
+    }
   });
 
   it("defaults JPEG_QUALITY to DEFAULT_JPEG_QUALITY", () => {
