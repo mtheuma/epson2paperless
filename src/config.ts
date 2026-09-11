@@ -140,7 +140,7 @@ export const configSchema = z
     // burst to an ephemeral source port (see keepalive.ts).
     netscanVersion: z.enum(["auto", "2.0", "3.0"]).default("auto"),
     tempDir: z.string().default(""),
-    shutdownTimeoutMs: z.coerce.number().int().min(100).default(30000),
+    shutdownTimeoutMs: z.coerce.number().int().min(100).default(120000),
     // Rolling per-state no-response timeout for the ESC/I-2 scan session.
     // Wi-Fi printers can spend a long time warming up before the first image
     // bytes arrive (issue #213), so this is a knob rather than a constant.

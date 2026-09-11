@@ -65,6 +65,7 @@ Notes:
 - Several destinations on the panel (e.g. a greyscale-PDF preset and a colour-JPG preset): one container per entry, each with its own MAC on a `macvlan` network. Compose example and caveats in [MULTIPLE-DESTINATIONS.md](docs/MULTIPLE-DESTINATIONS.md).
 - Container runs as UID 1000 (`node`). If your mount has a different owner, `chown` it to match.
 - Docker Desktop on macOS / Windows has caveats around host networking; the primary deployment target is a Linux server.
+- The shipped `compose.yaml` sets `stop_grace_period: 150s`, so `docker compose stop`/`restart` gives an in-flight scan time to finish under `SHUTDOWN_TIMEOUT_MS` instead of Docker SIGKILLing it at its 10s default.
 
 ### Run from source
 
@@ -206,16 +207,16 @@ Each setting's **Scope** column shows which printers it affects: `All`, `Panel` 
 <details>
 <summary>Advanced (leave as default unless you know why)</summary>
 
-| Variable                   | Scope        | Default | What it does                                                                                                                                                                                                           |
-| -------------------------- | ------------ | ------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SCAN_DEST_ID`             | All          | `0x02`  | Keepalive "Scan to Computer" selector. `0x02` is the only working value; others stop the destination appearing. For multiple instances, vary `SCAN_DEST_NAME` instead.                                                 |
-| `LANGUAGE`                 | All          | `en`    | 2-letter locale sent to the printer; no observed user-visible effect.                                                                                                                                                  |
-| `ESCI_FORCE_SOURCE`        | Legacy ESC/I | —       | Diagnostic override when FS F source autodetection misfires. Set to `flatbed`, `adf-simplex`, or `adf-duplex` to bypass the wire-byte detection.                                                                       |
-| `PRINTER_CERT_FINGERPRINT` | ESC/I-2 TLS  | —       | SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`); scans abort on mismatch. **Requires `PRINTER_PROTOCOL=esci2`** — `auto` can't pin reliably and the non-TLS variants have no cert.                      |
-| `DIAGNOSE_PROTOCOL`        | Legacy ESC/I | `false` | Compatibility-report aid. On a legacy `ESC @` non-ACK, sends one extra `FS Y` probe and aborts with annotated `[diagnose]` log lines. Leave off in normal use.                                                         |
-| `NETSCAN_VERSION`          | All          | `auto`  | Compatibility-triage aid. Forces the discovery keepalive wire format (`2.0` / `3.0`); `auto` picks it from the scanner's announced PID (`3.0` for the FF-680W and DS-575W, else `2.0`). Leave on `auto` in normal use. |
-| `SHUTDOWN_TIMEOUT_MS`      | All          | `30000` | ms to wait for an in-flight scan, or a panel press still being answered, to finish on `SIGINT`/`SIGTERM` before forcing shutdown.                                                                                      |
-| `ESCI2_TIMEOUT_MS`         | ESC/I-2      | `60000` | ms to wait for each printer reply during an ESC/I-2 scan before aborting. Raise it if a slow Wi-Fi printer times out while warming up.                                                                                 |
+| Variable                   | Scope        | Default  | What it does                                                                                                                                                                                                           |
+| -------------------------- | ------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `SCAN_DEST_ID`             | All          | `0x02`   | Keepalive "Scan to Computer" selector. `0x02` is the only working value; others stop the destination appearing. For multiple instances, vary `SCAN_DEST_NAME` instead.                                                 |
+| `LANGUAGE`                 | All          | `en`     | 2-letter locale sent to the printer; no observed user-visible effect.                                                                                                                                                  |
+| `ESCI_FORCE_SOURCE`        | Legacy ESC/I | —        | Diagnostic override when FS F source autodetection misfires. Set to `flatbed`, `adf-simplex`, or `adf-duplex` to bypass the wire-byte detection.                                                                       |
+| `PRINTER_CERT_FINGERPRINT` | ESC/I-2 TLS  | —        | SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`); scans abort on mismatch. **Requires `PRINTER_PROTOCOL=esci2`** — `auto` can't pin reliably and the non-TLS variants have no cert.                      |
+| `DIAGNOSE_PROTOCOL`        | Legacy ESC/I | `false`  | Compatibility-report aid. On a legacy `ESC @` non-ACK, sends one extra `FS Y` probe and aborts with annotated `[diagnose]` log lines. Leave off in normal use.                                                         |
+| `NETSCAN_VERSION`          | All          | `auto`   | Compatibility-triage aid. Forces the discovery keepalive wire format (`2.0` / `3.0`); `auto` picks it from the scanner's announced PID (`3.0` for the FF-680W and DS-575W, else `2.0`). Leave on `auto` in normal use. |
+| `SHUTDOWN_TIMEOUT_MS`      | All          | `120000` | ms to wait for an in-flight scan, or a panel press still being answered, to finish on `SIGINT`/`SIGTERM` before forcing shutdown. Must cover a full multi-page ADF scan; Docker's `stop_grace_period` must exceed it.  |
+| `ESCI2_TIMEOUT_MS`         | ESC/I-2      | `60000`  | ms to wait for each printer reply during an ESC/I-2 scan before aborting. Raise it if a slow Wi-Fi printer times out while warming up.                                                                                 |
 
 </details>
 

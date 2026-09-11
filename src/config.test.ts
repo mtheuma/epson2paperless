@@ -383,10 +383,10 @@ describe("loadConfig", () => {
     expect(config.tempDir).toBe("/var/tmp/epson");
   });
 
-  it("defaults shutdownTimeoutMs to 30000", () => {
+  it("defaults shutdownTimeoutMs to 120000", () => {
     process.env.PRINTER_IP = "192.0.2.58";
     const config = loadConfig();
-    expect(config.shutdownTimeoutMs).toBe(30000);
+    expect(config.shutdownTimeoutMs).toBe(120000);
   });
 
   it("accepts SHUTDOWN_TIMEOUT_MS override", () => {
