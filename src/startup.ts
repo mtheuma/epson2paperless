@@ -483,6 +483,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
       whitePoint: args.config.printerWhitePoint,
       resolution: args.config.scanResolution,
       colorMode: args.config.scanColorMode,
+      timeoutMs: args.config.esci2TimeoutMs,
       paperless: args.paperless,
       printerCertFingerprint: args.config.printerCertFingerprint,
     });
@@ -506,6 +507,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
       whitePoint: args.config.printerWhitePoint,
       resolution: args.config.scanResolution,
       colorMode: args.config.scanColorMode,
+      timeoutMs: args.config.esci2TimeoutMs,
       paperless: args.paperless,
     });
   }

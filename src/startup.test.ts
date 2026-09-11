@@ -544,6 +544,7 @@ describe("dispatchScanSession", () => {
       jpegQuality: 90,
       resolution: 200,
       colorMode: "color",
+      timeoutMs: 60000,
       paperless: PAPERLESS_OPTS,
       printerCertFingerprint: fp,
     });
@@ -570,6 +571,28 @@ describe("dispatchScanSession", () => {
     expect(call.action).toBe("jpg");
     expect(call.resolution).toBe(200);
     expect(call.colorMode).toBe("color");
+  });
+
+  it("forwards ESCI2_TIMEOUT_MS to both ESC/I-2 scanners", async () => {
+    detectVariantMock.mockResolvedValue("esci2");
+    await dispatchScanSession({
+      config: makeConfig({ printerProtocol: "esci2", esci2TimeoutMs: 90000 }),
+      duplex: false,
+      action: "jpg",
+      paperless: undefined,
+      productName: null,
+    });
+    expect(runEsci2ScanMock.mock.calls[0][0].timeoutMs).toBe(90000);
+
+    detectVariantMock.mockResolvedValue("esci2-plain");
+    await dispatchScanSession({
+      config: makeConfig({ printerProtocol: "esci2-plain", esci2TimeoutMs: 90000 }),
+      duplex: false,
+      action: "jpg",
+      paperless: undefined,
+      productName: null,
+    });
+    expect(runEsci2ScanOverPlainMock.mock.calls[0][0].timeoutMs).toBe(90000);
   });
 
   it("forwards SCAN_COLOR_MODE=grayscale to both ESC/I-2 scanners", async () => {

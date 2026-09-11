@@ -327,6 +327,13 @@ export interface RunScanSessionOpts<Ctx> {
   tempDir: string;
   sessionTs: Date;
   action: "jpg" | "pdf";
+  /**
+   * Per-run override for the rolling no-response timeout. Omitted means the
+   * graph's own `timeoutMs`. Exists because the graph is a module-level
+   * singleton built at import time, so a config-driven value (ESC/I-2's
+   * `ESCI2_TIMEOUT_MS`) can only reach the engine per session (issue #213).
+   */
+  timeoutMs?: number;
   postProcess?: PostProcessProfile;
   jpegQuality?: number;
   /** PRINTER_WHITE_POINT — device cast reference for the auto-colour verdict. */
@@ -398,6 +405,9 @@ export async function runScanSession<Ctx>(
   opts: RunScanSessionOpts<Ctx>,
 ): Promise<RunScanSessionResult<Ctx>> {
   const { graph, initialCtx, transportFactory } = opts;
+  // One resolution point for the rolling timeout: an explicit per-run value
+  // wins, otherwise the graph's own default.
+  const timeoutMs = opts.timeoutMs ?? graph.timeoutMs;
   const ctx = { ...initialCtx }; // engine owns mutability
 
   // Factory failures (TLS handshake, cert-fingerprint mismatch, plain TCP
@@ -460,10 +470,10 @@ export async function runScanSession<Ctx>(
       if (timeoutTimer) clearTimeout(timeoutTimer);
       timeoutTimer = setTimeout(() => {
         const reason = new Error(
-          `Timeout in state ${currentState} — no response in ${graph.timeoutMs}ms`,
+          `Timeout in state ${currentState} — no response in ${timeoutMs}ms`,
         );
         settle({ ok: false, reason, finalCtx: ctx });
-      }, graph.timeoutMs);
+      }, timeoutMs);
     }
 
     function clearTimeoutTimer(): void {
