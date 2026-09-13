@@ -82,7 +82,7 @@ When the service is up you'll see:
 [INFO] [main] epson2paperless ready — waiting for scan from printer panel
 ```
 
-Within about 60 seconds, your destination (default `Paperless`) appears in the printer's **Scan to Computer** list. If it doesn't, see [Troubleshooting](#troubleshooting).
+Open **Scan** > **Computer** on the printer panel. The printer announces itself when that menu opens, and your destination (default `Paperless`) appears in the list. If it doesn't, see [Troubleshooting](#troubleshooting).
 
 **Windows:** copy `command.bat.example` to `command.bat` (gitignored, so your local `PRINTER_IP` / paths stay private), edit the values, then double-click. The script tees output to `scan.log`.
 
@@ -259,7 +259,7 @@ Multi-page ADF scans in JPG mode upload one document per page. Pick **PDF** on t
 ## Troubleshooting
 
 **Destination doesn't appear on the printer panel.**
-The printer broadcasts a discovery beacon roughly once a minute; wait at least 60 seconds. If it still doesn't appear:
+The printer only announces itself when the panel's Scan > Computer menu is opened (or at power-on / a manual refresh), not on a timer. Back out of the menu and reopen it, and check the log for a `Printer announcement received` line. If it still doesn't appear:
 
 - Confirm the PC is on the same subnet as the printer. Try `ping <printer-ip>`.
 - Check your firewall. UDP port `2968` needs to be allowed for multicast traffic from the printer.

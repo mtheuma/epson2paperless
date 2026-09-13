@@ -423,7 +423,7 @@ describe("createKeepaliveResponder", () => {
     warnSpy.mockRestore();
   });
 
-  it("drops the dedup entry on a local-route failure so the next cycle retries", async () => {
+  it("drops the dedup entry on a local-route failure so the next announcement retries", async () => {
     let calls = 0;
     const h = await setupHarness({
       burstCount: 1,

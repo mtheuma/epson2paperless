@@ -16,7 +16,7 @@ Each channel is independent enough to be developed and tested separately. Inside
 
 ### Discovery and keepalive (UDP multicast)
 
-The printer periodically broadcasts an `02 06` announcement packet to the multicast address `239.255.255.253:2968` — roughly once every 60 seconds, and also immediately after the printer wakes from sleep. The announcement carries service identification (typically ~80 bytes total: `02 06` magic + 12-byte header + service descriptor + capability list). Byte 11 of the header is a sequence counter that increments with each broadcast cycle.
+The printer broadcasts an `02 06` announcement packet to the multicast address `239.255.255.253:2968` only when triggered, not on a timer: at power-on, when the panel's manual refresh-destinations action is used, and every time Scan > Computer is opened on the panel. The panel's destination list is built from whoever answers the latest announcement; there is no standing registration. (Measured on an ET-4956 with v0.11.1 at `LOG_LEVEL=debug`: 11.5 minutes awake and idle on the home screen produced nothing. An earlier capture that showed a 60 s cadence coincided with Scan being pressed on the panel every minute.) The announcement carries service identification (typically ~80 bytes total: `02 06` magic + 12-byte header + service descriptor + capability list). Byte 11 of the header is a sequence counter that increments with each announcement.
 
 A client registers itself as a scan destination by:
 
@@ -26,7 +26,7 @@ A client registers itself as a scan destination by:
 
 The printer only accepts keepalives during the ~60-second window after broadcasting an announcement. Outside that window it responds with ICMP Port Unreachable. A client that sends unsolicited keepalives — or keepalives with the wrong sequence number — is silently ignored and will not appear in the printer's destination list.
 
-Implemented in `src/keepalive.ts`. `parsePrinterAnnouncement` extracts the sequence byte from incoming `02 06` packets; `buildKeepalivePacket` assembles the `02 07` response; `createKeepaliveResponder` manages the socket lifecycle, multicast membership, and the per-announcement burst with deduplication (the printer broadcasts each beacon three times per cycle with the same sequence number, so the responder suppresses duplicate-sequence firings within a 30-second window to avoid sending nine keepalives per cycle instead of three).
+Implemented in `src/keepalive.ts`. `parsePrinterAnnouncement` extracts the sequence byte from incoming `02 06` packets; `buildKeepalivePacket` assembles the `02 07` response; `createKeepaliveResponder` manages the socket lifecycle, multicast membership, and the per-announcement burst with deduplication (the printer broadcasts each beacon three times per announcement with the same sequence number, so the responder suppresses duplicate-sequence firings within a 30-second window to avoid sending nine keepalives per announcement instead of three).
 
 The discovery protocol was fully decoded from Wireshark captures. The critical insight was that byte 11 is a _sequence echo_, not a static "number of key-value pairs" field as the packet structure might suggest — this was confirmed by observing multiple consecutive beacon cycles with different sequence values but the same number of key-value pairs in the keepalive payload. An earlier implementation that hardcoded a fixed byte-11 value of `0x03` was silently ignored by the printer; the service never appeared in its destination list until the sequence-echo behavior was identified and fixed.
 
