@@ -117,11 +117,11 @@ export interface KeepaliveResponderOptions {
   burstIntervalMs: number;
   /**
    * Window during which repeated announcements of the same seq are ignored.
-   * The printer broadcasts each `02 06` beacon 3× per cycle; without this,
-   * we'd emit 3 bursts × 3 packets = 9 unicasts per cycle. Dedupping by
-   * seq collapses that to 1 burst per distinct seq. Default 30_000 ms —
-   * long enough to span a cycle's 3 beacons, short enough that seq
-   * wrap-around across cycles still fires a new burst.
+   * The printer broadcasts each `02 06` beacon 3× per announcement; without
+   * this, we'd emit 3 bursts × 3 packets = 9 unicasts per announcement.
+   * Dedupping by seq collapses that to 1 burst per distinct seq. Default
+   * 30_000 ms — long enough to span an announcement's 3 beacons, short
+   * enough that seq wrap-around across announcements still fires a new burst.
    */
   dedupWindowMs?: number;
 }
@@ -225,8 +225,8 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
               );
               return;
             }
-            // Mark this seq as recently handled; auto-expire so a later cycle
-            // that reuses the same seq (byte wraps at 256) still fires.
+            // Mark this seq as recently handled; auto-expire so a later
+            // announcement that reuses the same seq (byte wraps at 256) still fires.
             const expiry = setTimeout(() => {
               seenSeqs.delete(dedupKey);
             }, dedupWindowMs);
@@ -256,14 +256,15 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
               } catch (err) {
                 // No route to the printer (EHOSTUNREACH / ENETUNREACH), most
                 // likely mid-renumber. Drop the dedup entry so the next
-                // announcement cycle (~60s) retries instead of skipping this
-                // seq as a duplicate; the two near-simultaneous duplicates in
-                // this same cycle have already been skipped by now.
+                // announcement (sent when the user next opens the panel's scan
+                // menu — there is no timer) retries instead of skipping this
+                // seq as a duplicate; the two near-simultaneous duplicates of
+                // this same announcement have already been skipped by now.
                 const timer = seenSeqs.get(dedupKey);
                 if (timer) clearTimeout(timer);
                 seenSeqs.delete(dedupKey);
                 log.warn(
-                  `No local route to ${source} for keepalive (seq=${seqHex}) — skipping burst, will retry next cycle`,
+                  `No local route to ${source} for keepalive (seq=${seqHex}) — skipping burst, will retry on the next announcement`,
                   err,
                 );
                 return null;
@@ -300,7 +301,7 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
                   }
                 });
                 // Remove self from pendingTimers so the array doesn't grow
-                // unboundedly across beacon cycles.
+                // unboundedly across announcements.
                 const idx = pendingTimers.indexOf(timer);
                 if (idx !== -1) pendingTimers.splice(idx, 1);
               }, i * opts.burstIntervalMs);

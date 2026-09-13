@@ -27,7 +27,7 @@ This document is the front door: it explains how the pieces fit together. The by
 
 ## Discovery and keepalive
 
-Epson printers periodically announce themselves over UDP multicast at `239.255.255.253:2968`. The service joins that multicast group, listens for `02 06` announcement packets, and responds with a short burst of `02 07` keepalive packets sent directly back to the printer.
+Epson printers announce themselves over UDP multicast at `239.255.255.253:2968` whenever the panel needs a destination list — at power-on, on a manual refresh, and each time Scan > Computer is opened — not on a timer. The service joins that multicast group, listens for `02 06` announcement packets, and responds with a short burst of `02 07` keepalive packets sent directly back to the printer.
 
 The important detail is that the keepalive must echo the announcement sequence byte. If the service sends the wrong sequence value, or sends keepalives outside the printer's announcement window, the printer ignores it and the destination never appears on the panel.
 
