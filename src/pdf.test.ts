@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import sharp from "sharp";
 import { PDFDocument } from "pdf-lib";
 import { composePdfFromJpegs } from "./pdf.js";
 
@@ -72,12 +73,49 @@ describe("composePdfFromJpegs", () => {
     expect(doc.getPage(2).getRotation().angle).toBe(180);
   });
 
-  it("sizes each page to the embedded JPEG's native dimensions", async () => {
+  it("sizes page to A4 points for a 300-DPI sample JPEG", async () => {
     writePage(1);
     const buf = await composePdfFromJpegs(tempDir, { backPages: [] });
     const doc = await PDFDocument.load(buf);
     const { width, height } = doc.getPage(0).getSize();
-    expect(width).toBeGreaterThan(100);
-    expect(height).toBeGreaterThan(100);
+    // sample-page.jpg is 2481 × 3506 px at 300 DPI → 595.44 × 841.44 pt
+    expect(width).toBeCloseTo(595.44, 1);
+    expect(height).toBeCloseTo(841.44, 1);
+  });
+
+  it("converts a 300-DPI fixture to correct point dimensions", async () => {
+    // Generate a 600 × 300 px JPEG at 300 DPI programmatically.
+    const fixture = await sharp({
+      create: { width: 600, height: 300, channels: 3, background: "#808080" },
+    })
+      .jpeg({ quality: 80 })
+      .withMetadata({ density: 300 })
+      .toBuffer();
+
+    writePage(1, fixture);
+    const buf = await composePdfFromJpegs(tempDir, { backPages: [] });
+    const doc = await PDFDocument.load(buf);
+    const { width, height } = doc.getPage(0).getSize();
+    // 600 × 72 / 300 = 144 pt,  300 × 72 / 300 = 72 pt
+    expect(width).toBeCloseTo(144, 1);
+    expect(height).toBeCloseTo(72, 1);
+  });
+
+  it("falls back to pixel-as-point when JPEG has no density metadata", async () => {
+    // Generate a 200 × 100 px JPEG without density metadata.
+    const fixture = await sharp({
+      create: { width: 200, height: 100, channels: 3, background: "#c0c0c0" },
+    })
+      .jpeg({ quality: 80 })
+      .withMetadata({})
+      .toBuffer();
+
+    writePage(1, fixture);
+    const buf = await composePdfFromJpegs(tempDir, { backPages: [] });
+    const doc = await PDFDocument.load(buf);
+    const { width, height } = doc.getPage(0).getSize();
+    // No density → 72-DPI fallback → pixel = point
+    expect(width).toBeCloseTo(200, 1);
+    expect(height).toBeCloseTo(100, 1);
   });
 });
