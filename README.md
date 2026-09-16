@@ -122,16 +122,20 @@ install without Docker access or an ESP32 on the LAN, the running daemon can acc
 same host-triggered scan over HTTP. Set `SCAN_TRIGGER_TOKEN` to a long random secret and
 the daemon opens `POST /scan` on `HEALTH_PORT` (default `3000`). Without the token the path
 is a plain 404. Every request must carry the token as a bearer
-header; `format` (`jpg`/`pdf`) and `sides` (`simplex`/`duplex`) are optional query
-parameters that default to `SCAN_FORMAT` / `SCAN_SIDES`, exactly like `scan:now`:
+header. All query parameters are optional: `format` (`jpg`/`pdf`) and `sides`
+(`simplex`/`duplex`) default to `SCAN_FORMAT` / `SCAN_SIDES`, exactly like `scan:now`, and
+`postProcess` (`none`/`document`) and `colorMode` (`color`/`grayscale`/`auto`) override
+`POST_PROCESS` / `SCAN_COLOR_MODE` for that scan only:
 
     curl -X POST -H "Authorization: Bearer $SCAN_TRIGGER_TOKEN" \
-      "http://<host>:3000/scan?format=pdf&sides=simplex"
+      "http://<host>:3000/scan?format=pdf&sides=simplex&postProcess=none"
 
 Responses: `202` accepted (the scan starts after the response; watch the logs for the
 result), `401` bad or missing token, `400` bad parameter, `409` a scan is already running,
-`405` anything other than POST. `/health` keeps reporting `lastScan`, which is the time the
-last scan was _triggered_ (panel or webhook), not whether it succeeded.
+`405` anything other than POST. Parameter names are case-sensitive and unknown ones are
+ignored, so check the `202` body: it lists the settings the scan will use. `/health` keeps
+reporting `lastScan`, which is the time the last scan was _triggered_ (panel or webhook),
+not whether it succeeded.
 
 One scan at a time is enforced both ways: the webhook answers `409` while a panel scan runs
 (or a panel press is still being answered), and the printer panel shows an error if Scan is

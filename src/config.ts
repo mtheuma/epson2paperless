@@ -18,6 +18,12 @@ export const MAX_DEVICE_CAST = 48;
 // with no colour content are saved as greyscale, the rest stay colour.
 export const DEFAULT_SCAN_COLOR_MODE = "color" as const;
 
+// Accepted values for POST_PROCESS and SCAN_COLOR_MODE, shared with the
+// POST /scan query parser (scan-trigger.ts) so the env var and the webhook
+// parameter can never disagree about what is valid.
+export const POST_PROCESS_VALUES = ["none", "document"] as const;
+export const SCAN_COLOR_MODE_VALUES = ["color", "grayscale", "auto"] as const;
+
 /** How the finalize-time greyscale pass runs: not at all, per-page chroma verdict, or every page. */
 export type GrayscaleConversion = "off" | "auto" | "force";
 
@@ -106,7 +112,7 @@ export const configSchema = z
     language: z.string().length(2).default("en"),
     jpegQuality: z.coerce.number().int().min(1).max(100).default(DEFAULT_JPEG_QUALITY),
     previewAction: z.enum(["reject", "jpg", "pdf"]).default("reject"),
-    postProcess: z.enum(["none", "document"]).default("none"),
+    postProcess: z.enum(POST_PROCESS_VALUES).default("none"),
     // Panel-less fallbacks — consulted whenever no panel choice reaches us:
     // the FF-680W job-number flow, and every host-triggered scan (scan-now).
     scanFormat: z.enum(["jpg", "pdf"]).default("pdf"),
@@ -123,7 +129,7 @@ export const configSchema = z
       .min(50, "SCAN_RESOLUTION must be 50-1200")
       .max(1200, "SCAN_RESOLUTION must be 50-1200")
       .optional(),
-    scanColorMode: z.enum(["color", "grayscale", "auto"]).default(DEFAULT_SCAN_COLOR_MODE),
+    scanColorMode: z.enum(SCAN_COLOR_MODE_VALUES).default(DEFAULT_SCAN_COLOR_MODE),
     esciForceSource: z.enum(["flatbed", "adf-simplex", "adf-duplex"]).optional(),
     printerProtocol: z.enum(["auto", "esci2", "esci2-plain", "esci"]).default("auto"),
     // Diagnostic-only. When true and the legacy `ESC @` init returns a non-ACK,
