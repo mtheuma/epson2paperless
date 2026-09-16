@@ -5,18 +5,25 @@
 // routing lives in health.ts and the scan dispatch in index.ts, so this file
 // can be unit-tested without a listener.
 import { timingSafeEqual } from "node:crypto";
+import { POST_PROCESS_VALUES, SCAN_COLOR_MODE_VALUES, type Config } from "./config.js";
 
 export type ScanFormat = "jpg" | "pdf";
 export type ScanSides = "simplex" | "duplex";
+export type ScanPostProcess = Config["postProcess"];
+export type ScanColorMode = Config["scanColorMode"];
 
 export interface ScanTriggerRequest {
   format: ScanFormat;
   sides: ScanSides;
+  postProcess: ScanPostProcess;
+  colorMode: ScanColorMode;
 }
 
 export interface ScanTriggerDefaults {
   scanFormat: ScanFormat;
   scanSides: ScanSides;
+  postProcess: ScanPostProcess;
+  scanColorMode: ScanColorMode;
 }
 
 const FORMATS: readonly ScanFormat[] = ["jpg", "pdf"];
@@ -40,10 +47,11 @@ export function authorize(authHeader: string | undefined, token: string): boolea
 }
 
 /**
- * Resolves `format` and `sides` from the query string, falling back to the
- * panel-less defaults (`SCAN_FORMAT` / `SCAN_SIDES`) exactly as `scan:now`
- * does. Unknown keys are ignored; a present-but-invalid value (including the
- * empty string) is an error rather than a silent fallback.
+ * Resolves `format`, `sides`, `postProcess` and `colorMode` from the query
+ * string, falling back to `SCAN_FORMAT` / `SCAN_SIDES` (the panel-less
+ * defaults, exactly as `scan:now` uses them) and `POST_PROCESS` /
+ * `SCAN_COLOR_MODE`. Unknown keys are ignored; a present-but-invalid value
+ * (including the empty string) is an error rather than a silent fallback.
  */
 export function parseScanParams(
   query: URLSearchParams,
@@ -53,7 +61,11 @@ export function parseScanParams(
   if (typeof format === "object") return format;
   const sides = pick(query, "sides", SIDES, defaults.scanSides);
   if (typeof sides === "object") return sides;
-  return { format, sides };
+  const postProcess = pick(query, "postProcess", POST_PROCESS_VALUES, defaults.postProcess);
+  if (typeof postProcess === "object") return postProcess;
+  const colorMode = pick(query, "colorMode", SCAN_COLOR_MODE_VALUES, defaults.scanColorMode);
+  if (typeof colorMode === "object") return colorMode;
+  return { format, sides, postProcess, colorMode };
 }
 
 function pick<T extends string>(

@@ -106,7 +106,12 @@ describe("POST /scan webhook", () => {
     const onScan = vi.fn();
     const scanTrigger = {
       token: TOKEN,
-      defaults: { scanFormat: "pdf" as const, scanSides: "duplex" as const },
+      defaults: {
+        scanFormat: "pdf" as const,
+        scanSides: "duplex" as const,
+        postProcess: "none" as const,
+        scanColorMode: "color" as const,
+      },
       isBusy: () => false,
       onScan,
       ...overrides,
@@ -177,7 +182,12 @@ describe("POST /scan webhook", () => {
     expect(res.headers["content-type"]).toContain("application/json");
     expect(JSON.parse(res.body)).toEqual({ status: "accepted", format: "pdf", sides: "duplex" });
     expect(onScan).toHaveBeenCalledTimes(1);
-    expect(onScan.mock.calls[0][0]).toEqual({ format: "pdf", sides: "duplex" });
+    expect(onScan.mock.calls[0][0]).toEqual({
+      format: "pdf",
+      sides: "duplex",
+      postProcess: "none",
+      colorMode: "color",
+    });
     expect(onScan.mock.calls[0][1]).toBe("127.0.0.1");
   });
 
@@ -188,7 +198,10 @@ describe("POST /scan webhook", () => {
     const res = await request("POST", `${base}/scan?format=jpg&sides=simplex`, AUTH);
     expect(res.status).toBe(202);
     expect(JSON.parse(res.body)).toEqual({ status: "accepted", format: "jpg", sides: "simplex" });
-    expect(onScan).toHaveBeenCalledWith({ format: "jpg", sides: "simplex" }, "127.0.0.1");
+    expect(onScan).toHaveBeenCalledWith(
+      { format: "jpg", sides: "simplex", postProcess: "none", colorMode: "color" },
+      "127.0.0.1",
+    );
   });
 
   it("answers 409 while a scan is in flight and does not dispatch", async () => {
@@ -211,7 +224,10 @@ describe("POST /scan webhook", () => {
       JSON.stringify({ format: "jpg" }),
     );
     expect(res.status).toBe(202);
-    expect(onScan).toHaveBeenCalledWith({ format: "pdf", sides: "duplex" }, "127.0.0.1");
+    expect(onScan).toHaveBeenCalledWith(
+      { format: "pdf", sides: "duplex", postProcess: "none", colorMode: "color" },
+      "127.0.0.1",
+    );
   });
 
   it("returns 404 for unknown paths when the trigger is enabled", async () => {
@@ -266,7 +282,12 @@ describe("malformed request paths", () => {
     const { server: s, base } = await listen({
       scanTrigger: {
         token: "t",
-        defaults: { scanFormat: "pdf", scanSides: "duplex" },
+        defaults: {
+          scanFormat: "pdf",
+          scanSides: "duplex",
+          postProcess: "none",
+          scanColorMode: "color",
+        },
         isBusy: () => false,
         onScan,
       },
@@ -276,7 +297,10 @@ describe("malformed request paths", () => {
       Authorization: "Bearer t",
     });
     expect(res.status).toBe(202);
-    expect(onScan).toHaveBeenCalledWith({ format: "jpg", sides: "duplex" }, "127.0.0.1");
+    expect(onScan).toHaveBeenCalledWith(
+      { format: "jpg", sides: "duplex", postProcess: "none", colorMode: "color" },
+      "127.0.0.1",
+    );
   });
 });
 

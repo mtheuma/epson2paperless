@@ -384,7 +384,12 @@ export function buildScanTriggerOptions(deps: ScanWebhookDeps): ScanTriggerOptio
 
   return {
     token: config.scanTriggerToken,
-    defaults: { scanFormat: config.scanFormat, scanSides: config.scanSides },
+    defaults: {
+      scanFormat: config.scanFormat,
+      scanSides: config.scanSides,
+      postProcess: config.postProcess,
+      scanColorMode: config.scanColorMode,
+    },
     isBusy: () => admission.isBusy(),
     onScan: (request, peerAddress) => {
       log.info(
