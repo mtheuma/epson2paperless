@@ -177,26 +177,10 @@ export async function runEsciScan(
       }
       return undefined;
     },
-    // Lossless density-only stamp for every no-resize case (resolveDownsample
-    // above returns undefined): SCAN_RESOLUTION unset, an exact match, or a
-    // request capped above the delivered DPI. The raw-RGB pixels are encoded
-    // host-side with no JFIF density, so without the stamp every legacy page
-    // reads as 72 DPI — viewers show it at the wrong physical size and
-    // composePdfFromJpegs sizes the PDF page box from that reading, turning
-    // a 300 DPI A4 scan into a 34 × 49 inch page (issue #221 follow-up).
-    // Reuses the same selectWireDpi call as resolveDownsample rather than
-    // sharing state with it; the resolvers never run concurrently, so
-    // recomputing is cheap and keeps each resolver independently readable.
-    // ESC/I-2 has no equivalent resolver — its JPEGs are printer-encoded
-    // passthrough and every captured model stamps its own JFIF density.
-    resolveStampDpi: (ctx: EsciCtx) => {
-      const delivered = ctx.entry.deliveredDpi({ source: ctx.source, format: ctx.format });
-      if (session.resolution === undefined) return delivered;
-      const sel = selectWireDpi(session.resolution, [delivered]);
-      // The value is the DELIVERED DPI, not session.resolution — a capped
-      // 800 DPI request still delivers (and must be stamped) 600.
-      return sel.downsampleToDpi !== undefined ? undefined : delivered;
-    },
+    // No density resolver is needed here: the delivered DPI is stamped into
+    // each page at encode (makeFlushTransition → encodeRawGbrToJpeg), so the
+    // exact-match and capped-above cases already carry it, and a downsample
+    // re-stamps its own target.
   });
 
   // Fire the public onSourceDetected hook only on success paths AND only

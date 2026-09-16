@@ -671,11 +671,14 @@ function makeFlushTransition(ctx: EsciCtx, preSend?: SendSpec<EsciCtx>): Transit
   const { widthPx, heightPx } = ctx.geom;
   const rawRgb = ctx.imageBuffer;
   const quality = ctx.jpegQuality;
+  // The DPI this wire actually delivers, stamped into the page at encode so
+  // every downstream consumer sizes it correctly (see encodeRawGbrToJpeg).
+  const dpi = ctx.entry.deliveredDpi({ source: ctx.source, format: ctx.format });
   ctx.imageBuffer = Buffer.alloc(0);
   ctx.imageBufferOffset = 0;
   const flush: PageFlush = {
     side: isBack ? "back" : "front",
-    encode: () => encodeRawGbrToJpeg(rawRgb, widthPx, heightPx, quality),
+    encode: () => encodeRawGbrToJpeg(rawRgb, widthPx, heightPx, quality, dpi),
   };
   if (ctx.source === "flatbed") {
     const trailing = ctx.entry.teardown.send();

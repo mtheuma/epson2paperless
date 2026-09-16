@@ -373,20 +373,6 @@ export interface RunScanSessionOpts<Ctx> {
    * the requested DPI, or the transport has no such notion.
    */
   resolveDownsample?: (ctx: Ctx) => Downsample | undefined;
-  /**
-   * Resolves the finalize-time lossless JFIF-density-only stamp from the
-   * final context — the legacy ESC/I path's counterpart to
-   * `resolveDownsample`: whenever no resize happens on that wire (default
-   * scan, or a SCAN_RESOLUTION that exactly matches or is capped above the
-   * delivered DPI) the host-encoded JPEG carries no real density and would
-   * read as 72 DPI — wrong physical size in viewers, and a 4x oversized PDF
-   * page box — so the delivered DPI is stamped in. Mutually exclusive with
-   * `resolveDownsample` by construction — a resolver that would return a
-   * downsample never also returns a stamp. Omitted (or returning undefined)
-   * means no stamp; the ESC/I-2 shells never set this — their JPEGs are
-   * printer-encoded passthrough carrying the printer's own JFIF density.
-   */
-  resolveStampDpi?: (ctx: Ctx) => number | undefined;
   paperless?: PaperlessUploadOptions;
   /**
    * Test-only: allow reaching DONE without any flushPage having fired.
@@ -463,7 +449,6 @@ export async function runScanSession<Ctx>(
         toneCurve: opts.resolveToneCurve?.(ctx),
         whitePoint: opts.whitePoint,
         downsample: opts.resolveDownsample?.(ctx),
-        stampDpi: opts.resolveStampDpi?.(ctx),
       });
     }
 
