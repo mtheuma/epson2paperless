@@ -9,6 +9,7 @@ import { runEsciScan, appendImageChunk } from "./scanner.js";
 import { parseIsPacket, buildIsPacket, IS_HEADER_SIZE } from "../protocol.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
 import { loadFixture, driveFixture, concatHostBytes } from "./test-support/replay.js";
+import { readJpegOrientation } from "../exif.js";
 import { WF3620_ENTRY } from "./dialects/wf3620.js";
 import { ET2550_ENTRY } from "./dialects/et2550.js";
 import { XP620_ENTRY } from "./dialects/xp620.js";
@@ -30,6 +31,15 @@ interface FixtureSpec {
   expectedFileCount: number;
   expectedBackPages: number[]; // 1-based page numbers; [] for non-duplex
   expectedPdfPageCount?: number; // set for multi-page or rotation-checked PDFs
+  /**
+   * Physical anchors, deliberately literals rather than reads of the dialect
+   * table (issue #221): the DPI every output JPG must carry, and the page
+   * width in points (pixels × 72 / DPI) every composed PDF page must have.
+   */
+  expectedDpi: number;
+  expectedWidthPt: number;
+  /** Finalize post-process profile — `document` re-encodes every page host-side. */
+  postProcess: "none" | "document";
 }
 
 const FIXTURE_SPECS: FixtureSpec[] = [
@@ -37,6 +47,9 @@ const FIXTURE_SPECS: FixtureSpec[] = [
   {
     path: "wf-3620/adf-single-page-jpeg.jsonl",
     format: "jpg",
+    expectedDpi: 600,
+    expectedWidthPt: 594.72,
+    postProcess: "none",
     duplex: false,
     entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-simplex",
@@ -46,6 +59,9 @@ const FIXTURE_SPECS: FixtureSpec[] = [
   {
     path: "wf-3620/adf-single-page-pdf.jsonl",
     format: "pdf",
+    expectedDpi: 300,
+    expectedWidthPt: 594.72,
+    postProcess: "none",
     duplex: false,
     entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-simplex",
@@ -55,6 +71,9 @@ const FIXTURE_SPECS: FixtureSpec[] = [
   {
     path: "wf-3620/adf-3-page-simplex-jpeg.jsonl",
     format: "jpg",
+    expectedDpi: 600,
+    expectedWidthPt: 594.72,
+    postProcess: "none",
     duplex: false,
     entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-simplex",
@@ -64,6 +83,9 @@ const FIXTURE_SPECS: FixtureSpec[] = [
   {
     path: "wf-3620/adf-3-page-simplex-pdf.jsonl",
     format: "pdf",
+    expectedDpi: 300,
+    expectedWidthPt: 594.72,
+    postProcess: "none",
     duplex: false,
     entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-simplex",
@@ -74,6 +96,9 @@ const FIXTURE_SPECS: FixtureSpec[] = [
   {
     path: "wf-3620/adf-2-page-jpeg.jsonl",
     format: "jpg",
+    expectedDpi: 600,
+    expectedWidthPt: 594.72,
+    postProcess: "none",
     duplex: true,
     entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-duplex",
@@ -83,6 +108,9 @@ const FIXTURE_SPECS: FixtureSpec[] = [
   {
     path: "wf-3620/adf-2-page-pdf.jsonl",
     format: "pdf",
+    expectedDpi: 300,
+    expectedWidthPt: 594.72,
+    postProcess: "none",
     duplex: true,
     entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-duplex",
@@ -93,6 +121,9 @@ const FIXTURE_SPECS: FixtureSpec[] = [
   {
     path: "wf-3620/adf-4-page-duplex-jpeg.jsonl",
     format: "jpg",
+    expectedDpi: 600,
+    expectedWidthPt: 594.72,
+    postProcess: "none",
     duplex: true,
     entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-duplex",
@@ -102,6 +133,9 @@ const FIXTURE_SPECS: FixtureSpec[] = [
   {
     path: "wf-3620/adf-4-page-duplex-pdf.jsonl",
     format: "pdf",
+    expectedDpi: 300,
+    expectedWidthPt: 594.72,
+    postProcess: "none",
     duplex: true,
     entry: WF3620_ENTRY,
     expectedDetectedSource: "adf-duplex",
@@ -112,6 +146,9 @@ const FIXTURE_SPECS: FixtureSpec[] = [
   {
     path: "wf-3620/flatbed-single-page-jpeg.jsonl",
     format: "jpg",
+    expectedDpi: 600,
+    expectedWidthPt: 594.72,
+    postProcess: "none",
     duplex: false,
     entry: WF3620_ENTRY,
     expectedDetectedSource: "flatbed",
@@ -121,6 +158,9 @@ const FIXTURE_SPECS: FixtureSpec[] = [
   {
     path: "wf-3620/flatbed-single-page-pdf.jsonl",
     format: "pdf",
+    expectedDpi: 300,
+    expectedWidthPt: 594.72,
+    postProcess: "none",
     duplex: false,
     entry: WF3620_ENTRY,
     expectedDetectedSource: "flatbed",
@@ -130,6 +170,9 @@ const FIXTURE_SPECS: FixtureSpec[] = [
   {
     path: "xp-620/flatbed.jsonl",
     format: "jpg",
+    expectedDpi: 300,
+    expectedWidthPt: 595.44,
+    postProcess: "none",
     duplex: false,
     entry: XP620_ENTRY,
     expectedDetectedSource: "flatbed",
@@ -140,6 +183,9 @@ const FIXTURE_SPECS: FixtureSpec[] = [
   {
     path: "xp-620/flatbed.jsonl",
     format: "pdf",
+    expectedDpi: 300,
+    expectedWidthPt: 595.44,
+    postProcess: "none",
     duplex: false,
     entry: XP620_ENTRY,
     expectedDetectedSource: "flatbed",
@@ -150,6 +196,9 @@ const FIXTURE_SPECS: FixtureSpec[] = [
   {
     path: "et-2550/flatbed.jsonl",
     format: "jpg",
+    expectedDpi: 300,
+    expectedWidthPt: 612,
+    postProcess: "none",
     duplex: false,
     entry: ET2550_ENTRY,
     expectedDetectedSource: "flatbed",
@@ -160,12 +209,42 @@ const FIXTURE_SPECS: FixtureSpec[] = [
   {
     path: "et-2550/flatbed.jsonl",
     format: "pdf",
+    expectedDpi: 300,
+    expectedWidthPt: 612,
+    postProcess: "none",
     duplex: false,
     entry: ET2550_ENTRY,
     expectedDetectedSource: "flatbed",
     expectedFileCount: 1,
     expectedBackPages: [],
     expectedPdfPageCount: 1,
+  },
+  // POST_PROCESS=document re-encodes every page host-side and writes its own
+  // EXIF resolution; the delivered DPI must survive that on both formats.
+  {
+    path: "wf-3620/flatbed-single-page-pdf.jsonl",
+    format: "pdf",
+    expectedDpi: 300,
+    expectedWidthPt: 594.72,
+    postProcess: "document",
+    duplex: false,
+    entry: WF3620_ENTRY,
+    expectedDetectedSource: "flatbed",
+    expectedFileCount: 1,
+    expectedBackPages: [],
+    expectedPdfPageCount: 1,
+  },
+  {
+    path: "wf-3620/adf-2-page-jpeg.jsonl",
+    format: "jpg",
+    expectedDpi: 600,
+    expectedWidthPt: 594.72,
+    postProcess: "document",
+    duplex: true,
+    entry: WF3620_ENTRY,
+    expectedDetectedSource: "adf-duplex",
+    expectedFileCount: 2,
+    expectedBackPages: [2],
   },
 ];
 
@@ -188,7 +267,7 @@ describe("scanner-esci", () => {
   });
 
   it.each(FIXTURE_SPECS)(
-    "$path: detects $expectedDetectedSource and produces $expectedFileCount file(s)",
+    "$path ($format, post-process $postProcess): detects $expectedDetectedSource and produces $expectedFileCount file(s)",
     async ({
       path: fixturePath,
       format,
@@ -198,6 +277,9 @@ describe("scanner-esci", () => {
       expectedFileCount,
       expectedBackPages,
       expectedPdfPageCount,
+      expectedDpi,
+      expectedWidthPt,
+      postProcess,
     }) => {
       const fixture = loadFixture(path.join(FIXTURES, fixturePath));
       const fake = new FakeTcpSocket();
@@ -214,6 +296,7 @@ describe("scanner-esci", () => {
           forcedSource: null, // pure detection — no override
           format,
           jpegQuality: 90,
+          postProcess,
           onSourceDetected: (s) => {
             detectedSource = s;
           },
@@ -240,52 +323,48 @@ describe("scanner-esci", () => {
         for (const f of files) expect(f).toMatch(/\.pdf$/);
       }
 
-      // Back-page rotation assertion.
-      // JPG path: each back page has EXIF Orientation=3.
-      // PDF path: composed PDF has /Rotate 180 on each back page.
-      if (format === "jpg" && expectedBackPages.length > 0) {
+      // Physical-size and back-page rotation assertions. Legacy pages are
+      // host-encoded from raw RGB, so the dialect's delivered DPI has to be
+      // stamped into the JFIF header — without it the page reads as 72 DPI
+      // and an A4 scan at 300 DPI becomes a 34 × 49 inch page box in the
+      // composed PDF (issue #221 follow-up). Anchored to the literal
+      // expectations on the spec, never to the dialect table.
+      if (format === "jpg") {
         // files is sorted; pages are 1-based. files[0] = page 1, files[1] = page 2, …
-        for (const pageNum of expectedBackPages) {
-          const bytes = readFileSync(path.join(outputDir, files[pageNum - 1]));
-          // Back page: SOI immediately followed by APP1 segment inserted by setJpegOrientation.
-          // Layout of the 36-byte APP1 block prepended at offset 2:
-          //   [0-1]  ff e1          APP1 marker
-          //   [2-3]  00 22          segment length = 34
-          //   [4-9]  Exif\0\0       identifier
-          //   [10-13] 4d 4d 00 2a   TIFF big-endian header + magic 42
-          //   [14-17] 00 00 00 08   IFD0 offset (8 bytes from start of TIFF header)
-          //   [18-19] 00 01         IFD entry count = 1
-          //   [20-27] 01 12 00 03 00 00 00 01  tag=0x0112, type=SHORT, count=1
-          //   [28-31] 00 [orientation] 00 00   value (big-endian SHORT in 4-byte field)
-          //   [32-35] 00 00 00 00   next-IFD terminator
-          // In the output buffer the APP1 block starts at byte 2 (after the SOI), so:
-          //   orientation value byte = 2 + 29 = 31
-          const ORIENTATION_VALUE_OFFSET = 31;
-          expect(bytes.subarray(0, 4)).toEqual(Buffer.from([0xff, 0xd8, 0xff, 0xe1]));
-          expect(bytes[ORIENTATION_VALUE_OFFSET]).toBe(0x03);
-        }
-        // Front pages must NOT have an APP1 segment.
         for (let i = 0; i < files.length; i++) {
-          const pageNum = i + 1;
-          if (!expectedBackPages.includes(pageNum)) {
-            const bytes = readFileSync(path.join(outputDir, files[i]));
-            expect(Buffer.from([bytes[2], bytes[3]]).equals(Buffer.from([0xff, 0xe1]))).toBe(false);
+          const bytes = readFileSync(path.join(outputDir, files[i]));
+          expect((await sharp(bytes).metadata()).density).toBe(expectedDpi);
+          // Back pages carry EXIF Orientation=3 (the ADF U-turn delivers them
+          // upside down); front pages carry no EXIF orientation at all. The
+          // document profile bakes the rotation into the pixels and writes an
+          // upright tag instead, so there no page may still claim 3.
+          const orientation = readJpegOrientation(bytes);
+          if (postProcess === "document") {
+            expect(orientation).not.toBe(3);
+          } else {
+            expect(orientation).toBe(expectedBackPages.includes(i + 1) ? 3 : undefined);
           }
         }
       }
 
-      if (format === "pdf" && expectedPdfPageCount !== undefined) {
+      if (format === "pdf") {
         // pdf-lib uses object streams (compressed by default), so plain-text search is unreliable;
-        // load the document and query the rotation programmatically.
+        // load the document and query page geometry and rotation programmatically.
         const pdfBytes = readFileSync(path.join(outputDir, files[0]));
         const doc = await PDFDocument.load(pdfBytes);
-        expect(doc.getPageCount()).toBe(expectedPdfPageCount);
-        for (let i = 0; i < expectedPdfPageCount; i++) {
-          const pageNum = i + 1;
-          if (expectedBackPages.includes(pageNum)) {
-            expect(doc.getPage(i).getRotation().angle).toBe(180);
-          } else {
-            expect(doc.getPage(i).getRotation().angle).toBe(0);
+        // Page box is in points: pixels × 72 / delivered DPI.
+        for (let i = 0; i < doc.getPageCount(); i++) {
+          expect(doc.getPage(i).getSize().width).toBeCloseTo(expectedWidthPt, 1);
+        }
+        if (expectedPdfPageCount !== undefined) {
+          expect(doc.getPageCount()).toBe(expectedPdfPageCount);
+          for (let i = 0; i < expectedPdfPageCount; i++) {
+            const pageNum = i + 1;
+            if (expectedBackPages.includes(pageNum)) {
+              expect(doc.getPage(i).getRotation().angle).toBe(180);
+            } else {
+              expect(doc.getPage(i).getRotation().angle).toBe(0);
+            }
           }
         }
       }
@@ -406,16 +485,14 @@ describe("SCAN_RESOLUTION host-side downsample fallback (legacy path)", () => {
     fixturePath: string;
     format: "jpg" | "pdf";
     resolution: number | undefined;
-  }): Promise<{ downsample: unknown; stampDpi: unknown; infoLogs: string[] }> {
+  }): Promise<{ downsample: unknown; infoLogs: string[] }> {
     const fixture = loadFixture(path.join(FIXTURES, opts.fixturePath));
     const fake = new FakeTcpSocket();
 
     const outputTail = await import("../output-tail.js");
     let capturedDownsample: unknown = "unset";
-    let capturedStampDpi: unknown = "unset";
     const finalizeSpy = vi.spyOn(outputTail, "finalizeSession").mockImplementation((args) => {
       capturedDownsample = args.downsample;
-      capturedStampDpi = args.stampDpi;
       return Promise.resolve();
     });
     const infoLogs: string[] = [];
@@ -445,50 +522,49 @@ describe("SCAN_RESOLUTION host-side downsample fallback (legacy path)", () => {
       consoleSpy.mockRestore();
     }
 
-    return { downsample: capturedDownsample, stampDpi: capturedStampDpi, infoLogs };
+    return { downsample: capturedDownsample, infoLogs };
   }
 
-  it("resolution below the delivered DPI (600, JPG): resolveDownsample yields {fromDpi:600, toDpi:150}, stampDpi undefined", async () => {
-    const { downsample, stampDpi, infoLogs } = await runWithDownsampleSpy({
+  // The delivered DPI itself is stamped at encode and asserted by the replay
+  // matrix above; these cover only the downsample decision and its log.
+
+  it("resolution below the delivered DPI (600, JPG): resolveDownsample yields {fromDpi:600, toDpi:150}", async () => {
+    const { downsample, infoLogs } = await runWithDownsampleSpy({
       fixturePath: "wf-3620/flatbed-single-page-jpeg.jsonl",
       format: "jpg",
       resolution: 150,
     });
     expect(downsample).toEqual({ fromDpi: 600, toDpi: 150 });
-    expect(stampDpi).toBeUndefined();
     expect(infoLogs.some((l) => /exceeds|maximum|delivers/.test(l))).toBe(false);
   }, 60_000);
 
-  it("resolution above the delivered DPI (800 requested, 300 delivered, PDF): resolveDownsample undefined, stampDpi is the delivered 300, plus an info log", async () => {
-    const { downsample, stampDpi, infoLogs } = await runWithDownsampleSpy({
+  it("resolution above the delivered DPI (800 requested, 300 delivered, PDF): resolveDownsample undefined, plus an info log", async () => {
+    const { downsample, infoLogs } = await runWithDownsampleSpy({
       fixturePath: "wf-3620/flatbed-single-page-pdf.jsonl",
       format: "pdf",
       resolution: 800,
     });
     expect(downsample).toBeUndefined();
-    expect(stampDpi).toBe(300);
     expect(infoLogs.some((l) => /exceeds|maximum|delivers/.test(l))).toBe(true);
   }, 60_000);
 
-  it("resolution exactly equal to the delivered DPI (600, JPG): resolveDownsample undefined, stampDpi is the delivered 600, no info log", async () => {
-    const { downsample, stampDpi, infoLogs } = await runWithDownsampleSpy({
+  it("resolution exactly equal to the delivered DPI (600, JPG): resolveDownsample undefined, no info log", async () => {
+    const { downsample, infoLogs } = await runWithDownsampleSpy({
       fixturePath: "wf-3620/flatbed-single-page-jpeg.jsonl",
       format: "jpg",
       resolution: 600,
     });
     expect(downsample).toBeUndefined();
-    expect(stampDpi).toBe(600);
     expect(infoLogs.some((l) => /exceeds|maximum|delivers/.test(l))).toBe(false);
   }, 60_000);
 
-  it("resolution unset: resolveDownsample and stampDpi both yield undefined with no info log", async () => {
-    const { downsample, stampDpi, infoLogs } = await runWithDownsampleSpy({
+  it("resolution unset: resolveDownsample undefined, no info log", async () => {
+    const { downsample, infoLogs } = await runWithDownsampleSpy({
       fixturePath: "wf-3620/flatbed-single-page-jpeg.jsonl",
       format: "jpg",
       resolution: undefined,
     });
     expect(downsample).toBeUndefined();
-    expect(stampDpi).toBeUndefined();
     expect(infoLogs.some((l) => /exceeds|maximum|delivers/.test(l))).toBe(false);
   }, 60_000);
 });

@@ -41,15 +41,6 @@ export interface FinalizeSessionArgs {
    * Omitted means the wire hit the requested DPI (or has no such notion).
    */
   downsample?: Downsample;
-  /**
-   * Lossless JFIF density patch for pages that reach output without a
-   * density-stamping re-encode — e.g. the legacy ESC/I path's explicit
-   * SCAN_RESOLUTION that exactly matches (or is capped above) the delivered
-   * DPI, where no resize happens so the host-encoded JPEG would otherwise
-   * ship with no real density and read as 72 DPI. Mutually exclusive with
-   * `downsample` by construction at the resolver.
-   */
-  stampDpi?: number;
 }
 
 /**
@@ -74,7 +65,6 @@ export async function finalizeSession(args: FinalizeSessionArgs): Promise<void> 
     toneCurve,
     whitePoint,
     downsample,
-    stampDpi,
   } = args;
   try {
     if (downsample) {
@@ -83,7 +73,7 @@ export async function finalizeSession(args: FinalizeSessionArgs): Promise<void> 
     await postProcessTempPages(
       sessionTempDir,
       postProcess,
-      { jpegQuality, toneCurve, grayscaleConversion, whitePoint, downsample, stampDpi },
+      { jpegQuality, toneCurve, grayscaleConversion, whitePoint, downsample },
       log,
     );
     let savedPaths: string[];

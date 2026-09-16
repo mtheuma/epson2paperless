@@ -71,4 +71,24 @@ describe("raw-to-jpeg", () => {
     const raw = Buffer.alloc(10);
     await expect(encodeRawGbrToJpeg(raw, 4, 4, 90)).rejects.toThrow(/buffer length/i);
   });
+
+  // Raw wire pixels carry no physical size, so the encoder must stamp the
+  // delivered DPI into the JFIF header — a density-less JPEG reads as 72 DPI,
+  // and every downstream consumer (viewers, the document re-encode, the PDF
+  // page box) sizes the page from that reading (issue #221).
+  it("stamps the delivered DPI as the JFIF density, without an EXIF block", async () => {
+    const raw = Buffer.alloc(4 * 4 * 3, 0x80);
+    const jpeg = await encodeRawGbrToJpeg(raw, 4, 4, 90, 300);
+    const meta = await sharp(jpeg).metadata();
+    expect(meta.density).toBe(300);
+    // JFIF APP0 directly after SOI: marker, length 16, "JFIF\0", v1.01, units=1 (DPI), 300 × 300.
+    const app0 = jpeg.indexOf(Buffer.from("JFIF\0"));
+    expect(app0).toBe(6);
+    expect(jpeg[app0 + 7]).toBe(1);
+    expect(jpeg.readUInt16BE(app0 + 8)).toBe(300);
+    expect(jpeg.readUInt16BE(app0 + 10)).toBe(300);
+    // No EXIF: sharp's withMetadata route would add an APP1 that the flush-time
+    // orientation stamp for duplex back pages would then duplicate.
+    expect(meta.exif).toBeUndefined();
+  });
 });

@@ -21,5 +21,5 @@ export const WF3620_ENTRY: LegacyDialectEntry = {
   prestart: "status-then-start",
   setup: { next: "INIT", send: () => passthru(buildEscInit(), 1) }, // ESC @  (reply 1)
   teardown: { next: "POST_STATUS", send: () => passthru(buildFsF(), 16) }, // FS F   (reply 16)
-  deliveredDpi: (mode) => (mode.format === "jpg" ? 600 : 300), // mirrors geometryFor
+  deliveredDpi: (mode) => geometry(mode).dpi, // 600 for JPG, 300 for PDF — one source of truth
 };
