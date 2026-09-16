@@ -46,9 +46,9 @@ export interface PostProcessOptions {
   /**
    * Lossless JFIF-density-only stamp for pages that reach output without a
    * density-stamping re-encode — the legacy ESC/I path's counterpart to
-   * `downsample` for an explicit SCAN_RESOLUTION that exactly matches (or is
-   * capped above) the delivered DPI: no resize happens, so without this the
-   * host-encoded JPEG carries no real JFIF density and reads as 72 DPI.
+   * `downsample` for every no-resize case (default scan, or a SCAN_RESOLUTION
+   * at or above the delivered DPI): the host-encoded JPEG carries no real
+   * JFIF density of its own, so without this it reads as 72 DPI.
    * Applied on top of whatever profile/grayscale re-encode ran (those
    * preserve only the SOURCE density, which legacy pages never had) — never
    * when `downsample` is set, since that path already stamps its own toDpi.

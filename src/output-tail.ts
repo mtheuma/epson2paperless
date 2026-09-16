@@ -43,11 +43,11 @@ export interface FinalizeSessionArgs {
   downsample?: Downsample;
   /**
    * Lossless JFIF density patch for pages that reach output without a
-   * density-stamping re-encode — e.g. the legacy ESC/I path's explicit
-   * SCAN_RESOLUTION that exactly matches (or is capped above) the delivered
-   * DPI, where no resize happens so the host-encoded JPEG would otherwise
-   * ship with no real density and read as 72 DPI. Mutually exclusive with
-   * `downsample` by construction at the resolver.
+   * density-stamping re-encode — the legacy ESC/I path's host-encoded pages
+   * whenever no resize happens (default scan, or a SCAN_RESOLUTION at or
+   * above the delivered DPI), which would otherwise ship with no real
+   * density and read as 72 DPI. Mutually exclusive with `downsample` by
+   * construction at the resolver.
    */
   stampDpi?: number;
 }

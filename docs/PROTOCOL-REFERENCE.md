@@ -521,6 +521,16 @@ smaller-wire-DPI-then-downsample arm above. At or above the delivered DPI, the
 fixed DPI is used as-is, with an info log when it's strictly above (mirroring the
 ESC/I-2 capped-at-max log).
 
+Because legacy pages are encoded host-side from raw RGB, the JPEG carries no
+density of its own, and a density-less JPEG reads as 72 DPI — the wrong physical
+size in viewers, and a PDF page box four times too large once
+`composePdfFromJpegs` sizes pages from the density (issue #221). So whenever no
+downsample runs — `SCAN_RESOLUTION` unset, or at or above the delivered DPI — the
+delivered DPI is stamped into the JFIF header at finalize (`stampDpi`, a lossless
+header patch, no re-encode). ESC/I-2 pages need no stamp: every captured model
+writes its own JFIF density (300 DPI on the ET-4950 family, 200/300 on the
+FF-680W, 400/600 on the DS-575W).
+
 ### Host-side downsample
 
 `downsampleJpeg` (`src/postprocess/downsample.ts`) is the fallback arm both paths

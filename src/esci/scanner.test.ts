@@ -9,6 +9,7 @@ import { runEsciScan, appendImageChunk } from "./scanner.js";
 import { parseIsPacket, buildIsPacket, IS_HEADER_SIZE } from "../protocol.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
 import { loadFixture, driveFixture, concatHostBytes } from "./test-support/replay.js";
+import { readJpegOrientation } from "../exif.js";
 import { WF3620_ENTRY } from "./dialects/wf3620.js";
 import { ET2550_ENTRY } from "./dialects/et2550.js";
 import { XP620_ENTRY } from "./dialects/xp620.js";
@@ -240,52 +241,44 @@ describe("scanner-esci", () => {
         for (const f of files) expect(f).toMatch(/\.pdf$/);
       }
 
-      // Back-page rotation assertion.
-      // JPG path: each back page has EXIF Orientation=3.
-      // PDF path: composed PDF has /Rotate 180 on each back page.
-      if (format === "jpg" && expectedBackPages.length > 0) {
+      // Physical-size and back-page rotation assertions. Legacy pages are
+      // host-encoded from raw RGB, so the dialect's delivered DPI has to be
+      // stamped into the JFIF header at finalize — without it the page reads
+      // as 72 DPI and an A4 scan at 300 DPI becomes a 34 × 49 inch page box
+      // in the composed PDF (issue #221 follow-up).
+      const mode = { source: expectedDetectedSource, format } as const;
+      const deliveredDpi = entry.deliveredDpi(mode);
+      if (format === "jpg") {
         // files is sorted; pages are 1-based. files[0] = page 1, files[1] = page 2, …
-        for (const pageNum of expectedBackPages) {
-          const bytes = readFileSync(path.join(outputDir, files[pageNum - 1]));
-          // Back page: SOI immediately followed by APP1 segment inserted by setJpegOrientation.
-          // Layout of the 36-byte APP1 block prepended at offset 2:
-          //   [0-1]  ff e1          APP1 marker
-          //   [2-3]  00 22          segment length = 34
-          //   [4-9]  Exif\0\0       identifier
-          //   [10-13] 4d 4d 00 2a   TIFF big-endian header + magic 42
-          //   [14-17] 00 00 00 08   IFD0 offset (8 bytes from start of TIFF header)
-          //   [18-19] 00 01         IFD entry count = 1
-          //   [20-27] 01 12 00 03 00 00 00 01  tag=0x0112, type=SHORT, count=1
-          //   [28-31] 00 [orientation] 00 00   value (big-endian SHORT in 4-byte field)
-          //   [32-35] 00 00 00 00   next-IFD terminator
-          // In the output buffer the APP1 block starts at byte 2 (after the SOI), so:
-          //   orientation value byte = 2 + 29 = 31
-          const ORIENTATION_VALUE_OFFSET = 31;
-          expect(bytes.subarray(0, 4)).toEqual(Buffer.from([0xff, 0xd8, 0xff, 0xe1]));
-          expect(bytes[ORIENTATION_VALUE_OFFSET]).toBe(0x03);
-        }
-        // Front pages must NOT have an APP1 segment.
         for (let i = 0; i < files.length; i++) {
-          const pageNum = i + 1;
-          if (!expectedBackPages.includes(pageNum)) {
-            const bytes = readFileSync(path.join(outputDir, files[i]));
-            expect(Buffer.from([bytes[2], bytes[3]]).equals(Buffer.from([0xff, 0xe1]))).toBe(false);
-          }
+          const bytes = readFileSync(path.join(outputDir, files[i]));
+          expect((await sharp(bytes).metadata()).density).toBe(deliveredDpi);
+          // Back pages carry EXIF Orientation=3 (the ADF U-turn delivers them
+          // upside down); front pages carry no EXIF orientation at all.
+          const expectedOrientation = expectedBackPages.includes(i + 1) ? 3 : undefined;
+          expect(readJpegOrientation(bytes)).toBe(expectedOrientation);
         }
       }
 
-      if (format === "pdf" && expectedPdfPageCount !== undefined) {
+      if (format === "pdf") {
         // pdf-lib uses object streams (compressed by default), so plain-text search is unreliable;
-        // load the document and query the rotation programmatically.
+        // load the document and query page geometry and rotation programmatically.
         const pdfBytes = readFileSync(path.join(outputDir, files[0]));
         const doc = await PDFDocument.load(pdfBytes);
-        expect(doc.getPageCount()).toBe(expectedPdfPageCount);
-        for (let i = 0; i < expectedPdfPageCount; i++) {
-          const pageNum = i + 1;
-          if (expectedBackPages.includes(pageNum)) {
-            expect(doc.getPage(i).getRotation().angle).toBe(180);
-          } else {
-            expect(doc.getPage(i).getRotation().angle).toBe(0);
+        // Page box is in points: pixels × 72 / delivered DPI.
+        const expectedWidthPt = (entry.raster(mode).widthPx * 72) / deliveredDpi;
+        for (let i = 0; i < doc.getPageCount(); i++) {
+          expect(doc.getPage(i).getSize().width).toBeCloseTo(expectedWidthPt, 1);
+        }
+        if (expectedPdfPageCount !== undefined) {
+          expect(doc.getPageCount()).toBe(expectedPdfPageCount);
+          for (let i = 0; i < expectedPdfPageCount; i++) {
+            const pageNum = i + 1;
+            if (expectedBackPages.includes(pageNum)) {
+              expect(doc.getPage(i).getRotation().angle).toBe(180);
+            } else {
+              expect(doc.getPage(i).getRotation().angle).toBe(0);
+            }
           }
         }
       }
@@ -481,14 +474,14 @@ describe("SCAN_RESOLUTION host-side downsample fallback (legacy path)", () => {
     expect(infoLogs.some((l) => /exceeds|maximum|delivers/.test(l))).toBe(false);
   }, 60_000);
 
-  it("resolution unset: resolveDownsample and stampDpi both yield undefined with no info log", async () => {
+  it("resolution unset: resolveDownsample undefined, stampDpi is still the delivered 600 (legacy pages always get a density stamp), no info log", async () => {
     const { downsample, stampDpi, infoLogs } = await runWithDownsampleSpy({
       fixturePath: "wf-3620/flatbed-single-page-jpeg.jsonl",
       format: "jpg",
       resolution: undefined,
     });
     expect(downsample).toBeUndefined();
-    expect(stampDpi).toBeUndefined();
+    expect(stampDpi).toBe(600);
     expect(infoLogs.some((l) => /exceeds|maximum|delivers/.test(l))).toBe(false);
   }, 60_000);
 });
