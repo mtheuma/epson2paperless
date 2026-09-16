@@ -375,7 +375,9 @@ export interface ScanWebhookDeps {
  * undefined when SCAN_TRIGGER_TOKEN is unset, which leaves the health server
  * as a pure read-only probe. The scan runs exactly as `scan:now` does: no
  * panel, so format/sides come from the request (defaulting to SCAN_FORMAT /
- * SCAN_SIDES), no PID hint, printer address from the resolved target.
+ * SCAN_SIDES), postProcess/colorMode may override POST_PROCESS /
+ * SCAN_COLOR_MODE for this scan only, no PID hint, printer address from the
+ * resolved target.
  */
 export function buildScanTriggerOptions(deps: ScanWebhookDeps): ScanTriggerOptions | undefined {
   const { config, target, admission } = deps;
@@ -393,7 +395,8 @@ export function buildScanTriggerOptions(deps: ScanWebhookDeps): ScanTriggerOptio
     isBusy: () => admission.isBusy(),
     onScan: (request, peerAddress) => {
       log.info(
-        `Webhook scan accepted from ${peerAddress} (format=${request.format}, sides=${request.sides})`,
+        `Webhook scan accepted from ${peerAddress} (format=${request.format}, ` +
+          `sides=${request.sides}, postProcess=${request.postProcess}, colorMode=${request.colorMode})`,
       );
       setLastScanTime(new Date().toISOString());
       // The busy check in health.ts and this track() share one synchronous
@@ -405,7 +408,9 @@ export function buildScanTriggerOptions(deps: ScanWebhookDeps): ScanTriggerOptio
       const scan = (async () => {
         const printerIp = await target.target();
         await dispatch({
-          config,
+          // Per-scan overrides go on a copy: the shared config must keep the
+          // env values for the next panel or webhook scan.
+          config: { ...config, postProcess: request.postProcess, scanColorMode: request.colorMode },
           duplex: request.sides === "duplex",
           action: request.format,
           paperless: buildPaperlessOptions(config),

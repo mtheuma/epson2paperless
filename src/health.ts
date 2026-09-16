@@ -119,7 +119,9 @@ function handleScan(
   }
 
   trigger.onScan(parsed, peer);
-  sendJson(res, 202, { status: "accepted", format: parsed.format, sides: parsed.sides });
+  // Echo every effective setting: unknown or mis-cased keys are ignored, so
+  // this body is how a caller confirms its overrides were applied.
+  sendJson(res, 202, { status: "accepted", ...parsed });
 }
 
 function sendJson(

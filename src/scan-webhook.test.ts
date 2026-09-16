@@ -154,6 +154,46 @@ describe("scan webhook wiring", () => {
     expect(args.duplex).toBe(false);
   });
 
+  it("applies postProcess/colorMode overrides to that scan's config only", async () => {
+    const config = makeConfig({ postProcess: "document", scanColorMode: "color" });
+    h = await harness({ config });
+    expect(await post(h.base, "/scan?postProcess=none&colorMode=grayscale")).toBe(202);
+    await settle();
+    const args = h.dispatch.mock.calls[0][0];
+    expect(args.config.postProcess).toBe("none");
+    expect(args.config.scanColorMode).toBe("grayscale");
+    // Everything else still comes from the env config.
+    expect(args.config.outputDir).toBe(config.outputDir);
+    // The shared config is untouched, so the next scan gets the env defaults.
+    expect(config.postProcess).toBe("document");
+    expect(config.scanColorMode).toBe("color");
+  });
+
+  it("falls back to POST_PROCESS / SCAN_COLOR_MODE when the query omits them", async () => {
+    h = await harness({ config: makeConfig({ postProcess: "document", scanColorMode: "auto" }) });
+    expect(await post(h.base)).toBe(202);
+    await settle();
+    const args = h.dispatch.mock.calls[0][0];
+    expect(args.config.postProcess).toBe("document");
+    expect(args.config.scanColorMode).toBe("auto");
+  });
+
+  it("logs the effective settings on acceptance", async () => {
+    const logSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      h = await harness({ config: makeConfig({ postProcess: "document" }) });
+      expect(await post(h.base, "/scan?postProcess=none")).toBe(202);
+      const accepted = logSpy.mock.calls
+        .map((call) => String(call[0]))
+        .filter((line) => line.includes("Webhook scan accepted"));
+      expect(accepted).toHaveLength(1);
+      expect(accepted[0]).toContain("postProcess=none");
+      expect(accepted[0]).toContain("colorMode=color");
+    } finally {
+      logSpy.mockRestore();
+    }
+  });
+
   it("stamps lastScan on acceptance", async () => {
     h = await harness({});
     expect(await post(h.base)).toBe(202);

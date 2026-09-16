@@ -180,7 +180,13 @@ describe("POST /scan webhook", () => {
     const res = await request("POST", `${base}/scan`, AUTH);
     expect(res.status).toBe(202);
     expect(res.headers["content-type"]).toContain("application/json");
-    expect(JSON.parse(res.body)).toEqual({ status: "accepted", format: "pdf", sides: "duplex" });
+    expect(JSON.parse(res.body)).toEqual({
+      status: "accepted",
+      format: "pdf",
+      sides: "duplex",
+      postProcess: "none",
+      colorMode: "color",
+    });
     expect(onScan).toHaveBeenCalledTimes(1);
     expect(onScan.mock.calls[0][0]).toEqual({
       format: "pdf",
@@ -197,11 +203,46 @@ describe("POST /scan webhook", () => {
     server = s;
     const res = await request("POST", `${base}/scan?format=jpg&sides=simplex`, AUTH);
     expect(res.status).toBe(202);
-    expect(JSON.parse(res.body)).toEqual({ status: "accepted", format: "jpg", sides: "simplex" });
+    expect(JSON.parse(res.body)).toEqual({
+      status: "accepted",
+      format: "jpg",
+      sides: "simplex",
+      postProcess: "none",
+      colorMode: "color",
+    });
     expect(onScan).toHaveBeenCalledWith(
       { format: "jpg", sides: "simplex", postProcess: "none", colorMode: "color" },
       "127.0.0.1",
     );
+  });
+
+  it("echoes postProcess/colorMode overrides in the 202 and the dispatch", async () => {
+    const { scanTrigger, onScan } = enabled();
+    const { server: s, base } = await listen({ scanTrigger });
+    server = s;
+    const res = await request("POST", `${base}/scan?postProcess=document&colorMode=auto`, AUTH);
+    expect(res.status).toBe(202);
+    expect(JSON.parse(res.body)).toEqual({
+      status: "accepted",
+      format: "pdf",
+      sides: "duplex",
+      postProcess: "document",
+      colorMode: "auto",
+    });
+    expect(onScan).toHaveBeenCalledWith(
+      { format: "pdf", sides: "duplex", postProcess: "document", colorMode: "auto" },
+      "127.0.0.1",
+    );
+  });
+
+  it("answers 400 for an invalid postProcess and does not dispatch", async () => {
+    const { scanTrigger, onScan } = enabled();
+    const { server: s, base } = await listen({ scanTrigger });
+    server = s;
+    const res = await request("POST", `${base}/scan?postProcess=sharpen`, AUTH);
+    expect(res.status).toBe(400);
+    expect(JSON.parse(res.body).error).toContain("postProcess");
+    expect(onScan).not.toHaveBeenCalled();
   });
 
   it("answers 409 while a scan is in flight and does not dispatch", async () => {
