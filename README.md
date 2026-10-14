@@ -27,6 +27,7 @@ What you get:
 | **ET-2750**           | ✅&nbsp;Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS                                                                         |
 | **ET-2810**           | ✅&nbsp;Verified     | Flatbed-only hardware; no panel trigger — needs `scan:now`                                                                    |
 | **ET-2950**           | 🟡&nbsp;Experimental | Flatbed-only hardware; inferred dialect, no reporter retest yet ([#92](https://github.com/mtheuma/epson2paperless/issues/92)) |
+| **ET-3700**           | ✅&nbsp;Verified     | Flatbed-only hardware; ESC/I-2 over plain TCP, no TLS                                                                         |
 | **ET-3950**           | ✅&nbsp;Verified     |                                                                                                                               |
 | **ET-4800**           | ✅&nbsp;Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS                                                                                   |
 | **ET-4950 / ET-4956** | ✅&nbsp;Verified     |                                                                                                                               |
@@ -267,13 +268,19 @@ The printer only announces itself when the panel's Scan > Computer menu is opene
 
 - Confirm the PC is on the same subnet as the printer. Try `ping <printer-ip>`.
 - Check your firewall. UDP port `2968` needs to be allowed for multicast traffic from the printer.
-- Make sure Epson Event Manager isn't running on the same PC. It binds the same port. Other Epson software (drivers, ScanSmart) is fine.
+- Make sure no Epson scan listener is running on the same machine. It binds the same port. On Windows that's Epson Event Manager; drivers and ScanSmart are fine. On macOS, quit Epson ScanSmart and Epson Scanner Monitor as well.
 
 **Pressing Start shows "Scanning error" instantly, and no `[pushscan]` line appears in the log.**
 Discovery is working (keepalive lines in the log) but the printer's scan trigger isn't reaching the service. Two known causes:
 
 - A firewall on the host is blocking inbound **TCP** port `2968`. Discovery only needs UDP; the scan trigger arrives on TCP. Allow both.
 - "Scan to Computer" was declined during the printer's initial network setup. It can't be re-enabled from the settings menus afterwards. Reset the printer's network settings and accept the Scan to Computer prompt when setting it up again.
+
+**Panel shows "Communication problem" and the log says `Ignoring push-scan`.**
+The panel action you picked isn't one the service scans for. The trigger is accepted but no scan starts, so the printer eventually times out with a communication error. Only Save as JPEG and Save as PDF scan by default:
+
+- **Preview on Computer** is ignored unless `PREVIEW_ACTION` is set to `jpg` or `pdf`. Some panels send the same code under another name. On the ET-3700 it was the "User setting" preset.
+- **Attach as email** and any other action are not supported. Pick JPEG or PDF instead.
 
 **`PRINTER_HOSTNAME=EPSONXXXX.local` doesn't resolve.**
 The image ships no mDNS resolver, so `.local` works only where the host's own resolver bridges mDNS (systemd-resolved can, with `MulticastDNS=` enabled globally and on the link, which most distros leave off). That varies by host, so prefer:

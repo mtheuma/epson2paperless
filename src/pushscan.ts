@@ -160,13 +160,14 @@ function computeDuplexFromId(id: string | null): boolean {
 }
 
 /**
- * Classifies the second character of `PushScanIDIn` as the Action bit.
- * The printer encodes Action as a bitmask on char 1:
- *   '1' (0b001) → jpg
- *   '2' (0b010) → pdf
- *   '4' (0b100) → preview
- * Anything else — including missing input, single-char input, or bit
- * combinations like '3' (0b011) — returns 'unknown' with a warning log.
+ * Classifies the second character of `PushScanIDIn` as the Action code.
+ * The printer encodes Action as a distinct option code on char 1:
+ *   '1' → jpg
+ *   '2' → pdf
+ *   '4' → preview
+ * Anything else — including missing input, single-char input, or '3'
+ * (the panel's unsupported "Attach as email" action, not jpg + pdf) —
+ * returns 'unknown' with a warning log.
  */
 export function computeActionFromId(id: string | null): PushScanAction {
   if (id === null) return "unknown";
