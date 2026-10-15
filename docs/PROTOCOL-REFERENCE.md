@@ -652,8 +652,9 @@ decodes it (`parseFsIReply`) and checks it against the running dialect
 - **Unrecognised:** a product no dialect claims, on the WF-3620 fallback.
   Warns that an older ESC/I model is trying the WF-3620 settings
   (experimental) and asks for a report.
-- **Switch:** another dialect claims the product, and its setup branch is
-  the running dialect's (same `setup.next` state, same first command). Every
+- **Switch:** the session is on the WF-3620 fallback, another dialect claims
+  the product, and its setup branch is the fallback's (same `setup.next`
+  state, same first command). Every
   byte on the wire up to this `FS I` is then what that dialect would have
   sent, so the session sets `ctx.entry` to it, resets the source state the
   way `runEsciScan` initialises it for that dialect (pinned `flatbed` for a
@@ -662,9 +663,10 @@ decodes it (`parseFsIReply`) and checks it against the running dialect
   both it and the WF-3620 open with `ESC @` into `INIT`. If the adopted
   dialect can't service `ESCI_FORCE_SOURCE`, the session fails there with
   the same error `runEsciScan` raises up front.
-- **Mismatch:** another dialect claims the product but its setup diverged
-  before `FS I`, or the session picked a PID-keyed dialect the printer
-  doesn't name. Warns, and the session continues on `ctx.entry`. Under
+- **Mismatch:** another dialect claims the product but the session is on a
+  PID-keyed dialect (the trigger's own PID chose it, and `FS I` doesn't
+  overrule that) or its setup diverged before `FS I`, or the session picked a
+  PID-keyed dialect the printer doesn't name. Warns, and the session continues on `ctx.entry`. Under
   `scan:now` an XP-620 lands here at best: it gets the WF-3620's `ESC @`
   setup instead of its own `ESC I`, and no capture shows whether that even
   reaches `FS I`.

@@ -77,6 +77,27 @@ describe("esciGraph WELCOME / LOCKING / INIT", () => {
     }
   });
 
+  it("INIT decides identically for every dialect whose setup enters it", () => {
+    // The IDENTITY switch (sameSetup) assumes the wire up to FS I doesn't
+    // depend on the dialect; INIT is the only state on that path today.
+    const state = esciGraph.states.INIT;
+    if (state.kind !== "decision") throw new Error("INIT must be a decision state");
+    const entries = [WF3620_ENTRY, ET2550_ENTRY];
+    expect(entries.every((e) => e.setup.next === "INIT")).toBe(true);
+    const ack = { type: ESCI_REPLY, payload: Buffer.from([0x06]) };
+    const nak = { type: ESCI_REPLY, payload: Buffer.from([0x15]) };
+    for (const packet of [ack, nak]) {
+      for (const diagnoseProtocol of [false, true]) {
+        const outcomes = entries.map((entry) =>
+          JSON.stringify(state.decide(makeCtx({ entry, diagnoseProtocol }), packet), (_k, v) =>
+            v instanceof Error ? v.message : (v as unknown),
+          ),
+        );
+        expect(new Set(outcomes).size).toBe(1);
+      }
+    }
+  });
+
   it("INIT advances to IDENTITY on a valid ESC @ ack", () => {
     const state = esciGraph.states.INIT;
     expect(state.kind).toBe("decision");
@@ -198,12 +219,18 @@ describe("esciGraph IDENTITY / STATUS_1A / STATUS_1B / STATUS_2", () => {
     expect(switched[0].data).toEqual({ firmware: "1.40" });
   });
 
-  it("IDENTITY switches back to a detecting dialect with its unresolved source", () => {
+  it("IDENTITY keeps a PID-keyed dialect the printer names differently, and warns", () => {
+    // The trigger's own PID chose the ET-2550; FS I doesn't overrule it.
     const ctx = makeCtx({ entry: ET2550_ENTRY, source: "flatbed", sourceDetected: true });
-    decideIdentity(ctx, buildFsIReply("PID 08B8", "1.20"));
-    expect(ctx.entry).toBe(WF3620_ENTRY);
-    expect(ctx.source).toBe("adf-simplex");
-    expect(ctx.sourceDetected).toBe(false);
+    const { result, lines } = decideIdentity(ctx, buildFsIReply("PID 08B8", "1.20"));
+    expect("next" in result && result.next).toBe("STATUS_1A");
+    expect(ctx.entry).toBe(ET2550_ENTRY);
+    expect(ctx.source).toBe("flatbed");
+    expect(lines.filter((l) => l.stream === "warn").map((l) => l.text)).toEqual([
+      expect.stringContaining(
+        "Printer identifies as PID 08B8, which has its own wf3620 dialect, but this session is running the et2550 settings",
+      ),
+    ]);
   });
 
   it("IDENTITY keeps a flatbed ESCI_FORCE_SOURCE across the switch", () => {
@@ -211,6 +238,8 @@ describe("esciGraph IDENTITY / STATUS_1A / STATUS_1B / STATUS_2", () => {
     const { result } = decideIdentity(ctx, buildFsIReply("PID 1106", "1.40"));
     expect("next" in result && result.next).toBe("STATUS_1A");
     expect(ctx.entry).toBe(ET2550_ENTRY);
+    expect(ctx.source).toBe("flatbed");
+    expect(ctx.sourceDetected).toBe(true);
   });
 
   it("IDENTITY fails rather than switch to a dialect that can't service ESCI_FORCE_SOURCE", () => {

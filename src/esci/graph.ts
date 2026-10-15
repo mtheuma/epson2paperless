@@ -77,11 +77,13 @@ export interface EsciCtx {
   /**
    * True once STATUS_2 has actually run and assigned `ctx.source` (either
    * from the FS F status byte via `legacyDetectSource` or from
-   * `ctx.forcedSource`). The shell uses this flag — not just the presence
-   * of `ctx.source` — to decide whether to fire `LegacyScanSession.onSourceDetected`,
-   * because `source` is initialized to `forcedSource ?? "adf-simplex"` in
-   * the scanner shell before any state has run, so a session that fails
-   * inside WELCOME / LOCKING / INIT could otherwise produce a spurious
+   * `ctx.forcedSource`), or from the start for a fixed-flatbed dialect,
+   * whose source is pinned with no detection to run (see `initialSource`,
+   * applied by the shell and again by an IDENTITY switch). The shell uses
+   * this flag — not just the presence of `ctx.source` — to decide whether to
+   * fire `LegacyScanSession.onSourceDetected`, because a detecting dialect
+   * starts on a `forcedSource ?? "adf-simplex"` placeholder, so a session that
+   * fails inside WELCOME / LOCKING / INIT could otherwise produce a spurious
    * detection callback on the failure path.
    */
   sourceDetected: boolean;
@@ -364,7 +366,9 @@ g.state(
 
 // INIT: ESC @ ack-or-NAK. ACK → IDENTITY (FS I); NAK + diagnoseProtocol →
 // DIAGNOSE_INIT_PROBE (FS Y); NAK + !diagnose → fail with the canonical
-// "expected ESC @ ack, got type=0x{type} payload={hex}" message.
+// "expected ESC @ ack, got type=0x{type} payload={hex}" message. Must not
+// branch on ctx.entry: the IDENTITY switch relies on every dialect whose setup
+// enters INIT reaching FS I with the same bytes (see sameSetup).
 g.state(
   "INIT",
   decision<EsciCtx>((ctx, packet) => {
@@ -500,7 +504,8 @@ g.state(
     if (typeGuard) return typeGuard;
     const lengthGuard = expectLength(packet.payload, 16, "STATUS_2", "status");
     if (lengthGuard) return lengthGuard;
-    // Fixed-flatbed: the shell already pinned ctx.source, and byte-0 detection
+    // Fixed-flatbed: ctx.source is already pinned (by the shell, or by the
+    // IDENTITY switch that adopted this dialect), and byte-0 detection
     // must NOT run — the ET-2550 reports 0x01 here (never the WF-3620's 0x81),
     // which legacyDetectSource would read as an ADF. Its driver runs the reset
     // cycle unconditionally, so take that path directly.

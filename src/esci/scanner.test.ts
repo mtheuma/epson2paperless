@@ -559,6 +559,40 @@ describe("scanner-esci", () => {
     60_000,
   );
 
+  it("a PID-less scan on an ET-2550 with an ADF ESCI_FORCE_SOURCE fails at FS I instead of switching", async () => {
+    const fixture = loadFixture(path.join(FIXTURES, "et-2550/flatbed.jsonl"));
+    const pid = Buffer.from("PID 1106", "latin1").toString("hex");
+    const identityIdx = fixture.findIndex(
+      (e) => e.dir === "p>h" && "hex" in e && e.hex.includes(pid),
+    );
+    expect(identityIdx).toBeGreaterThan(0);
+    const fake = new FakeTcpSocket();
+
+    const sessionPromise = runEsciScan(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        outputDir,
+        tempDir,
+        entry: WF3620_ENTRY, // supports ADF, so the shell's up-front check passes
+        duplex: false,
+        forcedSource: "adf-simplex",
+        format: "jpg",
+        jpegQuality: 90,
+      },
+      fake.asFactory(),
+    );
+    await expect(
+      driveFixture(fixture.slice(0, identityIdx + 1), fake, sessionPromise),
+    ).rejects.toThrow("ESCI_FORCE_SOURCE=adf-simplex is not supported by et2550");
+
+    // Nothing is sent after the identity reply: the session stops there.
+    expect(Buffer.concat(fake.writes).toString("hex")).toBe(
+      concatHostBytes(fixture.slice(0, identityIdx)).toString("hex"),
+    );
+    expect(readdirSync(outputDir)).toEqual([]);
+  });
+
   it("an unrecognised PID in the FS I reply logs the experimental line and runs the WF-3620 settings unchanged", async () => {
     const fixture = loadFixture(path.join(FIXTURES, "wf-3620/flatbed-single-page-jpeg.jsonl"));
     const original = Buffer.from("PID 08B8", "latin1").toString("hex");

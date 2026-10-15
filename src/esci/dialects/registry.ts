@@ -34,12 +34,14 @@ export function resolveLegacyEntry(productName: string | null): LegacyDialectEnt
  * - `match`: it is the dialect's own PID.
  * - `unrecognised`: the session is on the fallback and no dialect claims the
  *   product — an untested older model trying the WF-3620 settings.
- * - `switch`: another dialect claims the product (`owner`) and its setup
- *   branch is the running dialect's, so every byte on the wire so far is what
- *   `owner` would have sent; the session can carry on as `owner`.
- * - `mismatch`: another dialect claims the product (`owner`) but its setup
- *   diverged before FS I, or the session picked a PID-keyed dialect the
- *   printer doesn't name (`owner: null`).
+ * - `switch`: the session is on the fallback, another dialect claims the
+ *   product (`owner`), and its setup branch is the fallback's, so every byte on
+ *   the wire so far is what `owner` would have sent; the session can carry on
+ *   as `owner`. Only the fallback switches: a PID-keyed dialect was picked by
+ *   the trigger's own PID, which FS I does not overrule.
+ * - `mismatch`: another dialect claims the product (`owner`) but the session
+ *   isn't on the fallback or its setup diverged before FS I, or the session
+ *   picked a PID-keyed dialect the printer doesn't name (`owner: null`).
  */
 export type LegacyIdentityCheck =
   | { kind: "match" }
@@ -53,13 +55,17 @@ export function checkLegacyIdentity(
 ): LegacyIdentityCheck {
   if (productName === entry.productName) return { kind: "match" };
   const owner = (productName && BY_PID[productName]) || null;
-  if (owner === null && entry === FALLBACK_ENTRY) return { kind: "unrecognised" };
-  if (owner !== null && sameSetup(entry, owner)) return { kind: "switch", owner };
+  if (entry === FALLBACK_ENTRY) {
+    if (owner === null) return { kind: "unrecognised" };
+    if (sameSetup(entry, owner)) return { kind: "switch", owner };
+  }
   return { kind: "mismatch", owner };
 }
 
 // Same setup state and the same first command: the two dialects put
-// identical bytes on the wire from the lock up to their first FS I read.
+// identical bytes on the wire from the lock up to their first FS I read. That
+// holds only while the states between a setup branch and its identity read
+// never branch on ctx.entry; graph.test.ts pins that for INIT.
 function sameSetup(a: LegacyDialectEntry, b: LegacyDialectEntry): boolean {
   return a.setup.next === b.setup.next && a.setup.send().equals(b.setup.send());
 }

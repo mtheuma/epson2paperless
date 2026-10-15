@@ -29,14 +29,16 @@ describe("checkLegacyIdentity", () => {
     expect(checkLegacyIdentity(WF3620_ENTRY, "PID 9999")).toEqual({ kind: "unrecognised" });
     expect(checkLegacyIdentity(WF3620_ENTRY, null)).toEqual({ kind: "unrecognised" });
   });
-  it("switches to the owning dialect when its setup matches the running one", () => {
+  it("switches the fallback to the owning dialect when its setup matches", () => {
     // ET-2550 and WF-3620 both open with ESC @, so the wire up to FS I is identical.
     expect(checkLegacyIdentity(WF3620_ENTRY, "PID 1106")).toEqual({
       kind: "switch",
       owner: ET2550_ENTRY,
     });
+  });
+  it("never switches a PID-keyed dialect, even to one with the same setup", () => {
     expect(checkLegacyIdentity(ET2550_ENTRY, "PID 08B8")).toEqual({
-      kind: "switch",
+      kind: "mismatch",
       owner: WF3620_ENTRY,
     });
   });
