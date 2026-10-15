@@ -20,8 +20,17 @@ import { splitHashSegments } from "./segments.js";
  */
 
 export interface InfoTokens {
-  /** PID NNNN extracted from `#PRDh010PID NNNN        `. Null if missing. */
+  /**
+   * PID NNNN extracted from `#PRDh010PID NNNN        `. Null if missing, or
+   * when the printer reports a product name instead (see `prdName`).
+   */
   prdPid: string | null;
+  /**
+   * Product name from a name-form `#PRD`, e.g. "FF-680W" from
+   * `#PRDh007FF-680W\0`. Some sheet-fed scanners report this in place of a
+   * PID. Null if missing or PID-form.
+   */
+  prdName: string | null;
   /** Firmware version string from `#VERh008<value>`. Null if missing. */
   firmware: string | null;
   /** FB scan-area value from `#FB AREA<value>`. Null if missing. */
@@ -91,13 +100,31 @@ function textAfterPrefix(segments: string[], prefix: string): string | null {
   return null;
 }
 
+/**
+ * The value of a `#PRDhNNN<value>` segment, or null for any other segment.
+ * NNN is the value's length in hex: 16 for the space-padded `PID NNNN` form,
+ * the name's own length for the name form, which is followed by a NUL pad
+ * byte. Trailing padding of either kind is trimmed.
+ */
+function parsePrdValue(seg: string): string | null {
+  const m = seg.match(/^#PRDh([0-9a-fA-F]{3})/);
+  if (!m) return null;
+  const start = m[0].length;
+  return seg.slice(start, start + parseInt(m[1], 16)).replace(/[\s\0]+$/, "");
+}
+
 export function parseInfoTokens(body: Buffer): InfoTokens {
   const segments = splitHashSegments(body);
   let prdPid: string | null = null;
+  let prdName: string | null = null;
   let firmware: string | null = null;
   for (const seg of segments) {
-    const prdMatch = seg.match(/^#PRDh[0-9a-f]{3}PID\s+([0-9A-Fa-f]+)/);
-    if (prdMatch) prdPid = prdMatch[1];
+    const prd = parsePrdValue(seg);
+    if (prd !== null) {
+      const pidMatch = prd.match(/^PID\s+([0-9A-Fa-f]+)$/);
+      if (pidMatch) prdPid = pidMatch[1];
+      else if (prd.length > 0) prdName = prd;
+    }
     const verMatch = seg.match(/^#VERh[0-9a-f]{3}(.+)$/);
     if (verMatch) firmware = verMatch[1].trimEnd();
   }
@@ -106,6 +133,7 @@ export function parseInfoTokens(body: Buffer): InfoTokens {
   // value-side whitespace.
   return {
     prdPid,
+    prdName,
     firmware,
     fbArea: textAfterPrefix(segments, "#FB AREA"),
     adfArea: textAfterPrefix(segments, "#ADFAREA"),

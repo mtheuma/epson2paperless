@@ -1,6 +1,11 @@
 // src/esci2/dialects/registry.test.ts
 import { describe, it, expect } from "vitest";
-import { REGISTRY, supportsWireGrayscale } from "./registry.js";
+import {
+  REGISTRY,
+  REGISTRY_ENTRIES,
+  supportsWireGrayscale,
+  type RegistryEntry,
+} from "./registry.js";
 
 describe("REGISTRY", () => {
   it("contains exactly twelve known fingerprints", () => {
@@ -286,6 +291,55 @@ describe("REGISTRY", () => {
     };
     for (const [fp, want] of Object.entries(expected)) {
       expect(REGISTRY.get(fp)!.verifiedWireDpis, `fingerprint ${fp}`).toEqual(want);
+    }
+  });
+});
+
+describe("REGISTRY_ENTRIES model identity", () => {
+  it("pins each entry's PIDs and product names", () => {
+    const identities = REGISTRY_ENTRIES.map((e) => [e.displayName, e.pids, e.names]);
+    expect(identities).toEqual([
+      // ET-3950: PID unknown, resolves by fingerprint.
+      ["ET-4950 / ET-3950 / ET-4956 (ESC/I-2 over TLS)", ["11D1"], []],
+      // XP-4100: PID unknown, resolves by fingerprint.
+      ["ET-2750 / XP-4100 (ESC/I-2 over plain TCP)", ["112A"], []],
+      ["XP-7100 (ESC/I-2 over plain TCP)", ["1147"], []],
+      ["ET-2950 (ESC/I-2 over TLS)", ["11D0"], []],
+      ["ET-4800 (ESC/I-2 over plain TCP)", ["1185"], []],
+      ["ET-15000 (ESC/I-2 over plain TCP)", ["116E"], []],
+      ["FF-680W (ESC/I-2 over plain TCP)", [], ["FF-680W"]],
+      ["DS-575W (ESC/I-2 over plain TCP)", [], ["DS-575W"]],
+      ["ET-2810 / XP-3200 (ESC/I-2)", ["118A", "11AF"], []],
+      ["ET-8500 (ESC/I-2)", ["1193"], []],
+      ["ET-7700 (ESC/I-2)", ["112B"], []],
+      ["WF-3835 (ESC/I-2 over plain TCP)", ["117A"], []],
+    ]);
+  });
+
+  it("gives every entry at least one CAPA fingerprint", () => {
+    for (const e of REGISTRY_ENTRIES) {
+      expect(e.capaFingerprints.length, e.displayName).toBeGreaterThan(0);
+    }
+  });
+
+  // A key in two entries would make the lookup order decide the dialect.
+  it.each([
+    ["PID", (e: RegistryEntry) => e.pids.map((p) => p.toUpperCase())],
+    ["product name", (e: RegistryEntry) => e.names.map((n) => n.toUpperCase())],
+    ["CAPA fingerprint", (e: RegistryEntry) => e.capaFingerprints],
+  ] as const)("lists no %s in two entries", (_kind, keysOf) => {
+    const owners = new Map<string, string>();
+    for (const e of REGISTRY_ENTRIES) {
+      for (const key of keysOf(e)) {
+        expect(owners.get(key), `${key} in ${e.displayName}`).toBeUndefined();
+        owners.set(key, e.displayName);
+      }
+    }
+  });
+
+  it("stores PIDs as four upper-case hex digits", () => {
+    for (const pid of REGISTRY_ENTRIES.flatMap((e) => e.pids)) {
+      expect(pid).toMatch(/^[0-9A-F]{4}$/);
     }
   });
 });

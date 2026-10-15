@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { parseCapaTokens, parseInfoTokens, parseStatErrors } from "./capabilities.js";
+import { REPLAY_FIXTURES, readInit1Bodies } from "./test-support/capability-bodies.js";
 
 describe("parseInfoTokens", () => {
   it("extracts PRD PID and firmware from an XP-7100-style INFO body", () => {
@@ -14,7 +15,37 @@ describe("parseInfoTokens", () => {
     const info = Buffer.from("#FB ALGNLEFT#FB AREAd850i0001170", "ascii");
     const parsed = parseInfoTokens(info);
     expect(parsed.prdPid).toBeNull();
+    expect(parsed.prdName).toBeNull();
     expect(parsed.firmware).toBeNull();
+  });
+
+  it("parses a PID-form PRD to a PID and no name", () => {
+    const parsed = parseInfoTokens(Buffer.from("#PRDh010PID 11D1        #VERh008FB  2.00"));
+    expect(parsed.prdPid).toBe("11D1");
+    expect(parsed.prdName).toBeNull();
+  });
+
+  // The FF-680W and DS-575W shape: the length field counts the name alone,
+  // and a NUL pad byte follows it.
+  it("parses a name-form PRD to a product name and no PID", () => {
+    const parsed = parseInfoTokens(Buffer.from("#PRDh007FF-680W\0#VERh008ADF 1.00", "latin1"));
+    expect(parsed.prdName).toBe("FF-680W");
+    expect(parsed.prdPid).toBeNull();
+    expect(parsed.firmware).toBe("ADF 1.00");
+  });
+
+  it.each(REPLAY_FIXTURES)("parses the $model fixture's PRD ($path)", ({ model, path }) => {
+    const parsed = parseInfoTokens(readInit1Bodies(path).info);
+    const expected: Record<string, { prdPid: string | null; prdName: string | null }> = {
+      "ET-4950 family": { prdPid: "11D1", prdName: null },
+      "ET-2750": { prdPid: "112A", prdName: null },
+      "XP-7100": { prdPid: "1147", prdName: null },
+      "ET-4800": { prdPid: "1185", prdName: null },
+      "ET-7700": { prdPid: "112B", prdName: null },
+      "FF-680W": { prdPid: null, prdName: "FF-680W" },
+      "DS-575W": { prdPid: null, prdName: "DS-575W" },
+    };
+    expect({ prdPid: parsed.prdPid, prdName: parsed.prdName }).toEqual(expected[model]);
   });
 });
 

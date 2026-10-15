@@ -28,6 +28,7 @@ import {
   applyEntrySourceOverride,
   makeParaSpec,
   assertSourceSupported,
+  type ResolvedEntry,
 } from "./dialects/dispatch.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
 import {
@@ -367,14 +368,22 @@ twoPhaseRead(
   (ctx, body) => {
     ctx.capaBody = body;
     const fingerprint = computeCapaFingerprint(body);
+    let resolved: ResolvedEntry;
     try {
-      ctx.entry = lookupRegistryEntry(fingerprint, ctx.capaBody, ctx.infoBody, ctx.transport);
+      resolved = lookupRegistryEntry(fingerprint, ctx.capaBody, ctx.infoBody, ctx.transport);
     } catch (err) {
       return { error: err as Error };
     }
+    ctx.entry = resolved.entry;
     const capaTokens = parseCapaTokens(body);
     ctx.capaTokens = capaTokens;
-    log.debug("Dialect resolved", { name: ctx.entry.displayName, fingerprint });
+    log.debug("Dialect resolved", {
+      name: ctx.entry.displayName,
+      matchedBy: resolved.matchedBy,
+      pid: resolved.pid,
+      productName: resolved.productName,
+      fingerprint,
+    });
     // Shadow derivation: report-only, silent when the printer's own replies
     // agree with the entry. Nothing sent to the printer depends on it, so a
     // failure here is logged rather than allowed to end the session.

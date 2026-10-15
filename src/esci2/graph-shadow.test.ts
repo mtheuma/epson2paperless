@@ -19,13 +19,18 @@ vi.mock("./dialects/registry.js", async (importOriginal) => {
   const fp = computeCapaFingerprint(
     readInit1Bodies("tools/frida-capture/captures/2026-04-24T09-05-08-flatbed-1p-jpg.jsonl").capa,
   );
-  const doctored = new Map<string, RegistryEntry>(real.REGISTRY);
-  doctored.set(fp, {
-    ...real.REGISTRY.get(fp)!,
+  const original = real.REGISTRY.get(fp)!;
+  const doctored: RegistryEntry = {
+    ...original,
     adfDuplex: false,
     optionalSegments: { qit: false, cct: true },
-  });
-  return { ...real, REGISTRY: doctored };
+  };
+  const entries = real.REGISTRY_ENTRIES.map((e) => (e === original ? doctored : e));
+  return {
+    ...real,
+    REGISTRY_ENTRIES: entries,
+    REGISTRY: new Map([...real.REGISTRY].map(([k, e]) => [k, e === original ? doctored : e])),
+  };
 });
 
 describe("esci2Graph INIT1_CAPA_DATA — shadow derivation disagreement", () => {

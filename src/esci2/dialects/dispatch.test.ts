@@ -1,4 +1,4 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   lookupRegistryEntry,
   applyEntrySourceOverride,
@@ -7,6 +7,8 @@ import {
 } from "./dispatch.js";
 import { REGISTRY } from "./registry.js";
 import { UnsupportedDialectError } from "../diagnostic.js";
+import { computeCapaFingerprint } from "../capa-fingerprint.js";
+import { REPLAY_FIXTURES, readInit1Bodies } from "../test-support/capability-bodies.js";
 
 const ET4950_FP = "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2";
 const ET2750_FP = "de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7";
@@ -15,32 +17,131 @@ const FF680W_FP = "5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53ea
 const UNKNOWN_FP = "0000000000000000000000000000000000000000000000000000000000000000";
 const ET4800_FP = "7870a725ab969136d5eb04387bf01d3cc3168aabb3d11cfaca7d59a4169971c2";
 
-const ET4950_CAPA = Buffer.from("#GMMLISTUG10UG18#CMXLISTUNITUM08", "ascii"); // minimal stub
-const ET4950_INFO = Buffer.from("#PRDh010PID 1147        #FB AREAd850i0001170", "ascii");
+const STUB_CAPA = Buffer.from("#GMMLISTUG10UG18#CMXLISTUNITUM08", "ascii"); // minimal stub
+const UNKNOWN_PID_INFO = Buffer.from("#PRDh010PID 9999        #FB AREAd850i0001170", "ascii");
+
+const ET4950 = readInit1Bodies(
+  "tools/frida-capture/captures/2026-04-24T09-05-08-flatbed-1p-jpg.jsonl",
+);
+const XP7100 = readInit1Bodies("tools/pcap-extract/captures/xp-7100/jpg-flatbed.jsonl");
+const FF680W = readInit1Bodies("tools/pcap-extract/captures/ff-680w/adf-simplex-200.jsonl");
+
+/** A CAPA body no registry entry was recorded with: one extra segment. */
+const doctored = (capa: Buffer) => Buffer.concat([capa, Buffer.from("#ZZZZd001", "ascii")]);
+
+/** Runs the lookup with console.warn captured; returns the result and the warnings. */
+function lookup(info: Buffer, capa: Buffer, fingerprint = computeCapaFingerprint(capa)) {
+  const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  try {
+    const resolved = lookupRegistryEntry(fingerprint, capa, info, "plain");
+    return { resolved, warnings: warn.mock.calls.map((args) => args.join(" ")) };
+  } finally {
+    warn.mockRestore();
+  }
+}
 
 describe("lookupRegistryEntry", () => {
-  it("returns the entry for a known fingerprint", () => {
-    const e = lookupRegistryEntry(ET4950_FP, ET4950_CAPA, ET4950_INFO, "tls");
-    expect(e).toBe(REGISTRY.get(ET4950_FP));
+  it("resolves by the INFO product ID first", () => {
+    const { resolved, warnings } = lookup(ET4950.info, ET4950.capa);
+    expect(resolved.entry).toBe(REGISTRY.get(ET4950_FP));
+    expect(resolved.matchedBy).toBe("pid");
+    expect(resolved.pid).toBe("11D1");
+    expect(warnings).toEqual([]);
   });
 
-  it("throws UnsupportedDialectError with diagnostic for an unknown fingerprint", () => {
-    expect(() => lookupRegistryEntry(UNKNOWN_FP, ET4950_CAPA, ET4950_INFO, "plain")).toThrow(
-      UnsupportedDialectError,
-    );
+  it("resolves by the INFO product name when the printer reports a name", () => {
+    const { resolved, warnings } = lookup(FF680W.info, FF680W.capa);
+    expect(resolved.entry).toBe(REGISTRY.get(FF680W_FP));
+    expect(resolved.matchedBy).toBe("name");
+    expect(resolved.productName).toBe("FF-680W");
+    expect(resolved.pid).toBeNull();
+    expect(warnings).toEqual([]);
+  });
+
+  // The ET-3950 and XP-4100 case: a model whose PID isn't recorded resolves
+  // through the CAPA fingerprint it shares with a sibling.
+  it("falls back to the CAPA fingerprint when the PID isn't recorded", () => {
+    const { resolved, warnings } = lookup(UNKNOWN_PID_INFO, ET4950.capa);
+    expect(resolved.entry).toBe(REGISTRY.get(ET4950_FP));
+    expect(resolved.matchedBy).toBe("fingerprint");
+    expect(resolved.pid).toBe("9999");
+    expect(warnings).toEqual([]);
+  });
+
+  it("matches the PID case-insensitively", () => {
+    const info = Buffer.from("#PRDh010PID 11d1        ", "ascii");
+    expect(lookup(info, STUB_CAPA, UNKNOWN_FP).resolved.entry).toBe(REGISTRY.get(ET4950_FP));
+  });
+
+  describe("a PID or name hit with a CAPA fingerprint the model wasn't recorded with", () => {
+    it("warns with the diagnostic and proceeds with the identified model (PID)", () => {
+      const capa = doctored(ET4950.capa);
+      const fingerprint = computeCapaFingerprint(capa);
+      expect(REGISTRY.has(fingerprint)).toBe(false);
+      const { resolved, warnings } = lookup(ET4950.info, capa, fingerprint);
+      expect(resolved.entry).toBe(REGISTRY.get(ET4950_FP));
+      expect(resolved.matchedBy).toBe("pid");
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("by its PID 11D1");
+      expect(warnings[0]).toContain(`CAPA fingerprint:  ${fingerprint}`);
+      expect(warnings[0]).toContain("PRD:               PID 11D1");
+    });
+
+    it("warns with the diagnostic and proceeds with the identified model (name)", () => {
+      const { resolved, warnings } = lookup(FF680W.info, doctored(FF680W.capa));
+      expect(resolved.entry).toBe(REGISTRY.get(FF680W_FP));
+      expect(resolved.matchedBy).toBe("name");
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("by its product name FF-680W");
+      expect(warnings[0]).toContain("PRD:               FF-680W");
+    });
+
+    it("names the model the fingerprint belongs to, and still follows the PID", () => {
+      const { resolved, warnings } = lookup(ET4950.info, XP7100.capa);
+      expect(resolved.entry).toBe(REGISTRY.get(ET4950_FP));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain("it is the XP-7100");
+    });
+  });
+
+  it("throws UnsupportedDialectError when PID, name and fingerprint are all unknown", () => {
+    expect(() => lookup(UNKNOWN_PID_INFO, STUB_CAPA, UNKNOWN_FP)).toThrow(UnsupportedDialectError);
   });
 
   it("the thrown error carries the fingerprint and diagnostic", () => {
     try {
-      lookupRegistryEntry(UNKNOWN_FP, ET4950_CAPA, ET4950_INFO, "plain");
+      lookup(UNKNOWN_PID_INFO, STUB_CAPA, UNKNOWN_FP);
       expect.fail("should have thrown");
     } catch (err) {
       expect(err).toBeInstanceOf(UnsupportedDialectError);
       const e = err as UnsupportedDialectError;
       expect(e.capaFingerprint).toBe(UNKNOWN_FP);
       expect(e.diagnostic).toContain("CAPA fingerprint:");
+      expect(e.diagnostic).toContain("PRD:               PID 9999");
       expect(e.diagnostic).toContain("esci2-plain");
     }
+  });
+
+  it("an unknown product name fails the same way, and the diagnostic names it", () => {
+    const info = Buffer.from("#PRDh007XX-000W\0#VERh008ADF 1.00", "latin1");
+    try {
+      lookup(info, STUB_CAPA, UNKNOWN_FP);
+      expect.fail("should have thrown");
+    } catch (err) {
+      expect(err).toBeInstanceOf(UnsupportedDialectError);
+      expect((err as UnsupportedDialectError).diagnostic).toContain("PRD:               XX-000W");
+    }
+  });
+
+  // Every replay fixture must resolve by its model identity to the entry its
+  // fingerprint names, silently: the identity lookup changes nothing sent.
+  // The FF-680W and DS-575W resolve by name, so no trigger has to supply one.
+  it.each(REPLAY_FIXTURES)("resolves the $model fixture $path by identity", ({ model, path }) => {
+    const { info, capa } = readInit1Bodies(path);
+    const { resolved, warnings } = lookup(info, capa);
+    expect(resolved.entry).toBe(REGISTRY.get(computeCapaFingerprint(capa)));
+    expect(resolved.matchedBy).toBe(model === "FF-680W" || model === "DS-575W" ? "name" : "pid");
+    expect(warnings).toEqual([]);
   });
 });
 

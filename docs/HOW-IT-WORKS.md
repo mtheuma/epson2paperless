@@ -89,7 +89,7 @@ connect -> welcome -> lock
   -> unlock -> finalize output
 ```
 
-The legacy ESC/I graph follows the same engine contract but uses a different command vocabulary: `ESC @`, `ESC e`, `FS W`, `FS G`, `FS F`, plus unsolicited `0xa200` image-stream chunks. Per-model differences (WF-3620 vs. the flatbed-only XP-620 and ET-2550) are resolved through a small dialect registry (`src/esci/dialects/`) keyed on the push-scan PID (`PID 08C8` → XP-620, `PID 1106` → ET-2550, anything else → WF-3620), picked by `resolveLegacyEntry` — the legacy-path counterpart to the ESC/I-2 side's CAPA-fingerprint registry.
+The legacy ESC/I graph follows the same engine contract but uses a different command vocabulary: `ESC @`, `ESC e`, `FS W`, `FS G`, `FS F`, plus unsolicited `0xa200` image-stream chunks. Per-model differences (WF-3620 vs. the flatbed-only XP-620 and ET-2550) are resolved through a small dialect registry (`src/esci/dialects/`) keyed on the push-scan PID (`PID 08C8` → XP-620, `PID 1106` → ET-2550, anything else → WF-3620), picked by `resolveLegacyEntry` — the legacy-path counterpart to the ESC/I-2 side's model-identity registry.
 
 The protocol graphs intentionally stay separate. They share the engine and output pipeline, but not command construction or state names; that keeps the ESC/I-2 and WF-3620 behaviors easy to reason about independently.
 
