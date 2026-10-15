@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { esciGraph, ESCI_TIMEOUT_MS, ESCI_REPLY, type EsciCtx } from "./graph.js";
 import { WF3620_ENTRY } from "./dialects/wf3620.js";
 import { XP620_ENTRY } from "./dialects/xp620.js";
+import { ET2550_ENTRY } from "./dialects/et2550.js";
 import { captureLogs, type CapturedLine } from "./test-support/log-capture.js";
 import { buildFsIReply } from "./test-support/fs-i-reply.js";
 import type { TransitionResult } from "../scan-session.js";
@@ -73,6 +74,27 @@ describe("esciGraph WELCOME / LOCKING / INIT", () => {
       const result = state.decide(ctx, { type: ESCI_REPLY, payload: Buffer.from([0x06]) });
       expect("error" in result).toBe(true);
       if ("error" in result) expect(result.error.message).toMatch(/LOCKING/);
+    }
+  });
+
+  it("INIT decides identically for every dialect whose setup enters it", () => {
+    // The IDENTITY switch (sameSetup) assumes the wire up to FS I doesn't
+    // depend on the dialect; INIT is the only state on that path today.
+    const state = esciGraph.states.INIT;
+    if (state.kind !== "decision") throw new Error("INIT must be a decision state");
+    const entries = [WF3620_ENTRY, ET2550_ENTRY];
+    expect(entries.every((e) => e.setup.next === "INIT")).toBe(true);
+    const ack = { type: ESCI_REPLY, payload: Buffer.from([0x06]) };
+    const nak = { type: ESCI_REPLY, payload: Buffer.from([0x15]) };
+    for (const packet of [ack, nak]) {
+      for (const diagnoseProtocol of [false, true]) {
+        const outcomes = entries.map((entry) =>
+          JSON.stringify(state.decide(makeCtx({ entry, diagnoseProtocol }), packet), (_k, v) =>
+            v instanceof Error ? v.message : (v as unknown),
+          ),
+        );
+        expect(new Set(outcomes).size).toBe(1);
+      }
     }
   });
 
@@ -168,12 +190,75 @@ describe("esciGraph IDENTITY / STATUS_1A / STATUS_1B / STATUS_2", () => {
     const ctx = makeCtx();
     const { result, lines } = decideIdentity(ctx, buildFsIReply("PID 08C8", "1.10"));
     expect("next" in result && result.next).toBe("STATUS_1A");
+    // XP-620 setup opens with ESC I, so the wire has already diverged: no switch.
+    expect(ctx.entry).toBe(WF3620_ENTRY);
     const warnings = lines.filter((l) => l.stream === "warn");
     expect(warnings).toHaveLength(1);
     expect(warnings[0].text).toContain(
       "Printer identifies as PID 08C8, which has its own xp620 dialect, but this session is running the wf3620 settings",
     );
     expect(warnings[0].text).not.toContain("experimental");
+  });
+
+  it("IDENTITY on the WF-3620 settings switches an ET-2550 to its own dialect", () => {
+    // What scan:now and the webhook reach: no trigger PID, so the WF-3620 fallback.
+    const ctx = makeCtx();
+    const { result, lines } = decideIdentity(ctx, buildFsIReply("PID 1106", "1.40"));
+    expect("next" in result && result.next).toBe("STATUS_1A");
+    expect(ctx.entry).toBe(ET2550_ENTRY);
+    // Fixed-flatbed: the source is pinned, as the shell pins it for a session
+    // that starts on the ET-2550.
+    expect(ctx.source).toBe("flatbed");
+    expect(ctx.sourceDetected).toBe(true);
+    expect(lines.filter((l) => l.stream === "warn")).toEqual([]);
+    const switched = lines.filter((l) => l.text.includes("switching"));
+    expect(switched).toHaveLength(1);
+    expect(switched[0].text).toContain(
+      "[INFO] [scanner-esci] Printer identifies as PID 1106, which has its own et2550 dialect — switching from the wf3620 settings",
+    );
+    expect(switched[0].data).toEqual({ firmware: "1.40" });
+  });
+
+  it("IDENTITY keeps a PID-keyed dialect the printer names differently, and warns", () => {
+    // The trigger's own PID chose the ET-2550; FS I doesn't overrule it.
+    const ctx = makeCtx({ entry: ET2550_ENTRY, source: "flatbed", sourceDetected: true });
+    const { result, lines } = decideIdentity(ctx, buildFsIReply("PID 08B8", "1.20"));
+    expect("next" in result && result.next).toBe("STATUS_1A");
+    expect(ctx.entry).toBe(ET2550_ENTRY);
+    expect(ctx.source).toBe("flatbed");
+    expect(lines.filter((l) => l.stream === "warn").map((l) => l.text)).toEqual([
+      expect.stringContaining(
+        "Printer identifies as PID 08B8, which has its own wf3620 dialect, but this session is running the et2550 settings",
+      ),
+    ]);
+  });
+
+  it("IDENTITY keeps a flatbed ESCI_FORCE_SOURCE across the switch", () => {
+    const ctx = makeCtx({ forcedSource: "flatbed", source: "flatbed" });
+    const { result } = decideIdentity(ctx, buildFsIReply("PID 1106", "1.40"));
+    expect("next" in result && result.next).toBe("STATUS_1A");
+    expect(ctx.entry).toBe(ET2550_ENTRY);
+    expect(ctx.source).toBe("flatbed");
+    expect(ctx.sourceDetected).toBe(true);
+  });
+
+  it("IDENTITY fails rather than switch to a dialect that can't service ESCI_FORCE_SOURCE", () => {
+    const ctx = makeCtx({ forcedSource: "adf-simplex" });
+    const { result } = decideIdentity(ctx, buildFsIReply("PID 1106", "1.40"));
+    expect("error" in result && result.error.message).toBe(
+      "ESCI_FORCE_SOURCE=adf-simplex is not supported by et2550 (supports: flatbed). " +
+        "Unset ESCI_FORCE_SOURCE or set it to one of the supported sources.",
+    );
+    expect(ctx.entry).toBe(WF3620_ENTRY);
+  });
+
+  it("STATUS_1B after a switch to the ET-2550 skips the ESC e probe", () => {
+    const ctx = makeCtx();
+    decideIdentity(ctx, buildFsIReply("PID 1106", "1.40"));
+    const state = esciGraph.states.STATUS_1B;
+    if (state.kind !== "decision") throw new Error("STATUS_1B must be a decision state");
+    const result = state.decide(ctx, { type: ESCI_REPLY, payload: Buffer.alloc(16) });
+    expect("next" in result && result.next).toBe("STATUS_2");
   });
 
   it("IDENTITY on a PID-keyed dialect the printer doesn't name warns without the experimental line", () => {
@@ -211,6 +296,7 @@ describe("esciGraph IDENTITY / STATUS_1A / STATUS_1B / STATUS_2", () => {
     const ctx = makeCtx({ entry: XP620_ENTRY });
     const { result, lines } = decideIdentity(ctx, buildFsIReply("PID 1106", "1.40"), "XP_IDENT_C");
     expect("next" in result && result.next).toBe("XP_STATUS_1");
+    expect(ctx.entry).toBe(XP620_ENTRY);
     const warnings = lines.filter((l) => l.stream === "warn");
     expect(warnings).toHaveLength(1);
     expect(warnings[0].text).toContain(

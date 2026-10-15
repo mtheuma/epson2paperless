@@ -585,8 +585,8 @@ flatbed-only with a fixed raster:
   through its own state group.
 - **ET-2550** (issue #166) — the WF-3620's own flatbed path with both `ESC e`
   source-select pairs removed, since the driver never sends one on hardware
-  with no ADF. That omission is why the WF-3620 fallback NAKs at
-  `SOURCE_ACK2` for this model.
+  with no ADF. That omission is why the WF-3620 settings NAK at
+  `SOURCE_ACK2` on this model.
 
 Per-model differences are resolved through a small dialect registry rather than
 branching logic scattered through the graph — see [Per-model dialects
@@ -650,30 +650,50 @@ against each entry's literal PID string — `"PID 08B8"` for `WF3620_ENTRY`,
 PID — or `null`, which is what the host-triggered `scan:now` CLI
 (`src/scan-now.ts`) always passes since there is no panel to read a
 `ProductNameIn` from — falls back to `WF3620_ENTRY`, so the WF-3620 settings
-are the de facto generic legacy dialect. In other words, the XP-620 and
-ET-2550 dialects are only reachable through a panel-triggered scan (daemon or
-`npm run scan`); `scan:now` stays WF-3620 regardless of the actual printer.
-The WF-3620's `PID 08B8` comes from its `FS I` reply; no captured WF-3620
-trigger shows its `ProductNameIn`, and the fallback covers it either way.
+are the de facto generic legacy dialect. That is only where the session
+starts: the identity check below can hand it over to the printer's own
+dialect, which is how `scan:now` and the webhook reach the ET-2550 dialect.
+The XP-620 dialect is still reachable only through a panel-triggered scan
+(daemon or `npm run scan`). The WF-3620's `PID 08B8` comes from its `FS I`
+reply; no captured WF-3620 trigger shows its `ProductNameIn`, and the
+fallback covers it either way.
 
 The session's first `FS I` reply names the printer itself: a 16-byte product
 field at offset 46 (`PID 08B8` on the WF-3620, `PID 08C8` on the XP-620,
 `PID 1106` on the ET-2550) and a 4-byte firmware field at offset 62. The graph
 decodes it (`parseFsIReply`) and checks it against the running dialect
-(`checkLegacyIdentity`). This is report-only: the session continues on
-`ctx.entry` whatever the check says. A match logs the usual debug
-`Dialect resolved` line. A product no dialect claims, on the WF-3620 fallback,
-warns that an older ESC/I model is trying the WF-3620 settings
-(experimental) and asks for a report. A product another dialect claims warns
-which dialect that is: `scan:now` against an ET-2550 should produce it, since
-the ET-2550's setup reaches `FS I` the same way the WF-3620's does. (Under
-`scan:now` an XP-620 gets the WF-3620's `ESC @` setup instead of its own, and
-no capture shows whether that reaches `FS I`.) Because the PID is read
-in-session, the check works on `scan:now` too. Bytes outside printable ASCII
-in either field are logged as `\xNN`, and a reply that isn't 80 bytes fails
-the session with the whole reply in hex.
+(`checkLegacyIdentity`):
 
-Three branch points read `ctx.entry`:
+- **Match:** the dialect's own PID. Logs the usual debug `Dialect resolved`
+  line.
+- **Unrecognised:** a product no dialect claims, on the WF-3620 fallback.
+  Warns that an older ESC/I model is trying the WF-3620 settings
+  (experimental) and asks for a report.
+- **Switch:** the session is on the WF-3620 fallback, another dialect claims
+  the product, and its setup branch is the fallback's (same `setup.next`
+  state, same first command). Every
+  byte on the wire up to this `FS I` is then what that dialect would have
+  sent, so the session sets `ctx.entry` to it, resets the source state the
+  way `runEsciScan` initialises it for that dialect (pinned `flatbed` for a
+  fixed-flatbed one), and logs an info line naming both dialects. Today
+  that is a PID-less trigger (`scan:now`, the webhook) reaching an ET-2550:
+  both it and the WF-3620 open with `ESC @` into `INIT`. If the adopted
+  dialect can't service `ESCI_FORCE_SOURCE`, the session fails there with
+  the same error `runEsciScan` raises up front.
+- **Mismatch:** another dialect claims the product but the session is on a
+  PID-keyed dialect (the trigger's own PID chose it, and `FS I` doesn't
+  overrule that) or its setup diverged before `FS I`, or the session picked a
+  PID-keyed dialect the printer doesn't name. Warns, and the session continues on `ctx.entry`. Under
+  `scan:now` an XP-620 lands here at best: it gets the WF-3620's `ESC @`
+  setup instead of its own `ESC I`, and no capture shows whether that even
+  reaches `FS I`.
+
+Because the PID is read in-session, the check works on `scan:now` too. Bytes
+outside printable ASCII in either field are logged as `\xNN`, and a reply
+that isn't 80 bytes fails the session with the whole reply in hex.
+
+Three branch points read `ctx.entry`. All but setup run after the identity
+check, so they see any dialect it switched to:
 
 - **Setup** (`LOCKING`): once the lock-ack arrives, the graph jumps to
   `ctx.entry.setup.next` and sends `ctx.entry.setup.send()`. WF-3620 and
@@ -715,7 +735,9 @@ across the capture's JPG and PDF scans, so both are format-independent.
 dialect creates: if `entry.sourcePolicy === "fixed-flatbed"` and
 `ESCI_FORCE_SOURCE` names anything other than `flatbed`, the scan fails
 immediately with a descriptive error instead of desyncing mid-session
-against hardware with no ADF to source from.
+against hardware with no ADF to source from. That check sees only the
+dialect the session starts on, so the identity switch repeats it
+(`unsupportedForcedSource` in `src/esci/graph.ts`).
 
 ### XP-620 setup and teardown
 

@@ -50,6 +50,7 @@ import { encodeRawGbrToJpeg } from "./raw-to-jpeg.js";
 import { createLogger } from "../logger.js";
 import { passthru } from "./dialects/send.js";
 import { checkLegacyIdentity } from "./dialects/registry.js";
+import type { LegacyDialectEntry } from "./dialects/entry.js";
 
 const log = createLogger("scanner-esci");
 
@@ -59,8 +60,12 @@ const log = createLogger("scanner-esci");
  * here is ESC/I-protocol-specific.
  */
 export interface EsciCtx {
-  /** Resolved per-model dialect record; see src/esci/dialects/. */
-  entry: import("./dialects/entry.js").LegacyDialectEntry;
+  /**
+   * Resolved per-model dialect record; see src/esci/dialects/. The first FS I
+   * read may replace it with the printer's own dialect (see resolveIdentity),
+   * so states read it from ctx, never from the session.
+   */
+  entry: LegacyDialectEntry;
   duplex: boolean;
   forcedSource: Source | null;
   /** Set in STATUS_2 from the FS F byte (or ctx.forcedSource). */
@@ -72,11 +77,13 @@ export interface EsciCtx {
   /**
    * True once STATUS_2 has actually run and assigned `ctx.source` (either
    * from the FS F status byte via `legacyDetectSource` or from
-   * `ctx.forcedSource`). The shell uses this flag — not just the presence
-   * of `ctx.source` — to decide whether to fire `LegacyScanSession.onSourceDetected`,
-   * because `source` is initialized to `forcedSource ?? "adf-simplex"` in
-   * the scanner shell before any state has run, so a session that fails
-   * inside WELCOME / LOCKING / INIT could otherwise produce a spurious
+   * `ctx.forcedSource`), or from the start for a fixed-flatbed dialect,
+   * whose source is pinned with no detection to run (see `initialSource`,
+   * applied by the shell and again by an IDENTITY switch). The shell uses
+   * this flag — not just the presence of `ctx.source` — to decide whether to
+   * fire `LegacyScanSession.onSourceDetected`, because a detecting dialect
+   * starts on a `forcedSource ?? "adf-simplex"` placeholder, so a session that
+   * fails inside WELCOME / LOCKING / INIT could otherwise produce a spurious
    * detection callback on the failure path.
    */
   sourceDetected: boolean;
@@ -237,10 +244,44 @@ function xpIdentMeta(name: string, next: string, expectedLen: number): void {
 }
 
 /**
- * Log what the printer's FS I identity reply says about the dialect in use.
- * Report-only: every outcome continues the session on `ctx.entry`.
+ * The source state a session starts with on `entry`. Fixed-flatbed dialects
+ * have no FS F detection to run, so the source is pinned outright; the rest
+ * start on a safe default that STATUS_2 overwrites before anything reads it.
  */
-function reportIdentity(ctx: EsciCtx, payload: Buffer): void {
+export function initialSource(
+  entry: LegacyDialectEntry,
+  forcedSource: Source | null,
+): Pick<EsciCtx, "source" | "sourceDetected"> {
+  return entry.sourcePolicy === "fixed-flatbed"
+    ? { source: "flatbed", sourceDetected: true }
+    : { source: forcedSource ?? "adf-simplex", sourceDetected: false };
+}
+
+/**
+ * An ESCI_FORCE_SOURCE the dialect can't service (e.g. the XP-620 has no
+ * ADF), as the error that rejects it — rather than letting the wire session
+ * desync partway through a command sequence the printer doesn't support.
+ */
+export function unsupportedForcedSource(
+  entry: LegacyDialectEntry,
+  forcedSource: Source | null,
+): Error | null {
+  if (!forcedSource || entry.supportedSources.includes(forcedSource)) return null;
+  const supported = entry.supportedSources.join(", ");
+  return new Error(
+    `ESCI_FORCE_SOURCE=${forcedSource} is not supported by ${entry.name} ` +
+      `(supports: ${supported}). Unset ESCI_FORCE_SOURCE or set it to one of the supported sources.`,
+  );
+}
+
+/**
+ * Act on what the printer's FS I identity reply says about the dialect in
+ * use. A dialect whose setup matches the running one takes the session over
+ * (a PID-less trigger reaching an ET-2550); every other outcome is logged and
+ * the session continues on `ctx.entry`. Returns an error only when the
+ * adopted dialect can't service ESCI_FORCE_SOURCE.
+ */
+function resolveIdentity(ctx: EsciCtx, payload: Buffer): Error | null {
   const { productName, firmware } = parseFsIReply(payload);
   const check = checkLegacyIdentity(ctx.entry, productName);
   if (check.kind === "match") {
@@ -251,6 +292,17 @@ function reportIdentity(ctx: EsciCtx, payload: Buffer): void {
         "trying the WF-3620 settings (experimental), please report",
       { firmware },
     );
+  } else if (check.kind === "switch") {
+    const { owner } = check;
+    const forcedError = unsupportedForcedSource(owner, ctx.forcedSource);
+    if (forcedError) return forcedError;
+    log.info(
+      `Printer identifies as ${productName}, which has its own ${owner.name} dialect — ` +
+        `switching from the ${ctx.entry.name} settings`,
+      { firmware },
+    );
+    ctx.entry = owner;
+    Object.assign(ctx, initialSource(owner, ctx.forcedSource));
   } else {
     const owner = check.owner ? `, which has its own ${check.owner.name} dialect` : "";
     log.warn(
@@ -259,10 +311,11 @@ function reportIdentity(ctx: EsciCtx, payload: Buffer): void {
       { firmware },
     );
   }
+  return null;
 }
 
 /**
- * The session's first FS I read: validate the 80-byte reply, report the
+ * The session's first FS I read: validate the 80-byte reply, resolve the
  * identity, then advance. Later FS I re-reads (ADF_IDENTITY_*) stay silent.
  */
 function identityState(name: string, next: string, send: SendSpec<EsciCtx>): void {
@@ -281,7 +334,8 @@ function identityState(name: string, next: string, send: SendSpec<EsciCtx>): voi
           ),
         };
       }
-      reportIdentity(ctx, packet.payload);
+      const error = resolveIdentity(ctx, packet.payload);
+      if (error) return { error };
       return { next, send };
     }),
   );
@@ -312,7 +366,9 @@ g.state(
 
 // INIT: ESC @ ack-or-NAK. ACK → IDENTITY (FS I); NAK + diagnoseProtocol →
 // DIAGNOSE_INIT_PROBE (FS Y); NAK + !diagnose → fail with the canonical
-// "expected ESC @ ack, got type=0x{type} payload={hex}" message.
+// "expected ESC @ ack, got type=0x{type} payload={hex}" message. Must not
+// branch on ctx.entry: the IDENTITY switch relies on every dialect whose setup
+// enters INIT reaching FS I with the same bytes (see sameSetup).
 g.state(
   "INIT",
   decision<EsciCtx>((ctx, packet) => {
@@ -389,7 +445,7 @@ awaitReply(g, "XP_STATUS_3", ESCI_REPLY, length16, "GAMMA_CMD", sendEscZ());
 // IDENTITY → STATUS_1A → STATUS_1B → SOURCE probe → STATUS_2 (decision)
 // =============================================================================
 
-// IDENTITY: 80-byte identity payload, reported against the dialect → STATUS_1A, send FS F.
+// IDENTITY: 80-byte identity payload, resolved against the dialect → STATUS_1A, send FS F.
 identityState("IDENTITY", "STATUS_1A", sendFsF());
 
 // STATUS_1A: first FS F status reply. In the inter-page loop, byte 0 = 0x81
@@ -448,7 +504,8 @@ g.state(
     if (typeGuard) return typeGuard;
     const lengthGuard = expectLength(packet.payload, 16, "STATUS_2", "status");
     if (lengthGuard) return lengthGuard;
-    // Fixed-flatbed: the shell already pinned ctx.source, and byte-0 detection
+    // Fixed-flatbed: ctx.source is already pinned (by the shell, or by the
+    // IDENTITY switch that adopted this dialect), and byte-0 detection
     // must NOT run — the ET-2550 reports 0x01 here (never the WF-3620's 0x81),
     // which legacyDetectSource would read as an ADF. Its driver runs the reset
     // cycle unconditionally, so take that path directly.
