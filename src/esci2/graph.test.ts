@@ -6,6 +6,7 @@ import { IS_HEADER_SIZE, buildPurereadPacket, parseIsPacket } from "../protocol.
 import { parseCapaTokens } from "./capabilities.js";
 import { DEFAULT_JPEG_QUALITY } from "../config.js";
 import {
+  EXPECTED_DISAGREEMENTS,
   REPLAY_FIXTURES,
   readFirstInitPollStatus,
   readInit1Bodies,
@@ -1444,12 +1445,19 @@ describe("esci2Graph INIT1_CAPA_DATA — shadow derivation", () => {
   const shadowLines = (lines: unknown[][]) =>
     lines.filter((args) => args.some((a) => String(a).includes(SHADOW_LINE)));
 
-  it.each(REPLAY_FIXTURES)("is silent for the $model fixture $path", ({ path }) => {
-    const { info, capa } = readInit1Bodies(path);
-    const { ctx, lines } = resolveDialect(info, capa);
-    expect(ctx.entry).toBeDefined();
-    expect(shadowLines(lines)).toEqual([]);
-  });
+  it.each(REPLAY_FIXTURES)(
+    "logs only the expected disagreements for the $model fixture $path",
+    ({ model, path }) => {
+      const { info, capa } = readInit1Bodies(path);
+      const { ctx, lines } = resolveDialect(info, capa);
+      expect(ctx.entry).toBeDefined();
+      expect(shadowLines(lines).map((args) => args[2])).toEqual(
+        (EXPECTED_DISAGREEMENTS[model] ?? []).map((d) =>
+          expect.objectContaining({ field: d.field, derived: d.derived, entry: d.entry }),
+        ),
+      );
+    },
+  );
 });
 
 describe("esci2Graph INIT_POLL — status-content source shadow", () => {

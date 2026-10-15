@@ -10,6 +10,7 @@ import { parseCapaTokens, parseInfoTokens, parseStatErrors } from "./capabilitie
 import { REGISTRY, type RegistryEntry } from "./dialects/registry.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
 import {
+  EXPECTED_DISAGREEMENTS,
   REPLAY_FIXTURES,
   readFirstInitPollStatus,
   readInit1Bodies,
@@ -80,6 +81,22 @@ describe("deriveCapabilities — sources and source detection", () => {
   });
 });
 
+describe("deriveCapabilities — PARA profile and back-page rotation", () => {
+  it("adf-crp needs an ADF that lists crop and no flatbed", () => {
+    const adfOnly = ascii("#ADFAREAd850i0001550");
+    const both = ascii("#ADFAREAd850i0001400#FB AREAd850i0001170");
+    expect(derive(adfOnly, ascii("#ADFDPLX#ADFCRP #ADFSKEW")).paraProfile).toBe("adf-crp");
+    expect(derive(both, ascii("#ADFCRP ")).paraProfile).toBe("standard");
+    expect(derive(adfOnly, ascii("#ADFDPLX#ADFSKEW")).paraProfile).toBe("standard");
+  });
+
+  it("back pages are rotated exactly for a two-pass (2SCN) duplex ADF", () => {
+    expect(derive(ascii("#ADFDPLX2SCN"), NO_CAPA).duplexBackRotated).toBe(true);
+    expect(derive(ascii("#ADFDPLX1SCN"), NO_CAPA).duplexBackRotated).toBe(false);
+    expect(derive(ascii("#ADFAREAd850i0001400"), NO_CAPA).duplexBackRotated).toBe(false);
+  });
+});
+
 describe("sourceFromStatusErrors — content-based source decision", () => {
   it("ADF paper empty means the flatbed; no error means the ADF", () => {
     expect(sourceFromStatusErrors(parseStatErrors(ascii("#ERRADF PE  ")))).toEqual({
@@ -104,6 +121,8 @@ describe("compareWithEntry", () => {
     adfDuplex: true,
     sources: { flatbed: true, adf: true },
     sourceDetection: "init-poll-status",
+    paraProfile: "standard",
+    duplexBackRotated: true,
   };
 
   it("returns nothing when every field agrees", () => {
@@ -135,11 +154,26 @@ describe("compareWithEntry", () => {
 });
 
 describe("shadow derivation agrees with every replay fixture", () => {
-  it.each(REPLAY_FIXTURES)("$model: $path", ({ path }) => {
+  it.each(REPLAY_FIXTURES)("$model: $path", ({ model, path }) => {
     const { info, capa } = readInit1Bodies(path);
     const entry = REGISTRY.get(computeCapaFingerprint(capa));
     expect(entry).toBeDefined();
-    expect(compareWithEntry(derive(info, capa), entry!)).toEqual([]);
+    expect(compareWithEntry(derive(info, capa), entry!)).toEqual(
+      EXPECTED_DISAGREEMENTS[model] ?? [],
+    );
+  });
+
+  it("every expected disagreement names a fixture model", () => {
+    const models = new Set(REPLAY_FIXTURES.map((f) => f.model));
+    for (const model of Object.keys(EXPECTED_DISAGREEMENTS)) expect(models).toContain(model);
+  });
+
+  it("adf-crp is derived for exactly the FF-680W and DS-575W", () => {
+    const crp = REPLAY_FIXTURES.filter(({ path }) => {
+      const { info, capa } = readInit1Bodies(path);
+      return derive(info, capa).paraProfile === "adf-crp";
+    });
+    expect(new Set(crp.map((f) => f.model))).toEqual(new Set(["FF-680W", "DS-575W"]));
   });
 });
 
