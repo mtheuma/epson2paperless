@@ -21,6 +21,14 @@ export interface DerivedCapabilities {
   cct: boolean;
   /** The ADF can scan both sides. */
   adfDuplex: boolean;
+  /** Which sources the printer has: each one advertises a scan area in INFO. */
+  sources: { flatbed: boolean; adf: boolean };
+  /**
+   * How the session learns its source. A printer with both sources reads it
+   * from the init poll's status reply; a single-source printer is fixed to
+   * it. Null when INFO advertises no scan area at all.
+   */
+  sourceDetection: "init-poll-status" | "fixed-flatbed" | "fixed-adf" | null;
 }
 
 /** One differing field, typed by the field it names. */
@@ -53,7 +61,27 @@ const FIELDS: { [K in keyof DerivedCapabilities]: FieldRule<K> } = {
     derive: (_info, capa) => capa.adfDuplex,
     fromEntry: (e) => e.adfDuplex,
   },
+  sources: {
+    derive: (info) => sourcesOf(info),
+    fromEntry: (e) => ({ flatbed: e.fbExtents !== null, adf: e.adfExtents !== null }),
+  },
+  sourceDetection: {
+    derive: (info) => {
+      const { flatbed, adf } = sourcesOf(info);
+      if (flatbed && adf) return "init-poll-status";
+      if (flatbed) return "fixed-flatbed";
+      return adf ? "fixed-adf" : null;
+    },
+    // The entry's "stat-length" reads the same status reply, by its length.
+    fromEntry: (e) =>
+      e.sourceDetection === "stat-length" ? "init-poll-status" : e.sourceDetection,
+  },
 };
+
+/** A scan-area segment with no value advertises no source, as with lists. */
+function sourcesOf(info: InfoTokens): DerivedCapabilities["sources"] {
+  return { flatbed: advertises(info.fbArea), adf: advertises(info.adfArea) };
+}
 
 const FIELD_NAMES = Object.keys(FIELDS) as (keyof DerivedCapabilities)[];
 
@@ -74,9 +102,33 @@ export function compareWithEntry(
   const check = <K extends keyof DerivedCapabilities>(field: K) => {
     const fromEntry = FIELDS[field].fromEntry(entry);
     if (!isDeepStrictEqual(derived[field], fromEntry)) {
-      out.push({ field, derived: derived[field], entry: fromEntry });
+      out.push({ field, derived: derived[field], entry: fromEntry } as Disagreement);
     }
   };
   FIELD_NAMES.forEach(check);
   return out;
+}
+
+/**
+ * Today's source rule for `stat-length` entries, from the first init-poll
+ * STAT reply's declared length. ET-4950 fixtures: length 0 → ADF (printer
+ * queued no status); length 12 → flatbed (queued `#ERRADF PE  `). Other
+ * lengths default to ADF.
+ */
+export function sourceFromStatLength(length: number): "adf" | "flatbed" {
+  return length === 12 ? "flatbed" : "adf";
+}
+
+/**
+ * The source a printer with both sources is on, read from the content of the
+ * init poll's first status reply: "ADF paper empty" means the flatbed, no
+ * error means the ADF. Any other error is one a content-based decision would
+ * end the session on, so it is returned for the caller to report.
+ */
+export type StatusSourceDecision = { source: "flatbed" | "adf" } | { unexpectedErrors: string[] };
+
+export function sourceFromStatusErrors(errors: string[]): StatusSourceDecision {
+  const unexpected = errors.filter((e) => e !== "ADF PE");
+  if (unexpected.length > 0) return { unexpectedErrors: unexpected };
+  return { source: errors.length > 0 ? "flatbed" : "adf" };
 }

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseCapaTokens, parseInfoTokens } from "./capabilities.js";
+import { parseCapaTokens, parseInfoTokens, parseStatErrors } from "./capabilities.js";
 
 describe("parseInfoTokens", () => {
   it("extracts PRD PID and firmware from an XP-7100-style INFO body", () => {
@@ -108,5 +108,21 @@ describe("parseCapaTokens — resolution lists and JPEG quality range", () => {
     const body = Buffer.from("#FB AREAd850i0001170#FB RSMSLISTd075d150d200", "ascii");
     const t = parseCapaTokens(body);
     expect(t.fbRsmsList).toEqual([75, 150, 200]);
+  });
+});
+
+describe("parseStatErrors", () => {
+  it("returns each #ERR token as location and code, trimmed", () => {
+    expect(parseStatErrors(Buffer.from("#ERRADF PE  ", "ascii"))).toEqual(["ADF PE"]);
+    expect(parseStatErrors(Buffer.from("#ERRADF JAM #ERRFB  OPN ", "ascii"))).toEqual([
+      "ADF JAM",
+      "FB OPN",
+    ]);
+  });
+
+  it("returns nothing for a reply with no error, including #--- filler", () => {
+    expect(parseStatErrors(Buffer.alloc(0))).toEqual([]);
+    expect(parseStatErrors(Buffer.from("STATx0000000#---#---#---", "ascii"))).toEqual([]);
+    expect(parseStatErrors(Buffer.from("#ERR    #---", "ascii"))).toEqual([]);
   });
 });
