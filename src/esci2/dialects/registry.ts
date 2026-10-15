@@ -208,10 +208,10 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
   },
   // ET-15000: A3-print / A4-scan EcoTank. Flatbed + ADF simplex (no duplex),
   // ESC/I-2 over plain TCP. CAPA advertises GMM "UG10UG18" and CMX "UNITUM08"
-  // with QIT/CCT absent — structurally an ET-4800 that additionally lists the
-  // UG10 gamma mode. The gamma/CMX class bytes are reused from the ET-4800
-  // (closest plain-TCP sibling) pending a hardware capture of the ET-15000's
-  // own PARA; live-validated against a real ET-15000 (PID 116E, FW FB 1.01).
+  // with QIT/CCT absent — the same segment shape as the ET-4800, which
+  // advertises the same GMM and CMX lists. The gamma/CMX class bytes are
+  // reused from the ET-4800 (closest plain-TCP sibling) pending a hardware
+  // capture of the ET-15000's own PARA; live-validated against a real ET-15000 (PID 116E, FW FB 1.01).
   {
     pids: ["116E"],
     names: [],
