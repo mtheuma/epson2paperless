@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   buildGenericEntry,
   genericColourPair,
-  genericScanWindow,
+  genericParaFields,
   GenericDialectUnusableError,
 } from "./generic.js";
 import { makeParaSpec } from "./dispatch.js";
@@ -21,7 +21,7 @@ const capa = (text: string) => parseCapaTokens(ascii(text));
 
 const FB = "#FB AREAd850i0001170#FB ALGNLEFT";
 const ADF = "#ADFAREAd850i0001400#ADFALGNRIGT";
-const NEUTRAL_CAPA = "#GMMLISTUG10UG18#CMXLISTUNITUM08";
+const NEUTRAL_CAPA = "#GMMLISTUG10UG18#CMXLISTUNITUM08#FMTLISTRAW JPG ";
 
 /** One fixture per model: the generic path reads only INIT1, which every session of a model shares. */
 const FIXTURE_MODELS = REPLAY_FIXTURES.filter(
@@ -57,8 +57,10 @@ describe("the generic dialect, on every fixture model with its override ignored"
       expect(dpis.length).toBeGreaterThan(0);
       for (const dpi of dpis) {
         for (const action of ["jpg", "pdf"] as const) {
-          const spec = makeParaSpec(entry, source, action, dpi);
-          spec.acqExtents = genericScanWindow(infoTokens, entry, source, dpi);
+          const spec = {
+            ...makeParaSpec(entry, source, action, dpi),
+            ...genericParaFields(infoTokens, entry, source, dpi),
+          };
           const segments = parseParaSegments(composePara(spec));
           const values = (code: string) => segments.find((s) => s.code === code)?.values;
 
@@ -97,15 +99,18 @@ describe("genericColourPair", () => {
   });
 
   it("is SoC-style (UG10, no matrix) on a standard printer that lists no UM08", () => {
-    const pair = genericColourPair(capa("#GMMLISTUG10UG18#CMXLISTUNIT"), "standard");
+    const pair = genericColourPair(
+      capa("#GMMLISTUG10UG18#CMXLISTUNIT#FMTLISTRAW JPG "),
+      "standard",
+    );
     expect(pair).toEqual({ gmm: "UG10", gamma: "et4950-stock", cmx: null });
     expect(checkColourPair(pair)).toEqual({ valid: true, kind: "soc-style" });
   });
 
   it("fails on an adf-crp printer that lists no UM08", () => {
-    expect(() => genericColourPair(capa("#GMMLISTUG10UG18#CMXLISTUNIT"), "adf-crp")).toThrow(
-      GenericDialectUnusableError,
-    );
+    expect(() =>
+      genericColourPair(capa("#GMMLISTUG10UG18#CMXLISTUNIT#FMTLISTRAW JPG "), "adf-crp"),
+    ).toThrow(GenericDialectUnusableError);
   });
 
   it("fails rather than sending SoC-style UG10 to a printer that doesn't list it", () => {
@@ -144,7 +149,7 @@ describe("buildGenericEntry", () => {
   });
 
   it("is SoC-style on a standard printer that lists no UM08", () => {
-    const entry = buildGenericEntry(info(FB), capa("#GMMLISTUG10UG18#CMXLISTUNIT"));
+    const entry = buildGenericEntry(info(FB), capa("#GMMLISTUG10UG18#CMXLISTUNIT#FMTLISTRAW JPG "));
     expect(entry.gmm).toBe("UG10");
     expect(entry.cmxClass).toEqual({ jpg: null, pdf: null });
     const segments = parseParaSegments(composePara(makeParaSpec(entry, "flatbed", "jpg")));
@@ -152,7 +157,7 @@ describe("buildGenericEntry", () => {
   });
 
   it("fails on an adf-crp printer that lists no UM08", () => {
-    const crp = "#ADFCRP #GMMLISTUG10UG18#CMXLISTUNIT";
+    const crp = "#ADFCRP #GMMLISTUG10UG18#CMXLISTUNIT#FMTLISTRAW JPG ";
     expect(() => buildGenericEntry(info(ADF), capa(crp))).toThrow(/UM08/);
   });
 
@@ -162,7 +167,34 @@ describe("buildGenericEntry", () => {
     expect(entry.adfExtents).toEqual({ x0: 69, y0: 0, w: 2481, h: 3506 });
   });
 
+  it("sends #QIT / #CCT only when their list carries the value it sends", () => {
+    const listed = buildGenericEntry(
+      info(FB),
+      capa(NEUTRAL_CAPA + "#QITLISTPREFON  OFF#CCTLISTPREFCOL MONO"),
+    );
+    expect(listed.optionalSegments).toEqual({ qit: true, cct: true });
+    const other = buildGenericEntry(info(FB), capa(NEUTRAL_CAPA + "#QITLISTPREFON  #CCTLISTMONO"));
+    expect(other.optionalSegments).toEqual({ qit: false, cct: false });
+  });
+
+  it("takes the crop-mode #DFA length from the printer's ADF area", () => {
+    const adf = "#ADFAREAd850i0001400#ADFALGNCNTR";
+    const entry = buildGenericEntry(info(adf), capa("#ADFCRP " + NEUTRAL_CAPA));
+    const spec = {
+      ...makeParaSpec(entry, "adf-simplex", "jpg", 200),
+      ...genericParaFields(info(adf), entry, "adf-simplex", 200),
+    };
+    const segments = parseParaSegments(composePara(spec));
+    expect(segments.find((s) => s.code === "DFA")?.values).toEqual([0, 1400]);
+  });
+
   describe("fails fast", () => {
+    it("when CAPA lists no JPG format", () => {
+      expect(() =>
+        buildGenericEntry(info(FB), capa("#GMMLISTUG10UG18#CMXLISTUNITUM08#FMTLISTRAW ")),
+      ).toThrow("its CAPA reply lists no JPG format");
+    });
+
     it("when INFO advertises no scan area", () => {
       expect(() => buildGenericEntry(info("#PRDh010PID 9999        "), capa(NEUTRAL_CAPA))).toThrow(
         "its INFO reply advertises no scan area",

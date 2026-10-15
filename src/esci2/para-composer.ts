@@ -61,6 +61,12 @@ export interface ParaSpec {
    * computed per DPI (scaled, then clipped to the scan area).
    */
   acqExtents?: Extents;
+  /**
+   * adf-crp only: the second #DFA value, in 1/100 inch. Unset sends 1550,
+   * the captured FF-680W / DS-575W value (their ADF area's height). The
+   * generic dialect sets it from the printer's own ADF area.
+   */
+  adfCrpDfaLength?: number;
 }
 
 /** Reference DPI the standard profile's registry extents are captured at. */
@@ -119,10 +125,14 @@ export function scaleAcqExtents(profile: ParaProfile, e: Extents, resolution: nu
   return { x0, y0, w: x1 - x0, h: y1 - y0 };
 }
 
-const ADF_CRP_TRAILER_BEFORE_ACQ = Buffer.from(
-  "#CRPi0000000" + "#DFAi0000000i0001550" + "#LAMOFF " + "#PAGd000",
-  "ascii",
-);
+const ADF_CRP_DFA_LENGTH = 1550;
+
+function renderAdfCrpTrailerBeforeAcq(dfaLength: number): Buffer {
+  return Buffer.from(
+    "#CRPi0000000" + `#DFAi0000000i${pad7(dfaLength)}` + "#LAMOFF " + "#PAGd000",
+    "ascii",
+  );
+}
 
 const TRAILING_BSZ = Buffer.from("#BSZi1048576", "ascii");
 
@@ -297,7 +307,7 @@ function composeAdfCrpPara(spec: ParaSpec): Buffer {
     Buffer.from(`#GMM${spec.gmm}`, "ascii"),
     GAMMA_CLASSES[gammaName],
     CMX_CLASSES[cmxName],
-    ADF_CRP_TRAILER_BEFORE_ACQ,
+    renderAdfCrpTrailerBeforeAcq(spec.adfCrpDfaLength ?? ADF_CRP_DFA_LENGTH),
     renderAcq(acq),
     TRAILING_BSZ,
   ]);

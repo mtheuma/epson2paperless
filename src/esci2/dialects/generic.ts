@@ -1,5 +1,5 @@
 // src/esci2/dialects/generic.ts
-import type { CapaTokens, InfoTokens } from "../capabilities.js";
+import { parseArea, type CapaTokens, type InfoTokens } from "../capabilities.js";
 import type { ColourPair } from "../data/colour-pair.js";
 import { deriveCapabilities } from "../derivation.js";
 import { baseDpiFor, type Extents, type ParaProfile, type ParaSpec } from "../para-composer.js";
@@ -42,8 +42,12 @@ const POLLS_WITH_FLATBED = 3;
 // ADF-only printer needs this many.
 const POLLS_ADF_ONLY = 12;
 
-/** A CAPA list's items: four characters each ("UG10UG18" → UG10, UG18). */
-const items = (list: string | null): string[] => list?.match(/.{4}/g) ?? [];
+/**
+ * A CAPA list's items: four characters each ("UG10UG18" → UG10, UG18), trimmed
+ * of their space padding ("PREFON  OFF" → PREF, ON, OFF).
+ */
+const items = (list: string | null): string[] =>
+  (list?.match(/.{1,4}/g) ?? []).map((item) => item.trim());
 
 /**
  * The neutral pair: the neutral tone curve with the identity UM08 matrix,
@@ -82,7 +86,7 @@ export function genericColourPair(capa: CapaTokens, profile: ParaProfile): Colou
 /** How a session names the printer it is running the generic dialect for. */
 export function printerIdentity(info: InfoTokens): string {
   if (info.prdPid !== null) return `PID ${info.prdPid}`;
-  return info.prdName ?? "Unidentified printer (no PID or name in INFO)";
+  return info.prdName ?? "unidentified printer";
 }
 
 /**
@@ -91,13 +95,19 @@ export function printerIdentity(info: InfoTokens): string {
  * the generic window at the wire DPI instead (genericScanWindow), since
  * scaling a reference window can overrun the scan area.
  *
+ * The optional #QIT and #CCT segments are sent only when their list
+ * carries the value the composer sends (OFF, COL).
+ *
  * Throws GenericDialectUnusableError when the CAPA reply can't be parsed,
- * when INFO advertises no usable scan area, or when the colour pair can't
- * be formed.
+ * when it lists no JPG format, when INFO advertises no usable scan area, or
+ * when the colour pair can't be formed.
  */
 export function buildGenericEntry(info: InfoTokens, capa: CapaTokens): RegistryEntry {
   if (capa.segments.length === 0) {
     throw new GenericDialectUnusableError("its CAPA reply couldn't be parsed");
+  }
+  if (!items(capa.fmtList).includes("JPG")) {
+    throw new GenericDialectUnusableError("its CAPA reply lists no JPG format");
   }
   const derived = deriveCapabilities(info, capa);
   const profile = derived.paraProfile;
@@ -135,27 +145,38 @@ export function buildGenericEntry(info: InfoTokens, capa: CapaTokens): RegistryE
     gmm: pair.gmm,
     gammaClass: { jpg: pair.gamma, pdf: pair.gamma },
     cmxClass: { jpg: pair.cmx, pdf: pair.cmx },
-    optionalSegments: { qit: derived.qit, cct: derived.cct },
+    optionalSegments: {
+      qit: derived.qit && items(capa.qitList).includes("OFF"),
+      cct: derived.cct && items(capa.cctList).includes("COL"),
+    },
     paraProfile: profile,
     verifiedWireDpis: [],
   };
 }
 
 /**
- * The generic window for `source` at the wire DPI: the reference window
- * scaled, then clipped to the scan area at that DPI, so no DPI lands past
- * the edge. Throws if the area leaves nothing to scan at that DPI.
+ * The PARA fields the generic dialect computes per scan rather than keeping
+ * on its entry:
+ *
+ * - acqExtents: the generic window for `source` at the wire DPI, the
+ *   reference window scaled, then clipped to the scan area at that DPI, so
+ *   no DPI lands past the edge;
+ * - adfCrpDfaLength (crop mode): the ADF area's height, which is the value
+ *   the FF-680W and DS-575W captures carry there.
+ *
+ * Throws if the area leaves nothing to scan at that DPI.
  */
-export function genericScanWindow(
+export function genericParaFields(
   info: InfoTokens,
   entry: RegistryEntry,
   source: ParaSpec["source"],
   dpi: number,
-): Extents {
+): Pick<ParaSpec, "acqExtents" | "adfCrpDfaLength"> {
   const windowSource: WindowSource = source === "flatbed" ? "flatbed" : "adf";
-  const window = genericWindow(info, windowSource, entry.paraProfile ?? "standard", dpi);
-  if (window === null) {
+  const acqExtents = genericWindow(info, windowSource, entry.paraProfile ?? "standard", dpi);
+  if (acqExtents === null) {
     throw new Error(`${entry.displayName}: no ${windowSource} scan window at ${dpi} DPI`);
   }
-  return window;
+  if (entry.paraProfile !== "adf-crp") return { acqExtents };
+  return { acqExtents, adfCrpDfaLength: parseArea(info.adfArea)!.height };
 }

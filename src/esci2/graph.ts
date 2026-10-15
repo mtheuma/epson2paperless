@@ -51,7 +51,7 @@ import {
 } from "./capabilities.js";
 import { advertisedDpiSet, selectWireDpi } from "./resolution.js";
 import { genericWindowDifferences, windowProblems } from "./scan-window.js";
-import { genericScanWindow } from "./dialects/generic.js";
+import { genericParaFields } from "./dialects/generic.js";
 import { createLogger } from "../logger.js";
 
 const log = createLogger("scanner-esci2");
@@ -628,45 +628,62 @@ g.state("UNLOCKING", {
   on: { 0xa101: { next: "DONE" } },
 });
 
-/** Whether this is the first init-poll status reply and the entry reads its source from it. */
-function isFirstStatusForSource(ctx: Esci2Ctx): boolean {
-  const detection = ctx.entry!.sourceDetection;
-  return (
-    ctx.initPollIteration === 0 && (detection === "stat-length" || detection === "stat-content")
-  );
+/**
+ * How a source-detecting entry reads the first init-poll status reply: once
+ * from its header (fromHeader, in INIT_POLL_STAT) and once from the whole
+ * reply, its drained body included (fromReply, in whichever state completes
+ * it). Every per-mode difference lives here.
+ */
+interface StatusSourceRule {
+  fromHeader(ctx: Esci2Ctx, statLength: number): void;
+  fromReply(ctx: Esci2Ctx, state: string, status: Buffer[]): TransitionResult<Esci2Ctx> | undefined;
 }
 
-/**
- * Judges the first status reply, whole: the reply itself and its drained
- * body, if any. A "stat-content" entry takes its source from the reply's
- * error tokens here, and fails the session on an error other than "ADF
- * paper empty". A "stat-length" entry already took its source from the
- * reply's length; its content is only shadowed.
- */
-function judgeFirstStatus(
-  ctx: Esci2Ctx,
-  ...status: Buffer[]
-): TransitionResult<Esci2Ctx> | undefined {
-  if (ctx.entry!.sourceDetection === "stat-length") {
-    reportStatusSourceShadow(ctx, ...status);
-    return undefined;
-  }
-  const errors = status.flatMap((part) => parseStatErrors(part));
-  const decision = sourceFromStatusErrors(errors);
-  if ("unexpectedErrors" in decision) {
-    return {
-      error: new Error(
-        `INIT_POLL_STAT: the printer reports ${decision.unexpectedErrors.join(", ")}, so the ` +
-          "scan source can't be told from its status — clear it on the printer and scan again",
-      ),
-    };
-  }
-  ctx.source = decision.source;
-  log.debug("Source detected from the first status reply's content", {
-    errors,
-    source: ctx.source,
-  });
-  return undefined;
+const STATUS_SOURCE_RULES: Record<"stat-length" | "stat-content", StatusSourceRule> = {
+  // The captured entries' rule: the reply's declared length decides; its
+  // content is only shadowed.
+  "stat-length": {
+    fromHeader: (ctx, statLength) => {
+      ctx.source = sourceFromStatLength(statLength);
+      log.debug("Source detected from first STAT", { statLength, source: ctx.source });
+    },
+    fromReply: (ctx, _state, status) => {
+      reportStatusSourceShadow(ctx, ...status);
+      return undefined;
+    },
+  },
+  // The generic dialect's rule: the reply's error tokens decide, and an
+  // error other than "ADF paper empty" ends the session.
+  "stat-content": {
+    fromHeader: () => {},
+    fromReply: (ctx, state, status) => {
+      const errors = status.flatMap((part) => parseStatErrors(part));
+      const decision = sourceFromStatusErrors(errors);
+      if ("unexpectedErrors" in decision) {
+        return {
+          error: new Error(
+            `${state}: the printer reports ${decision.unexpectedErrors.join(", ")}, so the ` +
+              "scan source can't be told from its status — clear it on the printer and scan again",
+          ),
+        };
+      }
+      ctx.source = decision.source;
+      log.debug("Source detected from the first status reply's content", {
+        errors,
+        source: ctx.source,
+      });
+      return undefined;
+    },
+  },
+};
+
+/** The entry's status-source rule on the first init-poll cycle; undefined otherwise. */
+function firstStatusRule(ctx: Esci2Ctx): StatusSourceRule | undefined {
+  if (ctx.initPollIteration !== 0) return undefined;
+  const detection = ctx.entry!.sourceDetection;
+  return detection === "stat-length" || detection === "stat-content"
+    ? STATUS_SOURCE_RULES[detection]
+    : undefined;
 }
 
 /**
@@ -791,19 +808,14 @@ g.state(
     // stat-length heuristic would misclassify it as ADF, so skip the
     // override entirely and trust the `source: "flatbed"` value the
     // scanner shell pre-set in `initialCtx`.
-    if (isFirstStatusForSource(ctx)) {
-      if (ctx.entry!.sourceDetection === "stat-length") {
-        ctx.source = sourceFromStatLength(header.length);
-        log.debug("Source detected from first STAT", {
-          statLength: header.length,
-          source: ctx.source,
-        });
-      }
+    const rule = firstStatusRule(ctx);
+    if (rule) {
+      rule.fromHeader(ctx, header.length);
       // The reply's own tail is #--- filler unless the printer put tokens
       // inline, so it is judged too: here when there is no body to drain,
       // otherwise alongside the body in INIT_POLL_STAT_DRAIN.
       if (header.length === 0) {
-        const failed = judgeFirstStatus(ctx, packet.payload);
+        const failed = rule.fromReply(ctx, "INIT_POLL_STAT", [packet.payload]);
         if (failed) return failed;
       } else {
         ctx.firstStatusReply = packet.payload;
@@ -828,8 +840,12 @@ g.state(
   decision<Esci2Ctx>((ctx, packet) => {
     const typeGuard = expectIsType(packet, 0xa000, "INIT_POLL_STAT_DRAIN");
     if (typeGuard) return typeGuard;
-    if (isFirstStatusForSource(ctx)) {
-      const failed = judgeFirstStatus(ctx, ctx.firstStatusReply ?? Buffer.alloc(0), packet.payload);
+    const rule = firstStatusRule(ctx);
+    if (rule) {
+      const failed = rule.fromReply(ctx, "INIT_POLL_STAT_DRAIN", [
+        ctx.firstStatusReply ?? Buffer.alloc(0),
+        packet.payload,
+      ]);
       ctx.firstStatusReply = undefined;
       if (failed) return failed;
     }
@@ -969,7 +985,7 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
     quality,
   );
   if (ctx.genericInfo !== undefined) {
-    spec.acqExtents = genericScanWindow(ctx.genericInfo, ctx.entry!, paraSource, sel.wireDpi);
+    Object.assign(spec, genericParaFields(ctx.genericInfo, ctx.entry!, paraSource, sel.wireDpi));
   }
   const paraPayload = composePara(spec);
   return [

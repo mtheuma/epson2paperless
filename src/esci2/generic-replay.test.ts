@@ -4,10 +4,10 @@ import path from "node:path";
 import os from "node:os";
 import { runEsci2ScanOverPlain } from "./scanner.js";
 import { FakePlainSocket } from "./test-support/fake-plain-socket.js";
-import { loadFixture, driveFixture } from "./test-support/replay.js";
+import { loadFixture, driveFixture, extractScannerParaWrite } from "./test-support/replay.js";
 import { readInit1Bodies } from "./test-support/capability-bodies.js";
 import { parseCapaTokens, parseInfoTokens } from "./capabilities.js";
-import { buildGenericEntry, genericScanWindow } from "./dialects/generic.js";
+import { buildGenericEntry, genericParaFields } from "./dialects/generic.js";
 import { makeParaSpec } from "./dialects/dispatch.js";
 import { composePara, baseDpiFor } from "./para-composer.js";
 import { advertisedDpiSet, selectWireDpi } from "./resolution.js";
@@ -31,16 +31,6 @@ const FIXTURES = [
   ["ET-7700", "et-7700/flatbed-jpg", "flatbed"],
   ["DS-575W", "ds-575w/adf-simplex-400-mono-jpg", "adf-simplex"],
 ] as const;
-
-/** The PARA body the scanner wrote: the passthru after the "PARAx" header write. */
-function scannerPara(fake: FakePlainSocket): Buffer {
-  const i = fake.writes.findIndex((w) => w.includes("PARAx"));
-  if (i < 0) throw new Error("no PARA header written");
-  const header = fake.writes[i];
-  const at = header.indexOf("PARAx");
-  const length = parseInt(header.toString("ascii", at + 5, at + 12), 16);
-  return fake.writes[i + 1].subarray(20, 20 + length);
-}
 
 describe("generic dialect — fixture replay with every override ignored", () => {
   let outputDir: string;
@@ -94,9 +84,11 @@ describe("generic dialect — fixture replay with every override ignored", () =>
         baseDpiFor(entry.paraProfile),
         advertisedDpiSet(capa, source),
       ).wireDpi;
-      const spec = makeParaSpec(entry, source, "jpg", dpi);
-      spec.acqExtents = genericScanWindow(info, entry, source, dpi);
-      expect(scannerPara(fake).equals(composePara(spec))).toBe(true);
+      const spec = {
+        ...makeParaSpec(entry, source, "jpg", dpi),
+        ...genericParaFields(info, entry, source, dpi),
+      };
+      expect(extractScannerParaWrite(fake).equals(composePara(spec))).toBe(true);
     },
     60_000,
   );

@@ -1795,7 +1795,7 @@ describe("esci2Graph — generic dialect", () => {
     // 200-DPI reference to 75 DPI would round to 638 px, one past the edge.
     const info = Buffer.from("#PRDh010PID FFFF        #ADFAREAd850i0001550#ADFALGNCNTR", "ascii");
     const capa = Buffer.from(
-      "#ADFCRP #GMMLISTUG10UG18#CMXLISTUNITUM08#RSMLISTd075d200#RSSLISTd075d200",
+      "#ADFCRP #GMMLISTUG10UG18#CMXLISTUNITUM08#FMTLISTRAW JPG #RSMLISTd075d200#RSSLISTd075d200",
       "ascii",
     );
     const { ctx } = resolve(info, capa);
@@ -1813,6 +1813,8 @@ describe("esci2Graph — generic dialect", () => {
       .payload.subarray(8)
       .toString("latin1");
     expect(body).toContain("#ACQi0000000i0000000i0000637i0001162");
+    // The #DFA length is the printer's own ADF area height.
+    expect(body).toContain("#DFAi0000000i0001550");
   });
 
   it("doesn't add the unverified-DPI warning to an explicit SCAN_RESOLUTION", () => {

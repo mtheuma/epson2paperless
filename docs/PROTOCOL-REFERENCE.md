@@ -402,8 +402,8 @@ diagnostic block at `info`. The generic dialect is:
 
 It has no verified DPIs and no greyscale on the wire (pages convert
 host-side). When the replies leave out something it can't do without (no
-usable scan area, a CAPA reply that can't be parsed, no `UG18`/`UG10`
-gamma mode), the session fails fast with the reason and the diagnostic
+usable scan area, a CAPA reply that can't be parsed, no `JPG` format, no
+`UG18`/`UG10` gamma mode), the session fails fast with the reason and the diagnostic
 block. Adding
 support for a new printer is a data-only change in the normal case: capture its
 wire bytes, extract any novel gamma/CMX class into the data files, and add a
