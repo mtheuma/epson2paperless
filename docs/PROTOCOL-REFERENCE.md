@@ -377,8 +377,34 @@ source/action axes feed into `makeParaSpec`, and `composePara` assembles the
 PARA body.
 
 Printers whose product ID, product name and CAPA fingerprint are all
-unrecognised fail fast with a copy-pasteable diagnostic block — no synthesis
-attempt, no silent quality regression. Adding
+unrecognised run the **generic dialect** (`src/esci2/dialects/generic.ts`),
+built at INIT1 from their own replies. The session logs a warning ("not
+recognised — generic ESC/I-2 dialect, experimental, please report") and the
+diagnostic block at `info`. The generic dialect is:
+
+- the capability-derived fields (`deriveCapabilities`): sources, `#QIT` /
+  `#CCT`, ADF duplex, the `adf-crp` profile (`#ADFCRP` listed and no flatbed)
+  and back-page rotation (`#ADFDPLX2SCN`);
+- the neutral pair: the `et4950-stock` tone curve with the identity UM08
+  matrix, in `UG18` (or `UG10` if that's all `#GMMLIST` offers). A printer
+  whose `#CMXLIST` lacks `UM08` is sent SoC-style (`UG10`, no `#CMX`) on the
+  standard profile (failing if `UG10` isn't listed); an `adf-crp` printer
+  fails, since that PARA always carries a matrix;
+- the generic scan window, computed per wire DPI: A4 at 300 DPI placed by
+  the `ALGN` rule, scaled to the wire DPI, then clipped to the scan area
+  (`adf-crp`: the full ADF area at 200 DPI). Clipping last keeps every DPI
+  inside the area;
+- a poll count of 3 with a flatbed, 12 ADF-only (timing parity with the
+  captured driver only);
+- source detection from the first status reply's content (`stat-content`):
+  `#ERRADF PE` → flatbed, no error → ADF, any other error ends the session.
+  Single-source printers are fixed to their source.
+
+It has no verified DPIs and no greyscale on the wire (pages convert
+host-side). When the replies leave out something it can't do without (no
+usable scan area, a CAPA reply that can't be parsed, no `JPG` format, no
+`UG18`/`UG10` gamma mode), the session fails fast with the reason and the diagnostic
+block. Adding
 support for a new printer is a data-only change in the normal case: capture its
 wire bytes, extract any novel gamma/CMX class into the data files, and add a
 registry entry. A novel gamma class also gets a `GAMMA_CLASS_LOOK` tag: neutral

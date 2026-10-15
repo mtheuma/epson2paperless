@@ -1,20 +1,22 @@
 import { parseCapaTokens, parseInfoTokens } from "./capabilities.js";
 
 /**
- * Thrown when a session lands on a printer whose CAPA fingerprint isn't
- * in the registry. Carries enough context for the user to file an issue
- * that the maintainer can act on.
+ * Thrown when a session lands on a printer no registry entry matches and
+ * whose replies leave the generic dialect without something it needs (no
+ * usable scan area, an unparseable CAPA reply). Carries enough context for
+ * the user to file an issue that the maintainer can act on.
  *
- * Lives next to the diagnostic-block renderer it's thrown with. (Originally
- * declared in the now-deleted dialect.ts.)
+ * Lives next to the diagnostic-block renderer it's thrown with.
  */
 export class UnsupportedDialectError extends Error {
   constructor(
     public readonly capaFingerprint: string,
     public readonly diagnostic: string,
+    /** Why the generic dialect can't run, e.g. "its INFO reply advertises no scan area". */
+    public readonly reason: string,
   ) {
     super(
-      `Unsupported printer CAPA fingerprint ${capaFingerprint}. ` +
+      `Unsupported printer (CAPA fingerprint ${capaFingerprint}): ${reason}. ` +
         `Please file an issue with the diagnostic block below:\n\n${diagnostic}`,
     );
     this.name = "UnsupportedDialectError";
@@ -22,9 +24,10 @@ export class UnsupportedDialectError extends Error {
 }
 
 /**
- * Renders a copy-pasteable diagnostic block for the UnsupportedDialectError
- * raised when CAPA fingerprint doesn't resolve. Includes everything a
- * maintainer needs to add a new dialect or reproduce locally.
+ * Renders a copy-pasteable diagnostic block for an unrecognised printer: the
+ * generic dialect's report, the UnsupportedDialectError, and the warning on a
+ * fingerprint mismatch. Includes everything a maintainer needs to add a new
+ * dialect or reproduce locally.
  *
  * Body relocated verbatim from dialect-registry.ts. Pinned tests in
  * diagnostic.test.ts (moved from dialect-registry.test.ts) assert the

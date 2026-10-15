@@ -1,13 +1,14 @@
 import { REGISTRY_ENTRIES, type RegistryEntry } from "./registry.js";
 import type { ParaSpec } from "../para-composer.js";
 import { buildDiagnostic, UnsupportedDialectError } from "../diagnostic.js";
-import type { InfoTokens } from "../capabilities.js";
+import type { CapaTokens, InfoTokens } from "../capabilities.js";
+import { buildGenericEntry, GenericDialectUnusableError, printerIdentity } from "./generic.js";
 import { createLogger } from "../../logger.js";
 
 const log = createLogger("scanner-esci2");
 
-/** Which key resolved a session's registry entry. */
-export type IdentityMatch = "pid" | "name" | "fingerprint";
+/** Which key resolved a session's registry entry, or "generic" when none did. */
+export type IdentityMatch = "pid" | "name" | "fingerprint" | "generic";
 
 export interface ResolvedEntry {
   entry: RegistryEntry;
@@ -16,8 +17,9 @@ export interface ResolvedEntry {
 
 /** What INIT1 knows when it resolves the dialect. */
 export interface Init1Replies {
-  /** INFO, parsed once by the caller and shared with the shadow derivation. */
+  /** INFO and CAPA, parsed once by the caller and shared with the shadow derivation. */
   info: InfoTokens;
+  capa: CapaTokens;
   fingerprint: string;
   /** Raw bodies, rendered into the diagnostic block on a miss or mismatch. */
   infoBody: Buffer;
@@ -27,8 +29,11 @@ export interface Init1Replies {
 
 /**
  * Looks up the registry entry by model identity: the INFO product ID, then
- * the INFO product name, then the CAPA fingerprint. Throws
- * UnsupportedDialectError with the diagnostic block when none matches.
+ * the INFO product name, then the CAPA fingerprint. When none matches, the
+ * printer gets the generic dialect, built from its own replies, with a
+ * warning and the diagnostic block for the report. Throws
+ * UnsupportedDialectError with the diagnostic block only when the generic
+ * dialect can't be built either.
  *
  * A PID or name hit whose CAPA fingerprint isn't one of the entry's logs a
  * warning with the diagnostic block and proceeds with that entry: the model
@@ -65,10 +70,25 @@ export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
     return { entry: byIdentity, matchedBy };
   }
 
-  if (byFingerprint === undefined) {
-    throw new UnsupportedDialectError(fingerprint, buildDiagnostic(replies));
+  if (byFingerprint !== undefined) return { entry: byFingerprint, matchedBy: "fingerprint" };
+  return { entry: resolveGenericEntry(replies), matchedBy: "generic" };
+}
+
+function resolveGenericEntry(replies: Init1Replies): RegistryEntry {
+  const diagnostic = buildDiagnostic(replies);
+  let entry: RegistryEntry;
+  try {
+    entry = buildGenericEntry(replies.info, replies.capa);
+  } catch (err) {
+    if (!(err instanceof GenericDialectUnusableError)) throw err;
+    throw new UnsupportedDialectError(replies.fingerprint, diagnostic, err.message);
   }
-  return { entry: byFingerprint, matchedBy: "fingerprint" };
+  log.warn(
+    `${printerIdentity(replies.info)} not recognised — generic ESC/I-2 dialect, experimental, ` +
+      "please report how the scan turns out, with the diagnostic block below.",
+  );
+  log.info(`Diagnostic block for the report:\n\n${diagnostic}`);
+  return entry;
 }
 
 /**

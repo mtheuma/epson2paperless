@@ -56,3 +56,23 @@ export async function driveFixture(
   }
   await sessionPromise;
 }
+
+// Recover the PARA body bytes the scanner emitted, by searching the fake
+// socket's accumulated writes for the same "PARAx0000NNN" header and
+// peeling off the body wrapper.
+export function extractScannerParaWrite(fake: FakePlainSocket): Buffer {
+  const PARA_HDR = Buffer.from("PARAx", "ascii");
+  for (let i = 0; i < fake.writes.length; i++) {
+    const w = fake.writes[i];
+    const idx = w.indexOf(PARA_HDR);
+    if (idx < 0) continue;
+    // PARA header is "PARAx" + 7 ASCII hex chars; the size is encoded there.
+    const lenAscii = w.subarray(idx + 5, idx + 12).toString("ascii");
+    const declared = parseInt(lenAscii, 16);
+    // Body wrapper is the next write. Skip 12-byte IS header + 8-byte preamble.
+    const bodyWrite = fake.writes[i + 1];
+    if (!bodyWrite) throw new Error("extractScannerParaWrite: body write missing");
+    return bodyWrite.subarray(20, 20 + declared);
+  }
+  throw new Error("extractScannerParaWrite: PARA header write not found");
+}

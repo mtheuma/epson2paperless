@@ -17,7 +17,14 @@ export interface RegistryEntry {
    */
   capaFingerprints: readonly string[];
   displayName: string;
-  sourceDetection: "stat-length" | "fixed-flatbed" | "fixed-adf";
+  /**
+   * How the session learns its source. "stat-length" and "stat-content" both
+   * read the first init-poll status reply, by its declared length (the
+   * entries' captured rule) or by its error tokens (the generic dialect's:
+   * "ADF paper empty" means flatbed, no error means ADF). The fixed ones never
+   * consult it.
+   */
+  sourceDetection: "stat-length" | "stat-content" | "fixed-flatbed" | "fixed-adf";
   initPollIterations: number;
   /** Flatbed scan extents; null for ADF-only hardware (mirrors adfExtents' null for flatbed-only models). */
   fbExtents: Extents | null;

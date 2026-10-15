@@ -8,7 +8,7 @@ import {
 import { REGISTRY } from "./registry.js";
 import { UnsupportedDialectError } from "../diagnostic.js";
 import { computeCapaFingerprint } from "../capa-fingerprint.js";
-import { parseInfoTokens } from "../capabilities.js";
+import { parseCapaTokens, parseInfoTokens } from "../capabilities.js";
 import { REPLAY_FIXTURES, readInit1Bodies } from "../test-support/capability-bodies.js";
 
 const ET4950_FP = "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2";
@@ -18,7 +18,7 @@ const FF680W_FP = "5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53ea
 const UNKNOWN_FP = "0000000000000000000000000000000000000000000000000000000000000000";
 const ET4800_FP = "7870a725ab969136d5eb04387bf01d3cc3168aabb3d11cfaca7d59a4169971c2";
 
-const STUB_CAPA = Buffer.from("#GMMLISTUG10UG18#CMXLISTUNITUM08", "ascii"); // minimal stub
+const STUB_CAPA = Buffer.from("#GMMLISTUG10UG18#CMXLISTUNITUM08#FMTLISTRAW JPG ", "ascii"); // minimal stub
 const UNKNOWN_PID_INFO = Buffer.from("#PRDh010PID 9999        #FB AREAd850i0001170", "ascii");
 
 const ET4950 = readInit1Bodies(
@@ -30,20 +30,30 @@ const FF680W = readInit1Bodies("tools/pcap-extract/captures/ff-680w/adf-simplex-
 /** A CAPA body no registry entry was recorded with: one extra segment. */
 const doctored = (capa: Buffer) => Buffer.concat([capa, Buffer.from("#ZZZZd001", "ascii")]);
 
-/** Runs the lookup with console.warn captured; returns the result and the warnings. */
+/**
+ * Runs the lookup with the console captured; returns the result, the
+ * warnings, and the info lines.
+ */
 function lookup(info: Buffer, capa: Buffer, fingerprint = computeCapaFingerprint(capa)) {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  const log = vi.spyOn(console, "log").mockImplementation(() => {});
   try {
     const resolved = lookupRegistryEntry({
       info: parseInfoTokens(info),
+      capa: parseCapaTokens(capa),
       fingerprint,
       infoBody: info,
       capaBody: capa,
       transport: "plain",
     });
-    return { resolved, warnings: warn.mock.calls.map((args) => args.join(" ")) };
+    return {
+      resolved,
+      warnings: warn.mock.calls.map((args) => args.join(" ")),
+      infos: log.mock.calls.map((args) => args.join(" ")),
+    };
   } finally {
     warn.mockRestore();
+    log.mockRestore();
   }
 }
 
@@ -107,33 +117,54 @@ describe("lookupRegistryEntry", () => {
     });
   });
 
-  it("throws UnsupportedDialectError when PID, name and fingerprint are all unknown", () => {
-    expect(() => lookup(UNKNOWN_PID_INFO, STUB_CAPA, UNKNOWN_FP)).toThrow(UnsupportedDialectError);
-  });
+  describe("a printer whose PID, name and fingerprint are all unknown", () => {
+    it("gets the generic dialect, with a warning and the diagnostic block at info", () => {
+      const { resolved, warnings, infos } = lookup(UNKNOWN_PID_INFO, STUB_CAPA, UNKNOWN_FP);
+      expect(resolved.matchedBy).toBe("generic");
+      expect(resolved.entry.displayName).toBe("generic ESC/I-2 dialect (PID 9999)");
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain(
+        "PID 9999 not recognised — generic ESC/I-2 dialect, experimental, please report",
+      );
+      const diagnostic = infos.filter((line) => line.includes("CAPA fingerprint:"));
+      expect(diagnostic).toHaveLength(1);
+      expect(diagnostic[0]).toContain("[INFO]");
+      expect(diagnostic[0]).toContain(`CAPA fingerprint:  ${UNKNOWN_FP}`);
+      expect(diagnostic[0]).toContain("PRD:               PID 9999");
+      expect(diagnostic[0]).toContain("esci2-plain");
+    });
 
-  it("the thrown error carries the fingerprint and diagnostic", () => {
-    try {
-      lookup(UNKNOWN_PID_INFO, STUB_CAPA, UNKNOWN_FP);
-      expect.fail("should have thrown");
-    } catch (err) {
-      expect(err).toBeInstanceOf(UnsupportedDialectError);
-      const e = err as UnsupportedDialectError;
-      expect(e.capaFingerprint).toBe(UNKNOWN_FP);
-      expect(e.diagnostic).toContain("CAPA fingerprint:");
-      expect(e.diagnostic).toContain("PRD:               PID 9999");
-      expect(e.diagnostic).toContain("esci2-plain");
-    }
-  });
+    it("an unknown product name is named in the warning and the diagnostic", () => {
+      const info = Buffer.from("#PRDh007XX-000W\0#ADFAREAd850i0001400", "latin1");
+      const { resolved, warnings, infos } = lookup(info, STUB_CAPA, UNKNOWN_FP);
+      expect(resolved.matchedBy).toBe("generic");
+      expect(warnings[0]).toContain("XX-000W not recognised");
+      expect(infos.join("\n")).toContain("PRD:               XX-000W");
+    });
 
-  it("an unknown product name fails the same way, and the diagnostic names it", () => {
-    const info = Buffer.from("#PRDh007XX-000W\0#VERh008ADF 1.00", "latin1");
-    try {
-      lookup(info, STUB_CAPA, UNKNOWN_FP);
-      expect.fail("should have thrown");
-    } catch (err) {
-      expect(err).toBeInstanceOf(UnsupportedDialectError);
-      expect((err as UnsupportedDialectError).diagnostic).toContain("PRD:               XX-000W");
-    }
+    it("fails fast with the diagnostic when INFO advertises no scan area", () => {
+      const info = Buffer.from("#PRDh010PID 9999        ", "ascii");
+      try {
+        lookup(info, STUB_CAPA, UNKNOWN_FP);
+        expect.fail("should have thrown");
+      } catch (err) {
+        expect(err).toBeInstanceOf(UnsupportedDialectError);
+        const e = err as UnsupportedDialectError;
+        expect(e.reason).toBe("its INFO reply advertises no scan area");
+        expect(e.capaFingerprint).toBe(UNKNOWN_FP);
+        expect(e.diagnostic).toContain("PRD:               PID 9999");
+      }
+    });
+
+    it("fails fast with the diagnostic when CAPA can't be parsed", () => {
+      try {
+        lookup(UNKNOWN_PID_INFO, Buffer.from("garbage", "ascii"), UNKNOWN_FP);
+        expect.fail("should have thrown");
+      } catch (err) {
+        expect(err).toBeInstanceOf(UnsupportedDialectError);
+        expect((err as UnsupportedDialectError).reason).toBe("its CAPA reply couldn't be parsed");
+      }
+    });
   });
 
   // Every replay fixture must resolve by its model identity to the entry its
