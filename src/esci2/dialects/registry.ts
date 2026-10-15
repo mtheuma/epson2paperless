@@ -492,7 +492,29 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
   },
 ];
 
-/** REGISTRY_ENTRIES indexed by CAPA fingerprint. */
-export const REGISTRY: ReadonlyMap<string, RegistryEntry> = new Map(
-  REGISTRY_ENTRIES.flatMap((e) => e.capaFingerprints.map((fp) => [fp, e] as const)),
-);
+/**
+ * REGISTRY_ENTRIES indexed by CAPA fingerprint, for callers that already hold
+ * one (mostly tests). The session lookup, `lookupRegistryEntry`, reads
+ * REGISTRY_ENTRIES alone, so that array is the one source a test doctors.
+ */
+export const REGISTRY: ReadonlyMap<string, RegistryEntry> = indexByFingerprint(REGISTRY_ENTRIES);
+
+/**
+ * Builds the fingerprint index, refusing a fingerprint listed by two entries
+ * rather than letting the later one silently win.
+ */
+function indexByFingerprint(entries: readonly RegistryEntry[]): Map<string, RegistryEntry> {
+  const index = new Map<string, RegistryEntry>();
+  for (const entry of entries) {
+    for (const fp of entry.capaFingerprints) {
+      const other = index.get(fp);
+      if (other !== undefined) {
+        throw new Error(
+          `CAPA fingerprint ${fp} is listed by both ${other.displayName} and ${entry.displayName}`,
+        );
+      }
+      index.set(fp, entry);
+    }
+  }
+  return index;
+}

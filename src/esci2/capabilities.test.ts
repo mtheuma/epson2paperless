@@ -25,6 +25,11 @@ describe("parseInfoTokens", () => {
     expect(parsed.prdName).toBeNull();
   });
 
+  it("canonicalises the PID's hex casing and spacing", () => {
+    expect(parseInfoTokens(Buffer.from("#PRDh010PID 11d1        ")).prdPid).toBe("11D1");
+    expect(parseInfoTokens(Buffer.from("#PRDh008PID11D1 ")).prdPid).toBe("11D1");
+  });
+
   // The FF-680W and DS-575W shape: the length field counts the name alone,
   // and a NUL pad byte follows it.
   it("parses a name-form PRD to a product name and no PID", () => {

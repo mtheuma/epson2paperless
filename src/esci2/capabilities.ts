@@ -1,4 +1,5 @@
 import { splitHashSegments } from "./segments.js";
+import { extractPid } from "../printer-ids.js";
 
 /**
  * Token parsing for ESC/I-2 INFO and CAPA reply bodies.
@@ -21,8 +22,9 @@ import { splitHashSegments } from "./segments.js";
 
 export interface InfoTokens {
   /**
-   * PID NNNN extracted from `#PRDh010PID NNNN        `. Null if missing, or
-   * when the printer reports a product name instead (see `prdName`).
+   * PID NNNN extracted from `#PRDh010PID NNNN        `, as four upper-case
+   * hex digits (canonicalised by `extractPid`). Null if missing, or when the
+   * printer reports a product name instead (see `prdName`).
    */
   prdPid: string | null;
   /**
@@ -121,8 +123,8 @@ export function parseInfoTokens(body: Buffer): InfoTokens {
   for (const seg of segments) {
     const prd = parsePrdValue(seg);
     if (prd !== null) {
-      const pidMatch = prd.match(/^PID\s+([0-9A-Fa-f]+)$/);
-      if (pidMatch) prdPid = pidMatch[1];
+      const pid = extractPid(prd);
+      if (pid !== null) prdPid = pid.slice("PID ".length);
       else if (prd.length > 0) prdName = prd;
     }
     const verMatch = seg.match(/^#VERh[0-9a-f]{3}(.+)$/);

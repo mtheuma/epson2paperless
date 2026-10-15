@@ -8,6 +8,7 @@ import {
 import { REGISTRY } from "./registry.js";
 import { UnsupportedDialectError } from "../diagnostic.js";
 import { computeCapaFingerprint } from "../capa-fingerprint.js";
+import { parseInfoTokens } from "../capabilities.js";
 import { REPLAY_FIXTURES, readInit1Bodies } from "../test-support/capability-bodies.js";
 
 const ET4950_FP = "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2";
@@ -33,7 +34,13 @@ const doctored = (capa: Buffer) => Buffer.concat([capa, Buffer.from("#ZZZZd001",
 function lookup(info: Buffer, capa: Buffer, fingerprint = computeCapaFingerprint(capa)) {
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   try {
-    const resolved = lookupRegistryEntry(fingerprint, capa, info, "plain");
+    const resolved = lookupRegistryEntry({
+      info: parseInfoTokens(info),
+      fingerprint,
+      infoBody: info,
+      capaBody: capa,
+      transport: "plain",
+    });
     return { resolved, warnings: warn.mock.calls.map((args) => args.join(" ")) };
   } finally {
     warn.mockRestore();
@@ -45,7 +52,6 @@ describe("lookupRegistryEntry", () => {
     const { resolved, warnings } = lookup(ET4950.info, ET4950.capa);
     expect(resolved.entry).toBe(REGISTRY.get(ET4950_FP));
     expect(resolved.matchedBy).toBe("pid");
-    expect(resolved.pid).toBe("11D1");
     expect(warnings).toEqual([]);
   });
 
@@ -53,8 +59,6 @@ describe("lookupRegistryEntry", () => {
     const { resolved, warnings } = lookup(FF680W.info, FF680W.capa);
     expect(resolved.entry).toBe(REGISTRY.get(FF680W_FP));
     expect(resolved.matchedBy).toBe("name");
-    expect(resolved.productName).toBe("FF-680W");
-    expect(resolved.pid).toBeNull();
     expect(warnings).toEqual([]);
   });
 
@@ -64,7 +68,6 @@ describe("lookupRegistryEntry", () => {
     const { resolved, warnings } = lookup(UNKNOWN_PID_INFO, ET4950.capa);
     expect(resolved.entry).toBe(REGISTRY.get(ET4950_FP));
     expect(resolved.matchedBy).toBe("fingerprint");
-    expect(resolved.pid).toBe("9999");
     expect(warnings).toEqual([]);
   });
 

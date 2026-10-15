@@ -25,11 +25,10 @@ vi.mock("./dialects/registry.js", async (importOriginal) => {
     adfDuplex: false,
     optionalSegments: { qit: false, cct: true },
   };
-  const entries = real.REGISTRY_ENTRIES.map((e) => (e === original ? doctored : e));
+  // The session lookup reads REGISTRY_ENTRIES alone, so that is all to doctor.
   return {
     ...real,
-    REGISTRY_ENTRIES: entries,
-    REGISTRY: new Map([...real.REGISTRY].map(([k, e]) => [k, e === original ? doctored : e])),
+    REGISTRY_ENTRIES: real.REGISTRY_ENTRIES.map((e) => (e === original ? doctored : e)),
   };
 });
 

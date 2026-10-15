@@ -1,7 +1,7 @@
 import { REGISTRY_ENTRIES, type RegistryEntry } from "./registry.js";
 import type { ParaSpec } from "../para-composer.js";
 import { buildDiagnostic, UnsupportedDialectError } from "../diagnostic.js";
-import { parseInfoTokens } from "../capabilities.js";
+import type { InfoTokens } from "../capabilities.js";
 import { createLogger } from "../../logger.js";
 
 const log = createLogger("scanner-esci2");
@@ -12,13 +12,18 @@ export type IdentityMatch = "pid" | "name" | "fingerprint";
 export interface ResolvedEntry {
   entry: RegistryEntry;
   matchedBy: IdentityMatch;
-  /** The INFO `#PRD` product ID, if the printer reported one. */
-  pid: string | null;
-  /** The INFO `#PRD` product name, if the printer reported a name instead. */
-  productName: string | null;
 }
 
-const upper = (s: string | null) => s?.toUpperCase() ?? null;
+/** What INIT1 knows when it resolves the dialect. */
+export interface Init1Replies {
+  /** INFO, parsed once by the caller and shared with the shadow derivation. */
+  info: InfoTokens;
+  fingerprint: string;
+  /** Raw bodies, rendered into the diagnostic block on a miss or mismatch. */
+  infoBody: Buffer;
+  capaBody: Buffer;
+  transport: "tls" | "plain";
+}
 
 /**
  * Looks up the registry entry by model identity: the INFO product ID, then
@@ -33,45 +38,37 @@ const upper = (s: string | null) => s?.toUpperCase() ?? null;
  * CAPA, so the identity is available on every trigger path, including the
  * host-triggered ones that carry no panel PID.
  */
-export function lookupRegistryEntry(
-  fingerprint: string,
-  capaBody: Buffer,
-  infoBody: Buffer,
-  transport: "tls" | "plain",
-): ResolvedEntry {
-  const info = parseInfoTokens(infoBody);
-  const pid = upper(info.prdPid);
-  const name = upper(info.prdName);
-  const identity = { pid: info.prdPid, productName: info.prdName };
+export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
+  const { info, fingerprint } = replies;
+  // prdPid is canonical upper-case hex, and entries store names upper-case
+  // (both pinned by registry.test.ts), so only the reported name needs folding.
+  const { prdPid } = info;
+  const prdName = info.prdName?.toUpperCase() ?? null;
+  const byPid = prdPid === null ? undefined : REGISTRY_ENTRIES.find((e) => e.pids.includes(prdPid));
+  const byName =
+    prdName === null ? undefined : REGISTRY_ENTRIES.find((e) => e.names.includes(prdName));
   const byFingerprint = REGISTRY_ENTRIES.find((e) => e.capaFingerprints.includes(fingerprint));
 
-  const byPid = pid === null ? undefined : REGISTRY_ENTRIES.find((e) => e.pids.includes(pid));
-  const byName =
-    name === null
-      ? undefined
-      : REGISTRY_ENTRIES.find((e) => e.names.some((n) => n.toUpperCase() === name));
   const byIdentity = byPid ?? byName;
   if (byIdentity !== undefined) {
     const matchedBy = byPid !== undefined ? "pid" : "name";
     if (!byIdentity.capaFingerprints.includes(fingerprint)) {
-      const reported = matchedBy === "pid" ? `PID ${info.prdPid}` : `product name ${info.prdName}`;
-      const diagnostic = buildDiagnostic({ capaBody, infoBody, transport, fingerprint });
+      const reported = matchedBy === "pid" ? `PID ${prdPid}` : `product name ${info.prdName}`;
       log.warn(
         `Printer identified as ${byIdentity.displayName} by its ${reported}, but its CAPA ` +
           `fingerprint is not one recorded for that model` +
           (byFingerprint ? ` (it is the ${byFingerprint.displayName} one)` : "") +
           `. Continuing with that model's settings; if the scan fails or looks wrong, ` +
-          `please file an issue with the diagnostic block below:\n\n${diagnostic}`,
+          `please file an issue with the diagnostic block below:\n\n${buildDiagnostic(replies)}`,
       );
     }
-    return { entry: byIdentity, matchedBy, ...identity };
+    return { entry: byIdentity, matchedBy };
   }
 
   if (byFingerprint === undefined) {
-    const diagnostic = buildDiagnostic({ capaBody, infoBody, transport, fingerprint });
-    throw new UnsupportedDialectError(fingerprint, diagnostic);
+    throw new UnsupportedDialectError(fingerprint, buildDiagnostic(replies));
   }
-  return { entry: byFingerprint, matchedBy: "fingerprint", ...identity };
+  return { entry: byFingerprint, matchedBy: "fingerprint" };
 }
 
 /**

@@ -43,6 +43,7 @@ import {
   parseInfoTokens,
   parseStatErrors,
   type CapaTokens,
+  type InfoTokens,
 } from "./capabilities.js";
 import { advertisedDpiSet, selectWireDpi } from "./resolution.js";
 import { createLogger } from "../logger.js";
@@ -368,9 +369,17 @@ twoPhaseRead(
   (ctx, body) => {
     ctx.capaBody = body;
     const fingerprint = computeCapaFingerprint(body);
+    let info: InfoTokens;
     let resolved: ResolvedEntry;
     try {
-      resolved = lookupRegistryEntry(fingerprint, ctx.capaBody, ctx.infoBody, ctx.transport);
+      info = parseInfoTokens(ctx.infoBody);
+      resolved = lookupRegistryEntry({
+        info,
+        fingerprint,
+        infoBody: ctx.infoBody,
+        capaBody: ctx.capaBody,
+        transport: ctx.transport,
+      });
     } catch (err) {
       return { error: err as Error };
     }
@@ -380,15 +389,15 @@ twoPhaseRead(
     log.debug("Dialect resolved", {
       name: ctx.entry.displayName,
       matchedBy: resolved.matchedBy,
-      pid: resolved.pid,
-      productName: resolved.productName,
+      pid: info.prdPid,
+      productName: info.prdName,
       fingerprint,
     });
     // Shadow derivation: report-only, silent when the printer's own replies
     // agree with the entry. Nothing sent to the printer depends on it, so a
     // failure here is logged rather than allowed to end the session.
     try {
-      const derived = deriveCapabilities(parseInfoTokens(ctx.infoBody), capaTokens);
+      const derived = deriveCapabilities(info, capaTokens);
       for (const d of compareWithEntry(derived, ctx.entry)) {
         log.info("Capability derivation disagrees with the dialect entry", {
           dialect: ctx.entry.displayName,

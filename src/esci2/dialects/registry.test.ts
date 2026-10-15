@@ -324,8 +324,8 @@ describe("REGISTRY_ENTRIES model identity", () => {
 
   // A key in two entries would make the lookup order decide the dialect.
   it.each([
-    ["PID", (e: RegistryEntry) => e.pids.map((p) => p.toUpperCase())],
-    ["product name", (e: RegistryEntry) => e.names.map((n) => n.toUpperCase())],
+    ["PID", (e: RegistryEntry) => e.pids],
+    ["product name", (e: RegistryEntry) => e.names],
     ["CAPA fingerprint", (e: RegistryEntry) => e.capaFingerprints],
   ] as const)("lists no %s in two entries", (_kind, keysOf) => {
     const owners = new Map<string, string>();
@@ -337,9 +337,14 @@ describe("REGISTRY_ENTRIES model identity", () => {
     }
   });
 
-  it("stores PIDs as four upper-case hex digits", () => {
+  // The lookup compares keys exactly, against the canonical PID and the
+  // upper-cased reported name, so the stored spelling must be canonical too.
+  it("stores PIDs as four upper-case hex digits and names in upper case", () => {
     for (const pid of REGISTRY_ENTRIES.flatMap((e) => e.pids)) {
       expect(pid).toMatch(/^[0-9A-F]{4}$/);
+    }
+    for (const name of REGISTRY_ENTRIES.flatMap((e) => e.names)) {
+      expect(name).toBe(name.toUpperCase());
     }
   });
 });
