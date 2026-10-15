@@ -1,6 +1,9 @@
 import { describe, it, expect } from "vitest";
 import { esciGraph, ESCI_TIMEOUT_MS, ESCI_REPLY, type EsciCtx } from "./graph.js";
 import { WF3620_ENTRY } from "./dialects/wf3620.js";
+import { XP620_ENTRY } from "./dialects/xp620.js";
+import { captureLogs, type CapturedLine } from "./test-support/log-capture.js";
+import type { TransitionResult } from "../scan-session.js";
 
 function makeCtx(overrides: Partial<EsciCtx> = {}): EsciCtx {
   return {
@@ -114,13 +117,86 @@ describe("esciGraph WELCOME / LOCKING / INIT", () => {
 });
 
 describe("esciGraph IDENTITY / STATUS_1A / STATUS_1B / STATUS_2", () => {
-  it("IDENTITY advances to STATUS_1A on an 80-byte identity reply", () => {
+  /** An 80-byte FS I reply with the given product and firmware fields. */
+  function identityReply(product: string, firmware: string): Buffer {
+    const payload = Buffer.alloc(80);
+    payload.write(product.padEnd(16, " "), 46, "latin1");
+    payload.write(firmware, 62, "latin1");
+    return payload;
+  }
+
+  /** Run IDENTITY's decision on `payload`, capturing what it logs. */
+  function decideIdentity(
+    ctx: EsciCtx,
+    payload: Buffer,
+  ): {
+    result: TransitionResult<EsciCtx>;
+    lines: CapturedLine[];
+  } {
     const state = esciGraph.states.IDENTITY;
-    expect(state.kind).toBe("static");
-    if (state.kind === "static") {
-      expect(state.on[ESCI_REPLY]?.next).toBe("STATUS_1A");
-      expect(state.on[ESCI_REPLY]?.send).toBeDefined();
+    if (state.kind !== "decision") throw new Error("IDENTITY must be a decision state");
+    const capture = captureLogs();
+    try {
+      return { result: state.decide(ctx, { type: ESCI_REPLY, payload }), lines: capture.lines };
+    } finally {
+      capture.restore();
     }
+  }
+
+  it("IDENTITY advances to STATUS_1A and logs the dialect for the WF-3620's own PID", () => {
+    const ctx = makeCtx();
+    const { result, lines } = decideIdentity(ctx, identityReply("PID 08B8", "1.20"));
+    expect("next" in result && result.next).toBe("STATUS_1A");
+    expect("send" in result && result.send).toBeDefined();
+    expect(lines.filter((l) => l.stream === "warn")).toEqual([]);
+    const resolved = lines.find((l) => l.text.includes("Dialect resolved"));
+    expect(resolved?.data).toEqual({
+      dialect: "wf3620",
+      productName: "PID 08B8",
+      firmware: "1.20",
+    });
+  });
+
+  it("IDENTITY with an unknown PID logs the experimental line and keeps the WF-3620 settings", () => {
+    const ctx = makeCtx();
+    const { result, lines } = decideIdentity(ctx, identityReply("PID 0999", "2.05"));
+    expect("next" in result && result.next).toBe("STATUS_1A");
+    expect(ctx.entry).toBe(WF3620_ENTRY);
+    const warnings = lines.filter((l) => l.stream === "warn");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].text).toContain(
+      "Older ESC/I model PID 0999 not recognised — trying the WF-3620 settings (experimental), please report",
+    );
+    expect(warnings[0].data).toEqual({ firmware: "2.05" });
+  });
+
+  it("IDENTITY with another dialect's PID on the WF-3620 settings names that dialect", () => {
+    const ctx = makeCtx();
+    const { result, lines } = decideIdentity(ctx, identityReply("PID 08C8", "1.10"));
+    expect("next" in result && result.next).toBe("STATUS_1A");
+    const warnings = lines.filter((l) => l.stream === "warn");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].text).toContain(
+      "Printer identifies as PID 08C8, which has its own xp620 dialect, but this session is running the wf3620 settings",
+    );
+    expect(warnings[0].text).not.toContain("experimental");
+  });
+
+  it("IDENTITY on a PID-keyed dialect the printer doesn't name warns without the experimental line", () => {
+    const ctx = makeCtx({ entry: XP620_ENTRY });
+    const { lines } = decideIdentity(ctx, identityReply("PID 0999", "1.00"));
+    const warnings = lines.filter((l) => l.stream === "warn");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].text).toContain(
+      "Printer identifies as PID 0999, but this session is running the xp620 settings",
+    );
+  });
+
+  it("IDENTITY fails on a reply that isn't 80 bytes", () => {
+    const { result } = decideIdentity(makeCtx(), Buffer.alloc(79));
+    expect("error" in result && result.error.message).toMatch(
+      /IDENTITY: expected 80-byte identity/,
+    );
   });
 
   it("STATUS_1A jumps to CLEANUP_1 when inInterPageLoop and byte 0 = 0x81", () => {

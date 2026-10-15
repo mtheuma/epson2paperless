@@ -145,6 +145,47 @@ describe("esci-legacy FS G reply parser", () => {
   });
 });
 
+import { parseFsIReply } from "./commands.js";
+
+describe("esci-legacy FS I reply parser", () => {
+  // The WF-3620's 80-byte FS I reply, from
+  // tools/pcap-extract/captures/wf-3620/flatbed-single-page-jpeg.jsonl line 10.
+  const WF3620_REPLY_HEX =
+    "44370000b00400004b000000b0040000f07f0000d8270000d8360000d8270000a041000000000000" +
+    "00000000112050494420303842382020202020202020312e32301008000000000000000000000000";
+
+  /** An 80-byte reply with `product` at offset 46 and `firmware` at 62. */
+  function reply(product: string, firmware: string, pad = " "): Buffer {
+    const buf = Buffer.alloc(80);
+    buf.write(product.padEnd(16, pad), 46, "latin1");
+    buf.write(firmware, 62, "latin1");
+    return buf;
+  }
+
+  it("decodes the WF-3620's PID and firmware", () => {
+    expect(parseFsIReply(Buffer.from(WF3620_REPLY_HEX, "hex"))).toEqual({
+      productName: "PID 08B8",
+      firmware: "1.20",
+    });
+  });
+
+  it("canonicalises the PID the same way as the push-scan trigger", () => {
+    expect(parseFsIReply(reply("pid 08c8", "1.10")).productName).toBe("PID 08C8");
+  });
+
+  it("keeps a non-PID product name as trimmed text, NUL padding included", () => {
+    expect(parseFsIReply(reply("WF-9999", "1.00", "\0")).productName).toBe("WF-9999");
+  });
+
+  it("returns null for blank fields", () => {
+    expect(parseFsIReply(Buffer.alloc(80))).toEqual({ productName: null, firmware: null });
+  });
+
+  it("throws on a reply that's not 80 bytes", () => {
+    expect(() => parseFsIReply(Buffer.alloc(16))).toThrow(/80 bytes/);
+  });
+});
+
 import { buildStreamConfigPayload } from "./commands.js";
 
 describe("esci-legacy IS-0x2200 stream-config payload", () => {
