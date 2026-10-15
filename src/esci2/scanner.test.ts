@@ -147,16 +147,32 @@ async function driveScannerToPara(args: {
   action?: "jpg" | "pdf";
   /** Answer FS Y with a NAK on this init-poll cycle (2 or 3), ending the poll early. */
   nakFsYOnPollCycle?: number;
+  /** Answer FS X with these bytes instead of an ACK, and stop there. */
+  modeSwitchReply?: Buffer;
+  timeoutMs?: number;
 }): Promise<{
   fake: FakeTlsSocket;
   sessionPromise: Promise<void>;
   feedEsci2Reply: (bodyHex: string) => Promise<void>;
   feedLegacyAck: () => Promise<void>;
 }> {
-  const { outputDir, firstStatReplyHex, duplex = false, action = "jpg", nakFsYOnPollCycle } = args;
+  const { outputDir, firstStatReplyHex, duplex = false, action = "jpg", timeoutMs } = args;
+  const { nakFsYOnPollCycle, modeSwitchReply } = args;
+  if (nakFsYOnPollCycle !== undefined && nakFsYOnPollCycle !== 2 && nakFsYOnPollCycle !== 3) {
+    throw new Error(`nakFsYOnPollCycle must be 2 or 3, got ${nakFsYOnPollCycle}`);
+  }
   const fake = new FakeTlsSocket();
   const sessionPromise = runEsci2Scan(
-    { printerIp: "1.2.3.4", port: 1865, destId: 0x02, outputDir, tempDir: "", duplex, action },
+    {
+      printerIp: "1.2.3.4",
+      port: 1865,
+      destId: 0x02,
+      outputDir,
+      tempDir: "",
+      duplex,
+      action,
+      timeoutMs,
+    },
     fake.asFactory(),
   );
   fake.simulateConnect();
@@ -234,6 +250,12 @@ async function driveScannerToPara(args: {
   }
 
   // MODE_SWITCH + POST_MODE_STAT (length-0, no drain)
+  if (modeSwitchReply !== undefined) {
+    // No wait: a non-ACK fails the session, and the caller must attach its
+    // rejection handler before the next tick.
+    fake.feed(buildIsPacket(0xa000, modeSwitchReply));
+    return { fake, sessionPromise, feedEsci2Reply, feedLegacyAck };
+  }
   await feedLegacyAck();
   await feedEsci2Reply("STATx0000000");
 
@@ -594,6 +616,66 @@ describe("scanner init-poll early stop", () => {
       await waitImmediate();
       fake.feed(buildIsPacket(0xa000, Buffer.from("PARAx0000000#parNG", "ascii")));
       await rejection;
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  // Asserts a rejection without leaving it momentarily unhandled.
+  const rejectionOf = (p: Promise<void>) =>
+    p.then(
+      () => new Error("session resolved"),
+      (err: Error) => err,
+    );
+  const NAMED = /likely cause: the init poll stopped early .* cycle 2 with a non-ACK/;
+
+  it("names an early-stopped poll when the printer then refuses FS X", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { sessionPromise } = await driveScannerToPara({
+        outputDir,
+        firstStatReplyHex: "STATx0000000",
+        nakFsYOnPollCycle: 2,
+        modeSwitchReply: Buffer.from([0x15]),
+      });
+      const err = await rejectionOf(sessionPromise);
+      expect(err.message).toMatch(/^Validation failed in state MODE_SWITCH /);
+      expect(err.message).toMatch(NAMED);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("names an early-stopped poll when the printer then goes quiet", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { sessionPromise } = await driveScannerToPara({
+        outputDir,
+        firstStatReplyHex: "STATx0000000",
+        nakFsYOnPollCycle: 2,
+        timeoutMs: 50,
+      });
+      // PARA is on the wire; no reply comes.
+      const err = await rejectionOf(sessionPromise);
+      expect(err.message).toMatch(/^Timeout in state PARA /);
+      expect(err.message).toMatch(NAMED);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("doesn't blame the early stop for a panel cancel before PARA is accepted", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { fake, sessionPromise } = await driveScannerToPara({
+        outputDir,
+        firstStatReplyHex: "STATx0000000",
+        nakFsYOnPollCycle: 2,
+      });
+      const settled = rejectionOf(sessionPromise);
+      fake.feed(buildIsPacket(0x9000, Buffer.from([0x03])));
+      const err = await settled;
+      expect(err.message).toBe("Async ScanCancel (0x3)");
     } finally {
       warnSpy.mockRestore();
     }

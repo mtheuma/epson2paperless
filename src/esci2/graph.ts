@@ -8,6 +8,7 @@ import {
   payloadPreview,
   type SendSpec,
   type TransitionResult,
+  unexpectedPacketError,
   validationError,
 } from "../scan-session.js";
 import {
@@ -625,24 +626,26 @@ function reportStatusSourceShadow(ctx: Esci2Ctx, ...status: Buffer[]): void {
 // INIT_POLL_FS_Y: receives 0xa000 (FS Y ACK, payload[0]=0x06); sends STAT.
 //
 // The dialect's poll count is an upper bound, not a requirement: after at
-// least one good cycle, a non-ACK to FS Y is taken as the printer having
-// finished polling, so the session warns with the reply bytes and moves on to
-// the mode switch. Purely defensive and unproven on hardware: no capture
-// shows a printer refusing FS Y mid-poll. A non-ACK on the first cycle means
-// the printer never polled at all and still fails with the bytes, exactly as
-// the static validator did.
+// least one good cycle, a single-byte non-ACK to FS Y is taken as the printer
+// having finished polling, so the session warns with the reply bytes and
+// moves on to the mode switch. Purely defensive and unproven on hardware: no
+// capture shows a printer refusing FS Y mid-poll. A non-ACK on the first
+// cycle (the printer never polled at all), or a longer reply (likely framing
+// desync), still fails with the bytes, exactly as the static validator did.
+const isFsYAck = ackByte(0x06);
 g.state(
   "INIT_POLL_FS_Y",
   decision<Esci2Ctx>((ctx, packet) => {
-    const typeGuard = expectIsType(packet, 0xa000, "INIT_POLL_FS_Y");
-    if (typeGuard) return typeGuard;
-    if (packet.payload[0] === 0x06) {
+    if (packet.type !== 0xa000) {
+      return { error: unexpectedPacketError("INIT_POLL_FS_Y", packet.type) };
+    }
+    if (isFsYAck(packet.payload)) {
       return {
         next: "INIT_POLL_STAT",
         send: buildPassthruPacket(buildEsci2Command("STAT"), ESCI2_REPLY_SIZE),
       };
     }
-    if (ctx.initPollIteration === 0) {
+    if (ctx.initPollIteration === 0 || packet.payload.length !== 1) {
       return { error: validationError("INIT_POLL_FS_Y", packet) };
     }
     const cycle = ctx.initPollIteration + 1;
@@ -662,19 +665,24 @@ g.state(
 
 /**
  * Names an early-stopped init poll as the likely cause of a session failure.
- * The scanner shell runs every failed session through this, so a timeout, a
- * non-ACK to FS X or a PARA rejection after an early stop all carry it.
- * Returns the reason unchanged when the poll ran its full count, or once PARA
- * was accepted.
+ * The graph's protocol-failure annotator, so a timeout, a non-ACK to FS X or
+ * a PARA rejection after an early stop all carry it, while an async abort
+ * (e.g. a panel cancel) or a transport failure does not. Returns the reason
+ * unchanged when the poll ran its full count, or once PARA was accepted. The
+ * named error keeps the original's stack frames, since the logger prints the
+ * stack but not `cause`.
  */
-export function nameInitPollEarlyStop(reason: Error, ctx: Esci2Ctx | undefined): Error {
-  const stop = ctx?.initPollEarlyStop;
+export function nameInitPollEarlyStop(ctx: Esci2Ctx, reason: Error): Error {
+  const stop = ctx.initPollEarlyStop;
   if (stop === undefined) return reason;
-  return new Error(
+  const message =
     `${reason.message} — likely cause: the init poll stopped early after the printer ` +
-      `answered FS Y on cycle ${stop.cycle} with a non-ACK (${stop.reply}).`,
-    { cause: reason },
-  );
+    `answered FS Y on cycle ${stop.cycle} with a non-ACK (${stop.reply}).`;
+  const named = new Error(message, { cause: reason });
+  if (reason.message !== "" && reason.stack?.includes(reason.message)) {
+    named.stack = reason.stack.replace(reason.message, message);
+  }
+  return named;
 }
 
 // INIT_POLL_STAT: decision on STAT reply — drain if length>0, else FIN.
@@ -1181,6 +1189,9 @@ g.cleanupStates([
   "POSTSCAN_2_FIN",
   "UNLOCKING",
 ]);
+
+// A failure after an early-stopped init poll names the non-ACK it stopped on.
+g.describeProtocolFailure(nameInitPollEarlyStop);
 
 // =============================================================================
 // Export the built graph

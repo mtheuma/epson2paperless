@@ -183,32 +183,49 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
     }
   });
 
-  it("INIT_POLL_FS_Y rejects a non-0xa000 packet", () => {
+  it("INIT_POLL_FS_Y fails on a multi-byte non-ACK after a good cycle (likely desync)", () => {
+    const state = esci2Graph.states.INIT_POLL_FS_Y;
+    if (state.kind !== "decision") throw new Error("INIT_POLL_FS_Y not a decision");
+    const ctx = makeCtx({ initPollIteration: 1 });
+    const result = state.decide(ctx, { type: 0xa000, payload: Buffer.from("#ERRADF PE  ") });
+    expect("error" in result && result.error.message).toBe(
+      "Validation failed in state INIT_POLL_FS_Y for packet type 0xa000 (payload len=12, head=0x234552524144462050452020)",
+    );
+    expect(ctx.initPollEarlyStop).toBeUndefined();
+  });
+
+  it("INIT_POLL_FS_Y rejects a non-0xa000 packet with the static-state wording", () => {
     const state = esci2Graph.states.INIT_POLL_FS_Y;
     if (state.kind !== "decision") throw new Error("INIT_POLL_FS_Y not a decision");
     const result = state.decide(makeCtx({ initPollIteration: 1 }), {
       type: 0xa100,
       payload: Buffer.from([0x06]),
     });
-    expect("error" in result).toBe(true);
+    expect("error" in result && result.error.message).toBe(
+      "Unexpected packet type 0xa100 in state INIT_POLL_FS_Y",
+    );
   });
 
-  it("nameInitPollEarlyStop names an early stop as the likely cause of a later failure", () => {
+  it("names an early stop as the likely cause of a later failure, keeping the stack", () => {
+    expect(esci2Graph.describeProtocolFailure).toBe(nameInitPollEarlyStop);
     const reason = new Error(
       "Validation failed in state MODE_SWITCH for packet type 0xa000 (payload len=1, head=0x15)",
     );
     const ctx = makeCtx({ initPollEarlyStop: { cycle: 2, reply: "payload len=1, head=0x15" } });
-    const named = nameInitPollEarlyStop(reason, ctx);
+    const named = nameInitPollEarlyStop(ctx, reason);
     expect(named.message).toContain(reason.message);
     expect(named.message).toContain("likely cause: the init poll stopped early");
     expect(named.message).toContain("cycle 2 with a non-ACK (payload len=1, head=0x15)");
     expect(named.cause).toBe(reason);
+    // The original's frames, not nameInitPollEarlyStop's, follow the new message.
+    const frames = (stack: string | undefined) => stack?.split("\n").slice(1).join("\n");
+    expect(named.stack?.split("\n")[0]).toBe(`Error: ${named.message}`);
+    expect(frames(named.stack)).toBe(frames(reason.stack));
   });
 
   it("nameInitPollEarlyStop leaves the reason alone without an early stop", () => {
     const reason = new Error("Timeout in state MODE_SWITCH — no response in 60000ms");
-    expect(nameInitPollEarlyStop(reason, makeCtx())).toBe(reason);
-    expect(nameInitPollEarlyStop(reason, undefined)).toBe(reason);
+    expect(nameInitPollEarlyStop(makeCtx(), reason)).toBe(reason);
   });
 
   it("PARA acceptance clears an early stop, so later failures aren't blamed on it", () => {

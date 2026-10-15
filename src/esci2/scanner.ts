@@ -10,7 +10,7 @@ import {
 } from "../scan-session.js";
 import { resolveSessionTimestamp } from "../output.js";
 import type { WhitePoint } from "../postprocess/auto-color.js";
-import { esci2Graph, nameInitPollEarlyStop, type Esci2Ctx } from "./graph.js";
+import { esci2Graph, type Esci2Ctx } from "./graph.js";
 import { withEsci2UnlockOnDestroy, withTlsErrorLabels } from "./transport.js";
 import { supportsWireGrayscale } from "./dialects/registry.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
@@ -238,7 +238,7 @@ export async function runEsci2Scan(
     ...makeOutputResolvers(session),
     paperless: session.paperless,
   });
-  if (!result.ok) throw nameInitPollEarlyStop(result.reason, result.finalCtx);
+  if (!result.ok) throw result.reason;
 }
 
 /**
@@ -269,5 +269,5 @@ export async function runEsci2ScanOverPlain(
     ...makeOutputResolvers(session),
     paperless: session.paperless,
   });
-  if (!result.ok) throw nameInitPollEarlyStop(result.reason, result.finalCtx);
+  if (!result.ok) throw result.reason;
 }
