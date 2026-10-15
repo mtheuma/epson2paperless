@@ -50,6 +50,7 @@ import {
   type InfoTokens,
 } from "./capabilities.js";
 import { advertisedDpiSet, selectWireDpi } from "./resolution.js";
+import { genericWindowDifferences, windowProblems } from "./scan-window.js";
 import { createLogger } from "../logger.js";
 
 const log = createLogger("scanner-esci2");
@@ -408,16 +409,25 @@ twoPhaseRead(
     // agree with the entry. Nothing sent to the printer depends on it, so a
     // failure here is logged rather than allowed to end the session.
     try {
-      const derived = deriveCapabilities(info, capaTokens);
-      for (const d of compareWithEntry(derived, ctx.entry)) {
-        const data = { dialect: ctx.entry.displayName, ...d };
+      const dialect = ctx.entry.displayName;
+      for (const d of compareWithEntry(deriveCapabilities(info, capaTokens), ctx.entry)) {
         // A disagreement the entry already flags as unconfirmed is known;
         // repeating it at info on every scan would read as a new problem.
         if (isExpectedDisagreement(d, ctx.entry)) {
-          log.debug("Capability derivation disagrees with the dialect entry (known)", data);
+          log.debug("Capability derivation disagrees with the dialect entry (known)", {
+            dialect,
+            ...d,
+          });
         } else {
-          log.info("Capability derivation disagrees with the dialect entry", data);
+          log.info("Capability derivation disagrees with the dialect entry", { dialect, ...d });
         }
+      }
+      for (const p of windowProblems(info, ctx.entry)) {
+        log.info("Scan window disagrees with the printer's scan area", { dialect, ...p });
+      }
+      // A different paper size, not a disagreement: debug only.
+      for (const d of genericWindowDifferences(info, ctx.entry)) {
+        log.debug("Generic scan window differs from the dialect entry's", { dialect, ...d });
       }
     } catch (err) {
       log.warn("Capability derivation failed (report-only; the scan continues)", err);
