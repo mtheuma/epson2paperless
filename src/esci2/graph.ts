@@ -30,6 +30,7 @@ import {
   assertSourceSupported,
 } from "./dialects/dispatch.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
+import { compareWithEntry, deriveCapabilities } from "./derivation.js";
 import { composePara, baseDpiFor, type ParaSpec } from "./para-composer.js";
 import { parseCapaTokens, type CapaTokens } from "./capabilities.js";
 import { advertisedDpiSet, selectWireDpi } from "./resolution.js";
@@ -357,6 +358,20 @@ twoPhaseRead(
     }
     ctx.capaTokens = parseCapaTokens(body);
     log.debug("Dialect resolved", { name: ctx.entry.displayName, fingerprint });
+    // Shadow derivation: report-only, silent when the printer's own replies
+    // agree with the entry. Nothing sent to the printer depends on it, so a
+    // failure here is logged rather than allowed to end the session.
+    try {
+      const derived = deriveCapabilities(ctx.infoBody, body);
+      for (const d of compareWithEntry(derived, ctx.entry)) {
+        log.info("Capability derivation disagrees with the dialect entry", {
+          dialect: ctx.entry.displayName,
+          ...d,
+        });
+      }
+    } catch (err) {
+      log.debug("Capability derivation failed", err);
+    }
     applyEntrySourceOverride(ctx, ctx.entry);
   },
 );
