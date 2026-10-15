@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   compareWithEntry,
   deriveCapabilities,
+  isExpectedDisagreement,
   sourceFromStatLength,
   sourceFromStatusErrors,
   type DerivedCapabilities,
@@ -161,6 +162,20 @@ describe("shadow derivation agrees with every replay fixture", () => {
     expect(compareWithEntry(derive(info, capa), entry!)).toEqual(
       EXPECTED_DISAGREEMENTS[model] ?? [],
     );
+  });
+
+  it("every expected disagreement is one its entry flags as unconfirmed", () => {
+    for (const { model, path } of REPLAY_FIXTURES) {
+      const entry = REGISTRY.get(computeCapaFingerprint(readInit1Bodies(path).capa))!;
+      for (const d of EXPECTED_DISAGREEMENTS[model] ?? []) {
+        expect(isExpectedDisagreement(d, entry)).toBe(true);
+      }
+    }
+    // And only those: the same field on an entry that doesn't flag it counts.
+    const et4950 = REGISTRY.get(ET4950_FP)!;
+    expect(
+      isExpectedDisagreement({ field: "duplexBackRotated", derived: false, entry: true }, et4950),
+    ).toBe(false);
   });
 
   it("every expected disagreement names a fixture model", () => {
