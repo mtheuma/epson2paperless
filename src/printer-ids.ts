@@ -20,8 +20,9 @@ export const PID_ET7700 = "PID 112B";
 
 /**
  * Extract and canonicalise the `PID XXXX` token from a wire-sourced string —
- * the SOAP `ProductNameIn` (pushscan.ts) or the latin1-decoded UDP
- * announcement (keepalive.ts). Tolerates prefix/hex casing and spacing
+ * the SOAP `ProductNameIn` (pushscan.ts), the latin1-decoded UDP
+ * announcement (keepalive.ts), or an ESC/I-2 INFO `#PRD` value
+ * (esci2/capabilities.ts). Tolerates prefix/hex casing and spacing
  * variance (each model's exact spelling is pinned by only one or two pcaps),
  * while the alphanumeric guards on both ends keep PID-shaped substrings
  * inside longer tokens ("RAPID 112B") and longer hex runs ("PID 112B7") from

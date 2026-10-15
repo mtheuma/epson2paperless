@@ -30,6 +30,22 @@ describe("buildDiagnostic", () => {
     expect(diagnostic).toContain("abc123");
   });
 
+  it("renders the PRD line for each product-field form", () => {
+    const prdLine = (info: string) =>
+      buildDiagnostic({
+        capaBody: Buffer.alloc(0),
+        infoBody: Buffer.from(info, "latin1"),
+        transport: "plain",
+        fingerprint: "prd",
+      })
+        .split("\n")
+        .find((line) => line.startsWith("PRD:"));
+    expect(prdLine("#PRDh010PID 11D1        ")).toBe("PRD:               PID 11D1");
+    // Name form (FF-680W, DS-575W): the name, without a "PID" prefix.
+    expect(prdLine("#PRDh007FF-680W\0#VERh008ADF 1.00")).toBe("PRD:               FF-680W");
+    expect(prdLine("#VERh008FB  2.00")).toBe("PRD:               PID (absent)");
+  });
+
   it("marks ADF/duplex as N for a flatbed-only printer", () => {
     const info = Buffer.from("#FB AREAd850i0001170#PRDh010PID 112A", "ascii");
     const capa = Buffer.from("#GMMLISTUG10UG18", "ascii"); // no #ADFDPLX, no #CCTLIST
