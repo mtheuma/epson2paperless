@@ -120,7 +120,8 @@ const GENERIC_A4_AT_300 = { w: 2481, h: 3506 };
 
 /**
  * The window a printer with no entry would scan at `dpi`, or null when INFO
- * advertises no area for `source` or clipping leaves nothing to scan.
+ * advertises no area for `source`, when the profile has no such source
+ * (adf-crp has no flatbed), or when clipping leaves nothing to scan.
  *
  * - standard: A4 at 300 DPI, x0 from the alignment rule.
  * - adf-crp: the full ADF scan area at 200 DPI (crop mode stops at the end
@@ -137,6 +138,7 @@ export function genericWindow(
   profile: ParaProfile,
   dpi: number,
 ): Extents | null {
+  if (profile === "adf-crp" && source === "flatbed") return null;
   const geometry = sourceGeometry(info, source);
   if (geometry === null) return null;
   const baseDpi = baseDpiFor(profile);
@@ -146,6 +148,10 @@ export function genericWindow(
     reference = { x0: 0, y0: 0, w: baseAreaW, h: toPixels(geometry.area.height, baseDpi) };
   } else {
     const { w, h } = GENERIC_A4_AT_300;
+    // An area narrower than A4 makes a right-aligned x0 negative. Clamping it
+    // to 0 and clipping below gives the same window as placing A4 flush
+    // right and then clipping: the whole area, which is all the printer can
+    // scan of a sheet wider than it.
     const x0 = Math.max(0, alignedX0(geometry.align, baseAreaW, w) ?? 0);
     reference = { x0, y0: 0, w, h };
   }

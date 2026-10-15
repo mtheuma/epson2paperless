@@ -24,11 +24,6 @@ function fixture(path: string) {
   return { info: parseInfoTokens(infoBody), capa: parseCapaTokens(capa), entry };
 }
 
-// One fixture per model is enough here: a model's INFO doesn't vary by session.
-const FIXTURE_MODELS = REPLAY_FIXTURES.filter(
-  (f, i) => REPLAY_FIXTURES.findIndex((g) => g.model === f.model) === i,
-);
-
 describe("sourceGeometry", () => {
   it("reads each source's area (1/100 inch) and alignment from INFO", () => {
     const tokens = info(
@@ -109,7 +104,7 @@ describe("windowProblems", () => {
     expect(windowProblems(noAlign, shifted)).toEqual([]);
   });
 
-  it.each(FIXTURE_MODELS)("finds none for the $model entry against its own INFO", ({ path }) => {
+  it.each(REPLAY_FIXTURES)("finds none for the $model entry against $path", ({ path }) => {
     const { info: tokens, entry: e } = fixture(path);
     expect(windowProblems(tokens, e)).toEqual([]);
   });
@@ -156,6 +151,21 @@ describe("genericWindow", () => {
     expect(genericWindow(info("#FB AREAd850i0001170"), "adf", "standard", 300)).toBeNull();
   });
 
+  it("is null for the flatbed on the adf-crp profile, which has none", () => {
+    const tokens = info("#ADFAREAd850i0001550#FB ALGNLEFT#FB AREAd850i0001170");
+    expect(genericWindow(tokens, "flatbed", "adf-crp", 200)).toBeNull();
+  });
+
+  it("right-aligned area narrower than A4: the whole area, as flush-right A4 clipped would be", () => {
+    const tokens = info("#ADFALGNRIGT#ADFAREAd800i0001400");
+    expect(genericWindow(tokens, "adf", "standard", 300)).toEqual({
+      x0: 0,
+      y0: 0,
+      w: 2400,
+      h: 3506,
+    });
+  });
+
   it("is null when clipping leaves nothing to scan", () => {
     expect(
       genericWindow(info("#FB ALGNLEFT#FB AREAd000i0001170"), "flatbed", "standard", 300),
@@ -164,14 +174,14 @@ describe("genericWindow", () => {
 
   // Every source of every fixture model, at every DPI the printer advertises
   // for that source: the window stays inside the scan area at that DPI.
-  const cases = FIXTURE_MODELS.flatMap(({ model, path }) => {
+  const cases = REPLAY_FIXTURES.flatMap(({ model, path }) => {
     const { info: tokens, capa, entry } = fixture(path);
     const profile = entry.paraProfile ?? "standard";
     return (["flatbed", "adf"] as WindowSource[]).flatMap((source) => {
       const geometry = sourceGeometry(tokens, source);
       if (geometry === null) return [];
       const dpis = advertisedDpiSet(capa, source === "flatbed" ? "flatbed" : "adf-simplex");
-      return dpis.map((dpi) => ({ model, source, dpi, tokens, profile, geometry }));
+      return dpis.map((dpi) => ({ model, path, source, dpi, tokens, profile, geometry }));
     });
   });
 
@@ -182,7 +192,7 @@ describe("genericWindow", () => {
   });
 
   it.each(cases)(
-    "$model $source at $dpi DPI stays inside the scan area",
+    "$model $source at $dpi DPI stays inside the scan area ($path)",
     ({ source, dpi, tokens, profile, geometry }) => {
       const w = genericWindow(tokens, source, profile, dpi)!;
       expect(w.x0).toBeGreaterThanOrEqual(0);
@@ -205,9 +215,16 @@ describe("genericWindow", () => {
 
 describe("genericWindowDifferences — on record for a future paper-size decision", () => {
   it("the generic window matches every entry except the captured non-A4 sizes", () => {
-    const differences = FIXTURE_MODELS.flatMap(({ model, path }) => {
+    // Every fixture of a model must report the same differences; one each.
+    const seen = new Set<string>();
+    const differences = REPLAY_FIXTURES.flatMap(({ model, path }) => {
       const { info: tokens, entry } = fixture(path);
       return genericWindowDifferences(tokens, entry).map((d) => ({ model, ...d }));
+    }).filter((d) => {
+      const key = JSON.stringify(d);
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
     });
     expect(differences).toEqual([
       // 2477 x 3500: a few pixels under A4.
