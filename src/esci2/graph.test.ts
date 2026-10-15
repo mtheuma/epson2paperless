@@ -1456,6 +1456,11 @@ describe("esci2Graph INIT1_CAPA_DATA — shadow derivation", () => {
           expect.objectContaining({ field: d.field, derived: d.derived, entry: d.entry }),
         ),
       );
+      // Every entry's window fits its scan area and follows the alignment.
+      const windowLines = lines.filter((args) =>
+        args.some((a) => String(a).includes("Scan window disagrees")),
+      );
+      expect(windowLines).toEqual([]);
     },
   );
 });

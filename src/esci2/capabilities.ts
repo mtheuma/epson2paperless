@@ -33,6 +33,12 @@ export interface InfoTokens {
    * re-fed) or "1SCN" (single-pass, both sides at once). Null without duplex.
    */
   adfDuplexType: string | null;
+  /** Flatbed alignment from `#FB ALGN<value>`: "LEFT", "RIGT" or "CNTR". Null if missing. */
+  fbAlign: string | null;
+  /** ADF alignment from `#ADFALGN<value>`: "LEFT", "RIGT" or "CNTR". Null if missing. */
+  adfAlign: string | null;
+  /** Longest document the ADF takes, from `#ADFAMAX<value>` (long paper). Null if missing. */
+  adfAreaMax: string | null;
   /** Raw segments, in encounter order. */
   segments: string[];
 }
@@ -117,6 +123,9 @@ export function parseInfoTokens(body: Buffer): InfoTokens {
     fbArea: textAfterPrefix(segments, "#FB AREA"),
     adfArea: textAfterPrefix(segments, "#ADFAREA"),
     adfDuplexType: textAfterPrefix(segments, "#ADFDPLX"),
+    fbAlign: textAfterPrefix(segments, "#FB ALGN"),
+    adfAlign: textAfterPrefix(segments, "#ADFALGN"),
+    adfAreaMax: textAfterPrefix(segments, "#ADFAMAX"),
     segments,
   };
 }
@@ -154,4 +163,13 @@ export function parseStatErrors(body: Buffer): string[] {
     .filter((seg) => seg.startsWith("#ERR"))
     .map((seg) => seg.slice(4).replace(/\s+/g, " ").trim())
     .filter((err) => err.length > 0); // a bare #ERR names no error
+}
+
+/**
+ * An INFO area value ("d850i0001170": width, then height) in 1/100 inch, e.g.
+ * 8.50 x 11.70 in. Null when absent or not two numbers.
+ */
+export function parseArea(text: string | null): { width: number; height: number } | null {
+  const values = parseNumericList(text);
+  return values?.length === 2 ? { width: values[0], height: values[1] } : null;
 }
