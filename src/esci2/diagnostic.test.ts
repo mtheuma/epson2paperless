@@ -92,9 +92,9 @@ describe("buildDiagnostic", () => {
     expect(diagnostic).toContain("UNITUM08");
   });
 
-  it("throws an UnsupportedDialectError when explicitly raised", () => {
+  it("throws an UnsupportedDialectError naming the fingerprint and the reason", () => {
     expect(() => {
-      throw new UnsupportedDialectError("xyz", "diagnostic body");
-    }).toThrow(/xyz/);
+      throw new UnsupportedDialectError("xyz", "diagnostic body", "no scan area");
+    }).toThrow(/xyz\): no scan area\./);
   });
 });

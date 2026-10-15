@@ -51,6 +51,7 @@ import {
 } from "./capabilities.js";
 import { advertisedDpiSet, selectWireDpi } from "./resolution.js";
 import { genericWindowDifferences, windowProblems } from "./scan-window.js";
+import { genericScanWindow } from "./dialects/generic.js";
 import { createLogger } from "../logger.js";
 
 const log = createLogger("scanner-esci2");
@@ -105,6 +106,12 @@ export interface Esci2Ctx {
   initPollEarlyStop?: { cycle: number; reply: string };
   /** Resolved registry entry post-INIT1, drives PARA build + init-poll count + source detection. Undefined until INIT1 completes. */
   entry: RegistryEntry | undefined;
+  /**
+   * Set when the session runs the generic dialect (no registry entry
+   * matched): the parsed INFO reply its scan window is computed from at the
+   * wire DPI. Undefined otherwise.
+   */
+  genericInfo?: InfoTokens;
   /** Panel-selected output format; drives action-aware dialects' PARA splice. */
   action: "jpg" | "pdf";
   /**
@@ -381,12 +388,15 @@ twoPhaseRead(
   (ctx, body) => {
     ctx.capaBody = body;
     const fingerprint = computeCapaFingerprint(body);
+    const capaTokens = parseCapaTokens(body);
+    ctx.capaTokens = capaTokens;
     let info: InfoTokens;
     let resolved: ResolvedEntry;
     try {
       info = parseInfoTokens(ctx.infoBody);
       resolved = lookupRegistryEntry({
         info,
+        capa: capaTokens,
         fingerprint,
         infoBody: ctx.infoBody,
         capaBody: ctx.capaBody,
@@ -396,8 +406,6 @@ twoPhaseRead(
       return { error: err as Error };
     }
     ctx.entry = resolved.entry;
-    const capaTokens = parseCapaTokens(body);
-    ctx.capaTokens = capaTokens;
     log.debug("Dialect resolved", {
       name: ctx.entry.displayName,
       matchedBy: resolved.matchedBy,
@@ -405,6 +413,12 @@ twoPhaseRead(
       productName: info.prdName,
       fingerprint,
     });
+    if (resolved.matchedBy === "generic") {
+      // Built from the derivation itself, so there is nothing to compare.
+      ctx.genericInfo = info;
+      applyEntrySourceOverride(ctx, ctx.entry);
+      return;
+    }
     // Shadow derivation: report-only, silent when the printer's own replies
     // agree with the entry. Nothing sent to the printer depends on it, so a
     // failure here is logged rather than allowed to end the session.
@@ -614,8 +628,45 @@ g.state("UNLOCKING", {
   on: { 0xa101: { next: "DONE" } },
 });
 
-function isFirstStatusOfStatLengthEntry(ctx: Esci2Ctx): boolean {
-  return ctx.initPollIteration === 0 && ctx.entry!.sourceDetection === "stat-length";
+/** Whether this is the first init-poll status reply and the entry reads its source from it. */
+function isFirstStatusForSource(ctx: Esci2Ctx): boolean {
+  const detection = ctx.entry!.sourceDetection;
+  return (
+    ctx.initPollIteration === 0 && (detection === "stat-length" || detection === "stat-content")
+  );
+}
+
+/**
+ * Judges the first status reply, whole: the reply itself and its drained
+ * body, if any. A "stat-content" entry takes its source from the reply's
+ * error tokens here, and fails the session on an error other than "ADF
+ * paper empty". A "stat-length" entry already took its source from the
+ * reply's length; its content is only shadowed.
+ */
+function judgeFirstStatus(
+  ctx: Esci2Ctx,
+  ...status: Buffer[]
+): TransitionResult<Esci2Ctx> | undefined {
+  if (ctx.entry!.sourceDetection === "stat-length") {
+    reportStatusSourceShadow(ctx, ...status);
+    return undefined;
+  }
+  const errors = status.flatMap((part) => parseStatErrors(part));
+  const decision = sourceFromStatusErrors(errors);
+  if ("unexpectedErrors" in decision) {
+    return {
+      error: new Error(
+        `INIT_POLL_STAT: the printer reports ${decision.unexpectedErrors.join(", ")}, so the ` +
+          "scan source can't be told from its status — clear it on the printer and scan again",
+      ),
+    };
+  }
+  ctx.source = decision.source;
+  log.debug("Source detected from the first status reply's content", {
+    errors,
+    source: ctx.source,
+  });
+  return undefined;
 }
 
 /**
@@ -731,7 +782,8 @@ g.state(
       return { error: new Error("INIT_POLL_STAT: unparseable reply header") };
     }
     // Source detection — only on the FIRST iteration, and only when the
-    // dialect declares `sourceDetection: "stat-length"`.
+    // dialect reads it from the status reply ("stat-length" from its length,
+    // here; "stat-content" from its tokens, once any body is drained).
     //
     // ET-2750 uses `sourceDetection: "fixed-flatbed"` because it is
     // flatbed-only hardware AND its STAT replies declare length=0 even
@@ -739,17 +791,23 @@ g.state(
     // stat-length heuristic would misclassify it as ADF, so skip the
     // override entirely and trust the `source: "flatbed"` value the
     // scanner shell pre-set in `initialCtx`.
-    if (isFirstStatusOfStatLengthEntry(ctx)) {
-      ctx.source = sourceFromStatLength(header.length);
-      log.debug("Source detected from first STAT", {
-        statLength: header.length,
-        source: ctx.source,
-      });
+    if (isFirstStatusForSource(ctx)) {
+      if (ctx.entry!.sourceDetection === "stat-length") {
+        ctx.source = sourceFromStatLength(header.length);
+        log.debug("Source detected from first STAT", {
+          statLength: header.length,
+          source: ctx.source,
+        });
+      }
       // The reply's own tail is #--- filler unless the printer put tokens
       // inline, so it is judged too: here when there is no body to drain,
       // otherwise alongside the body in INIT_POLL_STAT_DRAIN.
-      if (header.length === 0) reportStatusSourceShadow(ctx, packet.payload);
-      else ctx.firstStatusReply = packet.payload;
+      if (header.length === 0) {
+        const failed = judgeFirstStatus(ctx, packet.payload);
+        if (failed) return failed;
+      } else {
+        ctx.firstStatusReply = packet.payload;
+      }
     }
     if (header.length > 0) {
       return {
@@ -770,9 +828,10 @@ g.state(
   decision<Esci2Ctx>((ctx, packet) => {
     const typeGuard = expectIsType(packet, 0xa000, "INIT_POLL_STAT_DRAIN");
     if (typeGuard) return typeGuard;
-    if (isFirstStatusOfStatLengthEntry(ctx)) {
-      reportStatusSourceShadow(ctx, ctx.firstStatusReply ?? Buffer.alloc(0), packet.payload);
+    if (isFirstStatusForSource(ctx)) {
+      const failed = judgeFirstStatus(ctx, ctx.firstStatusReply ?? Buffer.alloc(0), packet.payload);
       ctx.firstStatusReply = undefined;
+      if (failed) return failed;
     }
     return {
       next: "INIT_POLL_FIN",
@@ -895,9 +954,18 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
     );
   }
 
-  const paraPayload = composePara(
-    makeParaSpec(ctx.entry!, paraSource, ctx.action, sel.wireDpi, ctx.colorMode, quality),
+  const spec = makeParaSpec(
+    ctx.entry!,
+    paraSource,
+    ctx.action,
+    sel.wireDpi,
+    ctx.colorMode,
+    quality,
   );
+  if (ctx.genericInfo !== undefined) {
+    spec.acqExtents = genericScanWindow(ctx.genericInfo, ctx.entry!, paraSource, sel.wireDpi);
+  }
+  const paraPayload = composePara(spec);
   return [
     buildPassthruPacket(buildParaHeader(paraPayload.length), 0),
     buildPassthruPacket(paraPayload, ESCI2_REPLY_SIZE),
@@ -978,12 +1046,17 @@ g.state(
       // remove, so that scan just invites a report.
       const dpiUnverified =
         ctx.wireDpi !== undefined && !ctx.entry!.verifiedWireDpis.includes(ctx.wireDpi);
-      const hint = !dpiUnverified
-        ? ""
-        : ctx.resolution !== undefined
-          ? ` Requested wire DPI was ${ctx.wireDpi}; this model may not accept it — ` +
-            `remove SCAN_RESOLUTION or report the result (issue #81).`
-          : ` This model may not accept wire DPI ${ctx.wireDpi} — please report the result (issue #81).`;
+      // The generic dialect has no verified DPI at all, so the DPI is no
+      // more a suspect than anything else it chose.
+      const hint = ctx.genericInfo
+        ? ` The ${ctx.entry!.displayName} settings were not accepted — please report it ` +
+          "with the diagnostic block logged when the session started."
+        : !dpiUnverified
+          ? ""
+          : ctx.resolution !== undefined
+            ? ` Requested wire DPI was ${ctx.wireDpi}; this model may not accept it — ` +
+              `remove SCAN_RESOLUTION or report the result (issue #81).`
+            : ` This model may not accept wire DPI ${ctx.wireDpi} — please report the result (issue #81).`;
       return { error: new Error(`PARA rejected by printer (#par${par ?? "?"}).${hint}`) };
     }
     // The printer took the settings, so an early-stopped init poll did no harm.

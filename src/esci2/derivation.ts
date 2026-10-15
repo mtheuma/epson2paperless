@@ -77,9 +77,11 @@ const FIELDS: { [K in keyof DerivedCapabilities]: FieldRule<K> } = {
       if (flatbed) return "fixed-flatbed";
       return adf ? "fixed-adf" : null;
     },
-    // The entry's "stat-length" reads the same status reply, by its length.
+    // "stat-length" and "stat-content" both read the init poll's status reply.
     fromEntry: (e) =>
-      e.sourceDetection === "stat-length" ? "init-poll-status" : e.sourceDetection,
+      e.sourceDetection === "stat-length" || e.sourceDetection === "stat-content"
+        ? "init-poll-status"
+        : e.sourceDetection,
   },
   paraProfile: {
     // "No flatbed" is redundant on every printer seen so far (only ADF-only

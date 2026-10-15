@@ -55,6 +55,12 @@ export interface ParaSpec {
    * bytes exactly.
    */
   jpegQuality?: number;
+  /**
+   * The ACQ window at the wire resolution, sent as-is instead of scaling the
+   * source's reference extents. Set by the generic dialect, whose window is
+   * computed per DPI (scaled, then clipped to the scan area).
+   */
+  acqExtents?: Extents;
 }
 
 /** Reference DPI the standard profile's registry extents are captured at. */
@@ -165,6 +171,7 @@ function validate(spec: ParaSpec): void {
   };
   checkExtents("fbExtents", spec.fbExtents);
   checkExtents("adfExtents", spec.adfExtents);
+  checkExtents("acqExtents", spec.acqExtents ?? null);
   const gJpg = GAMMA_CLASSES[spec.gammaClass.jpg];
   const gPdf = GAMMA_CLASSES[spec.gammaClass.pdf];
   if (!gJpg) throw new Error(`composePara: unknown gammaClass.jpg=${spec.gammaClass.jpg}`);
@@ -235,7 +242,7 @@ function composeStandardPara(spec: ParaSpec): Buffer {
   // ET-4950 ADF's x0=69 would drift the crop at any other DPI) to the chosen
   // resolution, by edges (see scaleAcqExtents).
   const acqExtents = spec.source === "flatbed" ? spec.fbExtents! : spec.adfExtents!;
-  parts.push(renderAcq(scaleAcqExtents("standard", acqExtents, resolution)));
+  parts.push(renderAcq(spec.acqExtents ?? scaleAcqExtents("standard", acqExtents, resolution)));
   // 10. BSZ trailing constant.
   parts.push(TRAILING_BSZ);
 
@@ -283,7 +290,7 @@ function composeAdfCrpPara(spec: ParaSpec): Buffer {
     "ascii",
   );
 
-  const acq = scaleAcqExtents("adf-crp", spec.adfExtents, resolution);
+  const acq = spec.acqExtents ?? scaleAcqExtents("adf-crp", spec.adfExtents, resolution);
 
   return Buffer.concat([
     prefix,

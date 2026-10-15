@@ -1692,3 +1692,126 @@ describe("esci2Graph INIT_POLL — status-content source shadow", () => {
     }
   });
 });
+
+describe("esci2Graph — generic dialect", () => {
+  // A printer no entry knows: the ET-4800 fixture's replies with its PID
+  // swapped out and one CAPA segment added, so neither identity nor
+  // fingerprint matches.
+  const ET4800 = readInit1Bodies("tools/pcap-extract/captures/et-4800/flatbed-jpg.jsonl");
+  const UNKNOWN_INFO = Buffer.from(
+    ET4800.info.toString("latin1").replace("PID 1185", "PID FFFF"),
+    "latin1",
+  );
+  const UNKNOWN_CAPA = Buffer.concat([ET4800.capa, Buffer.from("#ZZZZd001", "ascii")]);
+
+  function resolve(info: Buffer, capa: Buffer) {
+    const state = esci2Graph.states.INIT1_CAPA_DATA;
+    if (state.kind !== "decision") throw new Error("INIT1_CAPA_DATA not a decision");
+    const ctx = makeCtx({ entry: undefined, infoBody: info, tprDeclaredLength: capa.length });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const result = state.decide(ctx, { type: 0xa000, payload: capa });
+      return {
+        ctx,
+        result,
+        warnings: warn.mock.calls.map((args) => args.join(" ")),
+        infos: log.mock.calls.map((args) => args.join(" ")),
+      };
+    } finally {
+      warn.mockRestore();
+      log.mockRestore();
+    }
+  }
+
+  it("runs an unrecognised printer on the generic dialect, with the warning and the diagnostic", () => {
+    const { ctx, result, warnings, infos } = resolve(UNKNOWN_INFO, UNKNOWN_CAPA);
+    expect("error" in result).toBe(false);
+    expect(ctx.entry!.displayName).toBe("generic ESC/I-2 dialect (PID FFFF)");
+    expect(ctx.entry!.sourceDetection).toBe("stat-content");
+    expect(ctx.genericInfo).toBeDefined();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("PID FFFF not recognised — generic ESC/I-2 dialect");
+    expect(
+      infos.some((line) => line.includes("[INFO]") && line.includes("CAPA fingerprint:")),
+    ).toBe(true);
+    // Nothing to shadow: the dialect is the derivation.
+    expect(infos.some((line) => line.includes("disagrees"))).toBe(false);
+  });
+
+  it("still resolves a known printer to its own entry", () => {
+    const { ctx } = resolve(ET4800.info, ET4800.capa);
+    expect(ctx.entry).toBe(REGISTRY.get(computeCapaFingerprint(ET4800.capa)));
+    expect(ctx.genericInfo).toBeUndefined();
+  });
+
+  it("fails fast with the diagnostic when INFO advertises no scan area", () => {
+    const { result } = resolve(Buffer.from("#PRDh010PID FFFF        ", "ascii"), UNKNOWN_CAPA);
+    expect("error" in result && result.error.message).toMatch(
+      /its INFO reply advertises no scan area[\s\S]*PRD: {15}PID FFFF/,
+    );
+  });
+
+  describe("source detection from the status reply's content", () => {
+    function firstStatus(header: Buffer, body: Buffer | null) {
+      const { ctx } = resolve(UNKNOWN_INFO, UNKNOWN_CAPA);
+      const stat = esci2Graph.states.INIT_POLL_STAT;
+      const drain = esci2Graph.states.INIT_POLL_STAT_DRAIN;
+      if (stat.kind !== "decision" || drain.kind !== "decision") throw new Error("not decisions");
+      ctx.source = "adf";
+      const statResult = stat.decide(ctx, { type: 0xa000, payload: header });
+      const result =
+        body === null ? statResult : drain.decide(ctx, { type: 0xa000, payload: body });
+      return { ctx, result };
+    }
+    const statHeader = (length: number) =>
+      Buffer.from(`STATx${length.toString(16).toUpperCase().padStart(7, "0")}` + "#---".repeat(13));
+
+    it("ADF paper empty → flatbed", () => {
+      const { ctx, result } = firstStatus(statHeader(12), Buffer.from("#ERRADF PE  "));
+      expect("next" in result && result.next).toBe("INIT_POLL_FIN");
+      expect(ctx.source).toBe("flatbed");
+    });
+
+    it("no error → ADF, read from the reply itself when there is no body", () => {
+      const { ctx, result } = firstStatus(statHeader(0), null);
+      expect("next" in result && result.next).toBe("INIT_POLL_FIN");
+      expect(ctx.source).toBe("adf");
+    });
+
+    it("no error in the body → ADF, even when the length would say flatbed", () => {
+      const { ctx } = firstStatus(statHeader(12), Buffer.from("#---#---#---"));
+      expect(ctx.source).toBe("adf");
+    });
+
+    it("any other error ends the session", () => {
+      const { result } = firstStatus(statHeader(12), Buffer.from("#ERRADF JAM "));
+      expect("error" in result && result.error.message).toMatch(/reports ADF JAM/);
+    });
+  });
+
+  it("sends the generic window at the wire DPI, clipped to the scan area", () => {
+    // ADF-only crop-mode printer: the full ADF area (8.5 in wide). Scaling the
+    // 200-DPI reference to 75 DPI would round to 638 px, one past the edge.
+    const info = Buffer.from("#PRDh010PID FFFF        #ADFAREAd850i0001550#ADFALGNCNTR", "ascii");
+    const capa = Buffer.from(
+      "#ADFCRP #GMMLISTUG10UG18#CMXLISTUNITUM08#RSMLISTd075d200#RSSLISTd075d200",
+      "ascii",
+    );
+    const { ctx } = resolve(info, capa);
+    expect(ctx.entry!.paraProfile).toBe("adf-crp");
+    expect(ctx.entry!.initPollIterations).toBe(12);
+    const state = esci2Graph.states.POST_MODE_STAT;
+    if (state.kind !== "decision") throw new Error("POST_MODE_STAT not a decision");
+    ctx.resolution = 75;
+    const result = state.decide(ctx, {
+      type: 0xa000,
+      payload: Buffer.from("STATx0000000" + " ".repeat(52), "ascii"),
+    });
+    if (!("send" in result)) throw new Error("expected a send from POST_MODE_STAT");
+    const body = parseIsPacket((result.send as Buffer[])[1])!
+      .payload.subarray(8)
+      .toString("latin1");
+    expect(body).toContain("#ACQi0000000i0000000i0000637i0001162");
+  });
+});
