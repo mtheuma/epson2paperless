@@ -33,6 +33,7 @@ import { computeCapaFingerprint } from "./capa-fingerprint.js";
 import {
   compareWithEntry,
   deriveCapabilities,
+  isExpectedDisagreement,
   sourceFromStatLength,
   sourceFromStatusErrors,
 } from "./derivation.js";
@@ -383,7 +384,16 @@ twoPhaseRead(
       const infoTokens = parseInfoTokens(ctx.infoBody);
       const dialect = ctx.entry.displayName;
       for (const d of compareWithEntry(deriveCapabilities(infoTokens, capaTokens), ctx.entry)) {
-        log.info("Capability derivation disagrees with the dialect entry", { dialect, ...d });
+        // A disagreement the entry already flags as unconfirmed is known;
+        // repeating it at info on every scan would read as a new problem.
+        if (isExpectedDisagreement(d, ctx.entry)) {
+          log.debug("Capability derivation disagrees with the dialect entry (known)", {
+            dialect,
+            ...d,
+          });
+        } else {
+          log.info("Capability derivation disagrees with the dialect entry", { dialect, ...d });
+        }
       }
       for (const p of windowProblems(infoTokens, ctx.entry)) {
         log.info("Scan window disagrees with the printer's scan area", { dialect, ...p });

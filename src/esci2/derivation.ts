@@ -109,6 +109,17 @@ export function deriveCapabilities(info: InfoTokens, capa: CapaTokens): DerivedC
   ) as unknown as DerivedCapabilities;
 }
 
+/**
+ * Whether a disagreement is one the entry itself already flags as
+ * unconfirmed, so reporting it on every session would only repeat a known
+ * open question. Today that is the FF-680W's back-page rotation
+ * (duplexBackRotationUnverified), which the rotation cutover settles; duplex
+ * scans on such an entry already warn and invite a hardware report.
+ */
+export function isExpectedDisagreement(d: Disagreement, entry: RegistryEntry): boolean {
+  return d.field === "duplexBackRotated" && entry.duplexBackRotationUnverified === true;
+}
+
 /** Per-field disagreements between a derivation and a registry entry, in FIELDS order. */
 export function compareWithEntry(
   derived: DerivedCapabilities,

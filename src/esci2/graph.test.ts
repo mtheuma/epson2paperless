@@ -5,6 +5,7 @@ import { REGISTRY } from "./dialects/registry.js";
 import { IS_HEADER_SIZE, buildPurereadPacket, parseIsPacket } from "../protocol.js";
 import { parseCapaTokens } from "./capabilities.js";
 import { DEFAULT_JPEG_QUALITY } from "../config.js";
+import { setLogLevel } from "../logger.js";
 import {
   EXPECTED_DISAGREEMENTS,
   REPLAY_FIXTURES,
@@ -1446,18 +1447,27 @@ describe("esci2Graph INIT1_CAPA_DATA — shadow derivation", () => {
     lines.filter((args) => args.some((a) => String(a).includes(SHADOW_LINE)));
 
   it.each(REPLAY_FIXTURES)(
-    "logs only the expected disagreements for the $model fixture $path",
+    "logs nothing at info, and only the expected disagreements at debug, for the $model fixture $path",
     ({ model, path }) => {
       const { info, capa } = readInit1Bodies(path);
-      const { ctx, lines } = resolveDialect(info, capa);
-      expect(ctx.entry).toBeDefined();
-      expect(shadowLines(lines).map((args) => args[2])).toEqual(
+      setLogLevel("debug");
+      let result: ReturnType<typeof resolveDialect>;
+      try {
+        result = resolveDialect(info, capa);
+      } finally {
+        setLogLevel("info");
+      }
+      expect(result.ctx.entry).toBeDefined();
+      const atLevel = (level: string) =>
+        shadowLines(result.lines).filter((args) => String(args[1]).includes(`[${level}]`));
+      expect(atLevel("INFO")).toEqual([]);
+      expect(atLevel("DEBUG").map((args) => args[2])).toEqual(
         (EXPECTED_DISAGREEMENTS[model] ?? []).map((d) =>
           expect.objectContaining({ field: d.field, derived: d.derived, entry: d.entry }),
         ),
       );
       // Every entry's window fits its scan area and follows the alignment.
-      const windowLines = lines.filter((args) =>
+      const windowLines = result.lines.filter((args) =>
         args.some((a) => String(a).includes("Scan window disagrees")),
       );
       expect(windowLines).toEqual([]);
