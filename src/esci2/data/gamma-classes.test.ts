@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { GAMMA_CLASSES, type GammaClassName } from "./gamma-classes.js";
+import { GAMMA_CLASSES, GAMMA_CLASS_LOOK, type GammaClassName } from "./gamma-classes.js";
 
 describe("gamma-classes", () => {
   it("exposes et4950-stock with the expected size", () => {
@@ -92,5 +92,35 @@ describe("gamma-classes", () => {
       "ds575w-mono",
     ];
     expect(_names).toHaveLength(6);
+  });
+
+  describe("looks", () => {
+    // Largest distance of any LUT entry from identity, across every channel
+    // segment (12-byte "#GMT… h100" header + 256-byte LUT each).
+    const maxIdentityDistance = (name: GammaClassName): number => {
+      const g = GAMMA_CLASSES[name];
+      expect(g.length % 268, `${name} is not whole h100 segments`).toBe(0);
+      let max = 0;
+      for (let seg = 0; seg < g.length; seg += 268) {
+        g.subarray(seg + 12, seg + 268).forEach((v, i) => (max = Math.max(max, Math.abs(v - i))));
+      }
+      return max;
+    };
+
+    it("tags every class neutral or Epson-look", () => {
+      for (const name of Object.keys(GAMMA_CLASSES) as GammaClassName[]) {
+        expect(["neutral", "epson-look"]).toContain(GAMMA_CLASS_LOOK[name]);
+      }
+    });
+
+    // The hand tag is the source of truth; this only sanity-checks it against
+    // the curve's shape, so a failure means the GAMMA_CLASS_LOOK row is wrong.
+    it("each GAMMA_CLASS_LOOK tag fits its curve's distance from identity", () => {
+      for (const name of Object.keys(GAMMA_CLASSES) as GammaClassName[]) {
+        const tag = GAMMA_CLASS_LOOK[name];
+        const fits = maxIdentityDistance(name) <= 1 === (tag === "neutral");
+        expect(fits, `GAMMA_CLASS_LOOK["${name}"] = "${tag}" doesn't fit the curve`).toBe(true);
+      }
+    });
   });
 });

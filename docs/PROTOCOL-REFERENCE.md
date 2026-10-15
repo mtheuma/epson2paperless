@@ -206,7 +206,7 @@ UNLOCKING        ← send Unlock (IS 0x2101), await IS 0xa101 ack
 DONE             ← compose/promote output files, then resolve
 ```
 
-**INIT_POLL iterations.** The iteration count is per-dialect, read from `ctx.entry.initPollIterations` — 3 for most dialects; 2 for ET-2750; 8 for the FF-680W; 12 for the DS-575W. It is not a per-transport constant: `esci2-plain` spans several counts. (ET-2750's host driver only loops twice before sending FS X. What the printer does with a third FS Y is unknown: no committed capture shows one, so an earlier claim here that it returns a non-ACK has no evidence behind it.) The captured drivers actually poll many more times — the ET-4950 family and ET-4800 run 11–14 cycles while the printer wakes the feeder — but that count is a driver artifact, not a readiness gate: a fixed small count suffices for an already-active printer, and replay fixtures are trimmed to match (see [REVERSE-ENGINEERING.md](REVERSE-ENGINEERING.md)). The loop is driven by a counter, not a ready-state signal from the printer — the status values returned by STAT during INIT_POLL are not examined for readiness; they are simply consumed.
+**INIT_POLL iterations.** The iteration count is per-dialect, read from `ctx.entry.initPollIterations` — 3 for most dialects; 2 for ET-2750; 8 for the FF-680W; 12 for the DS-575W. It is not a per-transport constant: `esci2-plain` spans several counts. (ET-2750's host driver only loops twice before sending FS X. What the printer does with a third FS Y is unknown: no committed capture shows one, so an earlier claim here that it returns a non-ACK has no evidence behind it.) The count is an upper bound, not a requirement: after at least one good cycle, a non-ACK to FS Y ends the poll early — the session logs a warning with the reply bytes and sends FS X, and if the mode switch or the PARA exchange then fails, the error names that non-ACK as the likely cause. A non-ACK on the first cycle still fails the session. This is defensive only: no capture shows a printer refusing FS Y mid-poll. The captured drivers actually poll many more times — the ET-4950 family and ET-4800 run 11–14 cycles while the printer wakes the feeder — but that count is a driver artifact, not a readiness gate: a fixed small count suffices for an already-active printer, and replay fixtures are trimmed to match (see [REVERSE-ENGINEERING.md](REVERSE-ENGINEERING.md)). The loop is driven by a counter, not a ready-state signal from the printer — the status values returned by STAT during INIT_POLL are not examined for readiness; they are simply consumed.
 
 **Async events.** At any point during the session, the printer can send an IS `0x9000` async event packet. The ESC/I-2 graph's `globalAbortHandlers` entry for `0x9000` inspects the dispatch byte and returns `null` (info-only) for `0x01` (ScanStart) and `0x04` (Stop), or an `Error` for `0x03` (ScanCancel — cancel) and the fatal set `0x02`/`0x80`/`0xa0` (Disconnect/Timeout/ServerError). The engine settles with `{ ok: false, reason }` on any returned `Error`, regardless of which fatal it was. The handler is registered at the ESC/I-2 graph level — it applies to both ESC/I-2 variants (TLS and plain-TCP) but not to the legacy ESC/I (WF-3620) graph, which does not register a global async handler. In practice, a `0x9000`/`0xa0` ServerError always means the printer rejected a command (typically a malformed PARA or an unexpected command sequence), and the session connection closes within milliseconds of the event.
 
@@ -356,6 +356,10 @@ Entries are pure data:
 - A `gmm` constant plus named `gammaClass` and `cmxClass` lookups resolved from
   `src/esci2/data/gamma-classes.ts` and `cmx-classes.ts`. Class definitions are
   inlined verbatim from captured fixtures; never algorithmically generated.
+  Each class is tagged neutral or Epson-look (a CMX class by whether its bytes
+  are the identity matrix), and `checkColourPair` (`src/esci2/data/colour-pair.ts`)
+  rejects a mixed pair; a test holds every entry to it, ET-8500 and ET-7700
+  excepted until their colour fix.
 - Optional-segment presence flags (`#QIT`, `#CCT`).
 
 At INIT1_CAPA the graph computes the fingerprint, looks up the entry via
@@ -367,7 +371,10 @@ Printers with an unrecognised CAPA fingerprint fail fast with a copy-pasteable
 diagnostic block — no synthesis attempt, no silent quality regression. Adding
 support for a new printer is a data-only change in the normal case: capture its
 wire bytes, extract any novel gamma/CMX class into the data files, and add a
-registry entry. Replay tests (`src/esci2/scanner.test.ts` and per-dialect files
+registry entry. A novel gamma class also gets a `GAMMA_CLASS_LOOK` tag: neutral
+if it was captured beside an identity matrix (or none), Epson-look if beside the
+model's own matrix. The entry's composed colour pairs must then pass
+`checkColourPair` (`src/esci2/data/colour-pair.test.ts`). Replay tests (`src/esci2/scanner.test.ts` and per-dialect files
 under `src/esci2/dialects/*.test.ts`) pin the composed output byte-for-byte
 against the captured fixture.
 
