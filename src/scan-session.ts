@@ -21,10 +21,30 @@ import { DEFAULT_JPEG_QUALITY, type GrayscaleConversion } from "./config.js";
  * unknown printer answering FS Y with a non-`0x06` byte — without needing a
  * pcap of the session.
  */
-function payloadPreview(payload: Buffer, max = 16): string {
+export function payloadPreview(payload: Buffer, max = 16): string {
   const head = payload.subarray(0, max).toString("hex");
   const ellipsis = payload.length > max ? "…" : "";
   return `payload len=${payload.length}, head=0x${head}${ellipsis}`;
+}
+
+/**
+ * The error a failed static-transition `validate` settles with. Exported so a
+ * decision state that only sometimes rejects a reply can fail with the same
+ * message the static form would.
+ */
+export function validationError(state: string, packet: { type: number; payload: Buffer }): Error {
+  return new Error(
+    `Validation failed in state ${state} for packet type ${hexType(packet.type)} (${payloadPreview(packet.payload)})`,
+  );
+}
+
+/** The error a static state settles with on a packet type it has no transition for. */
+export function unexpectedPacketError(state: string, type: number): Error {
+  return new Error(`Unexpected packet type ${hexType(type)} in state ${state}`);
+}
+
+function hexType(type: number): string {
+  return `0x${type.toString(16).padStart(4, "0")}`;
 }
 
 // =============================================================================
@@ -130,6 +150,13 @@ export interface Graph<Ctx> {
    * payloads.
    */
   maxPayloadBytes?: number;
+  /**
+   * Lets the graph add context from its ctx to a failure the printer's
+   * replies caused: a timeout, an unexpected or invalid reply, a decision
+   * error or a hook throw. Async aborts, transport failures and framing
+   * desync pass through untouched.
+   */
+  describeProtocolFailure?: (ctx: Ctx, reason: Error) => Error;
 }
 
 /**
@@ -234,6 +261,8 @@ export interface GraphBuilder<Ctx> {
    * pages have already flushed. See `Graph.cleanupStates` for semantics.
    */
   cleanupStates(names: readonly string[]): this;
+  /** Set the graph's protocol-failure annotator. See `Graph.describeProtocolFailure`. */
+  describeProtocolFailure(fn: (ctx: Ctx, reason: Error) => Error): this;
   build(): Graph<Ctx>;
 }
 
@@ -254,6 +283,7 @@ export function createGraph<Ctx>(initial: string, timeoutMs: number): GraphBuild
   let abortHandlers: Graph<Ctx>["globalAbortHandlers"];
   let ignoreFilter: Graph<Ctx>["globalIgnoreFilter"];
   let cleanup: ReadonlySet<string> | undefined;
+  let describeFailure: Graph<Ctx>["describeProtocolFailure"];
   return {
     state(name, def) {
       if (name === "DONE") {
@@ -292,6 +322,10 @@ export function createGraph<Ctx>(initial: string, timeoutMs: number): GraphBuild
       cleanup = new Set(names);
       return this;
     },
+    describeProtocolFailure(fn) {
+      describeFailure = fn;
+      return this;
+    },
     build() {
       if (!states[initial]) throw new Error(`Initial state '${initial}' not defined`);
       if (cleanup) {
@@ -306,6 +340,7 @@ export function createGraph<Ctx>(initial: string, timeoutMs: number): GraphBuild
         globalAbortHandlers: abortHandlers,
         globalIgnoreFilter: ignoreFilter,
         cleanupStates: cleanup,
+        describeProtocolFailure: describeFailure,
       });
     },
   };
@@ -452,13 +487,17 @@ export async function runScanSession<Ctx>(
       });
     }
 
+    function protocolFailure(reason: Error): Error {
+      return graph.describeProtocolFailure ? graph.describeProtocolFailure(ctx, reason) : reason;
+    }
+
     function armTimeout(): void {
       if (timeoutTimer) clearTimeout(timeoutTimer);
       timeoutTimer = setTimeout(() => {
         const reason = new Error(
           `Timeout in state ${currentState} — no response in ${timeoutMs}ms`,
         );
-        settle({ ok: false, reason, finalCtx: ctx });
+        settle({ ok: false, reason: protocolFailure(reason), finalCtx: ctx });
       }, timeoutMs);
     }
 
@@ -690,7 +729,9 @@ export async function runScanSession<Ctx>(
             if (!settled) {
               settle({
                 ok: false,
-                reason: new Error(`Engine error in state ${currentState}: ${reason.message}`),
+                reason: protocolFailure(
+                  new Error(`Engine error in state ${currentState}: ${reason.message}`),
+                ),
                 finalCtx: ctx,
               });
             }
@@ -801,9 +842,7 @@ export async function runScanSession<Ctx>(
         if (!transition) {
           settle({
             ok: false,
-            reason: new Error(
-              `Unexpected packet type 0x${packet.type.toString(16).padStart(4, "0")} in state ${currentState}`,
-            ),
+            reason: protocolFailure(unexpectedPacketError(currentState, packet.type)),
             finalCtx: ctx,
           });
           return;
@@ -811,9 +850,7 @@ export async function runScanSession<Ctx>(
         if (transition.validate && !transition.validate(packet.payload)) {
           settle({
             ok: false,
-            reason: new Error(
-              `Validation failed in state ${currentState} for packet type 0x${packet.type.toString(16).padStart(4, "0")} (${payloadPreview(packet.payload)})`,
-            ),
+            reason: protocolFailure(validationError(currentState, packet)),
             finalCtx: ctx,
           });
           return;
@@ -823,7 +860,7 @@ export async function runScanSession<Ctx>(
         // decision
         const result = state.decide(ctx, packet);
         if ("error" in result) {
-          settle({ ok: false, reason: result.error, finalCtx: ctx });
+          settle({ ok: false, reason: protocolFailure(result.error), finalCtx: ctx });
           return;
         }
         await applyTransition(result);
