@@ -2,6 +2,7 @@
 import { isDeepStrictEqual } from "node:util";
 import type { CapaTokens, InfoTokens } from "./capabilities.js";
 import type { RegistryEntry } from "./dialects/registry.js";
+import type { ParaProfile } from "./para-composer.js";
 
 /**
  * Shadow derivation: dialect fields computed from the printer's own INFO and
@@ -29,6 +30,10 @@ export interface DerivedCapabilities {
    * it. Null when INFO advertises no scan area at all.
    */
   sourceDetection: "init-poll-status" | "fixed-flatbed" | "fixed-adf" | null;
+  /** PARA layout: "adf-crp" for an ADF-only printer whose ADF can crop. */
+  paraProfile: ParaProfile;
+  /** Duplex back pages arrive turned 180° (a two-pass ADF re-feeds the sheet). */
+  duplexBackRotated: boolean;
 }
 
 /** One differing field, typed by the field it names. */
@@ -76,6 +81,17 @@ const FIELDS: { [K in keyof DerivedCapabilities]: FieldRule<K> } = {
     fromEntry: (e) =>
       e.sourceDetection === "stat-length" ? "init-poll-status" : e.sourceDetection,
   },
+  paraProfile: {
+    // "No flatbed" is redundant on every printer seen so far (only ADF-only
+    // printers list #ADFCRP), but it is the documented rule.
+    derive: (info, capa) => (capa.adfCrop && !sourcesOf(info).flatbed ? "adf-crp" : "standard"),
+    fromEntry: (e) => e.paraProfile ?? "standard",
+  },
+  duplexBackRotated: {
+    // Single-pass ("1SCN") or no duplex: back pages arrive upright.
+    derive: (info) => info.adfDuplexType === "2SCN",
+    fromEntry: (e) => e.duplexBackRotated,
+  },
 };
 
 /** A scan-area segment with no value advertises no source, as with lists. */
@@ -91,6 +107,17 @@ export function deriveCapabilities(info: InfoTokens, capa: CapaTokens): DerivedC
   return Object.fromEntries(
     FIELD_NAMES.map((field) => [field, FIELDS[field].derive(info, capa)]),
   ) as unknown as DerivedCapabilities;
+}
+
+/**
+ * Whether a disagreement is one the entry itself already flags as
+ * unconfirmed, so reporting it on every session would only repeat a known
+ * open question. Today that is the FF-680W's back-page rotation
+ * (duplexBackRotationUnverified), which the rotation cutover settles; duplex
+ * scans on such an entry already warn and invite a hardware report.
+ */
+export function isExpectedDisagreement(d: Disagreement, entry: RegistryEntry): boolean {
+  return d.field === "duplexBackRotated" && entry.duplexBackRotationUnverified === true;
 }
 
 /** Per-field disagreements between a derivation and a registry entry, in FIELDS order. */
