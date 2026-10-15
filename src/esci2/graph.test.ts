@@ -1496,21 +1496,19 @@ describe("esci2Graph INIT_POLL — status-content source shadow", () => {
   const statHeader = (length: number) =>
     Buffer.from(`STATx${length.toString(16).toUpperCase().padStart(7, "0")}` + "#---".repeat(13));
 
-  it.each(REPLAY_FIXTURES)("is silent for the $model fixture $path", ({ path }) => {
+  it.each(REPLAY_FIXTURES)("is silent for the $model fixture $path", ({ path, source }) => {
     const entry = REGISTRY.get(computeCapaFingerprint(readInit1Bodies(path).capa))!;
     const { header, body } = readFirstInitPollStatus(path);
     const { ctx, lines } = firstStatus(entry, header, body);
     expect(lines).toEqual([]);
-    // Fixed-source entries never consult the status; the rest scanned from
-    // the source the fixture's name says.
+    // Fixed-source entries never consult the status; the rest land on the
+    // source the session was recorded scanning from.
     const expected =
       entry.sourceDetection === "fixed-flatbed"
         ? "flatbed"
         : entry.sourceDetection === "fixed-adf"
           ? "adf"
-          : path.includes("flatbed")
-            ? "flatbed"
-            : "adf";
+          : source;
     expect(ctx.source).toBe(expected);
   });
 
@@ -1527,6 +1525,14 @@ describe("esci2Graph INIT_POLL — status-content source shadow", () => {
   it("logs a status error other than ADF paper empty, without changing the source", () => {
     const { ctx, lines } = firstStatus(ET4950_ENTRY, statHeader(12), Buffer.from("#ERRADF JAM "));
     expect(ctx.source).toBe("flatbed");
+    expect(lines).toHaveLength(1);
+    expect(lines[0][2]).toEqual(expect.objectContaining({ errors: ["ADF JAM"] }));
+  });
+
+  it("judges tokens the printer puts inline in the reply along with the body", () => {
+    // Synthetic: no fixture carries tokens in the STAT reply header.
+    const header = Buffer.from("STATx000000C#ERRADF JAM " + "#---".repeat(10));
+    const { lines } = firstStatus(ET4950_ENTRY, header, Buffer.from("#ERRADF PE  "));
     expect(lines).toHaveLength(1);
     expect(lines[0][2]).toEqual(expect.objectContaining({ errors: ["ADF JAM"] }));
   });

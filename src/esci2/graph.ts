@@ -30,7 +30,12 @@ import {
   assertSourceSupported,
 } from "./dialects/dispatch.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
-import { compareWithEntry, deriveCapabilities, sourceFromStatusErrors } from "./derivation.js";
+import {
+  compareWithEntry,
+  deriveCapabilities,
+  sourceFromStatLength,
+  sourceFromStatusErrors,
+} from "./derivation.js";
 import { composePara, baseDpiFor, type ParaSpec } from "./para-composer.js";
 import {
   parseCapaTokens,
@@ -78,6 +83,12 @@ export interface Esci2Ctx {
    * wire DPI and clamp jpegQuality against the printer's advertised range.
    */
   capaTokens: CapaTokens | undefined;
+  /**
+   * The first init-poll STAT reply (header and inline tokens), kept until its
+   * body is drained so the status-content shadow judges both together.
+   * Undefined otherwise.
+   */
+  firstStatusReply?: Buffer;
   /** Resolved registry entry post-INIT1, drives PARA build + init-poll count + source detection. Undefined until INIT1 completes. */
   entry: RegistryEntry | undefined;
   /** Panel-selected output format; drives action-aware dialects' PARA splice. */
@@ -560,29 +571,20 @@ g.state("UNLOCKING", {
   on: { 0xa101: { next: "DONE" } },
 });
 
-/**
- * Today's source rule for `stat-length` entries, from the first init-poll
- * STAT reply's declared length. ET-4950 fixtures: length 0 → ADF (printer
- * queued no status); length 12 → flatbed (queued `#ERRADF PE  `). Other
- * lengths default to ADF.
- */
-export function sourceFromStatLength(length: number): "adf" | "flatbed" {
-  return length === 12 ? "flatbed" : "adf";
-}
-
 function isFirstStatusOfStatLengthEntry(ctx: Esci2Ctx): boolean {
   return ctx.initPollIteration === 0 && ctx.entry!.sourceDetection === "stat-length";
 }
 
 /**
  * Shadow of the content-based source decision: reads the first status
- * reply's error tokens and reports, at info, where they disagree with the
- * length-based source already in ctx.source, or carry an error a
- * content-based decision would end the session on. Report-only.
+ * reply's error tokens (from the reply itself and its drained body, if any)
+ * and reports, at info, where they disagree with the length-based source
+ * already in ctx.source, or carry an error a content-based decision would
+ * end the session on. Report-only.
  */
-function reportStatusSourceShadow(ctx: Esci2Ctx, status: Buffer): void {
+function reportStatusSourceShadow(ctx: Esci2Ctx, ...status: Buffer[]): void {
   try {
-    const errors = parseStatErrors(status);
+    const errors = status.flatMap((part) => parseStatErrors(part));
     const decision = sourceFromStatusErrors(errors);
     if ("unexpectedErrors" in decision) {
       log.info("Status reply carries an error a content-based source decision would fail on", {
@@ -649,10 +651,11 @@ g.state(
         statLength: header.length,
         source: ctx.source,
       });
-      // A zero-length reply has no body to drain, so the reply itself is
-      // judged here (its tail is #--- filler unless the printer put tokens
-      // inline); otherwise INIT_POLL_STAT_DRAIN judges the body.
+      // The reply's own tail is #--- filler unless the printer put tokens
+      // inline, so it is judged too: here when there is no body to drain,
+      // otherwise alongside the body in INIT_POLL_STAT_DRAIN.
       if (header.length === 0) reportStatusSourceShadow(ctx, packet.payload);
+      else ctx.firstStatusReply = packet.payload;
     }
     if (header.length > 0) {
       return {
@@ -673,7 +676,10 @@ g.state(
   decision<Esci2Ctx>((ctx, packet) => {
     const typeGuard = expectIsType(packet, 0xa000, "INIT_POLL_STAT_DRAIN");
     if (typeGuard) return typeGuard;
-    if (isFirstStatusOfStatLengthEntry(ctx)) reportStatusSourceShadow(ctx, packet.payload);
+    if (isFirstStatusOfStatLengthEntry(ctx)) {
+      reportStatusSourceShadow(ctx, ctx.firstStatusReply ?? Buffer.alloc(0), packet.payload);
+      ctx.firstStatusReply = undefined;
+    }
     return {
       next: "INIT_POLL_FIN",
       send: buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),

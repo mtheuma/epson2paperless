@@ -26,38 +26,50 @@ interface RawEvent {
 }
 
 /**
- * Every committed ESC/I-2 replay fixture that records INIT1. The DS-575W
- * colour oracle is a PARA-only excerpt with no INIT1, so it is left out.
+ * Every committed ESC/I-2 replay fixture that records INIT1, with the source
+ * the session was recorded scanning from. The DS-575W colour oracle is a
+ * PARA-only excerpt with no INIT1, so it is left out.
  */
-export const REPLAY_FIXTURES: ReadonlyArray<{ model: string; path: string }> = [
-  ...[
-    "2026-04-24T08-56-07-adf-1p-simplex",
-    "2026-04-24T08-58-29-adf-1p-duplex",
-    "2026-04-24T08-59-52-adf-3p-simplex",
-    "2026-04-24T09-01-34-adf-3p-duplex",
-    "2026-04-24T09-03-58-adf-1p-simplex-pdf",
-    "2026-04-24T09-05-08-flatbed-1p-jpg",
-    "2026-04-24T09-06-37-flatbed-1p-pdf",
-  ].map((name) => ({
-    model: "ET-4950 family",
-    path: `tools/frida-capture/captures/${name}.jsonl`,
-  })),
-  ...(
-    [
-      ["ET-2750", "et-2750", ["flatbed-single-page-pdf"]],
-      ["XP-7100", "xp-7100", ["jpg-adf-duplex", "jpg-adf-simplex", "jpg-flatbed"]],
-      ["ET-4800", "et-4800", ["adf-jpg", "adf-pdf", "flatbed-jpg", "flatbed-pdf"]],
-      ["ET-7700", "et-7700", ["flatbed-jpg", "flatbed-pdf"]],
-      ["FF-680W", "ff-680w", ["adf-duplex-200", "adf-simplex-200", "adf-simplex-300"]],
-      ["DS-575W", "ds-575w", ["adf-duplex-600-mono-jpg", "adf-simplex-400-mono-jpg"]],
-    ] as const
-  ).flatMap(([model, dir, names]) =>
-    names.map((name) => ({ model, path: `tools/pcap-extract/captures/${dir}/${name}.jsonl` })),
-  ),
-];
+export const REPLAY_FIXTURES: ReadonlyArray<{
+  model: string;
+  path: string;
+  source: "flatbed" | "adf";
+}> = (
+  [
+    ["ET-4950 family", "frida-capture/captures/2026-04-24T08-56-07-adf-1p-simplex", "adf"],
+    ["ET-4950 family", "frida-capture/captures/2026-04-24T08-58-29-adf-1p-duplex", "adf"],
+    ["ET-4950 family", "frida-capture/captures/2026-04-24T08-59-52-adf-3p-simplex", "adf"],
+    ["ET-4950 family", "frida-capture/captures/2026-04-24T09-01-34-adf-3p-duplex", "adf"],
+    ["ET-4950 family", "frida-capture/captures/2026-04-24T09-03-58-adf-1p-simplex-pdf", "adf"],
+    ["ET-4950 family", "frida-capture/captures/2026-04-24T09-05-08-flatbed-1p-jpg", "flatbed"],
+    ["ET-4950 family", "frida-capture/captures/2026-04-24T09-06-37-flatbed-1p-pdf", "flatbed"],
+    ["ET-2750", "pcap-extract/captures/et-2750/flatbed-single-page-pdf", "flatbed"],
+    ["XP-7100", "pcap-extract/captures/xp-7100/jpg-adf-duplex", "adf"],
+    ["XP-7100", "pcap-extract/captures/xp-7100/jpg-adf-simplex", "adf"],
+    ["XP-7100", "pcap-extract/captures/xp-7100/jpg-flatbed", "flatbed"],
+    ["ET-4800", "pcap-extract/captures/et-4800/adf-jpg", "adf"],
+    ["ET-4800", "pcap-extract/captures/et-4800/adf-pdf", "adf"],
+    ["ET-4800", "pcap-extract/captures/et-4800/flatbed-jpg", "flatbed"],
+    ["ET-4800", "pcap-extract/captures/et-4800/flatbed-pdf", "flatbed"],
+    ["ET-7700", "pcap-extract/captures/et-7700/flatbed-jpg", "flatbed"],
+    ["ET-7700", "pcap-extract/captures/et-7700/flatbed-pdf", "flatbed"],
+    ["FF-680W", "pcap-extract/captures/ff-680w/adf-duplex-200", "adf"],
+    ["FF-680W", "pcap-extract/captures/ff-680w/adf-simplex-200", "adf"],
+    ["FF-680W", "pcap-extract/captures/ff-680w/adf-simplex-300", "adf"],
+    ["DS-575W", "pcap-extract/captures/ds-575w/adf-duplex-600-mono-jpg", "adf"],
+    ["DS-575W", "pcap-extract/captures/ds-575w/adf-simplex-400-mono-jpg", "adf"],
+  ] as const
+).map(([model, file, source]) => ({ model, path: `tools/${file}.jsonl`, source }));
 
-/** The printer→host IS frame payloads of a fixture, in order. */
+const payloadCache = new Map<string, Buffer[]>();
+
+/**
+ * The printer→host IS frame payloads of a fixture, in order. Cached per path:
+ * several tests read the same multi-megabyte fixtures.
+ */
 function readPrinterPayloads(path: string): Buffer[] {
+  const cached = payloadCache.get(path);
+  if (cached) return cached;
   const chunks: Buffer[] = [];
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (line.trim().length === 0) continue;
@@ -81,6 +93,7 @@ function readPrinterPayloads(path: string): Buffer[] {
     payloads.push(stream.subarray(off + 12, off + 12 + length));
     off += 12 + length;
   }
+  payloadCache.set(path, payloads);
   return payloads;
 }
 

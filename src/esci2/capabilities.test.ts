@@ -123,5 +123,6 @@ describe("parseStatErrors", () => {
   it("returns nothing for a reply with no error, including #--- filler", () => {
     expect(parseStatErrors(Buffer.alloc(0))).toEqual([]);
     expect(parseStatErrors(Buffer.from("STATx0000000#---#---#---", "ascii"))).toEqual([]);
+    expect(parseStatErrors(Buffer.from("#ERR    #---", "ascii"))).toEqual([]);
   });
 });

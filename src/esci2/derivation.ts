@@ -78,8 +78,9 @@ const FIELDS: { [K in keyof DerivedCapabilities]: FieldRule<K> } = {
   },
 };
 
+/** A scan-area segment with no value advertises no source, as with lists. */
 function sourcesOf(info: InfoTokens): DerivedCapabilities["sources"] {
-  return { flatbed: info.fbArea !== null, adf: info.adfArea !== null };
+  return { flatbed: advertises(info.fbArea), adf: advertises(info.adfArea) };
 }
 
 const FIELD_NAMES = Object.keys(FIELDS) as (keyof DerivedCapabilities)[];
@@ -106,6 +107,16 @@ export function compareWithEntry(
   };
   FIELD_NAMES.forEach(check);
   return out;
+}
+
+/**
+ * Today's source rule for `stat-length` entries, from the first init-poll
+ * STAT reply's declared length. ET-4950 fixtures: length 0 → ADF (printer
+ * queued no status); length 12 → flatbed (queued `#ERRADF PE  `). Other
+ * lengths default to ADF.
+ */
+export function sourceFromStatLength(length: number): "adf" | "flatbed" {
+  return length === 12 ? "flatbed" : "adf";
 }
 
 /**

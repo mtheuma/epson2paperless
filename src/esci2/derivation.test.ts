@@ -2,11 +2,11 @@ import { describe, it, expect } from "vitest";
 import {
   compareWithEntry,
   deriveCapabilities,
+  sourceFromStatLength,
   sourceFromStatusErrors,
   type DerivedCapabilities,
 } from "./derivation.js";
 import { parseCapaTokens, parseInfoTokens, parseStatErrors } from "./capabilities.js";
-import { sourceFromStatLength } from "./graph.js";
 import { REGISTRY, type RegistryEntry } from "./dialects/registry.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
 import {
@@ -59,6 +59,15 @@ describe("deriveCapabilities — sources and source detection", () => {
     expect(derive(ascii(ADF + FB), NO_CAPA).sourceDetection).toBe("init-poll-status");
     expect(derive(ascii(FB), NO_CAPA).sourceDetection).toBe("fixed-flatbed");
     expect(derive(ascii(ADF), NO_CAPA).sourceDetection).toBe("fixed-adf");
+  });
+
+  it("a scan-area segment with no value advertises no source", () => {
+    expect(derive(ascii("#ADFAREA" + FB), NO_CAPA)).toEqual(
+      expect.objectContaining({
+        sources: { flatbed: true, adf: false },
+        sourceDetection: "fixed-flatbed",
+      }),
+    );
   });
 
   it("no scan area at all derives no source detection", () => {
@@ -148,14 +157,13 @@ describe("content-based source decision agrees with the length-based one on ever
     );
   });
 
-  it.each(statLengthFixtures)("$model: $path", ({ path }) => {
+  it.each(statLengthFixtures)("$model: $path", ({ path, source }) => {
     const { header, body } = readFirstInitPollStatus(path);
     const lengthBased = sourceFromStatLength(body?.length ?? 0);
-    expect(sourceFromStatusErrors(parseStatErrors(body ?? header))).toEqual({
-      source: lengthBased,
-    });
-    // The fixture's own name says which source the session scanned from.
-    expect(lengthBased).toBe(path.includes("flatbed") ? "flatbed" : "adf");
+    const errors = [header, body ?? Buffer.alloc(0)].flatMap((b) => parseStatErrors(b));
+    expect(sourceFromStatusErrors(errors)).toEqual({ source: lengthBased });
+    // Both agree with the source the session was recorded scanning from.
+    expect(lengthBased).toBe(source);
   });
 
   it("DS-575W: its first statuses say paper-empty, yet it stays fixed to the ADF", () => {
