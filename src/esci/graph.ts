@@ -271,8 +271,16 @@ function identityState(name: string, next: string, send: SendSpec<EsciCtx>): voi
     decision<EsciCtx>((ctx, packet) => {
       const typeGuard = expectIsType(packet, ESCI_REPLY, name);
       if (typeGuard) return typeGuard;
-      const lengthGuard = expectLength(packet.payload, 80, name, "identity");
-      if (lengthGuard) return lengthGuard;
+      // Not expectLength: an unfamiliar model's reply is what a compatibility
+      // report needs, so the error carries it in full.
+      if (packet.payload.length !== 80) {
+        return {
+          error: new Error(
+            `${name}: expected 80-byte identity, got ${packet.payload.length} ` +
+              `(payload=${packet.payload.toString("hex")})`,
+          ),
+        };
+      }
       reportIdentity(ctx, packet.payload);
       return { next, send };
     }),

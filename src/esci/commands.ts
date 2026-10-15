@@ -166,9 +166,16 @@ export interface FsIIdentity {
   firmware: string | null;
 }
 
-/** Decode a space/NUL-padded ASCII field; blank → null. */
+/**
+ * Decode a space/NUL-padded ASCII field; blank → null. Bytes outside
+ * printable ASCII come back as `\xNN`, so an unfamiliar layout can't put
+ * control characters into a log line.
+ */
 function asciiField(buf: Buffer, start: number, end: number): string | null {
-  const text = buf.toString("latin1", start, end).replace(/[\s\0]+$/, "");
+  const text = buf
+    .toString("latin1", start, end)
+    .replace(/[\s\0]+$/, "")
+    .replace(/[^\x20-\x7e]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
   return text.length > 0 ? text : null;
 }
 

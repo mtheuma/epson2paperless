@@ -647,10 +647,14 @@ decodes it (`parseFsIReply`) and checks it against the running dialect
 `ctx.entry` whatever the check says. A match logs the usual debug
 `Dialect resolved` line. A product no dialect claims, on the WF-3620 fallback,
 warns that an older ESC/I model is trying the WF-3620 settings
-(experimental) and asks for a report. A product another dialect claims, which
-is what `scan:now` against an XP-620 or ET-2550 produces, warns which dialect
-that is. Because the PID is read in-session, the check works on `scan:now`
-too.
+(experimental) and asks for a report. A product another dialect claims warns
+which dialect that is: `scan:now` against an ET-2550 should produce it, since
+the ET-2550's setup reaches `FS I` the same way the WF-3620's does. (Under
+`scan:now` an XP-620 gets the WF-3620's `ESC @` setup instead of its own, and
+no capture shows whether that reaches `FS I`.) Because the PID is read
+in-session, the check works on `scan:now` too. Bytes outside printable ASCII
+in either field are logged as `\xNN`, and a reply that isn't 80 bytes fails
+the session with the whole reply in hex.
 
 Three branch points read `ctx.entry`:
 

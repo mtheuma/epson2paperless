@@ -257,16 +257,18 @@ const EXPECTED_IDENTITY: Record<string, { productName: string; firmware: string 
   "et-2550": { productName: "PID 1106", firmware: "1.40" },
 };
 
-/** Identity lines a session logged: the dialect line's data, plus any identity warning. */
+/**
+ * What a session logged about its identity: the dialect line's data, plus
+ * every warning. All warnings, not just identity-worded ones, so rewording
+ * the identity warning can't let it slip past a `warnings: []` assertion.
+ */
 function identityLogs(lines: ReturnType<typeof captureLogs>["lines"]): {
   resolved: unknown[];
   warnings: string[];
 } {
   return {
     resolved: lines.filter((l) => l.text.endsWith("Dialect resolved")).map((l) => l.data),
-    warnings: lines
-      .filter((l) => l.stream === "warn" && /ESC\/I model|identifies as/.test(l.text))
-      .map((l) => l.text),
+    warnings: lines.filter((l) => l.stream === "warn").map((l) => l.text),
   };
 }
 
