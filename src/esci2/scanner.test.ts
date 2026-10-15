@@ -206,7 +206,11 @@ async function driveScannerToPara(args: {
   if (firstStatLength > 0) {
     fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
     await waitImmediate();
-    fake.feed(buildIsPacket(0xa000, Buffer.alloc(firstStatLength, 0x2d)));
+    // The flatbed fixtures' 12-byte status body, padded/cut to the declared
+    // length, so the status-content shadow agrees and stays silent.
+    const body = Buffer.alloc(firstStatLength, 0x20);
+    body.write("#ERRADF PE", "ascii");
+    fake.feed(buildIsPacket(0xa000, body));
     await waitImmediate();
   }
   await feedEsci2Reply("FIN x0000000");

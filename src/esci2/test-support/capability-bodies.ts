@@ -1,8 +1,8 @@
 // src/esci2/test-support/capability-bodies.ts
 //
-// Recovers the INIT1 INFO and CAPA reply bodies from a committed ESC/I-2
-// replay fixture, for tests that check capability derivation against the
-// printers we have recordings of.
+// Recovers the INIT1 INFO and CAPA reply bodies, and the first init-poll STAT
+// reply, from a committed ESC/I-2 replay fixture, for tests that check
+// capability derivation against the printers we have recordings of.
 //
 // Both fixture formats carry the printer→host byte stream: pcap-extract
 // events as `{ dir: "p>h", hex }`, Frida events as `{ hook: "recv",
@@ -56,7 +56,8 @@ export const REPLAY_FIXTURES: ReadonlyArray<{ model: string; path: string }> = [
   ),
 ];
 
-export function readInit1Bodies(path: string): CapabilityBodies {
+/** The printer→host IS frame payloads of a fixture, in order. */
+function readPrinterPayloads(path: string): Buffer[] {
   const chunks: Buffer[] = [];
   for (const line of readFileSync(path, "utf8").split("\n")) {
     if (line.trim().length === 0) continue;
@@ -71,31 +72,59 @@ export function readInit1Bodies(path: string): CapabilityBodies {
   const payloads: Buffer[] = [];
   for (let off = 0; off + 12 <= stream.length; ) {
     if (stream.toString("latin1", off, off + 2) !== "IS") {
-      throw new Error(`readInit1Bodies: IS framing lost at byte ${off} of ${path}`);
+      throw new Error(`readPrinterPayloads: IS framing lost at byte ${off} of ${path}`);
     }
     const length = stream.readUInt32BE(off + 6);
     // A capture may stop mid-frame; INIT1 is long past by then, and a cut
-    // INIT1 body still fails bodyAfter's length check below.
+    // body still fails firstReply's length check.
     if (off + 12 + length > stream.length) break;
     payloads.push(stream.subarray(off + 12, off + 12 + length));
     off += 12 + length;
   }
+  return payloads;
+}
 
-  // The first INFO and CAPA reply headers are INIT1's. The body is the next
-  // non-empty frame (the session ignores empty 0xa000 frames too), and must
-  // be exactly the length the header declares: "INFOx" + 7 hex digits.
-  const bodyAfter = (cmd: string): Buffer => {
-    const i = payloads.findIndex((p) => p.toString("latin1", 0, 5) === `${cmd}x`);
-    if (i < 0) throw new Error(`readInit1Bodies: no ${cmd} reply in ${path}`);
-    const declared = parseInt(payloads[i].toString("latin1", 5, 12), 16);
-    const body = payloads.slice(i + 1).find((p) => p.length > 0);
-    if (body?.length !== declared || body[0] !== 0x23) {
-      throw new Error(
-        `readInit1Bodies: ${cmd} body in ${path} is ${body?.length ?? 0} bytes ` +
-          `(header declares ${declared}) or doesn't start with '#'`,
-      );
-    }
-    return body;
+/**
+ * The reply header naming `cmd` ("INFO", "CAPA", "STAT"), the length it
+ * declares ("INFOx" + 7 hex digits), and the body: the next non-empty frame,
+ * since the session ignores empty 0xa000 frames too. The body is null when
+ * the header declares zero length.
+ */
+function firstReply(
+  payloads: Buffer[],
+  cmd: string,
+  path: string,
+): { header: Buffer; body: Buffer | null } {
+  const i = payloads.findIndex((p) => p.toString("latin1", 0, 5) === `${cmd}x`);
+  if (i < 0) throw new Error(`firstReply: no ${cmd} reply in ${path}`);
+  const header = payloads[i];
+  const declared = parseInt(header.toString("latin1", 5, 12), 16);
+  if (declared === 0) return { header, body: null };
+  const body = payloads.slice(i + 1).find((p) => p.length > 0);
+  if (body?.length !== declared || body[0] !== 0x23) {
+    throw new Error(
+      `firstReply: ${cmd} body in ${path} is ${body?.length ?? 0} bytes ` +
+        `(header declares ${declared}) or doesn't start with '#'`,
+    );
+  }
+  return { header, body };
+}
+
+export function readInit1Bodies(path: string): CapabilityBodies {
+  // The first INFO and CAPA replies are INIT1's.
+  const payloads = readPrinterPayloads(path);
+  const body = (cmd: string): Buffer => {
+    const reply = firstReply(payloads, cmd, path);
+    if (reply.body === null) throw new Error(`readInit1Bodies: empty ${cmd} reply in ${path}`);
+    return reply.body;
   };
-  return { info: bodyAfter("INFO"), capa: bodyAfter("CAPA") };
+  return { info: body("INFO"), capa: body("CAPA") };
+}
+
+/**
+ * The first init-poll STAT reply: the session's first STAT, since INIT1 and
+ * INIT2 send none. `body` is null for a zero-length reply.
+ */
+export function readFirstInitPollStatus(path: string): { header: Buffer; body: Buffer | null } {
+  return firstReply(readPrinterPayloads(path), "STAT", path);
 }

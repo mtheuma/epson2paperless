@@ -30,9 +30,14 @@ import {
   assertSourceSupported,
 } from "./dialects/dispatch.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
-import { compareWithEntry, deriveCapabilities } from "./derivation.js";
+import { compareWithEntry, deriveCapabilities, sourceFromStatusErrors } from "./derivation.js";
 import { composePara, baseDpiFor, type ParaSpec } from "./para-composer.js";
-import { parseCapaTokens, parseInfoTokens, type CapaTokens } from "./capabilities.js";
+import {
+  parseCapaTokens,
+  parseInfoTokens,
+  parseStatErrors,
+  type CapaTokens,
+} from "./capabilities.js";
 import { advertisedDpiSet, selectWireDpi } from "./resolution.js";
 import { createLogger } from "../logger.js";
 
@@ -555,6 +560,49 @@ g.state("UNLOCKING", {
   on: { 0xa101: { next: "DONE" } },
 });
 
+/**
+ * Today's source rule for `stat-length` entries, from the first init-poll
+ * STAT reply's declared length. ET-4950 fixtures: length 0 → ADF (printer
+ * queued no status); length 12 → flatbed (queued `#ERRADF PE  `). Other
+ * lengths default to ADF.
+ */
+export function sourceFromStatLength(length: number): "adf" | "flatbed" {
+  return length === 12 ? "flatbed" : "adf";
+}
+
+function isFirstStatusOfStatLengthEntry(ctx: Esci2Ctx): boolean {
+  return ctx.initPollIteration === 0 && ctx.entry!.sourceDetection === "stat-length";
+}
+
+/**
+ * Shadow of the content-based source decision: reads the first status
+ * reply's error tokens and reports, at info, where they disagree with the
+ * length-based source already in ctx.source, or carry an error a
+ * content-based decision would end the session on. Report-only.
+ */
+function reportStatusSourceShadow(ctx: Esci2Ctx, status: Buffer): void {
+  try {
+    const errors = parseStatErrors(status);
+    const decision = sourceFromStatusErrors(errors);
+    if ("unexpectedErrors" in decision) {
+      log.info("Status reply carries an error a content-based source decision would fail on", {
+        dialect: ctx.entry!.displayName,
+        errors: decision.unexpectedErrors,
+        lengthBased: ctx.source,
+      });
+    } else if (decision.source !== ctx.source) {
+      log.info("Status-content source decision disagrees with the length-based one", {
+        dialect: ctx.entry!.displayName,
+        contentBased: decision.source,
+        lengthBased: ctx.source,
+        errors,
+      });
+    }
+  } catch (err) {
+    log.warn("Status-content source decision failed (report-only; the scan continues)", err);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // INIT_POLL cycle — 3 iterations of FS Y → STAT → (optional drain) → FIN
 // ---------------------------------------------------------------------------
@@ -575,9 +623,8 @@ g.state("INIT_POLL_FS_Y", {
 });
 
 // INIT_POLL_STAT: decision on STAT reply — drain if length>0, else FIN.
-// On the first iteration (ctx.initPollIteration === 0) also detects source:
-//   length 0 → ADF (no status queued); length 12 → flatbed (filler #---#---#---).
-//   Other lengths default to ADF, preserving the source-detection fallback.
+// On the first iteration (ctx.initPollIteration === 0) also detects source
+// by the reply's length (sourceFromStatLength).
 g.state(
   "INIT_POLL_STAT",
   decision<Esci2Ctx>((ctx, packet) => {
@@ -589,9 +636,6 @@ g.state(
     }
     // Source detection — only on the FIRST iteration, and only when the
     // dialect declares `sourceDetection: "stat-length"`.
-    // ET-4950 fixtures: length 0 → ADF (printer queued no status);
-    // length 12 → flatbed (queued `#---#---#---` filler). Other lengths
-    // default to ADF.
     //
     // ET-2750 uses `sourceDetection: "fixed-flatbed"` because it is
     // flatbed-only hardware AND its STAT replies declare length=0 even
@@ -599,18 +643,16 @@ g.state(
     // stat-length heuristic would misclassify it as ADF, so skip the
     // override entirely and trust the `source: "flatbed"` value the
     // scanner shell pre-set in `initialCtx`.
-    if (ctx.initPollIteration === 0 && ctx.entry!.sourceDetection === "stat-length") {
-      if (header.length === 0) {
-        ctx.source = "adf";
-      } else if (header.length === 12) {
-        ctx.source = "flatbed";
-      } else {
-        ctx.source = "adf"; // fallback for unexpected status length
-      }
+    if (isFirstStatusOfStatLengthEntry(ctx)) {
+      ctx.source = sourceFromStatLength(header.length);
       log.debug("Source detected from first STAT", {
         statLength: header.length,
         source: ctx.source,
       });
+      // A zero-length reply has no body to drain, so the reply itself is
+      // judged here (its tail is #--- filler unless the printer put tokens
+      // inline); otherwise INIT_POLL_STAT_DRAIN judges the body.
+      if (header.length === 0) reportStatusSourceShadow(ctx, packet.payload);
     }
     if (header.length > 0) {
       return {
@@ -626,14 +668,18 @@ g.state(
 );
 
 // INIT_POLL_STAT_DRAIN: drains queued status bytes, then sends FIN.
-g.state("INIT_POLL_STAT_DRAIN", {
-  on: {
-    0xa000: {
+g.state(
+  "INIT_POLL_STAT_DRAIN",
+  decision<Esci2Ctx>((ctx, packet) => {
+    const typeGuard = expectIsType(packet, 0xa000, "INIT_POLL_STAT_DRAIN");
+    if (typeGuard) return typeGuard;
+    if (isFirstStatusOfStatLengthEntry(ctx)) reportStatusSourceShadow(ctx, packet.payload);
+    return {
       next: "INIT_POLL_FIN",
       send: buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
-    },
-  },
-});
+    };
+  }),
+);
 
 // INIT_POLL_FIN: decision on FIN reply — loop or advance to MODE_SWITCH.
 // INIT_POLL_FIN increments initPollIteration; if below the dialect's

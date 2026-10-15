@@ -5,7 +5,12 @@ import { REGISTRY } from "./dialects/registry.js";
 import { IS_HEADER_SIZE, buildPurereadPacket, parseIsPacket } from "../protocol.js";
 import { parseCapaTokens } from "./capabilities.js";
 import { DEFAULT_JPEG_QUALITY } from "../config.js";
-import { REPLAY_FIXTURES, readInit1Bodies } from "./test-support/capability-bodies.js";
+import {
+  REPLAY_FIXTURES,
+  readFirstInitPollStatus,
+  readInit1Bodies,
+} from "./test-support/capability-bodies.js";
+import { computeCapaFingerprint } from "./capa-fingerprint.js";
 
 describe("esci2Graph (smoke)", () => {
   it("builds with the expected initial state and timeout", () => {
@@ -148,13 +153,16 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
     expect(esci2Graph.states.INIT_POLL_STAT.kind).toBe("decision");
   });
 
-  it("INIT_POLL_STAT_DRAIN is a static state that advances to INIT_POLL_FIN on 0xa000", () => {
+  it("INIT_POLL_STAT_DRAIN advances to INIT_POLL_FIN with a FIN send on 0xa000", () => {
+    // A decision state so the first cycle's body can feed the status shadow.
     const state = esci2Graph.states.INIT_POLL_STAT_DRAIN;
-    expect(state.kind).toBe("static");
-    if (state.kind === "static") {
-      expect(state.on[0xa000]?.next).toBe("INIT_POLL_FIN");
-      expect(state.on[0xa000]?.send).toBeDefined();
-    }
+    expect(state.kind).toBe("decision");
+    if (state.kind !== "decision") return;
+    const ctx = makeCtx({ initPollIteration: 1 });
+    const result = state.decide(ctx, { type: 0xa000, payload: Buffer.from("#ERRADF PE  ") });
+    expect("next" in result && result.next).toBe("INIT_POLL_FIN");
+    expect("send" in result && result.send).toBeDefined();
+    expect("error" in state.decide(ctx, { type: 0xa100, payload: Buffer.alloc(0) })).toBe(true);
   });
 
   it("INIT_POLL_FIN is a decision state (loop check)", () => {
@@ -1441,5 +1449,101 @@ describe("esci2Graph INIT1_CAPA_DATA — shadow derivation", () => {
     const { ctx, lines } = resolveDialect(info, capa);
     expect(ctx.entry).toBeDefined();
     expect(shadowLines(lines)).toEqual([]);
+  });
+});
+
+describe("esci2Graph INIT_POLL — status-content source shadow", () => {
+  const STATUS_LINES = [
+    "Status-content source decision disagrees with the length-based one",
+    "Status reply carries an error a content-based source decision would fail on",
+  ];
+  const ET4950_ENTRY = REGISTRY.get(
+    "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2",
+  )!;
+
+  // Feeds the first init-poll STAT reply (header, then the drained body when
+  // the header declares one) and returns ctx plus the status-shadow lines.
+  function firstStatus(
+    entry: import("./dialects/registry.js").RegistryEntry,
+    header: Buffer,
+    body: Buffer | null,
+  ): { ctx: import("./graph.js").Esci2Ctx; lines: unknown[][] } {
+    const stat = esci2Graph.states.INIT_POLL_STAT;
+    const drain = esci2Graph.states.INIT_POLL_STAT_DRAIN;
+    if (stat.kind !== "decision" || drain.kind !== "decision") {
+      throw new Error("INIT_POLL_STAT / _DRAIN not decisions");
+    }
+    const ctx = makeCtx({ entry, initPollIteration: 0, source: "flatbed" });
+    applyEntrySourceOverride(ctx, entry);
+    const infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const statResult = stat.decide(ctx, { type: 0xa000, payload: header });
+      expect("next" in statResult && statResult.next).toBe(
+        body === null ? "INIT_POLL_FIN" : "INIT_POLL_STAT_DRAIN",
+      );
+      if (body !== null) {
+        const drainResult = drain.decide(ctx, { type: 0xa000, payload: body });
+        expect("next" in drainResult && drainResult.next).toBe("INIT_POLL_FIN");
+      }
+      const lines = infoSpy.mock.calls.filter((args) =>
+        args.some((a) => STATUS_LINES.some((l) => String(a).includes(l))),
+      );
+      return { ctx, lines };
+    } finally {
+      infoSpy.mockRestore();
+    }
+  }
+  const statHeader = (length: number) =>
+    Buffer.from(`STATx${length.toString(16).toUpperCase().padStart(7, "0")}` + "#---".repeat(13));
+
+  it.each(REPLAY_FIXTURES)("is silent for the $model fixture $path", ({ path }) => {
+    const entry = REGISTRY.get(computeCapaFingerprint(readInit1Bodies(path).capa))!;
+    const { header, body } = readFirstInitPollStatus(path);
+    const { ctx, lines } = firstStatus(entry, header, body);
+    expect(lines).toEqual([]);
+    // Fixed-source entries never consult the status; the rest scanned from
+    // the source the fixture's name says.
+    const expected =
+      entry.sourceDetection === "fixed-flatbed"
+        ? "flatbed"
+        : entry.sourceDetection === "fixed-adf"
+          ? "adf"
+          : path.includes("flatbed")
+            ? "flatbed"
+            : "adf";
+    expect(ctx.source).toBe(expected);
+  });
+
+  it("logs when the content says ADF but the length says flatbed", () => {
+    // Synthetic: a 12-byte status with no error — the shape driveScannerToPara feeds.
+    const { ctx, lines } = firstStatus(ET4950_ENTRY, statHeader(12), Buffer.from("#---#---#---"));
+    expect(ctx.source).toBe("flatbed");
+    expect(lines).toHaveLength(1);
+    expect(lines[0][2]).toEqual(
+      expect.objectContaining({ contentBased: "adf", lengthBased: "flatbed" }),
+    );
+  });
+
+  it("logs a status error other than ADF paper empty, without changing the source", () => {
+    const { ctx, lines } = firstStatus(ET4950_ENTRY, statHeader(12), Buffer.from("#ERRADF JAM "));
+    expect(ctx.source).toBe("flatbed");
+    expect(lines).toHaveLength(1);
+    expect(lines[0][2]).toEqual(expect.objectContaining({ errors: ["ADF JAM"] }));
+  });
+
+  it("only the first poll cycle is judged", () => {
+    const stat = esci2Graph.states.INIT_POLL_STAT;
+    const drain = esci2Graph.states.INIT_POLL_STAT_DRAIN;
+    if (stat.kind !== "decision" || drain.kind !== "decision") throw new Error("not decisions");
+    const ctx = makeCtx({ entry: ET4950_ENTRY, initPollIteration: 1, source: "adf" });
+    const infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      stat.decide(ctx, { type: 0xa000, payload: statHeader(12) });
+      drain.decide(ctx, { type: 0xa000, payload: Buffer.from("#ERRADF JAM ") });
+      expect(ctx.source).toBe("adf");
+      expect(infoSpy).not.toHaveBeenCalled();
+    } finally {
+      infoSpy.mockRestore();
+    }
   });
 });
