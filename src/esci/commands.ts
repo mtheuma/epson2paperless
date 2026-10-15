@@ -7,6 +7,8 @@
  * travel as separate writes through the IS passthru envelope.
  */
 
+import { extractPid } from "../printer-ids.js";
+
 export function buildEscInit(): Buffer {
   return Buffer.from([0x1b, 0x40]);
 }
@@ -150,6 +152,47 @@ export function parseFsGReply(buf: Buffer): FsGReply {
     chunkSize: buf.readUInt32LE(2),
     bytesPerLine: buf.readUInt32LE(6),
     totalLines: buf.readUInt32LE(10),
+  };
+}
+
+export interface FsIIdentity {
+  /**
+   * Canonical `PID XXXX` from the product field, in the same form as the
+   * push-scan `ProductNameIn`; the trimmed raw text when the field holds no
+   * PID token; null when it is blank.
+   */
+  productName: string | null;
+  /** Firmware version text, e.g. "1.20"; null when blank. */
+  firmware: string | null;
+}
+
+/**
+ * Decode a space/NUL-padded ASCII field; blank → null. Bytes outside
+ * printable ASCII come back as `\xNN`, so an unfamiliar layout can't put
+ * control characters into a log line.
+ */
+function asciiField(buf: Buffer, start: number, end: number): string | null {
+  const text = buf
+    .toString("latin1", start, end)
+    .replace(/[\s\0]+$/, "")
+    .replace(/[^\x20-\x7e]/g, (c) => `\\x${c.charCodeAt(0).toString(16).padStart(2, "0")}`);
+  return text.length > 0 ? text : null;
+}
+
+/**
+ * Decode the identity fields of the 80-byte FS I reply: a 16-byte product
+ * field at offset 46 and a 4-byte firmware field at offset 62. Every legacy
+ * capture fills them the same way, e.g. the WF-3620's `PID 08B8` + `1.20`,
+ * the XP-620's `PID 08C8` + `1.10`, the ET-2550's `PID 1106` + `1.40`.
+ */
+export function parseFsIReply(buf: Buffer): FsIIdentity {
+  if (buf.length !== 80) {
+    throw new Error(`FS I reply must be 80 bytes, got ${buf.length}`);
+  }
+  const product = asciiField(buf, 46, 62);
+  return {
+    productName: extractPid(product) ?? product,
+    firmware: asciiField(buf, 62, 66),
   };
 }
 
