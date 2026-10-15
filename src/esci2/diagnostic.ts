@@ -54,7 +54,7 @@ export function buildDiagnostic(args: {
   const orAbsent = (s: string | null) => (s && s.length > 0 ? s : "(absent)");
   return [
     `CAPA fingerprint:  ${args.fingerprint}`,
-    `PRD:               PID ${info.prdPid ?? "(absent)"}`,
+    `PRD:               ${info.prdName ?? `PID ${info.prdPid ?? "(absent)"}`}`,
     `Firmware:          ${info.firmware ?? "(absent)"}`,
     `Transport:         ${transportLabel}`,
     `Source caps:       flatbed: ${yn(hasFlatbed)}  ADF: ${yn(hasAdf)}  duplex: ${yn(hasDuplex)}`,

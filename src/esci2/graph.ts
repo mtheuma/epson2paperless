@@ -31,6 +31,7 @@ import {
   applyEntrySourceOverride,
   makeParaSpec,
   assertSourceSupported,
+  type ResolvedEntry,
 } from "./dialects/dispatch.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
 import {
@@ -46,6 +47,7 @@ import {
   parseInfoTokens,
   parseStatErrors,
   type CapaTokens,
+  type InfoTokens,
 } from "./capabilities.js";
 import { advertisedDpiSet, selectWireDpi } from "./resolution.js";
 import { genericWindowDifferences, windowProblems } from "./scan-window.js";
@@ -379,21 +381,36 @@ twoPhaseRead(
   (ctx, body) => {
     ctx.capaBody = body;
     const fingerprint = computeCapaFingerprint(body);
+    let info: InfoTokens;
+    let resolved: ResolvedEntry;
     try {
-      ctx.entry = lookupRegistryEntry(fingerprint, ctx.capaBody, ctx.infoBody, ctx.transport);
+      info = parseInfoTokens(ctx.infoBody);
+      resolved = lookupRegistryEntry({
+        info,
+        fingerprint,
+        infoBody: ctx.infoBody,
+        capaBody: ctx.capaBody,
+        transport: ctx.transport,
+      });
     } catch (err) {
       return { error: err as Error };
     }
+    ctx.entry = resolved.entry;
     const capaTokens = parseCapaTokens(body);
     ctx.capaTokens = capaTokens;
-    log.debug("Dialect resolved", { name: ctx.entry.displayName, fingerprint });
+    log.debug("Dialect resolved", {
+      name: ctx.entry.displayName,
+      matchedBy: resolved.matchedBy,
+      pid: info.prdPid,
+      productName: info.prdName,
+      fingerprint,
+    });
     // Shadow derivation: report-only, silent when the printer's own replies
     // agree with the entry. Nothing sent to the printer depends on it, so a
     // failure here is logged rather than allowed to end the session.
     try {
-      const infoTokens = parseInfoTokens(ctx.infoBody);
       const dialect = ctx.entry.displayName;
-      for (const d of compareWithEntry(deriveCapabilities(infoTokens, capaTokens), ctx.entry)) {
+      for (const d of compareWithEntry(deriveCapabilities(info, capaTokens), ctx.entry)) {
         // A disagreement the entry already flags as unconfirmed is known;
         // repeating it at info on every scan would read as a new problem.
         if (isExpectedDisagreement(d, ctx.entry)) {
@@ -405,11 +422,11 @@ twoPhaseRead(
           log.info("Capability derivation disagrees with the dialect entry", { dialect, ...d });
         }
       }
-      for (const p of windowProblems(infoTokens, ctx.entry)) {
+      for (const p of windowProblems(info, ctx.entry)) {
         log.info("Scan window disagrees with the printer's scan area", { dialect, ...p });
       }
       // A different paper size, not a disagreement: debug only.
-      for (const d of genericWindowDifferences(infoTokens, ctx.entry)) {
+      for (const d of genericWindowDifferences(info, ctx.entry)) {
         log.debug("Generic scan window differs from the dialect entry's", { dialect, ...d });
       }
     } catch (err) {

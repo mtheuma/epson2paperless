@@ -1564,6 +1564,33 @@ describe("esci2Graph INIT1_CAPA_DATA — shadow derivation", () => {
   );
 });
 
+describe("esci2Graph INIT1_CAPA_DATA — model identity", () => {
+  // A CAPA reply the identified model was never recorded with, as after a
+  // firmware update: the session warns with the diagnostic and carries on
+  // with the model's entry instead of failing.
+  it.each([
+    ["PID", "tools/frida-capture/captures/2026-04-24T09-05-08-flatbed-1p-jpg.jsonl"],
+    ["product name", "tools/pcap-extract/captures/ff-680w/adf-simplex-200.jsonl"],
+  ])("continues on a fingerprint mismatch after a %s hit", (_kind, path) => {
+    const { info, capa } = readInit1Bodies(path);
+    const changed = Buffer.concat([capa, Buffer.from("#ZZZZd001", "ascii")]);
+    const state = esci2Graph.states.INIT1_CAPA_DATA;
+    if (state.kind !== "decision") throw new Error("INIT1_CAPA_DATA not a decision");
+    const ctx = makeCtx({ entry: undefined, infoBody: info, tprDeclaredLength: changed.length });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = state.decide(ctx, { type: 0xa000, payload: changed });
+      expect("error" in result).toBe(false);
+      expect(ctx.entry).toBe(REGISTRY.get(computeCapaFingerprint(capa)));
+      const warnings = warn.mock.calls.map((args) => args.join(" "));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain(`CAPA fingerprint:  ${computeCapaFingerprint(changed)}`);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+});
+
 describe("esci2Graph INIT_POLL — status-content source shadow", () => {
   const STATUS_LINES = [
     "Status-content source decision disagrees with the length-based one",

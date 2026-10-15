@@ -55,7 +55,7 @@ Three transport variants ride on TCP port 1865, decided per scan session by `src
 | `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750, XP-7100, ET-4800, FF-680W, DS-575W |
 | `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family, XP-620, ET-2550             |
 
-The Hardware column is illustrative, not exhaustive — the full model list lives in the [README compatibility table](../README.md#compatible-printers) and the dialect registries. The variant is also a per-session transport decision, not a dialect property: ESC/I-2 dialect entries are keyed by CAPA fingerprint, and some are transport-agnostic — the ET-8500 has been reported over both TLS and plain TCP, and the ET-2810 (plain TCP) and XP-3200 (TLS) share one fingerprint and one registry entry.
+The Hardware column is illustrative, not exhaustive — the full model list lives in the [README compatibility table](../README.md#compatible-printers) and the dialect registries. The variant is also a per-session transport decision, not a dialect property: ESC/I-2 dialect entries are keyed by model identity, and some are transport-agnostic — the ET-8500 has been reported over both TLS and plain TCP, and the ET-2810 (plain TCP) and XP-3200 (TLS) share one fingerprint and one registry entry.
 
 The rest of this section walks the **canonical `esci2-tls` path** in depth, since it's the most mechanically complex (TLS on top, both command generations layered inside) and the foundation that the other two variants peel back from. The plain-TCP ESC/I-2 differences live in [ESC/I-2 over plain TCP](#esci-2-over-plain-tcp), and the legacy ESC/I family in [ESC/I variant](#esci-variant-wf-3620). Both are sibling sections, not appendices.
 
@@ -129,7 +129,7 @@ The SANE `epsonds` backend provides a useful cross-reference: its passthru frami
 
 During the pre-mode-switch init sequence, the driver performs two capability discovery cycles. The first follows the initial `FS Y` ACK and sends `INFO → CAPA → FIN`; the second follows the `FS Z` ACK and sends `INFO → CAPA → RESA → FIN`. (The `@` prefix in the Frida capture naming convention is not a wire prefix — the actual command bytes on the wire are `INFOx0000000` and `CAPAx0000000` in the ESC/I-2 format.) These cycles appear in the Frida captures with consistent counts across all scan scenarios (2 × INFO, 2 × CAPA, 1 × RESA), which suggests they are mandatory initialization steps rather than optional feature queries.
 
-The INFO and CAPA replies declare the scanner's capabilities (supported resolutions, colour modes, document sources, and similar parameters). In a host-initiated pull-scan flow, the way the vendor driver's own UI works, these values would populate a scan dialog. In the push-scan flow implemented here, INFO is consumed and discarded, while CAPA is hashed into a fingerprint that resolves the printer's registry entry (see [How printer-model differences are handled](#how-printer-model-differences-are-handled)). Most of the PARA payload is **not** dynamically constructed from the advertised capabilities: colour handling (gamma / CMX classes, `gmm`, optional-segment flags) is assembled by `composePara` from the resolved entry's pinned data, byte-transcribed from that model's capture. This is a deliberate simplification: every supported printer's colour parameters are fixed in firmware for what this project needs, so negotiating them would only restate what the captures already pin, at the cost of more reverse-engineering work and no change to the end result. Resolution and JPEG quality are the exception — CAPA's `#RSMLIST` / `#RSSLIST` / `#ADFRSMSLIST` / `#FB RSMSLIST` / `#JPGRANG` segments are parsed and drive `SCAN_RESOLUTION` / `JPEG_QUALITY` selection at PARA build time (see [Scan resolution and JPEG quality](#scan-resolution-and-jpeg-quality)), because a single fixed DPI doesn't serve every use case the way a fixed colour curve does.
+The INFO and CAPA replies declare the scanner's capabilities (supported resolutions, colour modes, document sources, and similar parameters). In a host-initiated pull-scan flow, the way the vendor driver's own UI works, these values would populate a scan dialog. In the push-scan flow implemented here, INFO's product ID (or product name) resolves the printer's registry entry, with a fingerprint hashed from CAPA as the fallback key (see [How printer-model differences are handled](#how-printer-model-differences-are-handled)). Most of the PARA payload is **not** dynamically constructed from the advertised capabilities: colour handling (gamma / CMX classes, `gmm`, optional-segment flags) is assembled by `composePara` from the resolved entry's pinned data, byte-transcribed from that model's capture. This is a deliberate simplification: every supported printer's colour parameters are fixed in firmware for what this project needs, so negotiating them would only restate what the captures already pin, at the cost of more reverse-engineering work and no change to the end result. Resolution and JPEG quality are the exception — CAPA's `#RSMLIST` / `#RSSLIST` / `#ADFRSMSLIST` / `#FB RSMSLIST` / `#JPGRANG` segments are parsed and drive `SCAN_RESOLUTION` / `JPEG_QUALITY` selection at PARA build time (see [Scan resolution and JPEG quality](#scan-resolution-and-jpeg-quality)), because a single fixed DPI doesn't serve every use case the way a fixed colour curve does.
 
 ---
 
@@ -147,7 +147,7 @@ The shells / graphs / transports map to the variants like so:
 | `esci2-plain` | `runEsci2ScanOverPlain` | `src/esci2/graph` | `withEsci2UnlockOnDestroy(socketAsTransport(net.connect(...)))` — same graph, dialect-driven per-state decisions                                     |
 | `esci`        | `runEsciScan`           | `src/esci/graph`  | `socketAsTransport(net.connect(...))` — no transport adapters; UNLOCK is sent from the graph's `UNLOCKING` state rather than via a destroy-time hook |
 
-Both ESC/I-2 entry points share the same graph with no transport-conditional branching — the graph starts at the same `WELCOME` state and processes the same IS framing for either path. The difference lives entirely in the scanner shell: it picks the socket factory (`tls.connect` vs `net.connect`) and the transport-adapter composition (TLS-error labels on the TLS path, plain socket otherwise). `ctx.transport: "tls" | "plain"` rides along on the context only so the unknown-fingerprint diagnostic block can report which transport was in use. `ctx.entry` (resolved from the CAPA fingerprint at INIT1 — see [How printer-model differences are handled](#how-printer-model-differences-are-handled)) drives the per-state decisions (source detection, init-poll count, PARA build). The deterministic single-IS-packet-per-transition contract holds for all three.
+Both ESC/I-2 entry points share the same graph with no transport-conditional branching — the graph starts at the same `WELCOME` state and processes the same IS framing for either path. The difference lives entirely in the scanner shell: it picks the socket factory (`tls.connect` vs `net.connect`) and the transport-adapter composition (TLS-error labels on the TLS path, plain socket otherwise). `ctx.transport: "tls" | "plain"` rides along on the context only so the unknown-fingerprint diagnostic block can report which transport was in use. `ctx.entry` (resolved by model identity at INIT1 — see [How printer-model differences are handled](#how-printer-model-differences-are-handled)) drives the per-state decisions (source detection, init-poll count, PARA build). The deterministic single-IS-packet-per-transition contract holds for all three.
 
 ```
 CONNECTING
@@ -263,7 +263,7 @@ The composed PARA length depends on the dialect (which gamma / CMX classes and o
 | ET-7700                     | `esci2-plain` | 944 B   | —           | —          |
 | WF-3835                     | `esci2-plain` | 944 B   | 952 B       | —          |
 
-† Transport-agnostic entries, keyed by CAPA fingerprint rather than transport: the ET-2810 presents over plain TCP and its fingerprint-sharing XP-3200 sibling over TLS; the ET-8500 has been reported over both across reporters.
+† Transport-agnostic entries, keyed by model identity rather than transport: the ET-2810 presents over plain TCP and its fingerprint-sharing XP-3200 sibling over TLS; the ET-8500 has been reported over both across reporters.
 
 The FF-680W is ADF-only — its source is fixed to ADF (it has no flatbed). It reports no panel selection either (it sends a `JobNumberIn` trigger with no Sides/Action), so its sides, output format, and resolution come from `SCAN_SIDES` / `SCAN_FORMAT` / `SCAN_RESOLUTION` rather than the panel. PARA byte-length is DPI-independent (the `#RSM`/`#RSS`/`#ACQ` fields are fixed-width); the values, not the lengths, scale with `SCAN_RESOLUTION`.
 
@@ -343,14 +343,18 @@ Wire differences from the ET-4950 (decoded from the pcap captures under `tools/p
 - **Source detection / STAT.** XP-7100 and ET-4800 use `sourceDetection: "stat-length"` like the ET-4950 family (length 0 → ADF, 12 → flatbed). ET-2750 uses `"fixed-flatbed"`: its STAT reply packs a 52-byte filler inline in a single 64-byte IS frame while the 12-byte header still declares `length=0`, so the stat-length rule would misclassify it as ADF — the graph skips the override and trusts the `source: "flatbed"` value from `initialCtx`. ET-2750 hardware is flatbed-only, so this is correct. The FF-680W uses `sourceDetection: "fixed-adf"` (ADF-only hardware); the graph pins `ctx.source = "adf"` from the registry entry, mirroring ET-2750's `fixed-flatbed` approach in the opposite direction.
 - **PARA bodies are dialect-specific** and generally larger than the ET-4950 family's, carrying `#GMMUG18`, per-entry optional-segment flags, and a model-specific inline `#CMXUM08` ICC-matrix block. Per-dialect sizes are in the [PARA table above](#source-adf-vs-flatbed).
 
-These dialects are resolved by the same CAPA-fingerprint lookup used by the rest of the ESC/I-2 family. The scanner shell picks the entry point (`runEsci2Scan` for TLS vs `runEsci2ScanOverPlain` for plain TCP) and pre-sets `ctx.transport` in the initial ctx. On the `esci2-plain` transport, config-time validation rejects `ESCI_FORCE_SOURCE` (a legacy-ESC/I-only knob) and `PRINTER_CERT_FINGERPRINT` (no TLS layer to pin) at startup.
+These dialects are resolved by the same model-identity lookup used by the rest of the ESC/I-2 family. The scanner shell picks the entry point (`runEsci2Scan` for TLS vs `runEsci2ScanOverPlain` for plain TCP) and pre-sets `ctx.transport` in the initial ctx. On the `esci2-plain` transport, config-time validation rejects `ESCI_FORCE_SOURCE` (a legacy-ESC/I-only knob) and `PRINTER_CERT_FINGERPRINT` (no TLS layer to pin) at startup.
 
 ## How printer-model differences are handled
 
 Each supported printer family has an entry in `src/esci2/dialects/registry.ts`,
-keyed by a sha256 fingerprint over its CAPA reply (`src/esci2/capa-fingerprint.ts`).
-Entries are pure data:
+keyed by model identity. Entries are pure data:
 
+- Identity keys (`pids`, `names`, `capaFingerprints`): the product IDs the
+  models report in their INFO `#PRD` reply, the product names reported there
+  instead by the FF-680W and DS-575W, and sha256 fingerprints over their CAPA
+  replies (`src/esci2/capa-fingerprint.ts`). A model whose PID isn't known yet
+  (ET-3950, XP-4100) resolves through the fingerprint it shares with a sibling.
 - Dispatch metadata (`sourceDetection`, `initPollIterations`).
 - Scan extents (`fbExtents`, `adfExtents`) — manually pinned per family.
 - A `gmm` constant plus named `gammaClass` and `cmxClass` lookups resolved from
@@ -363,12 +367,18 @@ Entries are pure data:
 - Optional-segment presence flags (`#QIT`, `#CCT`).
 
 At INIT1_CAPA the graph computes the fingerprint, looks up the entry via
-`lookupRegistryEntry`, and stores it on the session context. At PARA build time
-the entry plus the runtime source/action axes feed into `makeParaSpec`, and
-`composePara` assembles the PARA body.
+`lookupRegistryEntry` (product ID, then product name, then CAPA fingerprint),
+and stores it on the session context. INFO is read before CAPA, so the identity
+is available on every trigger path, host-triggered scans included. A product
+ID or name hit whose fingerprint isn't one of the entry's (as after a firmware
+update that changes the CAPA reply) logs a warning with the diagnostic block
+and proceeds with that entry. At PARA build time the entry plus the runtime
+source/action axes feed into `makeParaSpec`, and `composePara` assembles the
+PARA body.
 
-Printers with an unrecognised CAPA fingerprint fail fast with a copy-pasteable
-diagnostic block — no synthesis attempt, no silent quality regression. Adding
+Printers whose product ID, product name and CAPA fingerprint are all
+unrecognised fail fast with a copy-pasteable diagnostic block — no synthesis
+attempt, no silent quality regression. Adding
 support for a new printer is a data-only change in the normal case: capture its
 wire bytes, extract any novel gamma/CMX class into the data files, and add a
 registry entry. A novel gamma class also gets a `GAMMA_CLASS_LOOK` tag: neutral
