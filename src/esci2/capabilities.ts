@@ -39,6 +39,11 @@ export interface InfoTokens {
   fbArea: string | null;
   /** ADF scan-area value from `#ADFAREA<value>`. Null if missing (= flatbed-only printer). */
   adfArea: string | null;
+  /**
+   * ADF duplex type from `#ADFDPLX<value>`: "2SCN" (two-pass, the sheet is
+   * re-fed) or "1SCN" (single-pass, both sides at once). Null without duplex.
+   */
+  adfDuplexType: string | null;
   /** Raw segments, in encounter order. */
   segments: string[];
 }
@@ -61,6 +66,8 @@ export interface CapaTokens {
   cctList: string | null;
   /** True if the CAPA body contains a `#ADFDPLX` segment. */
   adfDuplex: boolean;
+  /** True if the CAPA body contains a `#ADFCRP` segment (the ADF can crop). */
+  adfCrop: boolean;
   /** Supported main-scan resolutions (dpi) from `#RSMLIST`. Null if absent. */
   rsmList: number[] | null;
   /** Supported sub-scan resolutions (dpi) from `#RSSLIST`. Null if absent. */
@@ -139,6 +146,7 @@ export function parseInfoTokens(body: Buffer): InfoTokens {
     firmware,
     fbArea: textAfterPrefix(segments, "#FB AREA"),
     adfArea: textAfterPrefix(segments, "#ADFAREA"),
+    adfDuplexType: textAfterPrefix(segments, "#ADFDPLX"),
     segments,
   };
 }
@@ -152,6 +160,7 @@ export function parseCapaTokens(body: Buffer): CapaTokens {
     fmtList: textAfterPrefix(segments, "#FMTLIST"),
     cctList: textAfterPrefix(segments, "#CCTLIST"),
     adfDuplex: segments.some((s) => s.startsWith("#ADFDPLX")),
+    adfCrop: segments.some((s) => s.startsWith("#ADFCRP")),
     rsmList: parseNumericList(textAfterPrefix(segments, "#RSMLIST")),
     rssList: parseNumericList(textAfterPrefix(segments, "#RSSLIST")),
     adfRsmsList: parseNumericList(textAfterPrefix(segments, "#ADFRSMSLIST")),

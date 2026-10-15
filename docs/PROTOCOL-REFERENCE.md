@@ -360,6 +360,10 @@ keyed by model identity. Entries are pure data:
 - A `gmm` constant plus named `gammaClass` and `cmxClass` lookups resolved from
   `src/esci2/data/gamma-classes.ts` and `cmx-classes.ts`. Class definitions are
   inlined verbatim from captured fixtures; never algorithmically generated.
+  Each class is tagged neutral or Epson-look (a CMX class by whether its bytes
+  are the identity matrix), and `checkColourPair` (`src/esci2/data/colour-pair.ts`)
+  rejects a mixed pair; a test holds every entry to it, ET-8500 and ET-7700
+  excepted until their colour fix.
 - Optional-segment presence flags (`#QIT`, `#CCT`).
 
 At INIT1_CAPA the graph computes the fingerprint, looks up the entry via
@@ -377,7 +381,10 @@ unrecognised fail fast with a copy-pasteable diagnostic block — no synthesis
 attempt, no silent quality regression. Adding
 support for a new printer is a data-only change in the normal case: capture its
 wire bytes, extract any novel gamma/CMX class into the data files, and add a
-registry entry. Replay tests (`src/esci2/scanner.test.ts` and per-dialect files
+registry entry. A novel gamma class also gets a `GAMMA_CLASS_LOOK` tag: neutral
+if it was captured beside an identity matrix (or none), Epson-look if beside the
+model's own matrix. The entry's composed colour pairs must then pass
+`checkColourPair` (`src/esci2/data/colour-pair.test.ts`). Replay tests (`src/esci2/scanner.test.ts` and per-dialect files
 under `src/esci2/dialects/*.test.ts`) pin the composed output byte-for-byte
 against the captured fixture.
 

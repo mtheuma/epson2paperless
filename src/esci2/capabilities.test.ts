@@ -162,3 +162,18 @@ describe("parseStatErrors", () => {
     expect(parseStatErrors(Buffer.from("#ERR    #---", "ascii"))).toEqual([]);
   });
 });
+
+describe("ADF duplex type (INFO) and crop (CAPA)", () => {
+  it("parses the INFO #ADFDPLX value: 2SCN, 1SCN, or null when absent", () => {
+    expect(parseInfoTokens(Buffer.from("#ADFTYPEFEED#ADFDPLX2SCN#ADFFORDPF1N")).adfDuplexType).toBe(
+      "2SCN",
+    );
+    expect(parseInfoTokens(Buffer.from("#ADFDPLX1SCN#ADFFORDPF1N")).adfDuplexType).toBe("1SCN");
+    expect(parseInfoTokens(Buffer.from("#ADFTYPEFEED#ADFFORDPF1N")).adfDuplexType).toBeNull();
+  });
+
+  it("detects #ADFCRP in CAPA", () => {
+    expect(parseCapaTokens(Buffer.from("#ADFDPLX#ADFCRP #ADFSKEW")).adfCrop).toBe(true);
+    expect(parseCapaTokens(Buffer.from("#ADFDPLX#ADFSKEW")).adfCrop).toBe(false);
+  });
+});
