@@ -1,34 +1,54 @@
 import { describe, it, expect } from "vitest";
 import { checkColourPair, type ColourPair } from "./colour-pair.js";
-import { REGISTRY, supportsWireGrayscale, type RegistryEntry } from "../dialects/registry.js";
+import { GAMMA_CLASSES, type GammaClassName } from "./gamma-classes.js";
+import { CMX_CLASSES, type CmxClassName } from "./cmx-classes.js";
+import { composePara } from "../para-composer.js";
+import { makeParaSpec } from "../dialects/dispatch.js";
+import { REGISTRY, type RegistryEntry } from "../dialects/registry.js";
 
-// Models that send a mixed pair today, by displayName, until their
-// reporter-gated colour fix lands.
+// Models that send a mixed pair today, until their reporter-gated colour fix
+// lands. Keyed by model name, matched anywhere in the entry's displayName.
 const KNOWN_MIXED_PAIRS: Readonly<Record<string, string>> = {
-  "ET-8500 (ESC/I-2)":
+  "ET-8500":
     "ET-4800's Epson-look matrix with a neutral curve picked as the photo default (#120); fix awaits a compatibility-page scan.",
-  "ET-7700 (ESC/I-2)":
+  "ET-7700":
     "Inherits the ET-8500's pair, pinned by own-capture fixtures (#145); fix awaits a compatibility-page scan.",
 };
 
-// Every pair an entry can put on the wire: one per action, plus the greyscale
-// LUT with each action's matrix where the entry sends greyscale on the wire.
+const knownException = (entry: RegistryEntry): string | undefined =>
+  Object.keys(KNOWN_MIXED_PAIRS).find((model) => entry.displayName.includes(model));
+
+// The colour pair a composed PARA body carries, read back from its #GMM, #GMT
+// and #CMX segments and named by matching the class bytes.
+function pairOnTheWire(body: Buffer): ColourPair {
+  const gmmAt = body.indexOf("#GMM");
+  const gammas = (Object.keys(GAMMA_CLASSES) as GammaClassName[]).filter((name) =>
+    body.includes(GAMMA_CLASSES[name]),
+  );
+  if (gmmAt < 0 || gammas.length !== 1) throw new Error(`PARA has no single known #GMM/#GMT`);
+  const cmxAt = body.indexOf("#CMX");
+  let cmx: CmxClassName | null = null;
+  if (cmxAt >= 0) {
+    const segment = body.subarray(cmxAt, cmxAt + 24);
+    const match = (Object.keys(CMX_CLASSES) as CmxClassName[]).find((name) =>
+      CMX_CLASSES[name].equals(segment),
+    );
+    if (match === undefined) throw new Error(`PARA carries an unknown #CMX segment`);
+    cmx = match;
+  }
+  return { gmm: body.subarray(gmmAt + 4, gmmAt + 8).toString("ascii"), gamma: gammas[0], cmx };
+}
+
+// Every pair an entry puts on the wire: composed for each action and colour
+// mode. The source doesn't change the pair, so one the entry supports will do.
 function sentPairs(entry: RegistryEntry): { label: string; pair: ColourPair }[] {
-  return (["jpg", "pdf"] as const).flatMap((action) => {
-    const pairs: { label: string; pair: ColourPair }[] = [
-      {
-        label: action,
-        pair: { gmm: entry.gmm, gamma: entry.gammaClass[action], cmx: entry.cmxClass[action] },
-      },
-    ];
-    if (supportsWireGrayscale(entry)) {
-      pairs.push({
-        label: `${action} grayscale`,
-        pair: { gmm: entry.gmm, gamma: entry.monoGammaClass!, cmx: entry.cmxClass[action] },
-      });
-    }
-    return pairs;
-  });
+  const source = entry.fbExtents !== null ? "flatbed" : "adf-simplex";
+  return (["jpg", "pdf"] as const).flatMap((action) =>
+    (["color", "grayscale"] as const).map((colorMode) => ({
+      label: `${action} ${colorMode}`,
+      pair: pairOnTheWire(composePara(makeParaSpec(entry, source, action, undefined, colorMode))),
+    })),
+  );
 }
 
 const entries = [...REGISTRY.values()];
@@ -68,24 +88,44 @@ describe("checkColourPair", () => {
     });
   });
 
+  it("rejects SoC-style with an Epson-look tone curve", () => {
+    expect(checkColourPair({ gmm: "UG10", gamma: "et4800-stock", cmx: null })).toEqual({
+      valid: false,
+      reason:
+        "SoC-style with et4800-stock tone curve, which is epson-look; SoC-style needs a neutral curve",
+    });
+  });
+
   it("rejects a missing colour matrix outside UG10", () => {
     expect(checkColourPair({ gmm: "UG18", gamma: "et4950-stock", cmx: null }).valid).toBe(false);
   });
 });
 
 describe("registry colour pairs", () => {
-  it.each(
-    entries.filter((e) => !(e.displayName in KNOWN_MIXED_PAIRS)).map((e) => [e.displayName, e]),
-  )("%s sends only valid pairs", (_name, entry) => {
-    for (const { label, pair } of sentPairs(entry)) {
-      expect(checkColourPair(pair), label).toMatchObject({ valid: true });
-    }
-  });
+  it.each(entries.filter((e) => knownException(e) === undefined).map((e) => [e.displayName, e]))(
+    "%s sends only valid pairs",
+    (_name, entry) => {
+      for (const { label, pair } of sentPairs(entry)) {
+        expect(checkColourPair(pair), label).toMatchObject({ valid: true });
+      }
+    },
+  );
 
-  it.each(Object.keys(KNOWN_MIXED_PAIRS))("known exception %s still sends a mixed pair", (name) => {
-    const entry = entries.find((e) => e.displayName === name);
-    expect(entry, `${name} is not in the registry`).toBeDefined();
-    const invalid = sentPairs(entry!).filter(({ pair }) => !checkColourPair(pair).valid);
-    expect(invalid, "fixed: drop it from KNOWN_MIXED_PAIRS").not.toHaveLength(0);
-  });
+  it.each(Object.keys(KNOWN_MIXED_PAIRS))(
+    "known exception %s still sends a mixed pair",
+    (model) => {
+      const entry = entries.find((e) => knownException(e) === model);
+      expect(entry, `${model} is not in the registry`).toBeDefined();
+      const invalid = sentPairs(entry!)
+        .map(({ label, pair }) => ({ label, verdict: checkColourPair(pair) }))
+        .filter(({ verdict }) => !verdict.valid);
+      expect(invalid, "fixed: drop it from KNOWN_MIXED_PAIRS").not.toHaveLength(0);
+      for (const { label, verdict } of invalid) {
+        expect(verdict, label).toMatchObject({
+          valid: false,
+          reason: expect.stringMatching(/^mixed pair:/),
+        });
+      }
+    },
+  );
 });

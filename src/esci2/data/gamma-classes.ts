@@ -25,7 +25,7 @@
 // ~38-byte zero floor at the low end (input 0..~0x26 → output 0) and saturates
 // to 0xff at the top. Non-identity by design; replay tests pin it.
 
-import type { ColourLook } from "./colour-pair.js";
+import type { ColourLook } from "./colour-look.js";
 
 export type GammaClassName =
   | "et4950-stock"

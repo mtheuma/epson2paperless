@@ -7,7 +7,7 @@
 //   - xp7100-pdf:  xp-7100-fixtures/pdf-single.bin, offsets 864..888.
 //   - et4800-um08: tools/pcap-extract/captures/et-4800/flatbed-jpg.jsonl, PARA body offsets 864..888.
 
-import type { ColourLook } from "./colour-pair.js";
+import type { ColourLook } from "./colour-look.js";
 
 export type CmxClassName = "et2750-um08" | "xp7100-jpg" | "xp7100-pdf" | "et4800-um08";
 
@@ -27,9 +27,16 @@ const UM08_HEADER = Buffer.from("#CMXUM08h009", "ascii");
 const UNITY = 0x20;
 const DIAGONAL = new Set([0, 4, 8]);
 
-/** Whether a #CMX segment is the identity matrix, judged from its bytes alone. */
+/**
+ * Whether a #CMX segment is the identity matrix, judged from its bytes alone.
+ * Throws on any other matrix format: its identity form is unknown, so it can't
+ * be classified either way.
+ */
 export function isIdentityCmx(segment: Buffer): boolean {
-  if (segment.length !== 24 || !segment.subarray(0, 12).equals(UM08_HEADER)) return false;
+  if (segment.length !== 24 || !segment.subarray(0, 12).equals(UM08_HEADER)) {
+    const header = segment.subarray(0, 12).toString("ascii");
+    throw new Error(`isIdentityCmx: unknown matrix format ${header} (${segment.length} bytes)`);
+  }
   return segment.subarray(12).every((byte, i) => byte === (DIAGONAL.has(i) ? UNITY : 0));
 }
 

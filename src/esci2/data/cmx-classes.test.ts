@@ -78,11 +78,11 @@ describe("cmx-classes", () => {
       expect(isIdentityCmx(segment(body))).toBe(false);
     });
 
-    it("rejects a segment with a different header or length", () => {
+    it("throws on a matrix format it can't classify (other header or length)", () => {
       const other = segment(identity);
-      other.write("UM09", 4, "ascii");
-      expect(isIdentityCmx(other)).toBe(false);
-      expect(isIdentityCmx(segment(identity.slice(0, 9)))).toBe(false);
+      other.write("UNIT", 4, "ascii");
+      expect(() => isIdentityCmx(other)).toThrow(/unknown matrix format #CMXUNITh009/);
+      expect(() => isIdentityCmx(segment(identity.slice(0, 9)))).toThrow(/21 bytes/);
     });
   });
 });

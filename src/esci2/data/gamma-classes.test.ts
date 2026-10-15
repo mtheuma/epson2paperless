@@ -96,9 +96,10 @@ describe("gamma-classes", () => {
 
   describe("looks", () => {
     // Largest distance of any LUT entry from identity, across every channel
-    // segment (12-byte header + 256-byte LUT each).
+    // segment (12-byte "#GMT… h100" header + 256-byte LUT each).
     const maxIdentityDistance = (name: GammaClassName): number => {
       const g = GAMMA_CLASSES[name];
+      expect(g.length % 268, `${name} is not whole h100 segments`).toBe(0);
       let max = 0;
       for (let seg = 0; seg < g.length; seg += 268) {
         g.subarray(seg + 12, seg + 268).forEach((v, i) => (max = Math.max(max, Math.abs(v - i))));
@@ -112,11 +113,13 @@ describe("gamma-classes", () => {
       }
     });
 
-    it("neutral curves stay within one step of identity; Epson-look curves do not", () => {
+    // The hand tag is the source of truth; this only sanity-checks it against
+    // the curve's shape, so a failure means the GAMMA_CLASS_LOOK row is wrong.
+    it("each GAMMA_CLASS_LOOK tag fits its curve's distance from identity", () => {
       for (const name of Object.keys(GAMMA_CLASSES) as GammaClassName[]) {
-        const distance = maxIdentityDistance(name);
-        if (GAMMA_CLASS_LOOK[name] === "neutral") expect(distance, name).toBeLessThanOrEqual(1);
-        else expect(distance, name).toBeGreaterThan(1);
+        const tag = GAMMA_CLASS_LOOK[name];
+        const fits = maxIdentityDistance(name) <= 1 === (tag === "neutral");
+        expect(fits, `GAMMA_CLASS_LOOK["${name}"] = "${tag}" doesn't fit the curve`).toBe(true);
       }
     });
   });

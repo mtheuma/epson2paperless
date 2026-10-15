@@ -371,7 +371,10 @@ Printers with an unrecognised CAPA fingerprint fail fast with a copy-pasteable
 diagnostic block — no synthesis attempt, no silent quality regression. Adding
 support for a new printer is a data-only change in the normal case: capture its
 wire bytes, extract any novel gamma/CMX class into the data files, and add a
-registry entry. Replay tests (`src/esci2/scanner.test.ts` and per-dialect files
+registry entry. A novel gamma class also gets a `GAMMA_CLASS_LOOK` tag: neutral
+if it was captured beside an identity matrix (or none), Epson-look if beside the
+model's own matrix. The entry's composed colour pairs must then pass
+`checkColourPair` (`src/esci2/data/colour-pair.test.ts`). Replay tests (`src/esci2/scanner.test.ts` and per-dialect files
 under `src/esci2/dialects/*.test.ts`) pin the composed output byte-for-byte
 against the captured fixture.
 
