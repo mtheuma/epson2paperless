@@ -36,6 +36,7 @@ import {
   SOURCE_BYTE,
   buildEscLowerI,
   buildEscE2,
+  parseFsIReply,
   type Source,
   type Format,
 } from "./commands.js";
@@ -48,6 +49,7 @@ import { expectIsType, expectLength } from "../graph-helpers.js";
 import { encodeRawGbrToJpeg } from "./raw-to-jpeg.js";
 import { createLogger } from "../logger.js";
 import { passthru } from "./dialects/send.js";
+import { checkLegacyIdentity } from "./dialects/registry.js";
 
 const log = createLogger("scanner-esci");
 
@@ -234,6 +236,57 @@ function xpIdentMeta(name: string, next: string, expectedLen: number): void {
   );
 }
 
+/**
+ * Log what the printer's FS I identity reply says about the dialect in use.
+ * Report-only: every outcome continues the session on `ctx.entry`.
+ */
+function reportIdentity(ctx: EsciCtx, payload: Buffer): void {
+  const { productName, firmware } = parseFsIReply(payload);
+  const check = checkLegacyIdentity(ctx.entry, productName);
+  if (check.kind === "match") {
+    log.debug("Dialect resolved", { dialect: ctx.entry.name, productName, firmware });
+  } else if (check.kind === "unrecognised") {
+    log.warn(
+      `Older ESC/I model ${productName ?? "(no product ID reported)"} not recognised — ` +
+        "trying the WF-3620 settings (experimental), please report",
+      { firmware },
+    );
+  } else {
+    const owner = check.owner ? `, which has its own ${check.owner.name} dialect` : "";
+    log.warn(
+      `Printer identifies as ${productName ?? "(no product ID reported)"}${owner}, ` +
+        `but this session is running the ${ctx.entry.name} settings`,
+      { firmware },
+    );
+  }
+}
+
+/**
+ * The session's first FS I read: validate the 80-byte reply, report the
+ * identity, then advance. Later FS I re-reads (ADF_IDENTITY_*) stay silent.
+ */
+function identityState(name: string, next: string, send: SendSpec<EsciCtx>): void {
+  g.state(
+    name,
+    decision<EsciCtx>((ctx, packet) => {
+      const typeGuard = expectIsType(packet, ESCI_REPLY, name);
+      if (typeGuard) return typeGuard;
+      // Not expectLength: an unfamiliar model's reply is what a compatibility
+      // report needs, so the error carries it in full.
+      if (packet.payload.length !== 80) {
+        return {
+          error: new Error(
+            `${name}: expected 80-byte identity, got ${packet.payload.length} ` +
+              `(payload=${packet.payload.toString("hex")})`,
+          ),
+        };
+      }
+      reportIdentity(ctx, packet.payload);
+      return { next, send };
+    }),
+  );
+}
+
 // =============================================================================
 // Graph builder
 // =============================================================================
@@ -324,7 +377,7 @@ awaitReply(
 ); // ESC i (reply 4)
 xpIdentMeta("XP_IDENT_B_META", "XP_IDENT_B_DATA", 40);
 awaitReply(g, "XP_IDENT_B_DATA", ESCI_REPLY, length40, "XP_IDENT_C", sendFsI()); // FS I (reply 80)
-awaitReply(g, "XP_IDENT_C", ESCI_REPLY, length80, "XP_STATUS_1", sendFsF());
+identityState("XP_IDENT_C", "XP_STATUS_1", sendFsF());
 awaitReply(g, "XP_STATUS_1", ESCI_REPLY, length16, "XP_INIT", passthru(buildEscInit(), 1)); // ESC @
 awaitReply(g, "XP_INIT", ESCI_REPLY, isAck, "XP_E2", passthru(buildEscE2(), 1)); // ESC 0xe2
 awaitReply(g, "XP_E2", ESCI_REPLY, isAckOrNak, "XP_STATUS_2", sendFsF());
@@ -336,8 +389,8 @@ awaitReply(g, "XP_STATUS_3", ESCI_REPLY, length16, "GAMMA_CMD", sendEscZ());
 // IDENTITY → STATUS_1A → STATUS_1B → SOURCE probe → STATUS_2 (decision)
 // =============================================================================
 
-// IDENTITY: 80-byte identity payload (we don't decode it) → STATUS_1A, send FS F.
-awaitReply(g, "IDENTITY", ESCI_REPLY, length80, "STATUS_1A", sendFsF());
+// IDENTITY: 80-byte identity payload, reported against the dialect → STATUS_1A, send FS F.
+identityState("IDENTITY", "STATUS_1A", sendFsF());
 
 // STATUS_1A: first FS F status reply. In the inter-page loop, byte 0 = 0x81
 // (ADF empty) jumps straight to cleanup; 0x01 means more paper. On initial

@@ -42,10 +42,13 @@ What you get:
 | **XP-3200**           | ✅&nbsp;Verified     | Flatbed-only hardware; shares the ET-2810 dialect over TLS; panel lists the destination but errors "Invalid" — use `scan:now` |
 | **XP-4100**           | ✅&nbsp;Verified     | Flatbed-only hardware; shares the ET-2750 dialect ([#139](https://github.com/mtheuma/epson2paperless/issues/139))             |
 | **XP-7100**           | ✅&nbsp;Verified     |                                                                                                                               |
+| Other Epson models    | 🧪&nbsp;Untested     | Older ESC/I models try the WF-3620 settings                                                                                   |
 
 ✅ **Verified**: every capability the hardware has is confirmed working on real hardware by someone.
 
 🟡 **Experimental**: something is still untested; the Notes say what.
+
+🧪 **Untested**: no compatibility report yet; the Notes say what to expect.
 
 Compatibility reports are welcome whether your model works or doesn't. [Open an issue](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) using the compatibility template.
 

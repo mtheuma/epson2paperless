@@ -1,6 +1,10 @@
 import { describe, it, expect } from "vitest";
 import { esciGraph, ESCI_TIMEOUT_MS, ESCI_REPLY, type EsciCtx } from "./graph.js";
 import { WF3620_ENTRY } from "./dialects/wf3620.js";
+import { XP620_ENTRY } from "./dialects/xp620.js";
+import { captureLogs, type CapturedLine } from "./test-support/log-capture.js";
+import { buildFsIReply } from "./test-support/fs-i-reply.js";
+import type { TransitionResult } from "../scan-session.js";
 
 function makeCtx(overrides: Partial<EsciCtx> = {}): EsciCtx {
   return {
@@ -114,13 +118,118 @@ describe("esciGraph WELCOME / LOCKING / INIT", () => {
 });
 
 describe("esciGraph IDENTITY / STATUS_1A / STATUS_1B / STATUS_2", () => {
-  it("IDENTITY advances to STATUS_1A on an 80-byte identity reply", () => {
-    const state = esciGraph.states.IDENTITY;
-    expect(state.kind).toBe("static");
-    if (state.kind === "static") {
-      expect(state.on[ESCI_REPLY]?.next).toBe("STATUS_1A");
-      expect(state.on[ESCI_REPLY]?.send).toBeDefined();
+  /** Run an identity state's decision on `payload`, capturing what it logs. */
+  function decideIdentity(
+    ctx: EsciCtx,
+    payload: Buffer,
+    stateName: "IDENTITY" | "XP_IDENT_C" = "IDENTITY",
+  ): {
+    result: TransitionResult<EsciCtx>;
+    lines: CapturedLine[];
+  } {
+    const state = esciGraph.states[stateName];
+    if (state.kind !== "decision") throw new Error(`${stateName} must be a decision state`);
+    const capture = captureLogs();
+    try {
+      return { result: state.decide(ctx, { type: ESCI_REPLY, payload }), lines: capture.lines };
+    } finally {
+      capture.restore();
     }
+  }
+
+  it("IDENTITY advances to STATUS_1A and logs the dialect for the WF-3620's own PID", () => {
+    const ctx = makeCtx();
+    const { result, lines } = decideIdentity(ctx, buildFsIReply("PID 08B8", "1.20"));
+    expect("next" in result && result.next).toBe("STATUS_1A");
+    expect("send" in result && result.send).toBeDefined();
+    expect(lines.filter((l) => l.stream === "warn")).toEqual([]);
+    const resolved = lines.find((l) => l.text.includes("Dialect resolved"));
+    expect(resolved?.data).toEqual({
+      dialect: "wf3620",
+      productName: "PID 08B8",
+      firmware: "1.20",
+    });
+  });
+
+  it("IDENTITY with an unknown PID logs the experimental line and keeps the WF-3620 settings", () => {
+    const ctx = makeCtx();
+    const { result, lines } = decideIdentity(ctx, buildFsIReply("PID 0999", "2.05"));
+    expect("next" in result && result.next).toBe("STATUS_1A");
+    expect(ctx.entry).toBe(WF3620_ENTRY);
+    const warnings = lines.filter((l) => l.stream === "warn");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].text).toContain(
+      "Older ESC/I model PID 0999 not recognised — trying the WF-3620 settings (experimental), please report",
+    );
+    expect(warnings[0].data).toEqual({ firmware: "2.05" });
+  });
+
+  it("IDENTITY with another dialect's PID on the WF-3620 settings names that dialect", () => {
+    const ctx = makeCtx();
+    const { result, lines } = decideIdentity(ctx, buildFsIReply("PID 08C8", "1.10"));
+    expect("next" in result && result.next).toBe("STATUS_1A");
+    const warnings = lines.filter((l) => l.stream === "warn");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].text).toContain(
+      "Printer identifies as PID 08C8, which has its own xp620 dialect, but this session is running the wf3620 settings",
+    );
+    expect(warnings[0].text).not.toContain("experimental");
+  });
+
+  it("IDENTITY on a PID-keyed dialect the printer doesn't name warns without the experimental line", () => {
+    const ctx = makeCtx({ entry: XP620_ENTRY });
+    const { lines } = decideIdentity(ctx, buildFsIReply("PID 0999", "1.00"));
+    const warnings = lines.filter((l) => l.stream === "warn");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].text).toContain(
+      "Printer identifies as PID 0999, but this session is running the xp620 settings",
+    );
+  });
+
+  it("IDENTITY fails on a reply that isn't 80 bytes, quoting the whole reply", () => {
+    const payload = Buffer.alloc(79, 0xab);
+    const { result } = decideIdentity(makeCtx(), payload);
+    expect("error" in result && result.error.message).toBe(
+      `IDENTITY: expected 80-byte identity, got 79 (payload=${payload.toString("hex")})`,
+    );
+  });
+
+  it("XP_IDENT_C advances to XP_STATUS_1 with FS F and logs the XP-620's own PID", () => {
+    const ctx = makeCtx({ entry: XP620_ENTRY });
+    const { result, lines } = decideIdentity(ctx, buildFsIReply("PID 08C8", "1.10"), "XP_IDENT_C");
+    expect("next" in result && result.next).toBe("XP_STATUS_1");
+    expect("send" in result && result.send).toBeDefined();
+    expect(lines.filter((l) => l.stream === "warn")).toEqual([]);
+    expect(lines.find((l) => l.text.includes("Dialect resolved"))?.data).toEqual({
+      dialect: "xp620",
+      productName: "PID 08C8",
+      firmware: "1.10",
+    });
+  });
+
+  it("XP_IDENT_C warns on another dialect's PID and still advances", () => {
+    const ctx = makeCtx({ entry: XP620_ENTRY });
+    const { result, lines } = decideIdentity(ctx, buildFsIReply("PID 1106", "1.40"), "XP_IDENT_C");
+    expect("next" in result && result.next).toBe("XP_STATUS_1");
+    const warnings = lines.filter((l) => l.stream === "warn");
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0].text).toContain(
+      "Printer identifies as PID 1106, which has its own et2550 dialect, but this session is running the xp620 settings",
+    );
+  });
+
+  it("XP_IDENT_C fails on a wrong packet type or a reply that isn't 80 bytes", () => {
+    const state = esciGraph.states.XP_IDENT_C;
+    if (state.kind !== "decision") throw new Error("XP_IDENT_C must be a decision state");
+    const ctx = makeCtx({ entry: XP620_ENTRY });
+    const wrongType = state.decide(ctx, { type: 0xa100, payload: Buffer.alloc(80) });
+    expect("error" in wrongType && wrongType.error.message).toMatch(
+      /XP_IDENT_C: expected packet type 0xa000/,
+    );
+    const { result } = decideIdentity(ctx, Buffer.alloc(16), "XP_IDENT_C");
+    expect("error" in result && result.error.message).toMatch(
+      /^XP_IDENT_C: expected 80-byte identity, got 16 \(payload=0{32}\)$/,
+    );
   });
 
   it("STATUS_1A jumps to CLEANUP_1 when inInterPageLoop and byte 0 = 0x81", () => {
