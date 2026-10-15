@@ -1,33 +1,36 @@
 import { describe, it, expect } from "vitest";
 import { compareWithEntry, deriveCapabilities, type DerivedCapabilities } from "./derivation.js";
+import { parseCapaTokens, parseInfoTokens } from "./capabilities.js";
 import { REGISTRY, type RegistryEntry } from "./dialects/registry.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
-import { FIXTURE_MODELS, readInit1Bodies } from "./test-support/capability-bodies.js";
+import { REPLAY_FIXTURES, readInit1Bodies } from "./test-support/capability-bodies.js";
 
 const NO_INFO = Buffer.alloc(0);
+const derive = (info: Buffer, capa: Buffer) =>
+  deriveCapabilities(parseInfoTokens(info), parseCapaTokens(capa));
 const capa = (s: string) => Buffer.from(s, "ascii");
 const ET4950_FP = "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2";
 
 describe("deriveCapabilities — rules", () => {
   it("QIT and CCT are present exactly when CAPA advertises the matching list", () => {
-    expect(deriveCapabilities(NO_INFO, capa("#QITLISTPREFON  OFF #CCTLISTPREFCOL MONO"))).toEqual(
+    expect(derive(NO_INFO, capa("#QITLISTPREFON  OFF #CCTLISTPREFCOL MONO"))).toEqual(
       expect.objectContaining({ qit: true, cct: true }),
     );
-    expect(deriveCapabilities(NO_INFO, capa("#GMMLISTUG10UG18"))).toEqual(
+    expect(derive(NO_INFO, capa("#GMMLISTUG10UG18"))).toEqual(
       expect.objectContaining({ qit: false, cct: false }),
     );
   });
 
   it("a list segment with no items advertises nothing", () => {
     // Matches the diagnostic block, which renders a bare #XXXLIST as (absent).
-    expect(deriveCapabilities(NO_INFO, capa("#QITLIST#CCTLIST"))).toEqual(
+    expect(derive(NO_INFO, capa("#QITLIST#CCTLIST"))).toEqual(
       expect.objectContaining({ qit: false, cct: false }),
     );
   });
 
   it("ADF duplex is present exactly when CAPA carries an #ADFDPLX segment", () => {
-    expect(deriveCapabilities(NO_INFO, capa("#ADFDPLX#GMMLISTUG10")).adfDuplex).toBe(true);
-    expect(deriveCapabilities(NO_INFO, capa("#ADFRSMSLISTd300d600")).adfDuplex).toBe(false);
+    expect(derive(NO_INFO, capa("#ADFDPLX#GMMLISTUG10")).adfDuplex).toBe(true);
+    expect(derive(NO_INFO, capa("#ADFRSMSLISTd300d600")).adfDuplex).toBe(false);
   });
 });
 
@@ -47,12 +50,12 @@ describe("compareWithEntry", () => {
   });
 });
 
-describe("shadow derivation agrees with every replay-fixture model", () => {
-  it.each(FIXTURE_MODELS)("$model", ({ path }) => {
+describe("shadow derivation agrees with every replay fixture", () => {
+  it.each(REPLAY_FIXTURES)("$model: $path", ({ path }) => {
     const { info, capa } = readInit1Bodies(path);
     const entry = REGISTRY.get(computeCapaFingerprint(capa));
     expect(entry).toBeDefined();
-    expect(compareWithEntry(deriveCapabilities(info, capa), entry!)).toEqual([]);
+    expect(compareWithEntry(derive(info, capa), entry!)).toEqual([]);
   });
 });
 
@@ -133,7 +136,7 @@ describe("shadow derivation agrees with models known only from issue diagnostics
     const entry: RegistryEntry | undefined = REGISTRY.get(fp);
     expect(entry).toBeDefined();
     const { body, fields } = capaFromDiagnostic(block);
-    const disagreements = compareWithEntry(deriveCapabilities(NO_INFO, body), entry!);
+    const disagreements = compareWithEntry(derive(NO_INFO, body), entry!);
     expect(disagreements.filter((d) => fields.includes(d.field))).toEqual([]);
   });
 

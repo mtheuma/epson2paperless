@@ -1,11 +1,6 @@
 // src/esci2/derivation.ts
 import { isDeepStrictEqual } from "node:util";
-import {
-  parseCapaTokens,
-  parseInfoTokens,
-  type CapaTokens,
-  type InfoTokens,
-} from "./capabilities.js";
+import type { CapaTokens, InfoTokens } from "./capabilities.js";
 import type { RegistryEntry } from "./dialects/registry.js";
 
 /**
@@ -28,11 +23,14 @@ export interface DerivedCapabilities {
   adfDuplex: boolean;
 }
 
-export interface Disagreement {
-  field: keyof DerivedCapabilities;
-  derived: unknown;
-  entry: unknown;
-}
+/** One differing field, typed by the field it names. */
+export type Disagreement = {
+  [K in keyof DerivedCapabilities]: {
+    field: K;
+    derived: DerivedCapabilities[K];
+    entry: DerivedCapabilities[K];
+  };
+}[keyof DerivedCapabilities];
 
 interface FieldRule<K extends keyof DerivedCapabilities> {
   derive: (info: InfoTokens, capa: CapaTokens) => DerivedCapabilities[K];
@@ -59,9 +57,8 @@ const FIELDS: { [K in keyof DerivedCapabilities]: FieldRule<K> } = {
 
 const FIELD_NAMES = Object.keys(FIELDS) as (keyof DerivedCapabilities)[];
 
-export function deriveCapabilities(infoBody: Buffer, capaBody: Buffer): DerivedCapabilities {
-  const info = parseInfoTokens(infoBody);
-  const capa = parseCapaTokens(capaBody);
+/** Takes the parsed INFO and CAPA replies, so the session's own parse is reused. */
+export function deriveCapabilities(info: InfoTokens, capa: CapaTokens): DerivedCapabilities {
   // FIELDS' mapped type guarantees a rule for every key, so the result is complete.
   return Object.fromEntries(
     FIELD_NAMES.map((field) => [field, FIELDS[field].derive(info, capa)]),
@@ -74,11 +71,12 @@ export function compareWithEntry(
   entry: RegistryEntry,
 ): Disagreement[] {
   const out: Disagreement[] = [];
-  for (const field of FIELD_NAMES) {
+  const check = <K extends keyof DerivedCapabilities>(field: K) => {
     const fromEntry = FIELDS[field].fromEntry(entry);
     if (!isDeepStrictEqual(derived[field], fromEntry)) {
       out.push({ field, derived: derived[field], entry: fromEntry });
     }
-  }
+  };
+  FIELD_NAMES.forEach(check);
   return out;
 }

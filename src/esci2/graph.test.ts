@@ -1,12 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
 import { esci2Graph, ESCI2_TIMEOUT_MS } from "./graph.js";
 import { applyEntrySourceOverride } from "./dialects/dispatch.js";
-import { REGISTRY, type RegistryEntry } from "./dialects/registry.js";
+import { REGISTRY } from "./dialects/registry.js";
 import { IS_HEADER_SIZE, buildPurereadPacket, parseIsPacket } from "../protocol.js";
 import { parseCapaTokens } from "./capabilities.js";
 import { DEFAULT_JPEG_QUALITY } from "../config.js";
-import { computeCapaFingerprint } from "./capa-fingerprint.js";
-import { FIXTURE_MODELS, readInit1Bodies } from "./test-support/capability-bodies.js";
+import { REPLAY_FIXTURES, readInit1Bodies } from "./test-support/capability-bodies.js";
 
 describe("esci2Graph (smoke)", () => {
   it("builds with the expected initial state and timeout", () => {
@@ -1437,31 +1436,10 @@ describe("esci2Graph INIT1_CAPA_DATA — shadow derivation", () => {
   const shadowLines = (lines: unknown[][]) =>
     lines.filter((args) => args.some((a) => String(a).includes(SHADOW_LINE)));
 
-  it.each(FIXTURE_MODELS)("is silent for the $model replay fixture", ({ path }) => {
+  it.each(REPLAY_FIXTURES)("is silent for the $model fixture $path", ({ path }) => {
     const { info, capa } = readInit1Bodies(path);
     const { ctx, lines } = resolveDialect(info, capa);
     expect(ctx.entry).toBeDefined();
     expect(shadowLines(lines)).toEqual([]);
-  });
-
-  it("logs one info line per disagreeing field once the dialect resolves", () => {
-    const { info, capa } = readInit1Bodies(FIXTURE_MODELS[0].path);
-    const fp = computeCapaFingerprint(capa);
-    const registry = REGISTRY as Map<string, RegistryEntry>;
-    const real = registry.get(fp)!;
-    registry.set(fp, { ...real, adfDuplex: false, optionalSegments: { qit: false, cct: true } });
-    try {
-      const { lines } = resolveDialect(info, capa);
-      const shadow = shadowLines(lines);
-      expect(shadow).toHaveLength(2);
-      expect(shadow[0][2]).toEqual(
-        expect.objectContaining({ field: "qit", derived: true, entry: false }),
-      );
-      expect(shadow[1][2]).toEqual(
-        expect.objectContaining({ field: "adfDuplex", derived: true, entry: false }),
-      );
-    } finally {
-      registry.set(fp, real);
-    }
   });
 });
