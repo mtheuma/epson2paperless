@@ -48,8 +48,9 @@ const items = (list: string | null): string[] => list?.match(/.{4}/g) ?? [];
 /**
  * The neutral pair: the neutral tone curve with the identity UM08 matrix,
  * in gamma mode UG18 (UG10 when that's all the printer lists). A printer
- * that lists no UM08 matrix is sent SoC-style instead: UG10 and no matrix.
- * Crop mode (adf-crp) always sends a matrix, so there it fails.
+ * that lists no UM08 matrix is sent SoC-style instead: UG10 and no matrix,
+ * failing if it doesn't list UG10 either. Crop mode (adf-crp) always sends
+ * a matrix, so there it fails.
  */
 export function genericColourPair(capa: CapaTokens, profile: ParaProfile): ColourPair {
   const modes = items(capa.gmmList);
@@ -70,13 +71,18 @@ export function genericColourPair(capa: CapaTokens, profile: ParaProfile): Colou
       "its CAPA reply lists no UM08 colour matrix, which crop-mode (adf-crp) scanning needs",
     );
   }
+  if (!modes.includes("UG10")) {
+    throw new GenericDialectUnusableError(
+      "its CAPA reply lists no UM08 colour matrix and no UG10 gamma mode to send without one",
+    );
+  }
   return { gmm: "UG10", gamma: NEUTRAL_TONE_CURVE, cmx: null };
 }
 
 /** How a session names the printer it is running the generic dialect for. */
 export function printerIdentity(info: InfoTokens): string {
   if (info.prdPid !== null) return `PID ${info.prdPid}`;
-  return info.prdName ?? "printer with no PID or product name";
+  return info.prdName ?? "Unidentified printer (no PID or name in INFO)";
 }
 
 /**

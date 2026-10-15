@@ -924,7 +924,13 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
   // Only warn when the caller explicitly asked for a resolution — the
   // dialect's own pinned default running at an as-yet-unverified DPI isn't
   // actionable by the user and would just be noise on every default scan.
-  if (ctx.resolution !== undefined && !ctx.entry!.verifiedWireDpis.includes(sel.wireDpi)) {
+  // The generic dialect verifies no DPI; its own warning already asks for a
+  // report, so this one would only point at the wrong issue.
+  if (
+    ctx.resolution !== undefined &&
+    ctx.genericInfo === undefined &&
+    !ctx.entry!.verifiedWireDpis.includes(sel.wireDpi)
+  ) {
     log.warn(
       `wire DPI ${sel.wireDpi} is unverified on ${ctx.entry!.displayName} — ` +
         "please report results (issue #81)",

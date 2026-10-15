@@ -388,8 +388,8 @@ diagnostic block at `info`. The generic dialect is:
 - the neutral pair: the `et4950-stock` tone curve with the identity UM08
   matrix, in `UG18` (or `UG10` if that's all `#GMMLIST` offers). A printer
   whose `#CMXLIST` lacks `UM08` is sent SoC-style (`UG10`, no `#CMX`) on the
-  standard profile; an `adf-crp` printer fails, since that PARA always
-  carries a matrix;
+  standard profile (failing if `UG10` isn't listed); an `adf-crp` printer
+  fails, since that PARA always carries a matrix;
 - the generic scan window, computed per wire DPI: A4 at 300 DPI placed by
   the `ALGN` rule, scaled to the wire DPI, then clipped to the scan area
   (`adf-crp`: the full ADF area at 200 DPI). Clipping last keeps every DPI

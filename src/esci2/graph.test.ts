@@ -1814,4 +1814,22 @@ describe("esci2Graph — generic dialect", () => {
       .toString("latin1");
     expect(body).toContain("#ACQi0000000i0000000i0000637i0001162");
   });
+
+  it("doesn't add the unverified-DPI warning to an explicit SCAN_RESOLUTION", () => {
+    const { ctx } = resolve(UNKNOWN_INFO, UNKNOWN_CAPA);
+    ctx.resolution = 300;
+    ctx.source = "flatbed";
+    const state = esci2Graph.states.POST_MODE_STAT;
+    if (state.kind !== "decision") throw new Error("POST_MODE_STAT not a decision");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      state.decide(ctx, {
+        type: 0xa000,
+        payload: Buffer.from("STATx0000000" + " ".repeat(52), "ascii"),
+      });
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      warn.mockRestore();
+    }
+  });
 });

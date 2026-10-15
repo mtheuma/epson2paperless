@@ -108,6 +108,12 @@ describe("genericColourPair", () => {
     );
   });
 
+  it("fails rather than sending SoC-style UG10 to a printer that doesn't list it", () => {
+    expect(() => genericColourPair(capa("#GMMLISTUG18#CMXLISTUNIT"), "standard")).toThrow(
+      /no UG10 gamma mode/,
+    );
+  });
+
   it("fails when the printer lists neither UG18 nor UG10", () => {
     expect(() => genericColourPair(capa("#GMMLISTUG22#CMXLISTUNITUM08"), "standard")).toThrow(
       /no gamma mode/,
