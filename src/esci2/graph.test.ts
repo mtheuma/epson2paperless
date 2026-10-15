@@ -1,8 +1,15 @@
 import { describe, it, expect, vi } from "vitest";
-import { esci2Graph, ESCI2_TIMEOUT_MS } from "./graph.js";
+import { esci2Graph, ESCI2_TIMEOUT_MS, nameInitPollEarlyStop } from "./graph.js";
+import { buildEsci2Command } from "./commands.js";
+import { buildFsX } from "../commands-fs.js";
 import { applyEntrySourceOverride } from "./dialects/dispatch.js";
 import { REGISTRY } from "./dialects/registry.js";
-import { IS_HEADER_SIZE, buildPurereadPacket, parseIsPacket } from "../protocol.js";
+import {
+  IS_HEADER_SIZE,
+  buildPassthruPacket,
+  buildPurereadPacket,
+  parseIsPacket,
+} from "../protocol.js";
 import { parseCapaTokens } from "./capabilities.js";
 import { DEFAULT_JPEG_QUALITY } from "../config.js";
 import {
@@ -133,20 +140,87 @@ describe("esci2Graph T22 states", () => {
 });
 
 describe("esci2Graph T23 INIT_POLL cycle", () => {
-  it("INIT_POLL_FS_Y transitions to INIT_POLL_STAT on 0xa000", () => {
+  it("INIT_POLL_FS_Y sends STAT and advances to INIT_POLL_STAT on an ACK", () => {
     const state = esci2Graph.states.INIT_POLL_FS_Y;
-    expect(state.kind).toBe("static");
-    if (state.kind === "static") {
-      expect(state.on[0xa000]?.next).toBe("INIT_POLL_STAT");
+    if (state.kind !== "decision") throw new Error("INIT_POLL_FS_Y not a decision");
+    const result = state.decide(makeCtx({ initPollIteration: 1 }), {
+      type: 0xa000,
+      payload: Buffer.from([0x06]),
+    });
+    expect("next" in result && result.next).toBe("INIT_POLL_STAT");
+    expect("send" in result && result.send).toEqual(
+      buildPassthruPacket(buildEsci2Command("STAT"), 64),
+    );
+  });
+
+  it("INIT_POLL_FS_Y fails with the reply bytes on a non-ACK in the first cycle", () => {
+    const state = esci2Graph.states.INIT_POLL_FS_Y;
+    if (state.kind !== "decision") throw new Error("INIT_POLL_FS_Y not a decision");
+    const ctx = makeCtx({ initPollIteration: 0 });
+    const result = state.decide(ctx, { type: 0xa000, payload: Buffer.from([0x15]) });
+    expect("error" in result && result.error.message).toBe(
+      "Validation failed in state INIT_POLL_FS_Y for packet type 0xa000 (payload len=1, head=0x15)",
+    );
+    expect(ctx.initPollEarlyStop).toBeUndefined();
+  });
+
+  it("INIT_POLL_FS_Y stops the poll early on a non-ACK after a good cycle, warning with the bytes", () => {
+    const state = esci2Graph.states.INIT_POLL_FS_Y;
+    if (state.kind !== "decision") throw new Error("INIT_POLL_FS_Y not a decision");
+    // Iteration 1 = one good cycle done, so this FS Y opens cycle 2 of 3.
+    const ctx = makeCtx({ initPollIteration: 1 });
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = state.decide(ctx, { type: 0xa000, payload: Buffer.from([0x15]) });
+      expect("next" in result && result.next).toBe("MODE_SWITCH");
+      expect("send" in result && result.send).toEqual(buildPassthruPacket(buildFsX(), 1));
+      expect(ctx.initPollEarlyStop).toEqual({ cycle: 2, reply: "payload len=1, head=0x15" });
+      const messages = warnSpy.mock.calls.map((c) => c.map(String).join(" ")).join("\n");
+      expect(messages).toContain("cycle 2 of 3");
+      expect(messages).toContain("payload len=1, head=0x15");
+    } finally {
+      warnSpy.mockRestore();
     }
   });
 
-  it("INIT_POLL_FS_Y sends a STAT passthru packet on 0xa000 transition", () => {
+  it("INIT_POLL_FS_Y rejects a non-0xa000 packet", () => {
     const state = esci2Graph.states.INIT_POLL_FS_Y;
-    expect(state.kind).toBe("static");
-    if (state.kind === "static") {
-      expect(state.on[0xa000]?.send).toBeDefined();
-    }
+    if (state.kind !== "decision") throw new Error("INIT_POLL_FS_Y not a decision");
+    const result = state.decide(makeCtx({ initPollIteration: 1 }), {
+      type: 0xa100,
+      payload: Buffer.from([0x06]),
+    });
+    expect("error" in result).toBe(true);
+  });
+
+  it("nameInitPollEarlyStop names an early stop as the likely cause of a later failure", () => {
+    const reason = new Error(
+      "Validation failed in state MODE_SWITCH for packet type 0xa000 (payload len=1, head=0x15)",
+    );
+    const ctx = makeCtx({ initPollEarlyStop: { cycle: 2, reply: "payload len=1, head=0x15" } });
+    const named = nameInitPollEarlyStop(reason, ctx);
+    expect(named.message).toContain(reason.message);
+    expect(named.message).toContain("likely cause: the init poll stopped early");
+    expect(named.message).toContain("cycle 2 with a non-ACK (payload len=1, head=0x15)");
+    expect(named.cause).toBe(reason);
+  });
+
+  it("nameInitPollEarlyStop leaves the reason alone without an early stop", () => {
+    const reason = new Error("Timeout in state MODE_SWITCH — no response in 60000ms");
+    expect(nameInitPollEarlyStop(reason, makeCtx())).toBe(reason);
+    expect(nameInitPollEarlyStop(reason, undefined)).toBe(reason);
+  });
+
+  it("PARA acceptance clears an early stop, so later failures aren't blamed on it", () => {
+    const state = esci2Graph.states.PARA;
+    if (state.kind !== "decision") throw new Error("PARA not a decision");
+    const ctx = makeCtx({ initPollEarlyStop: { cycle: 2, reply: "payload len=1, head=0x15" } });
+    const result = state.decide(ctx, {
+      type: 0xa000,
+      payload: Buffer.from("PARAx0000000#parOK  ", "ascii"),
+    });
+    expect("next" in result && result.next).toBe("TRDT");
+    expect(ctx.initPollEarlyStop).toBeUndefined();
   });
 
   it("INIT_POLL_STAT is a decision state", () => {
@@ -213,8 +287,6 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
     expect(state.kind).toBe("decision");
     if (state.kind !== "decision") return;
     // Iteration was 1, bumps to 2 — equals dialect.initPollIterations=2, advance.
-    // Sending a third FS Y after the printer has moved on returns a non-ACK
-    // that fails MODE_SWITCH validation, so this cap is load-bearing.
     const ctx = makeCtx({
       entry: REGISTRY.get("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7")!,
       initPollIteration: 1,

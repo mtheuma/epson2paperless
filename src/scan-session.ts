@@ -21,10 +21,21 @@ import { DEFAULT_JPEG_QUALITY, type GrayscaleConversion } from "./config.js";
  * unknown printer answering FS Y with a non-`0x06` byte — without needing a
  * pcap of the session.
  */
-function payloadPreview(payload: Buffer, max = 16): string {
+export function payloadPreview(payload: Buffer, max = 16): string {
   const head = payload.subarray(0, max).toString("hex");
   const ellipsis = payload.length > max ? "…" : "";
   return `payload len=${payload.length}, head=0x${head}${ellipsis}`;
+}
+
+/**
+ * The error a failed static-transition `validate` settles with. Exported so a
+ * decision state that only sometimes rejects a reply can fail with the same
+ * message the static form would.
+ */
+export function validationError(state: string, packet: { type: number; payload: Buffer }): Error {
+  return new Error(
+    `Validation failed in state ${state} for packet type 0x${packet.type.toString(16).padStart(4, "0")} (${payloadPreview(packet.payload)})`,
+  );
 }
 
 // =============================================================================
@@ -809,13 +820,7 @@ export async function runScanSession<Ctx>(
           return;
         }
         if (transition.validate && !transition.validate(packet.payload)) {
-          settle({
-            ok: false,
-            reason: new Error(
-              `Validation failed in state ${currentState} for packet type 0x${packet.type.toString(16).padStart(4, "0")} (${payloadPreview(packet.payload)})`,
-            ),
-            finalCtx: ctx,
-          });
+          settle({ ok: false, reason: validationError(currentState, packet), finalCtx: ctx });
           return;
         }
         await applyTransition(transition);

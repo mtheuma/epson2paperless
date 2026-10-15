@@ -4,7 +4,8 @@ import path from "node:path";
 import os from "node:os";
 import { PDFDocument } from "pdf-lib";
 import { runEsci2Scan, runEsci2ScanOverPlain } from "./scanner.js";
-import { buildIsPacket } from "../protocol.js";
+import { buildIsPacket, buildPassthruPacket } from "../protocol.js";
+import { buildFsY } from "../commands-fs.js";
 import { parseEsci2ReplyHeader } from "./commands.js";
 import { FakeTlsSocket } from "./test-support/fake-tls-socket.js";
 import { FakePlainSocket } from "./test-support/fake-plain-socket.js";
@@ -144,13 +145,15 @@ async function driveScannerToPara(args: {
   firstStatReplyHex: string;
   duplex?: boolean;
   action?: "jpg" | "pdf";
+  /** Answer FS Y with a NAK on this init-poll cycle (2 or 3), ending the poll early. */
+  nakFsYOnPollCycle?: number;
 }): Promise<{
   fake: FakeTlsSocket;
   sessionPromise: Promise<void>;
   feedEsci2Reply: (bodyHex: string) => Promise<void>;
   feedLegacyAck: () => Promise<void>;
 }> {
-  const { outputDir, firstStatReplyHex, duplex = false, action = "jpg" } = args;
+  const { outputDir, firstStatReplyHex, duplex = false, action = "jpg", nakFsYOnPollCycle } = args;
   const fake = new FakeTlsSocket();
   const sessionPromise = runEsci2Scan(
     { printerIp: "1.2.3.4", port: 1865, destId: 0x02, outputDir, tempDir: "", duplex, action },
@@ -219,7 +222,12 @@ async function driveScannerToPara(args: {
   await feedEsci2Reply("FIN x0000000");
 
   // INIT_POLL cycles 2 + 3 (length-0 STATs, no drain)
-  for (let i = 0; i < 2; i++) {
+  for (let cycle = 2; cycle <= 3; cycle++) {
+    if (cycle === nakFsYOnPollCycle) {
+      fake.feed(buildIsPacket(0xa000, Buffer.from([0x15])));
+      await waitImmediate();
+      break;
+    }
     await feedLegacyAck();
     await feedEsci2Reply("STATx0000000");
     await feedEsci2Reply("FIN x0000000");
@@ -548,6 +556,72 @@ describe("scanner targeted tests — error paths", () => {
     // Last write should be the UNLOCK packet, proving transitionToError ran.
     const lastWrite = fake.writes[fake.writes.length - 1];
     expect(lastWrite.readUInt16BE(2)).toBe(0x2101);
+  });
+});
+
+describe("scanner init-poll early stop", () => {
+  let outputDir: string;
+
+  beforeEach(() => {
+    outputDir = mkdtempSync(path.join(os.tmpdir(), "scanner-early-stop-"));
+  });
+
+  afterEach(() => {
+    rmSync(outputDir, { recursive: true, force: true });
+  });
+
+  const fsYWrite = buildPassthruPacket(buildFsY(), 1);
+  const countFsYWrites = (fake: FakeTlsSocket) =>
+    fake.writes.filter((w) => w.equals(fsYWrite)).length;
+
+  it("names an early-stopped poll when the printer then rejects PARA", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { fake, sessionPromise } = await driveScannerToPara({
+        outputDir,
+        firstStatReplyHex: "STATx0000000",
+        nakFsYOnPollCycle: 2,
+      });
+      // INIT1's FS Y plus init-poll cycles 1 and 2: the NAK'd cycle 2 sent no third FS Y.
+      expect(countFsYWrites(fake)).toBe(3);
+      expect(warnSpy.mock.calls.map((c) => c.map(String).join(" ")).join(" | ")).toMatch(
+        /cycle 2 of 3 with a non-ACK \(payload len=1, head=0x15\)/,
+      );
+      const rejection = expect(sessionPromise).rejects.toThrow(
+        /PARA rejected by printer \(#parNG\)\. — likely cause: the init poll stopped early .* cycle 2 with a non-ACK \(payload len=1, head=0x15\)/,
+      );
+      fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
+      await waitImmediate();
+      fake.feed(buildIsPacket(0xa000, Buffer.from("PARAx0000000#parNG", "ascii")));
+      await rejection;
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("stops blaming the early stop once PARA is accepted", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const { fake, sessionPromise } = await driveScannerToPara({
+        outputDir,
+        firstStatReplyHex: "STATx0000000",
+        nakFsYOnPollCycle: 2,
+      });
+      fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
+      await waitImmediate();
+      fake.feed(buildIsPacket(0xa000, Buffer.from("PARAx0000000#parOK", "ascii")));
+      await waitImmediate();
+      const settled = sessionPromise.then(
+        () => new Error("session resolved"),
+        (err: Error) => err,
+      );
+      fake.feed(buildIsPacket(0x9000, Buffer.from([0xa0])));
+      const err = await settled;
+      expect(err.message).toMatch(/fatal/i);
+      expect(err.message).not.toMatch(/likely cause/);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 

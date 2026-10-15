@@ -5,8 +5,10 @@ import {
   decision,
   type Graph,
   type GraphBuilder,
+  payloadPreview,
   type SendSpec,
   type TransitionResult,
+  validationError,
 } from "../scan-session.js";
 import {
   buildLockPacket,
@@ -89,6 +91,13 @@ export interface Esci2Ctx {
    * Undefined otherwise.
    */
   firstStatusReply?: Buffer;
+  /**
+   * Set when the init poll stopped early on a non-ACK to FS Y (see
+   * INIT_POLL_FS_Y): the cycle it happened on and a preview of the reply.
+   * Cleared once PARA is accepted, so only a failure in the mode switch or
+   * the settings exchange is blamed on it (`nameInitPollEarlyStop`).
+   */
+  initPollEarlyStop?: { cycle: number; reply: string };
   /** Resolved registry entry post-INIT1, drives PARA build + init-poll count + source detection. Undefined until INIT1 completes. */
   entry: RegistryEntry | undefined;
   /** Panel-selected output format; drives action-aware dialects' PARA splice. */
@@ -614,15 +623,59 @@ function reportStatusSourceShadow(ctx: Esci2Ctx, ...status: Buffer[]): void {
 // the FIN exchange, rather than a plain static transition.
 
 // INIT_POLL_FS_Y: receives 0xa000 (FS Y ACK, payload[0]=0x06); sends STAT.
-g.state("INIT_POLL_FS_Y", {
-  on: {
-    0xa000: {
-      validate: (payload) => payload[0] === 0x06,
-      next: "INIT_POLL_STAT",
-      send: buildPassthruPacket(buildEsci2Command("STAT"), ESCI2_REPLY_SIZE),
-    },
-  },
-});
+//
+// The dialect's poll count is an upper bound, not a requirement: after at
+// least one good cycle, a non-ACK to FS Y is taken as the printer having
+// finished polling, so the session warns with the reply bytes and moves on to
+// the mode switch. Purely defensive and unproven on hardware: no capture
+// shows a printer refusing FS Y mid-poll. A non-ACK on the first cycle means
+// the printer never polled at all and still fails with the bytes, exactly as
+// the static validator did.
+g.state(
+  "INIT_POLL_FS_Y",
+  decision<Esci2Ctx>((ctx, packet) => {
+    const typeGuard = expectIsType(packet, 0xa000, "INIT_POLL_FS_Y");
+    if (typeGuard) return typeGuard;
+    if (packet.payload[0] === 0x06) {
+      return {
+        next: "INIT_POLL_STAT",
+        send: buildPassthruPacket(buildEsci2Command("STAT"), ESCI2_REPLY_SIZE),
+      };
+    }
+    if (ctx.initPollIteration === 0) {
+      return { error: validationError("INIT_POLL_FS_Y", packet) };
+    }
+    const cycle = ctx.initPollIteration + 1;
+    const reply = payloadPreview(packet.payload);
+    ctx.initPollEarlyStop = { cycle, reply };
+    log.warn(
+      `Init poll: the printer answered FS Y on cycle ${cycle} of ` +
+        `${ctx.entry!.initPollIterations} with a non-ACK (${reply}) — ` +
+        "stopping the poll early and moving on to the mode switch.",
+    );
+    return {
+      next: "MODE_SWITCH",
+      send: buildPassthruPacket(buildFsX(), LEGACY_REPLY_SIZE),
+    };
+  }),
+);
+
+/**
+ * Names an early-stopped init poll as the likely cause of a session failure.
+ * The scanner shell runs every failed session through this, so a timeout, a
+ * non-ACK to FS X or a PARA rejection after an early stop all carry it.
+ * Returns the reason unchanged when the poll ran its full count, or once PARA
+ * was accepted.
+ */
+export function nameInitPollEarlyStop(reason: Error, ctx: Esci2Ctx | undefined): Error {
+  const stop = ctx?.initPollEarlyStop;
+  if (stop === undefined) return reason;
+  return new Error(
+    `${reason.message} — likely cause: the init poll stopped early after the printer ` +
+      `answered FS Y on cycle ${stop.cycle} with a non-ACK (${stop.reply}).`,
+    { cause: reason },
+  );
+}
 
 // INIT_POLL_STAT: decision on STAT reply — drain if length>0, else FIN.
 // On the first iteration (ctx.initPollIteration === 0) also detects source
@@ -892,6 +945,8 @@ g.state(
           : ` This model may not accept wire DPI ${ctx.wireDpi} — please report the result (issue #81).`;
       return { error: new Error(`PARA rejected by printer (#par${par ?? "?"}).${hint}`) };
     }
+    // The printer took the settings, so an early-stopped init poll did no harm.
+    ctx.initPollEarlyStop = undefined;
     return { next: "TRDT", send: buildPassthruPacket(buildEsci2Command("TRDT"), ESCI2_REPLY_SIZE) };
   }),
 );
