@@ -9,7 +9,7 @@ import {
 } from "../scan-session.js";
 import { resolveSessionTimestamp } from "../output.js";
 import type { WhitePoint } from "../postprocess/auto-color.js";
-import { esciGraph, type EsciCtx } from "./graph.js";
+import { esciGraph, initialSource, unsupportedForcedSource, type EsciCtx } from "./graph.js";
 import type { Source, Format } from "./commands.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
 import { withRawSocketCleanClose } from "./transport.js";
@@ -29,7 +29,10 @@ export interface LegacyScanSession {
   outputDir: string;
   /** Base directory for per-session temp spill; "" means `os.tmpdir()` at runtime. */
   tempDir: string;
-  /** Resolved per-model dialect record; see src/esci/dialects/. */
+  /**
+   * Dialect the session starts on; see src/esci/dialects/. The printer's FS I
+   * reply can switch it (EsciCtx.entry), e.g. a PID-less trigger on an ET-2550.
+   */
   entry: LegacyDialectEntry;
   /** Panel-side Sides selection (true → 2-Sided). Source detected from FS F. */
   duplex: boolean;
@@ -104,17 +107,11 @@ export async function runEsciScan(
     throw new Error(`Failed to create session temp dir under ${tempBase}: ${msg}`);
   }
 
-  // Reject an ESCI_FORCE_SOURCE the dialect can't actually service up front
-  // (e.g. XP-620 has no ADF) rather than letting the wire session desync
-  // partway through a command sequence the printer doesn't support.
-  const fixedFlatbed = session.entry.sourcePolicy === "fixed-flatbed";
-  if (session.forcedSource && !session.entry.supportedSources.includes(session.forcedSource)) {
-    const supported = session.entry.supportedSources.join(", ");
-    throw new Error(
-      `ESCI_FORCE_SOURCE=${session.forcedSource} is not supported by ${session.entry.name} ` +
-        `(supports: ${supported}). Unset ESCI_FORCE_SOURCE or set it to one of the supported sources.`,
-    );
-  }
+  // Reject an ESCI_FORCE_SOURCE the dialect can't service before connecting.
+  // This sees only the dialect the session starts on; the IDENTITY state
+  // re-checks it against any dialect the printer's FS I reply switches to.
+  const forcedError = unsupportedForcedSource(session.entry, session.forcedSource);
+  if (forcedError) throw forcedError;
 
   const result = await runScanSession<EsciCtx>({
     graph: esciGraph,
@@ -122,14 +119,7 @@ export async function runEsciScan(
       entry: session.entry,
       duplex: session.duplex,
       forcedSource: session.forcedSource,
-      // Safe default — STATUS_2 overwrites this from the FS F byte (or
-      // forcedSource) before any state downstream reads it, UNLESS the
-      // entry is fixed-flatbed, in which case there's no FS F detection
-      // to run and the source is pinned outright. The `sourceDetected`
-      // flag below disambiguates "this default" from "STATUS_2 actually
-      // ran" so the shell only fires onSourceDetected on success paths.
-      source: fixedFlatbed ? "flatbed" : (session.forcedSource ?? "adf-simplex"),
-      sourceDetected: fixedFlatbed ? true : false,
+      ...initialSource(session.entry, session.forcedSource),
       format: session.format,
       jpegQuality: session.jpegQuality,
       diagnoseProtocol: session.diagnoseProtocol ?? false,

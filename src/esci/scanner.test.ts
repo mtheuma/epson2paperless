@@ -500,6 +500,65 @@ describe("scanner-esci", () => {
   // rewritten — nothing else in the session reads it.
   // -------------------------------------------------------------------------
 
+  // scan:now and the webhook carry no PID, so the session starts on the WF-3620
+  // fallback. The ET-2550 names itself in the first FS I reply, and its setup
+  // up to there is the WF-3620's, so the session must finish as the ET-2550.
+  it.each(["jpg", "pdf"] as const)(
+    "a PID-less %s scan on an ET-2550 switches to its dialect and reproduces its transcript",
+    async (format) => {
+      const fixture = loadFixture(path.join(FIXTURES, "et-2550/flatbed.jsonl"));
+      const fake = new FakeTcpSocket();
+      let detectedSource: string | null = null;
+
+      const logs = captureLogs();
+      try {
+        const sessionPromise = runEsciScan(
+          {
+            printerIp: "1.2.3.4",
+            port: 1865,
+            outputDir,
+            tempDir,
+            entry: WF3620_ENTRY, // resolveLegacyEntry(null)
+            duplex: false,
+            forcedSource: null,
+            format,
+            jpegQuality: 90,
+            onSourceDetected: (s) => {
+              detectedSource = s;
+            },
+          },
+          fake.asFactory(),
+        );
+        await driveFixture(fixture, fake, sessionPromise);
+      } finally {
+        logs.restore();
+      }
+
+      expect(Buffer.concat(fake.writes).toString("hex")).toBe(
+        concatHostBytes(fixture).toString("hex"),
+      );
+      expect(detectedSource).toBe("flatbed");
+      expect(identityLogs(logs.lines)).toEqual({ resolved: [], warnings: [] });
+      expect(logs.lines.filter((l) => l.text.includes("switching")).map((l) => l.text)).toEqual([
+        expect.stringContaining(
+          "Printer identifies as PID 1106, which has its own et2550 dialect — switching from the wf3620 settings",
+        ),
+      ]);
+
+      // The ET-2550's delivered DPI (300), not the WF-3620's 600 for JPG.
+      const files = readdirSync(outputDir);
+      expect(files).toHaveLength(1);
+      const bytes = readFileSync(path.join(outputDir, files[0]));
+      if (format === "jpg") {
+        expect((await sharp(bytes).metadata()).density).toBe(300);
+      } else {
+        const doc = await PDFDocument.load(bytes);
+        expect(doc.getPage(0).getSize().width).toBeCloseTo(612, 1);
+      }
+    },
+    60_000,
+  );
+
   it("an unrecognised PID in the FS I reply logs the experimental line and runs the WF-3620 settings unchanged", async () => {
     const fixture = loadFixture(path.join(FIXTURES, "wf-3620/flatbed-single-page-jpeg.jsonl"));
     const original = Buffer.from("PID 08B8", "latin1").toString("hex");
