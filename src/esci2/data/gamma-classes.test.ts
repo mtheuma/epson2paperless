@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { GAMMA_CLASSES, type GammaClassName } from "./gamma-classes.js";
+import { GAMMA_CLASSES, GAMMA_CLASS_LOOK, type GammaClassName } from "./gamma-classes.js";
 
 describe("gamma-classes", () => {
   it("exposes et4950-stock with the expected size", () => {
@@ -92,5 +92,32 @@ describe("gamma-classes", () => {
       "ds575w-mono",
     ];
     expect(_names).toHaveLength(6);
+  });
+
+  describe("looks", () => {
+    // Largest distance of any LUT entry from identity, across every channel
+    // segment (12-byte header + 256-byte LUT each).
+    const maxIdentityDistance = (name: GammaClassName): number => {
+      const g = GAMMA_CLASSES[name];
+      let max = 0;
+      for (let seg = 0; seg < g.length; seg += 268) {
+        g.subarray(seg + 12, seg + 268).forEach((v, i) => (max = Math.max(max, Math.abs(v - i))));
+      }
+      return max;
+    };
+
+    it("tags every class neutral or Epson-look", () => {
+      for (const name of Object.keys(GAMMA_CLASSES) as GammaClassName[]) {
+        expect(["neutral", "epson-look"]).toContain(GAMMA_CLASS_LOOK[name]);
+      }
+    });
+
+    it("neutral curves stay within one step of identity; Epson-look curves do not", () => {
+      for (const name of Object.keys(GAMMA_CLASSES) as GammaClassName[]) {
+        const distance = maxIdentityDistance(name);
+        if (GAMMA_CLASS_LOOK[name] === "neutral") expect(distance, name).toBeLessThanOrEqual(1);
+        else expect(distance, name).toBeGreaterThan(1);
+      }
+    });
   });
 });

@@ -25,6 +25,8 @@
 // ~38-byte zero floor at the low end (input 0..~0x26 → output 0) and saturates
 // to 0xff at the top. Non-identity by design; replay tests pin it.
 
+import type { ColourLook } from "./colour-pair.js";
+
 export type GammaClassName =
   | "et4950-stock"
   | "xp7100-jpg"
@@ -58,4 +60,18 @@ export const GAMMA_CLASSES: Readonly<Record<GammaClassName, Buffer>> = {
     "23474d544d4f4e4f68313030000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f30313233343435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
     "hex",
   ),
+};
+
+// Each curve's look, tagged by hand from its capture: a neutral curve stays
+// within a step of identity and was captured beside an identity colour matrix
+// (or, for the SoC-style et4950-stock, beside no matrix at all); an Epson-look
+// curve has a contrast floor and ceiling and was captured beside the model's
+// own matrix.
+export const GAMMA_CLASS_LOOK: Readonly<Record<GammaClassName, ColourLook>> = {
+  "et4950-stock": "neutral",
+  "xp7100-jpg": "epson-look",
+  "xp7100-pdf": "neutral",
+  "et4800-stock": "epson-look",
+  "ff680w-adf": "neutral",
+  "ds575w-mono": "neutral",
 };

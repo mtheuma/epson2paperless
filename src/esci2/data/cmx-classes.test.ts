@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { CMX_CLASSES, type CmxClassName } from "./cmx-classes.js";
+import { CMX_CLASSES, cmxClassLook, isIdentityCmx, type CmxClassName } from "./cmx-classes.js";
 
 describe("cmx-classes", () => {
   it("exposes et2750-um08 as a 24-byte segment", () => {
@@ -37,5 +37,52 @@ describe("cmx-classes", () => {
   it("class names enumerate", () => {
     const _names: CmxClassName[] = ["et2750-um08", "xp7100-jpg", "xp7100-pdf", "et4800-um08"];
     expect(_names).toHaveLength(4);
+  });
+
+  describe("identity recognition", () => {
+    const header = Buffer.from("#CMXUM08h009", "ascii");
+    const segment = (body: number[]) => Buffer.concat([header, Buffer.from(body)]);
+    const identity = [0x20, 0, 0, 0, 0x20, 0, 0, 0, 0x20, 0, 0, 0];
+
+    it("tags each class from its bytes: et2750-um08 and xp7100-pdf are identity", () => {
+      const looks = Object.fromEntries(
+        (Object.keys(CMX_CLASSES) as CmxClassName[]).map((name) => [name, cmxClassLook(name)]),
+      );
+      expect(looks).toEqual({
+        "et2750-um08": "neutral",
+        "xp7100-jpg": "epson-look",
+        "xp7100-pdf": "neutral",
+        "et4800-um08": "epson-look",
+      });
+    });
+
+    it("recognises identity bytes that belong to no class", () => {
+      expect(isIdentityCmx(segment(identity))).toBe(true);
+    });
+
+    it("rejects an off-diagonal coefficient", () => {
+      const body = [...identity];
+      body[1] = 0x01;
+      expect(isIdentityCmx(segment(body))).toBe(false);
+    });
+
+    it("rejects a non-unity diagonal", () => {
+      const body = [...identity];
+      body[4] = 0x1f;
+      expect(isIdentityCmx(segment(body))).toBe(false);
+    });
+
+    it("rejects non-zero padding", () => {
+      const body = [...identity];
+      body[11] = 0x01;
+      expect(isIdentityCmx(segment(body))).toBe(false);
+    });
+
+    it("rejects a segment with a different header or length", () => {
+      const other = segment(identity);
+      other.write("UM09", 4, "ascii");
+      expect(isIdentityCmx(other)).toBe(false);
+      expect(isIdentityCmx(segment(identity.slice(0, 9)))).toBe(false);
+    });
   });
 });

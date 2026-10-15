@@ -356,6 +356,10 @@ Entries are pure data:
 - A `gmm` constant plus named `gammaClass` and `cmxClass` lookups resolved from
   `src/esci2/data/gamma-classes.ts` and `cmx-classes.ts`. Class definitions are
   inlined verbatim from captured fixtures; never algorithmically generated.
+  Each class is tagged neutral or Epson-look (a CMX class by whether its bytes
+  are the identity matrix), and `checkColourPair` (`src/esci2/data/colour-pair.ts`)
+  rejects a mixed pair; a test holds every entry to it, ET-8500 and ET-7700
+  excepted until their colour fix.
 - Optional-segment presence flags (`#QIT`, `#CCT`).
 
 At INIT1_CAPA the graph computes the fingerprint, looks up the entry via

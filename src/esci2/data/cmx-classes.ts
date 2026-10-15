@@ -7,6 +7,8 @@
 //   - xp7100-pdf:  xp-7100-fixtures/pdf-single.bin, offsets 864..888.
 //   - et4800-um08: tools/pcap-extract/captures/et-4800/flatbed-jpg.jsonl, PARA body offsets 864..888.
 
+import type { ColourLook } from "./colour-pair.js";
+
 export type CmxClassName = "et2750-um08" | "xp7100-jpg" | "xp7100-pdf" | "et4800-um08";
 
 export const CMX_CLASSES: Readonly<Record<CmxClassName, Buffer>> = {
@@ -16,3 +18,22 @@ export const CMX_CLASSES: Readonly<Record<CmxClassName, Buffer>> = {
   // payload 20 01 84 00 1f 00 00 00 24 00 00 00 — distinct from et2750 + xp7100.
   "et4800-um08": Buffer.from("23434d58554d303868303039200184001f00000024000000", "hex"),
 };
+
+// Every class is the 12-byte "#CMXUM08h009" header followed by nine one-byte
+// coefficients (h009, a 3×3 matrix) and three zero bytes of padding. 0x20 is
+// the diagonal value of the identity matrix, as the ET-2750 and XP-7100 PDF
+// captures carry it.
+const UM08_HEADER = Buffer.from("#CMXUM08h009", "ascii");
+const UNITY = 0x20;
+const DIAGONAL = new Set([0, 4, 8]);
+
+/** Whether a #CMX segment is the identity matrix, judged from its bytes alone. */
+export function isIdentityCmx(segment: Buffer): boolean {
+  if (segment.length !== 24 || !segment.subarray(0, 12).equals(UM08_HEADER)) return false;
+  return segment.subarray(12).every((byte, i) => byte === (DIAGONAL.has(i) ? UNITY : 0));
+}
+
+/** An identity matrix leaves colour to the host; any other is the model's own colour profile. */
+export function cmxClassLook(name: CmxClassName): ColourLook {
+  return isIdentityCmx(CMX_CLASSES[name]) ? "neutral" : "epson-look";
+}
