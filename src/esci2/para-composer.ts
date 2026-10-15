@@ -85,6 +85,34 @@ export function baseDpiFor(profile: ParaProfile | undefined): number {
   return profile === "adf-crp" ? ADF_CRP_BASE_DPI : STANDARD_BASE_DPI;
 }
 
+/**
+ * Scales registry ACQ extents, pinned at the profile's reference DPI
+ * (baseDpiFor), to the wire `resolution`, exactly as composePara does.
+ *
+ * standard: scale the EDGES, not the offset and size independently. The
+ * registry window can span the source's full advertised area (ET-4950 ADF:
+ * 69 + 2481 = 2550 = 8.5in x 300), and rounding x0 and w separately at a
+ * half-scale (150 DPI: 34.5 -> 35, 1240.5 -> 1241) lands one pixel past the
+ * area's edge, which the firmware answers with #parFAIL (ET-4956,
+ * hardware-verified 2026-09-02). Flooring the far edge keeps every DPI
+ * inside the area; the near edge rounds to preserve centring. Scale is 1 at
+ * the default, keeping the replay shields byte-identical.
+ *
+ * adf-crp: offsets kept, size scaled linearly and rounded (wire-verified at
+ * 200/300 on the FF-680W and 400/600 on the DS-575W).
+ */
+export function scaleAcqExtents(profile: ParaProfile, e: Extents, resolution: number): Extents {
+  const scale = resolution / baseDpiFor(profile);
+  if (profile === "adf-crp") {
+    return { x0: e.x0, y0: e.y0, w: Math.round(e.w * scale), h: Math.round(e.h * scale) };
+  }
+  const x0 = Math.round(e.x0 * scale);
+  const y0 = Math.round(e.y0 * scale);
+  const x1 = Math.floor((e.x0 + e.w) * scale);
+  const y1 = Math.floor((e.y0 + e.h) * scale);
+  return { x0, y0, w: x1 - x0, h: y1 - y0 };
+}
+
 const ADF_CRP_TRAILER_BEFORE_ACQ = Buffer.from(
   "#CRPi0000000" + "#DFAi0000000i0001550" + "#LAMOFF " + "#PAGd000",
   "ascii",
@@ -205,26 +233,9 @@ function composeStandardPara(spec: ParaSpec): Buffer {
   // 9. ACQ extents (fb or adf, per source). Registry extents are pinned at
   // STANDARD_BASE_DPI; scale all four fields (offsets included — e.g. the
   // ET-4950 ADF's x0=69 would drift the crop at any other DPI) to the chosen
-  // resolution. Scale is 1 at the default, keeping the replay shields
-  // byte-identical.
-  //
-  // Scale the EDGES, not the offset and size independently: the registry
-  // window can span the source's full advertised area (ET-4950 ADF: 69 +
-  // 2481 = 2550 = 8.5in x 300), and rounding x0 and w separately at a
-  // half-scale (150 DPI: 34.5 -> 35, 1240.5 -> 1241) lands one pixel past the
-  // area's edge, which the firmware answers with #parFAIL (ET-4956,
-  // hardware-verified 2026-09-02). Flooring the far edge keeps every DPI
-  // inside the area; the near edge rounds to preserve centring.
-  const scale = resolution / STANDARD_BASE_DPI;
-  const scaleExtents = (e: Extents): Extents => {
-    const x0 = Math.round(e.x0 * scale);
-    const y0 = Math.round(e.y0 * scale);
-    const x1 = Math.floor((e.x0 + e.w) * scale);
-    const y1 = Math.floor((e.y0 + e.h) * scale);
-    return { x0, y0, w: x1 - x0, h: y1 - y0 };
-  };
+  // resolution, by edges (see scaleAcqExtents).
   const acqExtents = spec.source === "flatbed" ? spec.fbExtents! : spec.adfExtents!;
-  parts.push(renderAcq(scaleExtents(acqExtents)));
+  parts.push(renderAcq(scaleAcqExtents("standard", acqExtents, resolution)));
   // 10. BSZ trailing constant.
   parts.push(TRAILING_BSZ);
 
@@ -272,14 +283,7 @@ function composeAdfCrpPara(spec: ParaSpec): Buffer {
     "ascii",
   );
 
-  // ACQ extents scale linearly with DPI from the 200-DPI registry reference.
-  const scale = resolution / ADF_CRP_BASE_DPI;
-  const acq: Extents = {
-    x0: spec.adfExtents.x0,
-    y0: spec.adfExtents.y0,
-    w: Math.round(spec.adfExtents.w * scale),
-    h: Math.round(spec.adfExtents.h * scale),
-  };
+  const acq = scaleAcqExtents("adf-crp", spec.adfExtents, resolution);
 
   return Buffer.concat([
     prefix,

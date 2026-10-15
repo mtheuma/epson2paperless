@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseCapaTokens, parseInfoTokens, parseStatErrors } from "./capabilities.js";
+import { parseArea, parseCapaTokens, parseInfoTokens, parseStatErrors } from "./capabilities.js";
 
 describe("parseInfoTokens", () => {
   it("extracts PRD PID and firmware from an XP-7100-style INFO body", () => {
@@ -124,5 +124,41 @@ describe("parseStatErrors", () => {
     expect(parseStatErrors(Buffer.alloc(0))).toEqual([]);
     expect(parseStatErrors(Buffer.from("STATx0000000#---#---#---", "ascii"))).toEqual([]);
     expect(parseStatErrors(Buffer.from("#ERR    #---", "ascii"))).toEqual([]);
+  });
+});
+
+describe("ADF duplex type (INFO) and crop (CAPA)", () => {
+  it("parses the INFO #ADFDPLX value: 2SCN, 1SCN, or null when absent", () => {
+    expect(parseInfoTokens(Buffer.from("#ADFTYPEFEED#ADFDPLX2SCN#ADFFORDPF1N")).adfDuplexType).toBe(
+      "2SCN",
+    );
+    expect(parseInfoTokens(Buffer.from("#ADFDPLX1SCN#ADFFORDPF1N")).adfDuplexType).toBe("1SCN");
+    expect(parseInfoTokens(Buffer.from("#ADFTYPEFEED#ADFFORDPF1N")).adfDuplexType).toBeNull();
+  });
+
+  it("detects #ADFCRP in CAPA", () => {
+    expect(parseCapaTokens(Buffer.from("#ADFDPLX#ADFCRP #ADFSKEW")).adfCrop).toBe(true);
+    expect(parseCapaTokens(Buffer.from("#ADFDPLX#ADFSKEW")).adfCrop).toBe(false);
+  });
+});
+
+describe("scan-area geometry fields (INFO)", () => {
+  it("parses flatbed and ADF alignment and the ADF's long-paper maximum", () => {
+    const t = parseInfoTokens(
+      Buffer.from("#ADFALGNCNTR#ADFAREAd850i0001550#ADFAMAXd850i0024000#FB ALGNLEFT", "ascii"),
+    );
+    expect(t.adfAlign).toBe("CNTR");
+    expect(t.fbAlign).toBe("LEFT");
+    expect(t.adfAreaMax).toBe("d850i0024000");
+    expect(parseInfoTokens(Buffer.from("#FB AREAd850i0001170", "ascii"))).toEqual(
+      expect.objectContaining({ fbAlign: null, adfAlign: null, adfAreaMax: null }),
+    );
+  });
+
+  it("parseArea reads width then height in 1/100 inch", () => {
+    expect(parseArea("d850i0001170")).toEqual({ width: 850, height: 1170 });
+    expect(parseArea("d850i0024000")).toEqual({ width: 850, height: 24000 });
+    expect(parseArea(null)).toBeNull();
+    expect(parseArea("d850")).toBeNull();
   });
 });
