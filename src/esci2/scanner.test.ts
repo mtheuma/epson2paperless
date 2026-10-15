@@ -13,11 +13,11 @@ import { loadFixture, driveFixture, extractScannerParaWrite } from "./test-suppo
 import { readInit1Bodies } from "./test-support/capability-bodies.js";
 import type { FixtureEvent } from "./test-support/replay.js";
 import { readJsonl, trimStatCycles, replayCapture } from "./test-support/frida-replay.js";
-import { REGISTRY } from "./dialects/registry.js";
 import { makeParaSpec } from "./dialects/dispatch.js";
 import { composePara, type ParaSpec } from "./para-composer.js";
 import { readJpegOrientation } from "../exif.js";
 import sharp from "sharp";
+import { recordedDialect } from "./test-support/dialects.js";
 
 const XP7100_FP = "56d26c61896ca417807ac68d37775036fa1e702ee44c0beaa27d8a6ea9fa457e";
 
@@ -1268,7 +1268,7 @@ describe("runEsci2ScanOverPlain — XP-7100 fixture replay", () => {
     // .bin and JSONL extractions.)
     const paraSource: ParaSpec["source"] =
       opts.source === "flatbed" ? "flatbed" : opts.duplex ? "adf-duplex" : "adf-simplex";
-    const recipePara = composePara(makeParaSpec(REGISTRY.get(XP7100_FP)!, paraSource, "jpg"));
+    const recipePara = composePara(makeParaSpec(recordedDialect(XP7100_FP), paraSource, "jpg"));
     expect(capturedPara.equals(recipePara)).toBe(true);
 
     return readdirSync(outputDir).filter((f) => f.endsWith(".jpg"));
@@ -1371,7 +1371,9 @@ describe("runEsci2ScanOverPlain — ET-4800 fixture replay", () => {
     // for that source axis (ET-4800 PARA is action-invariant, so action only
     // selects identical gamma/cmx classes here).
     const paraSource: ParaSpec["source"] = opts.source === "flatbed" ? "flatbed" : "adf-simplex";
-    const recipePara = composePara(makeParaSpec(REGISTRY.get(ET4800_FP)!, paraSource, opts.action));
+    const recipePara = composePara(
+      makeParaSpec(recordedDialect(ET4800_FP), paraSource, opts.action),
+    );
     expect(capturedPara.equals(recipePara)).toBe(true);
 
     return readdirSync(outputDir);
@@ -1453,7 +1455,9 @@ describe("runEsci2ScanOverPlain — ET-7700 fixture replay", () => {
 
     // ET-7700 PARA is action-invariant (asserted in et-7700.test.ts), so both
     // fixtures must match the composer's flatbed recipe byte-for-byte.
-    const recipePara = composePara(makeParaSpec(REGISTRY.get(ET7700_FP)!, "flatbed", opts.action));
+    const recipePara = composePara(
+      makeParaSpec(recordedDialect(ET7700_FP), "flatbed", opts.action),
+    );
     expect(capturedPara.equals(recipePara)).toBe(true);
 
     return readdirSync(outputDir);
@@ -1528,7 +1532,7 @@ describe("runEsci2ScanOverPlain — FF-680W fixture replay", () => {
     // the #RSM/#RSS/#ACQ segments (the only dialect that consumes it).
     const paraSource: ParaSpec["source"] = opts.duplex ? "adf-duplex" : "adf-simplex";
     const recipePara = composePara(
-      makeParaSpec(REGISTRY.get(FF680W_FP)!, paraSource, "pdf", opts.resolution),
+      makeParaSpec(recordedDialect(FF680W_FP), paraSource, "pdf", opts.resolution),
     );
     expect(capturedPara.equals(recipePara)).toBe(true);
 
@@ -1659,7 +1663,7 @@ describe("runEsci2ScanOverPlain — DS-575W fixture replay", () => {
 
     const source: ParaSpec["source"] = opts.duplex ? "adf-duplex" : "adf-simplex";
     const recipePara = composePara(
-      makeParaSpec(REGISTRY.get(DS575W_FP)!, source, "jpg", opts.resolution, "grayscale"),
+      makeParaSpec(recordedDialect(DS575W_FP), source, "jpg", opts.resolution, "grayscale"),
     );
     expect(normalizeAdfCrpFlags(recipePara).equals(normalizeAdfCrpFlags(capturedPara))).toBe(true);
 
@@ -1706,7 +1710,7 @@ describe("runEsci2ScanOverPlain — DS-575W fixture replay", () => {
     const oracle = loadFixture(path.join(FIX_DIR, "adf-simplex-600-color-jpg.oracle.jsonl"));
     const capturedPara = extractCapturedParaBody(oracle);
     const recipePara = composePara(
-      makeParaSpec(REGISTRY.get(DS575W_FP)!, "adf-simplex", "jpg", 600, "color"),
+      makeParaSpec(recordedDialect(DS575W_FP), "adf-simplex", "jpg", 600, "color"),
     );
     expect(recipePara.length).toBe(996);
     expect(recipePara.equals(capturedPara)).toBe(true);

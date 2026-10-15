@@ -9,18 +9,19 @@ import {
   type WindowSource,
 } from "./scan-window.js";
 import { parseCapaTokens, parseInfoTokens } from "./capabilities.js";
-import { REGISTRY, type RegistryEntry } from "./dialects/registry.js";
+import type { Dialect } from "./dialects/registry.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
 import { scaleAcqExtents } from "./para-composer.js";
 import { advertisedDpiSet } from "./resolution.js";
 import { REPLAY_FIXTURES, readInit1Bodies } from "./test-support/capability-bodies.js";
+import { recordedDialect } from "./test-support/dialects.js";
 
 const ET4950_FP = "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2";
 const info = (s: string) => parseInfoTokens(Buffer.from(s, "ascii"));
 
 function fixture(path: string) {
   const { info: infoBody, capa } = readInit1Bodies(path);
-  const entry = REGISTRY.get(computeCapaFingerprint(capa))!;
+  const entry = recordedDialect(computeCapaFingerprint(capa));
   return { info: parseInfoTokens(infoBody), capa: parseCapaTokens(capa), entry };
 }
 
@@ -67,7 +68,7 @@ describe("alignedX0", () => {
 });
 
 describe("windowProblems", () => {
-  const entry = REGISTRY.get(ET4950_FP)!;
+  const entry = recordedDialect(ET4950_FP);
   const et4950Info = info(
     "#ADFALGNRIGT#ADFAREAd850i0001400#ADFAMAXd850i0002000#FB ALGNLEFT#FB AREAd850i0001170",
   );
@@ -77,7 +78,7 @@ describe("windowProblems", () => {
   });
 
   it("reports a window that leaves the largest scan region", () => {
-    const tall: RegistryEntry = { ...entry, fbExtents: { x0: 0, y0: 0, w: 2481, h: 3600 } };
+    const tall: Dialect = { ...entry, fbExtents: { x0: 0, y0: 0, w: 2481, h: 3600 } };
     expect(windowProblems(et4950Info, tall)).toEqual([
       expect.objectContaining({ source: "flatbed", problem: "outside-scan-area" }),
     ]);
@@ -85,21 +86,21 @@ describe("windowProblems", () => {
 
   it("bounds a standard ADF window by the ADF area, not its long-paper maximum", () => {
     // 4300 rows fit the 20-inch #ADFAMAX (6000) but not the 14-inch area (4200).
-    const long: RegistryEntry = { ...entry, adfExtents: { x0: 69, y0: 0, w: 2481, h: 4300 } };
+    const long: Dialect = { ...entry, adfExtents: { x0: 69, y0: 0, w: 2481, h: 4300 } };
     expect(windowProblems(et4950Info, long)).toEqual([
       expect.objectContaining({ source: "adf", problem: "outside-scan-area" }),
     ]);
   });
 
   it("reports an x0 the alignment rule doesn't give", () => {
-    const shifted: RegistryEntry = { ...entry, adfExtents: { x0: 0, y0: 0, w: 2481, h: 3506 } };
+    const shifted: Dialect = { ...entry, adfExtents: { x0: 0, y0: 0, w: 2481, h: 3506 } };
     expect(windowProblems(et4950Info, shifted)).toEqual([
       expect.objectContaining({ source: "adf", problem: "x0-misaligned", expectedX0: 69 }),
     ]);
   });
 
   it("skips the x0 check when INFO gives no alignment", () => {
-    const shifted: RegistryEntry = { ...entry, adfExtents: { x0: 0, y0: 0, w: 2481, h: 3506 } };
+    const shifted: Dialect = { ...entry, adfExtents: { x0: 0, y0: 0, w: 2481, h: 3506 } };
     const noAlign = info("#ADFAREAd850i0001400#FB AREAd850i0001170");
     expect(windowProblems(noAlign, shifted)).toEqual([]);
   });
@@ -176,7 +177,7 @@ describe("genericWindow", () => {
   // for that source: the window stays inside the scan area at that DPI.
   const cases = REPLAY_FIXTURES.flatMap(({ model, path }) => {
     const { info: tokens, capa, entry } = fixture(path);
-    const profile = entry.paraProfile ?? "standard";
+    const profile = entry.paraProfile;
     return (["flatbed", "adf"] as WindowSource[]).flatMap((source) => {
       const geometry = sourceGeometry(tokens, source);
       if (geometry === null) return [];

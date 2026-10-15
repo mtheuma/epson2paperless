@@ -1,10 +1,10 @@
 // src/esci2/dialects/generic.ts
 import { parseArea, type CapaTokens, type InfoTokens } from "../capabilities.js";
 import type { ColourPair } from "../data/colour-pair.js";
-import { deriveCapabilities } from "../derivation.js";
+import { capabilityFields, deriveCapabilities, listItems } from "../derivation.js";
 import { baseDpiFor, type Extents, type ParaProfile, type ParaSpec } from "../para-composer.js";
 import { genericWindow, type WindowSource } from "../scan-window.js";
-import type { RegistryEntry } from "./registry.js";
+import type { Dialect } from "./registry.js";
 
 /**
  * The generic dialect: what an ESC/I-2 printer with no model override is
@@ -43,13 +43,6 @@ const POLLS_WITH_FLATBED = 3;
 const POLLS_ADF_ONLY = 12;
 
 /**
- * A CAPA list's items: four characters each ("UG10UG18" → UG10, UG18), trimmed
- * of their space padding ("PREFON  OFF" → PREF, ON, OFF).
- */
-const items = (list: string | null): string[] =>
-  (list?.match(/.{1,4}/g) ?? []).map((item) => item.trim());
-
-/**
  * The neutral pair: the neutral tone curve with the identity UM08 matrix,
  * in gamma mode UG18 (UG10 when that's all the printer lists). A printer
  * that lists no UM08 matrix is sent SoC-style instead: UG10 and no matrix,
@@ -57,13 +50,13 @@ const items = (list: string | null): string[] =>
  * a matrix, so there it fails.
  */
 export function genericColourPair(capa: CapaTokens, profile: ParaProfile): ColourPair {
-  const modes = items(capa.gmmList);
+  const modes = listItems(capa.gmmList);
   if (!modes.includes("UG18") && !modes.includes("UG10")) {
     throw new GenericDialectUnusableError(
       `its CAPA reply lists no gamma mode the generic dialect can send (UG18 or UG10)`,
     );
   }
-  if (items(capa.cmxList).includes("UM08")) {
+  if (listItems(capa.cmxList).includes("UM08")) {
     return {
       gmm: modes.includes("UG18") ? "UG18" : "UG10",
       gamma: NEUTRAL_TONE_CURVE,
@@ -90,23 +83,21 @@ export function printerIdentity(info: InfoTokens): string {
 }
 
 /**
- * Builds the generic dialect as a registry-shaped record. Its windows are
- * the generic window at the profile's reference DPI; the PARA itself takes
- * the generic window at the wire DPI instead (genericScanWindow), since
- * scaling a reference window can overrun the scan area.
- *
- * The optional #QIT and #CCT segments are sent only when their list
- * carries the value the composer sends (OFF, COL).
+ * Builds the generic dialect. Its windows are the generic window at the
+ * profile's reference DPI; the PARA itself takes the generic window at the
+ * wire DPI instead (genericParaFields), since scaling a reference window can
+ * overrun the scan area. Its capability fields are the ones every session
+ * takes (capabilityFields).
  *
  * Throws GenericDialectUnusableError when the CAPA reply can't be parsed,
  * when it lists no JPG format, when INFO advertises no usable scan area, or
  * when the colour pair can't be formed.
  */
-export function buildGenericEntry(info: InfoTokens, capa: CapaTokens): RegistryEntry {
+export function buildGenericEntry(info: InfoTokens, capa: CapaTokens): Dialect {
   if (capa.segments.length === 0) {
     throw new GenericDialectUnusableError("its CAPA reply couldn't be parsed");
   }
-  if (!items(capa.fmtList).includes("JPG")) {
+  if (!listItems(capa.fmtList).includes("JPG")) {
     throw new GenericDialectUnusableError("its CAPA reply lists no JPG format");
   }
   const derived = deriveCapabilities(info, capa);
@@ -140,17 +131,12 @@ export function buildGenericEntry(info: InfoTokens, capa: CapaTokens): RegistryE
     initPollIterations: fbExtents !== null ? POLLS_WITH_FLATBED : POLLS_ADF_ONLY,
     fbExtents,
     adfExtents,
-    adfDuplex: derived.adfDuplex && adfExtents !== null,
     duplexBackRotated: derived.duplexBackRotated,
     gmm: pair.gmm,
     gammaClass: { jpg: pair.gamma, pdf: pair.gamma },
     cmxClass: { jpg: pair.cmx, pdf: pair.cmx },
-    optionalSegments: {
-      qit: derived.qit && items(capa.qitList).includes("OFF"),
-      cct: derived.cct && items(capa.cctList).includes("COL"),
-    },
-    paraProfile: profile,
     verifiedWireDpis: [],
+    ...capabilityFields(derived),
   };
 }
 
@@ -168,12 +154,12 @@ export function buildGenericEntry(info: InfoTokens, capa: CapaTokens): RegistryE
  */
 export function genericParaFields(
   info: InfoTokens,
-  entry: RegistryEntry,
+  entry: Dialect,
   source: ParaSpec["source"],
   dpi: number,
 ): Pick<ParaSpec, "acqExtents" | "adfCrpDfaLength"> {
   const windowSource: WindowSource = source === "flatbed" ? "flatbed" : "adf";
-  const acqExtents = genericWindow(info, windowSource, entry.paraProfile ?? "standard", dpi);
+  const acqExtents = genericWindow(info, windowSource, entry.paraProfile, dpi);
   if (acqExtents === null) {
     throw new Error(`${entry.displayName}: no ${windowSource} scan window at ${dpi} DPI`);
   }

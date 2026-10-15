@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { REGISTRY } from "./registry.js";
 import { composePara } from "../para-composer.js";
 import { makeParaSpec } from "./dispatch.js";
+import { recordedDialect } from "../test-support/dialects.js";
 
 const ET4950_FP = "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2";
-const entry = REGISTRY.get(ET4950_FP)!;
+const entry = recordedDialect(ET4950_FP);
 
 describe("ET-4950 registry entry", () => {
   it("supports flatbed + ADF", () => {

@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { REGISTRY } from "./registry.js";
 import { composePara } from "../para-composer.js";
 import { makeParaSpec } from "./dispatch.js";
+import { recordedDialect } from "../test-support/dialects.js";
 
 const WF3835_FP = "860a899be9dc4fc27b68f8aed21a49ccfe87733a3974813f0c2ade6810e89dc7";
-const entry = REGISTRY.get(WF3835_FP)!;
+const entry = recordedDialect(WF3835_FP);
 
 // The registry entry's static fields are asserted in registry.test.ts alongside
 // the other dialects. This file covers only what's specific to the WF-3835's

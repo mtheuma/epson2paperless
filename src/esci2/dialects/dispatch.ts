@@ -1,8 +1,9 @@
-import { REGISTRY_ENTRIES, type RegistryEntry } from "./registry.js";
+import { REGISTRY_ENTRIES, type Dialect, type RegistryEntry } from "./registry.js";
 import type { ParaSpec } from "../para-composer.js";
 import { buildDiagnostic, UnsupportedDialectError } from "../diagnostic.js";
 import type { CapaTokens, InfoTokens } from "../capabilities.js";
 import { buildGenericEntry, GenericDialectUnusableError, printerIdentity } from "./generic.js";
+import { capabilityFields, deriveCapabilities } from "../derivation.js";
 import { createLogger } from "../../logger.js";
 
 const log = createLogger("scanner-esci2");
@@ -11,7 +12,7 @@ const log = createLogger("scanner-esci2");
 export type IdentityMatch = "pid" | "name" | "fingerprint" | "generic";
 
 export interface ResolvedEntry {
-  entry: RegistryEntry;
+  entry: Dialect;
   matchedBy: IdentityMatch;
 }
 
@@ -29,7 +30,8 @@ export interface Init1Replies {
 
 /**
  * Looks up the registry entry by model identity: the INFO product ID, then
- * the INFO product name, then the CAPA fingerprint. When none matches, the
+ * the INFO product name, then the CAPA fingerprint, and completes it with the
+ * capability fields derived from this printer's own replies. When none matches, the
  * printer gets the generic dialect, built from its own replies, with a
  * warning and the diagnostic block for the report. Throws
  * UnsupportedDialectError with the diagnostic block only when the generic
@@ -44,7 +46,7 @@ export interface Init1Replies {
  * host-triggered ones that carry no panel PID.
  */
 export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
-  const { info, fingerprint } = replies;
+  const { info, capa, fingerprint } = replies;
   // prdPid is canonical upper-case hex, and entries store names upper-case
   // (both pinned by registry.test.ts), so only the reported name needs folding.
   const { prdPid } = info;
@@ -67,16 +69,30 @@ export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
           `please file an issue with the diagnostic block below:\n\n${buildDiagnostic(replies)}`,
       );
     }
-    return { entry: byIdentity, matchedBy };
+    return { entry: withCapabilities(byIdentity, info, capa), matchedBy };
   }
 
-  if (byFingerprint !== undefined) return { entry: byFingerprint, matchedBy: "fingerprint" };
+  if (byFingerprint !== undefined) {
+    return { entry: withCapabilities(byFingerprint, info, capa), matchedBy: "fingerprint" };
+  }
   return { entry: resolveGenericEntry(replies), matchedBy: "generic" };
 }
 
-function resolveGenericEntry(replies: Init1Replies): RegistryEntry {
+/**
+ * A registry entry completed with the capability fields derived from the
+ * printer's own replies, the same ones the generic dialect is built with.
+ */
+export function withCapabilities(
+  entry: RegistryEntry,
+  info: InfoTokens,
+  capa: CapaTokens,
+): Dialect {
+  return { ...entry, ...capabilityFields(deriveCapabilities(info, capa)) };
+}
+
+function resolveGenericEntry(replies: Init1Replies): Dialect {
   const diagnostic = buildDiagnostic(replies);
-  let entry: RegistryEntry;
+  let entry: Dialect;
   try {
     entry = buildGenericEntry(replies.info, replies.capa);
   } catch (err) {
@@ -123,7 +139,7 @@ export function applyEntrySourceOverride(
  * Origin-independent: an adf-duplex PARA against a simplex-only ADF is wrong
  * whether the panel or the host asked for it.
  */
-export function assertSourceSupported(entry: RegistryEntry, source: ParaSpec["source"]): void {
+export function assertSourceSupported(entry: Dialect, source: ParaSpec["source"]): void {
   if (source === "adf-duplex" && !entry.adfDuplex) {
     throw new Error(
       `${entry.displayName} has no duplex ADF — refusing to compose an adf-duplex PARA ` +
@@ -139,7 +155,7 @@ export function assertSourceSupported(entry: RegistryEntry, source: ParaSpec["so
  * duplex folded in by the call site).
  */
 export function makeParaSpec(
-  entry: RegistryEntry,
+  entry: Dialect,
   source: ParaSpec["source"],
   action: ParaSpec["action"],
   resolution?: number,

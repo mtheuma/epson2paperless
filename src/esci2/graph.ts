@@ -25,7 +25,7 @@ import {
   parseTokens,
 } from "./commands.js";
 import { ackByte, expectIsType } from "../graph-helpers.js";
-import { supportsWireGrayscale, type RegistryEntry } from "./dialects/registry.js";
+import { supportsWireGrayscale, type Dialect } from "./dialects/registry.js";
 import {
   lookupRegistryEntry,
   applyEntrySourceOverride,
@@ -104,8 +104,8 @@ export interface Esci2Ctx {
    * the settings exchange is blamed on it (`nameInitPollEarlyStop`).
    */
   initPollEarlyStop?: { cycle: number; reply: string };
-  /** Resolved registry entry post-INIT1, drives PARA build + init-poll count + source detection. Undefined until INIT1 completes. */
-  entry: RegistryEntry | undefined;
+  /** Resolved dialect post-INIT1 (registry entry or generic, plus its capability fields), drives PARA build + init-poll count + source detection. Undefined until INIT1 completes. */
+  entry: Dialect | undefined;
   /**
    * Set when the session runs the generic dialect (no registry entry
    * matched): the parsed INFO reply its scan window is computed from at the

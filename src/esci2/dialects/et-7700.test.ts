@@ -1,10 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { REGISTRY } from "./registry.js";
 import { composePara } from "../para-composer.js";
 import { makeParaSpec } from "./dispatch.js";
+import { recordedDialect } from "../test-support/dialects.js";
 
 const ET7700_FP = "72319314b621fea0aab6cc16f4fd891534cec08f33ce80116a849f6f6e1e58d4";
-const entry = REGISTRY.get(ET7700_FP)!;
+const entry = recordedDialect(ET7700_FP);
 
 // The registry entry's static fields are asserted in registry.test.ts alongside
 // the other dialects. This file covers only what's specific to the ET-7700's

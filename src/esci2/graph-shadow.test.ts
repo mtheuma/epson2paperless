@@ -22,8 +22,8 @@ vi.mock("./dialects/registry.js", async (importOriginal) => {
   const original = real.REGISTRY.get(fp)!;
   const doctored: RegistryEntry = {
     ...original,
-    adfDuplex: false,
-    optionalSegments: { qit: false, cct: true },
+    sourceDetection: "fixed-adf",
+    duplexBackRotated: false,
   };
   // The session lookup reads REGISTRY_ENTRIES alone, so that is all to doctor.
   return {
@@ -69,10 +69,14 @@ describe("esci2Graph INIT1_CAPA_DATA — shadow derivation disagreement", () => 
       );
       expect(shadow).toHaveLength(2);
       expect(shadow[0][2]).toEqual(
-        expect.objectContaining({ field: "qit", derived: true, entry: false }),
+        expect.objectContaining({
+          field: "sourceDetection",
+          derived: "init-poll-status",
+          entry: "fixed-adf",
+        }),
       );
       expect(shadow[1][2]).toEqual(
-        expect.objectContaining({ field: "adfDuplex", derived: true, entry: false }),
+        expect.objectContaining({ field: "duplexBackRotated", derived: true, entry: false }),
       );
     } finally {
       infoSpy.mockRestore();

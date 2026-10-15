@@ -20,6 +20,7 @@ import {
   readInit1Bodies,
 } from "./test-support/capability-bodies.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
+import { recordedDialect } from "./test-support/dialects.js";
 
 describe("esci2Graph (smoke)", () => {
   it("builds with the expected initial state and timeout", () => {
@@ -293,7 +294,7 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
     // ET-2750 host driver only loops twice. After the first FIN reply,
     // iteration goes 0 → 1 (still < dialect.initPollIterations=2), so loop.
     const ctx = makeCtx({
-      entry: REGISTRY.get("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7")!,
+      entry: recordedDialect("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7"),
       initPollIteration: 0,
     });
     const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
@@ -307,7 +308,7 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
     if (state.kind !== "decision") return;
     // Iteration was 1, bumps to 2 — equals dialect.initPollIterations=2, advance.
     const ctx = makeCtx({
-      entry: REGISTRY.get("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7")!,
+      entry: recordedDialect("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7"),
       initPollIteration: 1,
     });
     const result = state.decide(ctx, { type: 0xa000, payload: Buffer.alloc(0) });
@@ -651,7 +652,7 @@ function makeCtx(
     infoBody: Buffer.alloc(0),
     capaBody: Buffer.alloc(0),
     capaTokens: undefined,
-    entry: REGISTRY.get("2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2")!,
+    entry: recordedDialect("2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2"),
     jpegQuality: DEFAULT_JPEG_QUALITY,
     wireDpi: undefined,
     downsampleToDpi: undefined,
@@ -683,7 +684,7 @@ describe("esci2Graph POST_MODE_STAT — PARA reflects ctx.resolution + source", 
     expect(state.kind).toBe("decision");
     if (state.kind !== "decision") throw new Error("POST_MODE_STAT not a decision");
     const ctx = makeCtx({
-      entry: REGISTRY.get(FF680W_FP)!,
+      entry: recordedDialect(FF680W_FP),
       source: "adf",
       capaTokens: FF680W_CAPA_TOKENS,
       ...overrides,
@@ -912,13 +913,13 @@ describe("esci2Graph POST_MODE_STAT — duplex capability guard", () => {
 
   it("throws for ADF + duplex on the ET-4800 (simplex-only ADF)", () => {
     expect(() =>
-      decidePostModeStat({ entry: REGISTRY.get(ET4800_FP)!, source: "adf", duplex: true }),
+      decidePostModeStat({ entry: recordedDialect(ET4800_FP), source: "adf", duplex: true }),
     ).toThrow(/no duplex ADF/);
   });
 
   it("sends PARA for ADF + simplex on the ET-4800", () => {
     const result = decidePostModeStat({
-      entry: REGISTRY.get(ET4800_FP)!,
+      entry: recordedDialect(ET4800_FP),
       source: "adf",
       duplex: false,
     });
@@ -930,7 +931,7 @@ describe("esci2Graph POST_MODE_STAT — duplex capability guard", () => {
   // once the source is flatbed and the guard must not fire.
   it("sends PARA for flatbed + duplex on a flatbed-only entry", () => {
     const result = decidePostModeStat({
-      entry: REGISTRY.get(ET2810_FP)!,
+      entry: recordedDialect(ET2810_FP),
       source: "flatbed",
       duplex: true,
     });
@@ -1013,7 +1014,7 @@ describe("esci2Graph INIT_POLL_STAT source detection", () => {
     // misclassify ET-2750 as ADF — the fixed-flatbed dialect must skip
     // detection and trust the pre-set source.
     const ctx = makeCtx({
-      entry: REGISTRY.get("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7")!,
+      entry: recordedDialect("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7"),
       source: "flatbed",
       initPollIteration: 0,
     });
@@ -1037,11 +1038,11 @@ describe("applyEntrySourceOverride", () => {
     const ctx = makeCtx({
       source: "adf",
       transport: "tls",
-      entry: REGISTRY.get("b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb")!,
+      entry: recordedDialect("b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb"),
     });
     applyEntrySourceOverride(
       ctx,
-      REGISTRY.get("b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb")!,
+      recordedDialect("b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb"),
     );
     expect(ctx.source).toBe("flatbed");
   });
@@ -1050,11 +1051,11 @@ describe("applyEntrySourceOverride", () => {
     const ctx = makeCtx({
       source: "flatbed",
       transport: "plain",
-      entry: REGISTRY.get("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7")!,
+      entry: recordedDialect("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7"),
     });
     applyEntrySourceOverride(
       ctx,
-      REGISTRY.get("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7")!,
+      recordedDialect("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7"),
     );
     expect(ctx.source).toBe("flatbed");
   });
@@ -1063,11 +1064,11 @@ describe("applyEntrySourceOverride", () => {
     const ctx = makeCtx({
       source: "adf",
       transport: "tls",
-      entry: REGISTRY.get("2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2")!,
+      entry: recordedDialect("2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2"),
     });
     applyEntrySourceOverride(
       ctx,
-      REGISTRY.get("2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2")!,
+      recordedDialect("2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2"),
     );
     expect(ctx.source).toBe("adf");
   });
@@ -1581,7 +1582,7 @@ describe("esci2Graph INIT1_CAPA_DATA — model identity", () => {
     try {
       const result = state.decide(ctx, { type: 0xa000, payload: changed });
       expect("error" in result).toBe(false);
-      expect(ctx.entry).toBe(REGISTRY.get(computeCapaFingerprint(capa)));
+      expect(ctx.entry).toMatchObject(REGISTRY.get(computeCapaFingerprint(capa))!);
       const warnings = warn.mock.calls.map((args) => args.join(" "));
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain(`CAPA fingerprint:  ${computeCapaFingerprint(changed)}`);
@@ -1596,14 +1597,14 @@ describe("esci2Graph INIT_POLL — status-content source shadow", () => {
     "Status-content source decision disagrees with the length-based one",
     "Status reply carries an error a content-based source decision would fail on",
   ];
-  const ET4950_ENTRY = REGISTRY.get(
+  const ET4950_ENTRY = recordedDialect(
     "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2",
-  )!;
+  );
 
   // Feeds the first init-poll STAT reply (header, then the drained body when
   // the header declares one) and returns ctx plus the status-shadow lines.
   function firstStatus(
-    entry: import("./dialects/registry.js").RegistryEntry,
+    entry: import("./dialects/registry.js").Dialect,
     header: Buffer,
     body: Buffer | null,
   ): { ctx: import("./graph.js").Esci2Ctx; lines: unknown[][] } {
@@ -1636,7 +1637,7 @@ describe("esci2Graph INIT_POLL — status-content source shadow", () => {
     Buffer.from(`STATx${length.toString(16).toUpperCase().padStart(7, "0")}` + "#---".repeat(13));
 
   it.each(REPLAY_FIXTURES)("is silent for the $model fixture $path", ({ path, source }) => {
-    const entry = REGISTRY.get(computeCapaFingerprint(readInit1Bodies(path).capa))!;
+    const entry = recordedDialect(computeCapaFingerprint(readInit1Bodies(path).capa));
     const { header, body } = readFirstInitPollStatus(path);
     const { ctx, lines } = firstStatus(entry, header, body);
     expect(lines).toEqual([]);
@@ -1741,7 +1742,7 @@ describe("esci2Graph — generic dialect", () => {
 
   it("still resolves a known printer to its own entry", () => {
     const { ctx } = resolve(ET4800.info, ET4800.capa);
-    expect(ctx.entry).toBe(REGISTRY.get(computeCapaFingerprint(ET4800.capa)));
+    expect(ctx.entry).toMatchObject(REGISTRY.get(computeCapaFingerprint(ET4800.capa))!);
     expect(ctx.genericInfo).toBeUndefined();
   });
 

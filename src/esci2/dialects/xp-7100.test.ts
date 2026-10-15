@@ -1,12 +1,12 @@
 import { describe, it, expect } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { REGISTRY } from "./registry.js";
 import { composePara } from "../para-composer.js";
 import { makeParaSpec } from "./dispatch.js";
+import { recordedDialect } from "../test-support/dialects.js";
 
 const XP7100_FP = "56d26c61896ca417807ac68d37775036fa1e702ee44c0beaa27d8a6ea9fa457e";
-const entry = REGISTRY.get(XP7100_FP)!;
+const entry = recordedDialect(XP7100_FP);
 
 const FIXTURE_DIR = path.resolve("src/esci2/dialects/xp-7100-fixtures");
 function loadFixture(name: string): Buffer {

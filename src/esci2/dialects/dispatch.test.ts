@@ -10,6 +10,7 @@ import { UnsupportedDialectError } from "../diagnostic.js";
 import { computeCapaFingerprint } from "../capa-fingerprint.js";
 import { parseCapaTokens, parseInfoTokens } from "../capabilities.js";
 import { REPLAY_FIXTURES, readInit1Bodies } from "../test-support/capability-bodies.js";
+import { recordedDialect } from "../test-support/dialects.js";
 
 const ET4950_FP = "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2";
 const ET2750_FP = "de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7";
@@ -60,14 +61,14 @@ function lookup(info: Buffer, capa: Buffer, fingerprint = computeCapaFingerprint
 describe("lookupRegistryEntry", () => {
   it("resolves by the INFO product ID first", () => {
     const { resolved, warnings } = lookup(ET4950.info, ET4950.capa);
-    expect(resolved.entry).toBe(REGISTRY.get(ET4950_FP));
+    expect(resolved.entry).toMatchObject(REGISTRY.get(ET4950_FP)!);
     expect(resolved.matchedBy).toBe("pid");
     expect(warnings).toEqual([]);
   });
 
   it("resolves by the INFO product name when the printer reports a name", () => {
     const { resolved, warnings } = lookup(FF680W.info, FF680W.capa);
-    expect(resolved.entry).toBe(REGISTRY.get(FF680W_FP));
+    expect(resolved.entry).toMatchObject(REGISTRY.get(FF680W_FP)!);
     expect(resolved.matchedBy).toBe("name");
     expect(warnings).toEqual([]);
   });
@@ -76,14 +77,16 @@ describe("lookupRegistryEntry", () => {
   // through the CAPA fingerprint it shares with a sibling.
   it("falls back to the CAPA fingerprint when the PID isn't recorded", () => {
     const { resolved, warnings } = lookup(UNKNOWN_PID_INFO, ET4950.capa);
-    expect(resolved.entry).toBe(REGISTRY.get(ET4950_FP));
+    expect(resolved.entry).toMatchObject(REGISTRY.get(ET4950_FP)!);
     expect(resolved.matchedBy).toBe("fingerprint");
     expect(warnings).toEqual([]);
   });
 
   it("matches the PID case-insensitively", () => {
     const info = Buffer.from("#PRDh010PID 11d1        ", "ascii");
-    expect(lookup(info, STUB_CAPA, UNKNOWN_FP).resolved.entry).toBe(REGISTRY.get(ET4950_FP));
+    expect(lookup(info, STUB_CAPA, UNKNOWN_FP).resolved.entry).toMatchObject(
+      REGISTRY.get(ET4950_FP)!,
+    );
   });
 
   describe("a PID or name hit with a CAPA fingerprint the model wasn't recorded with", () => {
@@ -92,7 +95,7 @@ describe("lookupRegistryEntry", () => {
       const fingerprint = computeCapaFingerprint(capa);
       expect(REGISTRY.has(fingerprint)).toBe(false);
       const { resolved, warnings } = lookup(ET4950.info, capa, fingerprint);
-      expect(resolved.entry).toBe(REGISTRY.get(ET4950_FP));
+      expect(resolved.entry).toMatchObject(REGISTRY.get(ET4950_FP)!);
       expect(resolved.matchedBy).toBe("pid");
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain("by its PID 11D1");
@@ -102,7 +105,7 @@ describe("lookupRegistryEntry", () => {
 
     it("warns with the diagnostic and proceeds with the identified model (name)", () => {
       const { resolved, warnings } = lookup(FF680W.info, doctored(FF680W.capa));
-      expect(resolved.entry).toBe(REGISTRY.get(FF680W_FP));
+      expect(resolved.entry).toMatchObject(REGISTRY.get(FF680W_FP)!);
       expect(resolved.matchedBy).toBe("name");
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain("by its product name FF-680W");
@@ -111,7 +114,7 @@ describe("lookupRegistryEntry", () => {
 
     it("names the model the fingerprint belongs to, and still follows the PID", () => {
       const { resolved, warnings } = lookup(ET4950.info, XP7100.capa);
-      expect(resolved.entry).toBe(REGISTRY.get(ET4950_FP));
+      expect(resolved.entry).toMatchObject(REGISTRY.get(ET4950_FP)!);
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain("it is the XP-7100");
     });
@@ -173,7 +176,7 @@ describe("lookupRegistryEntry", () => {
   it.each(REPLAY_FIXTURES)("resolves the $model fixture $path by identity", ({ model, path }) => {
     const { info, capa } = readInit1Bodies(path);
     const { resolved, warnings } = lookup(info, capa);
-    expect(resolved.entry).toBe(REGISTRY.get(computeCapaFingerprint(capa)));
+    expect(resolved.entry).toMatchObject(REGISTRY.get(computeCapaFingerprint(capa))!);
     expect(resolved.matchedBy).toBe(model === "FF-680W" || model === "DS-575W" ? "name" : "pid");
     expect(warnings).toEqual([]);
   });
@@ -181,21 +184,21 @@ describe("lookupRegistryEntry", () => {
 
 describe("applyEntrySourceOverride", () => {
   it("pins ctx.source = 'flatbed' for fixed-flatbed entries", () => {
-    const entry = REGISTRY.get(ET2750_FP)!; // fixed-flatbed
+    const entry = recordedDialect(ET2750_FP); // fixed-flatbed
     const ctx = { source: "adf" as "adf" | "flatbed", duplex: false };
     applyEntrySourceOverride(ctx, entry);
     expect(ctx.source).toBe("flatbed");
   });
 
   it("pins ctx.source = 'adf' for fixed-adf entries", () => {
-    const entry = REGISTRY.get(FF680W_FP)!; // fixed-adf
+    const entry = recordedDialect(FF680W_FP); // fixed-adf
     const ctx = { source: "flatbed" as "adf" | "flatbed", duplex: false };
     applyEntrySourceOverride(ctx, entry);
     expect(ctx.source).toBe("adf");
   });
 
   it("leaves ctx.source unchanged for stat-length entries", () => {
-    const entry = REGISTRY.get(ET4950_FP)!; // stat-length
+    const entry = recordedDialect(ET4950_FP); // stat-length
     const ctx = { source: "adf" as "adf" | "flatbed", duplex: false };
     applyEntrySourceOverride(ctx, entry);
     expect(ctx.source).toBe("adf");
@@ -204,7 +207,7 @@ describe("applyEntrySourceOverride", () => {
 
 describe("makeParaSpec", () => {
   it("projects entry + flatbed onto ParaSpec.fbExtents", () => {
-    const entry = REGISTRY.get(ET4950_FP)!;
+    const entry = recordedDialect(ET4950_FP);
     const spec = makeParaSpec(entry, "flatbed", "jpg");
     expect(spec.source).toBe("flatbed");
     expect(spec.action).toBe("jpg");
@@ -215,20 +218,20 @@ describe("makeParaSpec", () => {
   });
 
   it("projects entry + adf-simplex correctly", () => {
-    const entry = REGISTRY.get(ET4950_FP)!;
+    const entry = recordedDialect(ET4950_FP);
     const spec = makeParaSpec(entry, "adf-simplex", "jpg");
     expect(spec.source).toBe("adf-simplex");
   });
 
   it("projects entry + adf-duplex correctly", () => {
-    const entry = REGISTRY.get(ET4950_FP)!;
+    const entry = recordedDialect(ET4950_FP);
     const spec = makeParaSpec(entry, "adf-duplex", "pdf");
     expect(spec.source).toBe("adf-duplex");
     expect(spec.action).toBe("pdf");
   });
 
   it("projects FF-680W paraProfile", () => {
-    const entry = REGISTRY.get(FF680W_FP)!;
+    const entry = recordedDialect(FF680W_FP);
     const spec = makeParaSpec(entry, "adf-duplex", "jpg");
     expect(spec.profile).toBe("adf-crp");
   });
@@ -236,23 +239,36 @@ describe("makeParaSpec", () => {
 
 describe("assertSourceSupported", () => {
   it("rejects adf-duplex on a simplex-only ADF", () => {
-    const entry = REGISTRY.get(ET4800_FP)!;
+    const entry = recordedDialect(ET4800_FP);
     expect(() => assertSourceSupported(entry, "adf-duplex")).toThrow(/no duplex ADF/);
   });
 
   it("names the model and the fix in the error", () => {
-    const entry = REGISTRY.get(ET4800_FP)!;
+    const entry = recordedDialect(ET4800_FP);
     expect(() => assertSourceSupported(entry, "adf-duplex")).toThrow(/ET-4800/);
     expect(() => assertSourceSupported(entry, "adf-duplex")).toThrow(/SCAN_SIDES=simplex/);
   });
 
   it("allows adf-simplex on a simplex-only ADF", () => {
-    const entry = REGISTRY.get(ET4800_FP)!;
+    const entry = recordedDialect(ET4800_FP);
     expect(() => assertSourceSupported(entry, "adf-simplex")).not.toThrow();
   });
 
+  it("refuses adf-duplex on a known duplex model whose CAPA doesn't advertise it", () => {
+    // The ET-4950 family's ADF is duplex, but the session goes by the
+    // printer's own CAPA: without #ADFDPLX, its dialect has no duplex ADF.
+    const text = ET4950.capa.toString("latin1");
+    expect(text).toContain("#ADFDPLX");
+    const capa = Buffer.from(text.replace("#ADFDPLX", ""), "latin1");
+    const { resolved } = lookup(ET4950.info, capa);
+    expect(resolved.matchedBy).toBe("pid");
+    expect(resolved.entry.adfDuplex).toBe(false);
+    expect(() => assertSourceSupported(resolved.entry, "adf-duplex")).toThrow(/no duplex ADF/);
+    expect(() => assertSourceSupported(resolved.entry, "adf-simplex")).not.toThrow();
+  });
+
   it("allows adf-duplex on duplex-capable hardware", () => {
-    const entry = REGISTRY.get(ET4950_FP)!;
+    const entry = recordedDialect(ET4950_FP);
     expect(() => assertSourceSupported(entry, "adf-duplex")).not.toThrow();
   });
 
@@ -262,7 +278,7 @@ describe("assertSourceSupported", () => {
   // guard must not fire. An earlier design rejected on `duplex` at entry
   // resolution and broke exactly this case.
   it("allows flatbed on a flatbed-only entry even though duplex was requested", () => {
-    const entry = REGISTRY.get(ET2810_FP)!;
+    const entry = recordedDialect(ET2810_FP);
     expect(() => assertSourceSupported(entry, "flatbed")).not.toThrow();
   });
 });

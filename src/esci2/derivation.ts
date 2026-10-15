@@ -1,26 +1,28 @@
 // src/esci2/derivation.ts
 import { isDeepStrictEqual } from "node:util";
 import type { CapaTokens, InfoTokens } from "./capabilities.js";
-import type { RegistryEntry } from "./dialects/registry.js";
+import type { CapabilityFields, RegistryEntry } from "./dialects/registry.js";
 import type { ParaProfile } from "./para-composer.js";
 
 /**
- * Shadow derivation: dialect fields computed from the printer's own INFO and
- * CAPA replies, compared with what the registry entry says. Report-only for
- * now; nothing here changes what is sent. Once a field agrees with every
- * fixture model, a later change can take it from the derivation and drop it
- * from the registry.
+ * Capability derivation: dialect fields computed from the printer's own INFO
+ * and CAPA replies.
  *
- * Each field is one row in FIELDS: its derivation rule and where the entry
- * keeps the value it is compared with. Adding a field is a new row plus its
- * slot in DerivedCapabilities.
+ * Some of them are live: every session takes them from here
+ * (capabilityFields), and no registry entry carries them. The rest are still
+ * shadowed: compared with what the registry entry says and reported, without
+ * changing what is sent. Once a shadowed field agrees with every fixture
+ * model, a later change makes it live and drops it from the registry.
+ *
+ * Each field is one rule in RULES. A shadowed field also has a row in
+ * SHADOWED saying where the entry keeps the value it is compared with.
  */
 export interface DerivedCapabilities {
-  /** PARA carries the optional #QIT segment. */
+  /** PARA carries the optional #QIT segment (live). */
   qit: boolean;
-  /** PARA carries the optional #CCT segment. */
+  /** PARA carries the optional #CCT segment (live). */
   cct: boolean;
-  /** The ADF can scan both sides. */
+  /** The ADF can scan both sides (live). */
   adfDuplex: boolean;
   /** Which sources the printer has: each one advertises a scan area in INFO. */
   sources: { flatbed: boolean; adf: boolean };
@@ -30,85 +32,89 @@ export interface DerivedCapabilities {
    * it. Null when INFO advertises no scan area at all.
    */
   sourceDetection: "init-poll-status" | "fixed-flatbed" | "fixed-adf" | null;
-  /** PARA layout: "adf-crp" for an ADF-only printer whose ADF can crop. */
+  /** PARA layout: "adf-crp" for an ADF-only printer whose ADF can crop (live). */
   paraProfile: ParaProfile;
   /** Duplex back pages arrive turned 180° (a two-pass ADF re-feeds the sheet). */
   duplexBackRotated: boolean;
 }
 
+/** The fields still compared with the registry entry rather than used directly. */
+export type ShadowedField = "sources" | "sourceDetection" | "duplexBackRotated";
+
 /** One differing field, typed by the field it names. */
 export type Disagreement = {
-  [K in keyof DerivedCapabilities]: {
+  [K in ShadowedField]: {
     field: K;
     derived: DerivedCapabilities[K];
     entry: DerivedCapabilities[K];
   };
-}[keyof DerivedCapabilities];
+}[ShadowedField];
 
-interface FieldRule<K extends keyof DerivedCapabilities> {
-  derive: (info: InfoTokens, capa: CapaTokens) => DerivedCapabilities[K];
-  fromEntry: (entry: RegistryEntry) => DerivedCapabilities[K];
-}
+/**
+ * A CAPA list's items: four characters each ("UG10UG18" → UG10, UG18), trimmed
+ * of their space padding ("PREFON  OFF" → PREF, ON, OFF).
+ */
+export const listItems = (list: string | null): string[] =>
+  (list?.match(/.{1,4}/g) ?? []).map((item) => item.trim());
 
-/** A list segment with no items advertises nothing, as in the diagnostic block. */
-const advertises = (list: string | null): boolean => list !== null && list.length > 0;
-
-const FIELDS: { [K in keyof DerivedCapabilities]: FieldRule<K> } = {
-  qit: {
-    derive: (_info, capa) => advertises(capa.qitList),
-    fromEntry: (e) => e.optionalSegments.qit,
+const RULES: {
+  [K in keyof DerivedCapabilities]: (info: InfoTokens, capa: CapaTokens) => DerivedCapabilities[K];
+} = {
+  // The optional segments are sent only when their list carries the value the
+  // composer sends (#QITOFF, #CCTCOL).
+  qit: (_info, capa) => listItems(capa.qitList).includes("OFF"),
+  cct: (_info, capa) => listItems(capa.cctList).includes("COL"),
+  adfDuplex: (info, capa) => capa.adfDuplex && sourcesOf(info).adf,
+  sources: (info) => sourcesOf(info),
+  sourceDetection: (info) => {
+    const { flatbed, adf } = sourcesOf(info);
+    if (flatbed && adf) return "init-poll-status";
+    if (flatbed) return "fixed-flatbed";
+    return adf ? "fixed-adf" : null;
   },
-  cct: {
-    derive: (_info, capa) => advertises(capa.cctList),
-    fromEntry: (e) => e.optionalSegments.cct,
-  },
-  adfDuplex: {
-    derive: (_info, capa) => capa.adfDuplex,
-    fromEntry: (e) => e.adfDuplex,
-  },
-  sources: {
-    derive: (info) => sourcesOf(info),
-    fromEntry: (e) => ({ flatbed: e.fbExtents !== null, adf: e.adfExtents !== null }),
-  },
-  sourceDetection: {
-    derive: (info) => {
-      const { flatbed, adf } = sourcesOf(info);
-      if (flatbed && adf) return "init-poll-status";
-      if (flatbed) return "fixed-flatbed";
-      return adf ? "fixed-adf" : null;
-    },
-    // "stat-length" and "stat-content" both read the init poll's status reply.
-    fromEntry: (e) =>
-      e.sourceDetection === "stat-length" || e.sourceDetection === "stat-content"
-        ? "init-poll-status"
-        : e.sourceDetection,
-  },
-  paraProfile: {
-    // "No flatbed" is redundant on every printer seen so far (only ADF-only
-    // printers list #ADFCRP), but it is the documented rule.
-    derive: (info, capa) => (capa.adfCrop && !sourcesOf(info).flatbed ? "adf-crp" : "standard"),
-    fromEntry: (e) => e.paraProfile ?? "standard",
-  },
-  duplexBackRotated: {
-    // Single-pass ("1SCN") or no duplex: back pages arrive upright.
-    derive: (info) => info.adfDuplexType === "2SCN",
-    fromEntry: (e) => e.duplexBackRotated,
-  },
+  // "No flatbed" is redundant on every printer seen so far (only ADF-only
+  // printers list #ADFCRP), but it is the documented rule.
+  paraProfile: (info, capa) => (capa.adfCrop && !sourcesOf(info).flatbed ? "adf-crp" : "standard"),
+  // Single-pass ("1SCN") or no duplex: back pages arrive upright.
+  duplexBackRotated: (info) => info.adfDuplexType === "2SCN",
 };
 
-/** A scan-area segment with no value advertises no source, as with lists. */
+const SHADOWED: {
+  [K in ShadowedField]: (entry: RegistryEntry) => DerivedCapabilities[K];
+} = {
+  sources: (e) => ({ flatbed: e.fbExtents !== null, adf: e.adfExtents !== null }),
+  // "stat-length" and "stat-content" both read the init poll's status reply.
+  sourceDetection: (e) =>
+    e.sourceDetection === "stat-length" || e.sourceDetection === "stat-content"
+      ? "init-poll-status"
+      : e.sourceDetection,
+  duplexBackRotated: (e) => e.duplexBackRotated,
+};
+
+/** A scan-area segment with no value advertises no source. */
 function sourcesOf(info: InfoTokens): DerivedCapabilities["sources"] {
+  const advertises = (area: string | null) => area !== null && area.length > 0;
   return { flatbed: advertises(info.fbArea), adf: advertises(info.adfArea) };
 }
 
-const FIELD_NAMES = Object.keys(FIELDS) as (keyof DerivedCapabilities)[];
+const FIELD_NAMES = Object.keys(RULES) as (keyof DerivedCapabilities)[];
+const SHADOWED_FIELDS = Object.keys(SHADOWED) as ShadowedField[];
 
 /** Takes the parsed INFO and CAPA replies, so the session's own parse is reused. */
 export function deriveCapabilities(info: InfoTokens, capa: CapaTokens): DerivedCapabilities {
-  // FIELDS' mapped type guarantees a rule for every key, so the result is complete.
+  // RULES' mapped type guarantees a rule for every key, so the result is complete.
   return Object.fromEntries(
-    FIELD_NAMES.map((field) => [field, FIELDS[field].derive(info, capa)]),
+    FIELD_NAMES.map((field) => [field, RULES[field](info, capa)]),
   ) as unknown as DerivedCapabilities;
+}
+
+/** The live fields, in the shape a session's dialect carries them. */
+export function capabilityFields(derived: DerivedCapabilities): CapabilityFields {
+  return {
+    adfDuplex: derived.adfDuplex,
+    optionalSegments: { qit: derived.qit, cct: derived.cct },
+    paraProfile: derived.paraProfile,
+  };
 }
 
 /**
@@ -122,19 +128,19 @@ export function isExpectedDisagreement(d: Disagreement, entry: RegistryEntry): b
   return d.field === "duplexBackRotated" && entry.duplexBackRotationUnverified === true;
 }
 
-/** Per-field disagreements between a derivation and a registry entry, in FIELDS order. */
+/** Per-field disagreements between a derivation and a registry entry, in SHADOWED order. */
 export function compareWithEntry(
   derived: DerivedCapabilities,
   entry: RegistryEntry,
 ): Disagreement[] {
   const out: Disagreement[] = [];
-  const check = <K extends keyof DerivedCapabilities>(field: K) => {
-    const fromEntry = FIELDS[field].fromEntry(entry);
+  const check = <K extends ShadowedField>(field: K) => {
+    const fromEntry = SHADOWED[field](entry);
     if (!isDeepStrictEqual(derived[field], fromEntry)) {
       out.push({ field, derived: derived[field], entry: fromEntry } as Disagreement);
     }
   };
-  FIELD_NAMES.forEach(check);
+  SHADOWED_FIELDS.forEach(check);
   return out;
 }
 

@@ -2,7 +2,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { parseArea, type InfoTokens } from "./capabilities.js";
 import { baseDpiFor, scaleAcqExtents, type Extents, type ParaProfile } from "./para-composer.js";
-import type { RegistryEntry } from "./dialects/registry.js";
+import type { Dialect } from "./dialects/registry.js";
 
 /**
  * Shadow derivation for the scan window (report-only). The printer's INFO
@@ -71,7 +71,7 @@ export type WindowProblem =
   | { source: WindowSource; problem: "outside-scan-area"; window: Extents; maxArea: Extents }
   | { source: WindowSource; problem: "x0-misaligned"; window: Extents; expectedX0: number };
 
-function entryWindows(entry: RegistryEntry): [WindowSource, Extents][] {
+function entryWindows(entry: Dialect): [WindowSource, Extents][] {
   const out: [WindowSource, Extents][] = [];
   if (entry.fbExtents !== null) out.push(["flatbed", entry.fbExtents]);
   if (entry.adfExtents !== null) out.push(["adf", entry.adfExtents]);
@@ -85,7 +85,7 @@ function entryWindows(entry: RegistryEntry): [WindowSource, Extents][] {
  * for is a sources disagreement, reported by compareWithEntry, so it is
  * skipped here.
  */
-export function windowProblems(info: InfoTokens, entry: RegistryEntry): WindowProblem[] {
+export function windowProblems(info: InfoTokens, entry: Dialect): WindowProblem[] {
   const dpi = baseDpiFor(entry.paraProfile);
   const out: WindowProblem[] = [];
   for (const [source, window] of entryWindows(entry)) {
@@ -179,9 +179,9 @@ export interface GenericWindowDifference {
  */
 export function genericWindowDifferences(
   info: InfoTokens,
-  entry: RegistryEntry,
+  entry: Dialect,
 ): GenericWindowDifference[] {
-  const profile = entry.paraProfile ?? "standard";
+  const profile = entry.paraProfile;
   const out: GenericWindowDifference[] = [];
   for (const [source, window] of entryWindows(entry)) {
     const generic = genericWindow(info, source, profile, baseDpiFor(profile));

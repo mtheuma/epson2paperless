@@ -4,7 +4,8 @@ import { GAMMA_CLASSES, type GammaClassName } from "./gamma-classes.js";
 import { CMX_CLASSES, type CmxClassName } from "./cmx-classes.js";
 import { composePara } from "../para-composer.js";
 import { makeParaSpec } from "../dialects/dispatch.js";
-import { REGISTRY, type RegistryEntry } from "../dialects/registry.js";
+import { REGISTRY, type Dialect, type RegistryEntry } from "../dialects/registry.js";
+import { recordedDialect } from "../test-support/dialects.js";
 
 // Models that send a mixed pair today, until their reporter-gated colour fix
 // lands. Keyed by model name, matched anywhere in the entry's displayName.
@@ -41,7 +42,7 @@ function pairOnTheWire(body: Buffer): ColourPair {
 
 // Every pair an entry puts on the wire: composed for each action and colour
 // mode. The source doesn't change the pair, so one the entry supports will do.
-function sentPairs(entry: RegistryEntry): { label: string; pair: ColourPair }[] {
+function sentPairs(entry: Dialect): { label: string; pair: ColourPair }[] {
   const source = entry.fbExtents !== null ? "flatbed" : "adf-simplex";
   return (["jpg", "pdf"] as const).flatMap((action) =>
     (["color", "grayscale"] as const).map((colorMode) => ({
@@ -51,7 +52,7 @@ function sentPairs(entry: RegistryEntry): { label: string; pair: ColourPair }[] 
   );
 }
 
-const entries = [...REGISTRY.values()];
+const entries = [...REGISTRY.values()].map((e) => recordedDialect(e.capaFingerprints[0]));
 
 describe("checkColourPair", () => {
   it("accepts a neutral pair", () => {
