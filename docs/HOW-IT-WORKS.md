@@ -44,7 +44,7 @@ Only the configured printer's address is accepted on this port (`PRINTER_IP`, or
 The SOAP body's `PushScanIDIn` value carries the panel choices:
 
 - Byte 0: sides (`0` = 1-sided, `1` = 2-sided).
-- Byte 1: action bitmask (`1` = JPG, `2` = PDF, `4` = Preview on Computer).
+- Byte 1: action code (`1` = JPG, `2` = PDF, `3` = Attach as email, `4` = Preview on Computer). Email is not supported and is refused like any unrecognised value.
 
 The response must echo the request's `x-uid` header exactly. If it does not, the data transfer can still succeed but the printer panel reports "Scanning Error" afterwards.
 

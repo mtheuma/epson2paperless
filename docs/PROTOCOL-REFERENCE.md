@@ -37,13 +37,13 @@ When the user selects a destination and presses Scan on the panel, the printer o
 The SOAP body's `<PushScanIDIn>` element is the only channel through which the panel's user selections reach the service. It encodes two fields in a compact binary-style string:
 
 - **Byte 0** (Sides): `0` = 1-Sided, `1` = 2-Sided.
-- **Byte 1** (Action bitmask): `1` = JPG, `2` = PDF, `4` = Preview on Computer.
+- **Byte 1** (Action code): `1` = JPG, `2` = PDF, `3` = Attach as email (unsupported), `4` = Preview on Computer.
 
 The service must reply with an HTTP 200 OK. The response must echo the request's `x-uid` header value verbatim. The printer increments this counter on each scan and uses it to verify the response came from the correct session. A mismatched `x-uid` causes the printer to display "Scanning Error" on the panel after the scan completes — even though the scan data transfers correctly and the output file is produced. This is a panel-state signal, not a data-integrity issue; the root cause and fix are documented in [the panel-error investigation](REVERSE-ENGINEERING.md#the-panel-error-investigation).
 
 The service parses the `PushScanIDIn` value from the request body, sends the HTTP 200 OK response, and half-closes the push-scan TCP connection with a FIN (not RST — using RST causes the printer to tear down its end aggressively). Once that response has been written, the daemon's callback opens the scan-session connection to the printer on port 1865. In `PRINTER_PROTOCOL=auto` mode the dispatcher probes that port first and chooses the TLS ESC/I-2, plain-TCP ESC/I-2, or legacy ESC/I scanner.
 
-Implemented in `src/pushscan.ts`. `parsePushScanRequest` extracts the SOAP fields; `buildPushScanResponse` constructs the echoed response. Action handling is two-stage: `computeActionFromId` decodes the raw `PushScanIDIn` action bitmask into one of `jpg`, `pdf`, `preview`, or `unknown`; `resolveEffectiveAction` then applies the `PREVIEW_ACTION` env-var gate and returns `jpg`, `pdf`, or `null` (default: reject preview silently → `null`; `PREVIEW_ACTION=jpg`/`pdf` redirects preview into a real scan).
+Implemented in `src/pushscan.ts`. `parsePushScanRequest` extracts the SOAP fields; `buildPushScanResponse` constructs the echoed response. Action handling is two-stage: `computeActionFromId` decodes the raw `PushScanIDIn` action code into one of `jpg`, `pdf`, `preview`, or `unknown`; `resolveEffectiveAction` then applies the `PREVIEW_ACTION` env-var gate and returns `jpg`, `pdf`, or `null` (default: reject preview silently → `null`; `PREVIEW_ACTION=jpg`/`pdf` redirects preview into a real scan).
 
 ### Scan session: three transport variants on port 1865
 
@@ -287,13 +287,17 @@ Flatbed scans are always single-sided regardless of the `PushScanIDIn[0]` value.
 
 ### Action: JPG / PDF / Preview
 
-The panel's Action selection is the second character of `PushScanIDIn`, interpreted as a bitmask: `1` = JPG, `2` = PDF, `4` = Preview on Computer. The service resolves this to an effective action via `resolveEffectiveAction` in `src/pushscan.ts`.
+The panel's Action selection is the second character of `PushScanIDIn`: `1` = JPG, `2` = PDF, `4` = Preview on Computer. The service resolves this to an effective action via `resolveEffectiveAction` in `src/pushscan.ts`.
+
+The values are distinct panel options, not combinable bit flags. `3` is not JPG + PDF: the ET-3700 sends it for its "Attach as email" action. The service has no email path, so `computeActionFromId` decodes `3` (and any other value) as `unknown` and the scan is refused. The panel's action list comes from the printer firmware, not the destination, so models can offer actions the service never handles.
 
 A key protocol finding for the ESC/I-2 path: **the printer always streams JPEG-encoded image data regardless of the panel's Action setting.** PDF is composed host-side with pdf-lib after all pages have been received, so the printer is never told "PDF". The scan-parameter (PARA) bytes are action-invariant for most dialects (ET-4950 family, ET-2750, ET-4800) — the same capture replays for both `action='jpg'` and `action='pdf'`, and the ADF replay tests assert this by reusing one Frida JPG capture across both runs. **XP-7100 is the exception:** its registry entry carries per-action gamma / CMX classes, so it emits different PARA bytes for JPG vs PDF even though the image stream is identical JPEG either way. (The committed JPG and PDF flatbed captures are separate Frida sessions and so differ slightly in capture-time polling cadence, but the protocol structure is the same.)
 
 The ESC/I path (WF-3620) is different: the firmware locks the scan resolution to the panel's format choice (600 DPI for JPG, 300 DPI for PDF), so the wire bytes do differ between the two — see [ESC/I variant (WF-3620)](#esci-variant-wf-3620) below. Composition still happens host-side via pdf-lib in PDF mode, but the underlying pixel stream is captured at the lower resolution.
 
-Preview on Computer (`PushScanIDIn[1] = 4`) is rejected by default (the scan does not proceed). The `PREVIEW_ACTION` environment variable overrides this: setting it to `jpg` or `pdf` redirects preview scans through the normal capture flow.
+Preview on Computer (`PushScanIDIn[1] = 4`) is rejected by default (the scan does not proceed). The `PREVIEW_ACTION` environment variable overrides this: setting it to `jpg` or `pdf` redirects preview scans through the normal capture flow. Panels don't always label this action "Preview": the ET-3700's "User setting" preset sends `4` too.
+
+A refused action still gets the HTTP 200 OK. No scan session follows, so the printer times out and shows a "Communication problem" error on the panel.
 
 After `DONE`, the engine calls `transport.end()` to queue the FIN synchronously and then schedules the end-of-scan step via `setImmediate` — it does **not** wait for the socket's `'close'` event (the close handler is a no-op on the DONE path). The `setImmediate` exists to give any in-flight microtasks — notably the previous `flushPage`'s file-write resolving its Promise — a tick to settle before the synchronous finalize step runs:
 
