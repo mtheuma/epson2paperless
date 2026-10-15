@@ -5,6 +5,7 @@ import { REGISTRY } from "./dialects/registry.js";
 import { IS_HEADER_SIZE, buildPurereadPacket, parseIsPacket } from "../protocol.js";
 import { parseCapaTokens } from "./capabilities.js";
 import { DEFAULT_JPEG_QUALITY } from "../config.js";
+import { REPLAY_FIXTURES, readInit1Bodies } from "./test-support/capability-bodies.js";
 
 describe("esci2Graph (smoke)", () => {
   it("builds with the expected initial state and timeout", () => {
@@ -1408,5 +1409,37 @@ describe("esci2Graph T27 UNLOCKING", () => {
     const state = esci2Graph.states.UNLOCKING;
     if (state.kind !== "static") return;
     expect(state.on[0xa101]?.send).toBeUndefined();
+  });
+});
+
+describe("esci2Graph INIT1_CAPA_DATA — shadow derivation", () => {
+  const SHADOW_LINE = "Capability derivation disagrees with the dialect entry";
+
+  // Feeds INIT1's CAPA body to the state that resolves the dialect, with
+  // INFO already captured, and returns the info-level lines it logged.
+  function resolveDialect(
+    info: Buffer,
+    capa: Buffer,
+  ): { ctx: import("./graph.js").Esci2Ctx; lines: unknown[][] } {
+    const state = esci2Graph.states.INIT1_CAPA_DATA;
+    if (state.kind !== "decision") throw new Error("INIT1_CAPA_DATA not a decision");
+    const ctx = makeCtx({ entry: undefined, infoBody: info, tprDeclaredLength: capa.length });
+    const infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      const result = state.decide(ctx, { type: 0xa000, payload: capa });
+      expect("error" in result).toBe(false);
+      return { ctx, lines: infoSpy.mock.calls };
+    } finally {
+      infoSpy.mockRestore();
+    }
+  }
+  const shadowLines = (lines: unknown[][]) =>
+    lines.filter((args) => args.some((a) => String(a).includes(SHADOW_LINE)));
+
+  it.each(REPLAY_FIXTURES)("is silent for the $model fixture $path", ({ path }) => {
+    const { info, capa } = readInit1Bodies(path);
+    const { ctx, lines } = resolveDialect(info, capa);
+    expect(ctx.entry).toBeDefined();
+    expect(shadowLines(lines)).toEqual([]);
   });
 });
