@@ -11,7 +11,10 @@ import type { LegacyDialectEntry } from "./entry.js";
 
 export const WF3620_ENTRY: LegacyDialectEntry = {
   name: "wf3620",
-  productName: null,
+  // From the FS I identity reply in every WF-3620 capture (firmware 1.20). No
+  // captured WF-3620 trigger shows its ProductNameIn, so the trigger lookup
+  // matching it is likely but unverified; the fallback covers it either way.
+  productName: "PID 08B8",
   sourcePolicy: "detect",
   supportedSources: ["flatbed", "adf-simplex", "adf-duplex"],
   raster: (mode) => geometry(mode),

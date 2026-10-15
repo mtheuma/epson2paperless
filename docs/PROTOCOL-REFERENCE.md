@@ -635,13 +635,33 @@ fixed-flatbed dialects arrive at the gamma phase by different routes.
 the entry. The push-scan SOAP's `ProductNameIn` field (parsed by
 `parsePushScanRequest` in `src/pushscan.ts`, threaded through
 `dispatchScanSession` in `src/startup.ts` as `productName`) is matched
-against each PID-keyed entry's literal PID string — `"PID 08C8"` for
-`XP620_ENTRY`, `"PID 1106"` for `ET2550_ENTRY`. Any other PID — or `null`,
-which is what the host-triggered `scan:now` CLI (`src/scan-now.ts`) always
-passes since there is no panel to read a `ProductNameIn` from — falls back to
-`WF3620_ENTRY`. In other words, both PID-keyed dialects are only reachable
-through a panel-triggered scan (daemon or `npm run scan`); `scan:now` stays
-WF-3620 regardless of the actual printer.
+against each entry's literal PID string — `"PID 08B8"` for `WF3620_ENTRY`,
+`"PID 08C8"` for `XP620_ENTRY`, `"PID 1106"` for `ET2550_ENTRY`. Any other
+PID — or `null`, which is what the host-triggered `scan:now` CLI
+(`src/scan-now.ts`) always passes since there is no panel to read a
+`ProductNameIn` from — falls back to `WF3620_ENTRY`, so the WF-3620 settings
+are the de facto generic legacy dialect. In other words, the XP-620 and
+ET-2550 dialects are only reachable through a panel-triggered scan (daemon or
+`npm run scan`); `scan:now` stays WF-3620 regardless of the actual printer.
+The WF-3620's `PID 08B8` comes from its `FS I` reply; no captured WF-3620
+trigger shows its `ProductNameIn`, and the fallback covers it either way.
+
+The session's first `FS I` reply names the printer itself: a 16-byte product
+field at offset 46 (`PID 08B8` on the WF-3620, `PID 08C8` on the XP-620,
+`PID 1106` on the ET-2550) and a 4-byte firmware field at offset 62. The graph
+decodes it (`parseFsIReply`) and checks it against the running dialect
+(`checkLegacyIdentity`). This is report-only: the session continues on
+`ctx.entry` whatever the check says. A match logs the usual debug
+`Dialect resolved` line. A product no dialect claims, on the WF-3620 fallback,
+warns that an older ESC/I model is trying the WF-3620 settings
+(experimental) and asks for a report. A product another dialect claims warns
+which dialect that is: `scan:now` against an ET-2550 should produce it, since
+the ET-2550's setup reaches `FS I` the same way the WF-3620's does. (Under
+`scan:now` an XP-620 gets the WF-3620's `ESC @` setup instead of its own, and
+no capture shows whether that reaches `FS I`.) Because the PID is read
+in-session, the check works on `scan:now` too. Bytes outside printable ASCII
+in either field are logged as `\xNN`, and a reply that isn't 80 bytes fails
+the session with the whole reply in hex.
 
 Three branch points read `ctx.entry`:
 

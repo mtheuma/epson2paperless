@@ -17,6 +17,10 @@ export function setLogLevel(level: LogLevel): void {
   currentLevel = level;
 }
 
+export function getLogLevel(): LogLevel {
+  return currentLevel;
+}
+
 export function setLogFormat(format: LogFormat): void {
   currentFormat = format;
 }

@@ -14,6 +14,7 @@ import { WF3620_ENTRY } from "./dialects/wf3620.js";
 import { ET2550_ENTRY } from "./dialects/et2550.js";
 import { XP620_ENTRY } from "./dialects/xp620.js";
 import type { LegacyDialectEntry } from "./dialects/entry.js";
+import { captureLogs } from "./test-support/log-capture.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(__dirname, "..", "..", "tools", "pcap-extract", "captures");
@@ -248,6 +249,29 @@ const FIXTURE_SPECS: FixtureSpec[] = [
   },
 ];
 
+// What each model's FS I identity reply names, keyed by fixture directory.
+// Literals from the captures, not reads of the dialect table.
+const EXPECTED_IDENTITY: Record<string, { productName: string; firmware: string }> = {
+  "wf-3620": { productName: "PID 08B8", firmware: "1.20" },
+  "xp-620": { productName: "PID 08C8", firmware: "1.10" },
+  "et-2550": { productName: "PID 1106", firmware: "1.40" },
+};
+
+/**
+ * What a session logged about its identity: the dialect line's data, plus
+ * every warning. All warnings, not just identity-worded ones, so rewording
+ * the identity warning can't let it slip past a `warnings: []` assertion.
+ */
+function identityLogs(lines: ReturnType<typeof captureLogs>["lines"]): {
+  resolved: unknown[];
+  warnings: string[];
+} {
+  return {
+    resolved: lines.filter((l) => l.text.endsWith("Dialect resolved")).map((l) => l.data),
+    warnings: lines.filter((l) => l.stream === "warn").map((l) => l.text),
+  };
+}
+
 // ---------------------------------------------------------------------------
 // Replay matrix
 // ---------------------------------------------------------------------------
@@ -285,25 +309,38 @@ describe("scanner-esci", () => {
       const fake = new FakeTcpSocket();
       let detectedSource: string | null = null;
 
-      const sessionPromise = runEsciScan(
-        {
-          printerIp: "1.2.3.4",
-          port: 1865,
-          outputDir,
-          tempDir,
-          entry,
-          duplex,
-          forcedSource: null, // pure detection — no override
-          format,
-          jpegQuality: 90,
-          postProcess,
-          onSourceDetected: (s) => {
-            detectedSource = s;
+      const logs = captureLogs();
+      try {
+        const sessionPromise = runEsciScan(
+          {
+            printerIp: "1.2.3.4",
+            port: 1865,
+            outputDir,
+            tempDir,
+            entry,
+            duplex,
+            forcedSource: null, // pure detection — no override
+            format,
+            jpegQuality: 90,
+            postProcess,
+            onSourceDetected: (s) => {
+              detectedSource = s;
+            },
           },
-        },
-        fake.asFactory(),
-      );
-      await driveFixture(fixture, fake, sessionPromise);
+          fake.asFactory(),
+        );
+        await driveFixture(fixture, fake, sessionPromise);
+      } finally {
+        logs.restore();
+      }
+
+      // Identity: the first FS I reply is decoded and matches the dialect,
+      // logged once even when ADF pages re-read FS I.
+      const expectedIdentity = EXPECTED_IDENTITY[fixturePath.split("/")[0]];
+      expect(identityLogs(logs.lines)).toEqual({
+        resolved: [{ dialect: entry.name, ...expectedIdentity }],
+        warnings: [],
+      });
 
       // Shield: the scanner reproduced the captured host transcript exactly.
       expect(Buffer.concat(fake.writes).toString("hex")).toBe(
@@ -455,6 +492,55 @@ describe("scanner-esci", () => {
     const files = readdirSync(outputDir);
     expect(files).toHaveLength(1);
     expect((await sharp(path.join(outputDir, files[0])).metadata()).channels).toBe(1);
+  }, 60_000);
+
+  // -------------------------------------------------------------------------
+  // Unrecognised legacy PID: the WF-3620 settings still run, byte for byte,
+  // and the session says so. Same fixture with the FS I product field
+  // rewritten — nothing else in the session reads it.
+  // -------------------------------------------------------------------------
+
+  it("an unrecognised PID in the FS I reply logs the experimental line and runs the WF-3620 settings unchanged", async () => {
+    const fixture = loadFixture(path.join(FIXTURES, "wf-3620/flatbed-single-page-jpeg.jsonl"));
+    const original = Buffer.from("PID 08B8", "latin1").toString("hex");
+    const renamed = Buffer.from("PID 0999", "latin1").toString("hex");
+    const patched = fixture.map((e) =>
+      e.dir === "p>h" && "hex" in e ? { ...e, hex: e.hex.replace(original, renamed) } : e,
+    );
+    expect(JSON.stringify(patched)).not.toBe(JSON.stringify(fixture));
+    const fake = new FakeTcpSocket();
+
+    const logs = captureLogs();
+    try {
+      const sessionPromise = runEsciScan(
+        {
+          printerIp: "1.2.3.4",
+          port: 1865,
+          outputDir,
+          tempDir,
+          entry: WF3620_ENTRY, // what the fallback resolves for an unknown or absent PID
+          duplex: false,
+          forcedSource: null,
+          format: "jpg",
+          jpegQuality: 90,
+        },
+        fake.asFactory(),
+      );
+      await driveFixture(patched, fake, sessionPromise);
+    } finally {
+      logs.restore();
+    }
+
+    expect(Buffer.concat(fake.writes).toString("hex")).toBe(
+      concatHostBytes(fixture).toString("hex"),
+    );
+    expect(readdirSync(outputDir)).toHaveLength(1);
+    const { resolved, warnings } = identityLogs(logs.lines);
+    expect(resolved).toEqual([]);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain(
+      "Older ESC/I model PID 0999 not recognised — trying the WF-3620 settings (experimental), please report",
+    );
   }, 60_000);
 });
 

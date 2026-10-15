@@ -14,7 +14,8 @@ export interface Branch<S extends string> {
 
 export interface LegacyDialectEntry {
   name: "wf3620" | "xp620" | "et2550";
-  productName: string | null; // push-scan PID; null = default fallback
+  /** `PID XXXX`, matched against the push-scan trigger and the FS I identity reply. */
+  productName: string;
   sourcePolicy: "detect" | "fixed-flatbed";
   supportedSources: Source[];
   raster: (mode: ScanMode) => Pick<ScanGeometry, "widthPx" | "heightPx">;
