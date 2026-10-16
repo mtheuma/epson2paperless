@@ -30,25 +30,21 @@ export interface RegistryEntry {
   fbExtents: Extents | null;
   adfExtents: Extents | null;
   /**
-   * Whether the hardware's ADF can scan both sides. Read by
-   * assertSourceSupported at PARA-build time: composing an `adf-duplex` PARA
-   * for a simplex-only ADF sends the printer a segment its firmware never
-   * advertised. The panel used to make this unreachable by never offering
-   * 2-sided on such models; the host trigger (scan-now) can request it
-   * directly, because SCAN_SIDES defaults to "duplex".
-   *
-   * `false` for flatbed-only models, where it is unreachable but must still
-   * be stated.
+   * The DPI fbExtents and adfExtents are given at: the reference DPI of the
+   * PARA profile they were captured under (baseDpiFor). Omitted means 300,
+   * the standard profile's; the crop-mode (adf-crp) scanners set 200. A
+   * session whose derived profile has a different reference DPI rescales the
+   * windows (withCapabilities), so their physical size is kept.
    */
-  adfDuplex: boolean;
+  windowDpi?: number;
   /**
    * Whether duplex back sides arrive physically rotated 180° and need the
    * host-side compensation (EXIF Orientation=3 / PDF /Rotate 180). True for
    * reversing-ADF hardware, which re-feeds the sheet; false for single-pass
    * dual-sensor scanners, whose back sensor captures the side upright —
    * confirmed on DS-575W hardware, where the compensation inverted back
-   * pages (issue #128 follow-up). Unreachable (but still stated, like
-   * adfDuplex) for simplex-ADF and flatbed-only models.
+   * pages (issue #128 follow-up). Unreachable (but still stated) for
+   * simplex-ADF and flatbed-only models.
    */
   duplexBackRotated: boolean;
   /**
@@ -62,8 +58,6 @@ export interface RegistryEntry {
   gmm: string;
   gammaClass: { jpg: GammaClassName; pdf: GammaClassName };
   cmxClass: { jpg: CmxClassName | null; pdf: CmxClassName | null };
-  optionalSegments: { qit: boolean; cct: boolean };
-  paraProfile?: ParaProfile;
   /**
    * Single-channel gamma LUT for greyscale scans (adf-crp profile only).
    * Presence marks the dialect as greyscale-capable: when SCAN_COLOR_MODE is
@@ -91,7 +85,30 @@ export interface RegistryEntry {
 }
 
 /**
- * Whether SCAN_COLOR_MODE=grayscale is honoured on the wire for this entry.
+ * The dialect fields a session always takes from the printer's own INFO and
+ * CAPA replies (capabilityFields), for a registry entry and the generic
+ * dialect alike. No entry can override them (ADR 0001).
+ */
+export interface CapabilityFields {
+  /**
+   * Whether the ADF can scan both sides. Read by assertSourceSupported at
+   * PARA-build time: composing an `adf-duplex` PARA for a simplex-only ADF
+   * sends the printer a segment its firmware never advertised. The panel
+   * never offers 2-sided on such models, but the host trigger (scan-now) can
+   * request it directly, because SCAN_SIDES defaults to "duplex".
+   */
+  adfDuplex: boolean;
+  /** Whether PARA carries the optional #QIT and #CCT segments. */
+  optionalSegments: { qit: boolean; cct: boolean };
+  /** PARA layout: "adf-crp" for the crop-mode ADF-only scanners, else "standard". */
+  paraProfile: ParaProfile;
+}
+
+/** What a session runs: its registry entry (or the generic one) plus the capability fields. */
+export interface Dialect extends RegistryEntry, CapabilityFields {}
+
+/**
+ * Whether SCAN_COLOR_MODE=grayscale is honoured on the wire for this dialect.
  * The single definition of the capability — the graph's fallback log and the
  * scanner shells' finalize resolution both consume it, keeping them aligned
  * with composePara's gate: only the adf-crp composer reads colorMode
@@ -100,7 +117,7 @@ export interface RegistryEntry {
  * therefore still resolves to host-side conversion instead of silently
  * producing colour output under an explicit grayscale setting.
  */
-export function supportsWireGrayscale(entry: RegistryEntry | undefined): boolean {
+export function supportsWireGrayscale(entry: Dialect | undefined): boolean {
   return entry?.paraProfile === "adf-crp" && entry.monoGammaClass !== undefined;
 }
 
@@ -116,12 +133,10 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
     adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
-    adfDuplex: true,
     duplexBackRotated: true, // reversing ADF — backs arrive upside down
     gmm: "UG10",
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
     cmxClass: { jpg: null, pdf: null },
-    optionalSegments: { qit: true, cct: true },
     toneCurve: "et4950-family",
     // 300: Frida-captured replay fixtures drive it end-to-end. The rest:
     // ET-4956 hardware verification, 2026-09-02 (issue #81 runbook) —
@@ -148,12 +163,10 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 2,
     fbExtents: { x0: 0, y0: 0, w: 2477, h: 3500 },
     adfExtents: null,
-    adfDuplex: false, // no ADF
     duplexBackRotated: false, // no ADF
     gmm: "UG18",
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
     cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
-    optionalSegments: { qit: false, cct: false },
     // Committed pcap-extracted replay fixture drives 300 DPI end-to-end.
     verifiedWireDpis: [300],
   },
@@ -166,12 +179,10 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2550, h: 3300 },
     adfExtents: { x0: 0, y0: 0, w: 2550, h: 3300 },
-    adfDuplex: true,
     duplexBackRotated: true, // reversing ADF — backs arrive upside down
     gmm: "UG18",
     gammaClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
     cmxClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
-    optionalSegments: { qit: true, cct: false },
     // Committed pcap-extracted replay fixture drives 300 DPI end-to-end.
     verifiedWireDpis: [300],
   },
@@ -184,12 +195,10 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
     adfExtents: null,
-    adfDuplex: false, // no ADF
     duplexBackRotated: false, // no ADF
     gmm: "UG10",
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
     cmxClass: { jpg: null, pdf: null },
-    optionalSegments: { qit: true, cct: true },
     // No replay fixture and no reporter retest (README: 🟡 Experimental,
     // inferred dialect, issue #92) — seed empty per the verification-posture
     // rule until a hardware report confirms a wire DPI.
@@ -204,12 +213,10 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3, // same as ET-4950 family; fixtures trimmed to 3 cycles
     fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
     adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
-    adfDuplex: false, // ADF simplex
     duplexBackRotated: false, // ADF simplex — no back sides
     gmm: "UG18",
     gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
     cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
-    optionalSegments: { qit: false, cct: false },
     // Committed pcap-extracted replay fixture drives 300 DPI end-to-end.
     verifiedWireDpis: [300],
   },
@@ -228,12 +235,10 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
     adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
-    adfDuplex: false, // ADF simplex
     duplexBackRotated: false, // ADF simplex — no back sides
     gmm: "UG18",
     gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
     cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
-    optionalSegments: { qit: false, cct: false },
     // Live-validated on real hardware (PID 116E, FW FB 1.01) at 300 DPI.
     verifiedWireDpis: [300],
   },
@@ -251,14 +256,12 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 8,
     fbExtents: null, // ADF-only hardware — no flatbed
     adfExtents: { x0: 0, y0: 0, w: 1700, h: 7200 },
-    adfDuplex: true,
+    windowDpi: 200,
     duplexBackRotated: true, // single-pass hardware, but the compensation has shipped unchallenged — flip on a hardware report
     duplexBackRotationUnverified: true,
     gmm: "UG18",
     gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
     cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
-    optionalSegments: { qit: false, cct: false },
-    paraProfile: "adf-crp",
     // Committed pcap-extracted replay fixtures drive 200 and 300 DPI end-to-end.
     verifiedWireDpis: [200, 300],
   },
@@ -289,13 +292,11 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 12,
     fbExtents: null, // ADF-only hardware — no flatbed
     adfExtents: { x0: 0, y0: 0, w: 1700, h: 3100 },
-    adfDuplex: true,
+    windowDpi: 200,
     duplexBackRotated: false, // single-pass dual sensor — backs arrive upright (hardware-confirmed, #128)
     gmm: "UG18",
     gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
     cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
-    optionalSegments: { qit: false, cct: false },
-    paraProfile: "adf-crp",
     monoGammaClass: "ds575w-mono",
     // 400 and 600: committed pcap-extracted replay fixtures drive these
     // end-to-end. 200: not fixture-covered, but README-recorded as the one
@@ -362,12 +363,10 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
     adfExtents: null,
-    adfDuplex: false,
     duplexBackRotated: false, // no ADF
     gmm: "UG18",
     gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
     cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
-    optionalSegments: { qit: false, cct: false },
     // Live-validated on real hardware at 300 DPI (issue #132).
     verifiedWireDpis: [300],
   },
@@ -399,12 +398,10 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
     adfExtents: null,
-    adfDuplex: false, // no ADF
     duplexBackRotated: false, // no ADF
     gmm: "UG18",
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
     cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
-    optionalSegments: { qit: true, cct: false },
     // Confirmed working by the reporter at 300 DPI (issue #120).
     verifiedWireDpis: [300],
   },
@@ -440,12 +437,10 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
     adfExtents: null,
-    adfDuplex: false, // no ADF
     duplexBackRotated: false, // no ADF
     gmm: "UG18",
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
     cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
-    optionalSegments: { qit: true, cct: false },
     // Committed pcap-extracted replay fixtures drive 300 DPI end-to-end (issue #145).
     verifiedWireDpis: [300],
   },
@@ -486,12 +481,10 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
     adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
-    adfDuplex: false, // ADF simplex (CAPA duplex: N)
     duplexBackRotated: false, // ADF simplex — no back sides
     gmm: "UG18",
     gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
     cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
-    optionalSegments: { qit: true, cct: false },
     // Awaiting reporter validation (#174) — the flatbed evidence isn't
     // recorded in the tree yet. Flip to [300] in the PR that flips the
     // README row to ✅.

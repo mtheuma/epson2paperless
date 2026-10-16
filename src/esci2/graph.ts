@@ -25,7 +25,7 @@ import {
   parseTokens,
 } from "./commands.js";
 import { ackByte, expectIsType } from "../graph-helpers.js";
-import { supportsWireGrayscale, type RegistryEntry } from "./dialects/registry.js";
+import { supportsWireGrayscale, type Dialect } from "./dialects/registry.js";
 import {
   lookupRegistryEntry,
   applyEntrySourceOverride,
@@ -36,7 +36,6 @@ import {
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
 import {
   compareWithEntry,
-  deriveCapabilities,
   isExpectedDisagreement,
   sourceFromStatLength,
   sourceFromStatusErrors,
@@ -104,8 +103,8 @@ export interface Esci2Ctx {
    * the settings exchange is blamed on it (`nameInitPollEarlyStop`).
    */
   initPollEarlyStop?: { cycle: number; reply: string };
-  /** Resolved registry entry post-INIT1, drives PARA build + init-poll count + source detection. Undefined until INIT1 completes. */
-  entry: RegistryEntry | undefined;
+  /** Resolved dialect post-INIT1 (registry entry or generic, plus its capability fields), drives PARA build + init-poll count + source detection. Undefined until INIT1 completes. */
+  entry: Dialect | undefined;
   /**
    * Set when the session runs the generic dialect (no registry entry
    * matched): the parsed INFO reply its scan window is computed from at the
@@ -412,6 +411,11 @@ twoPhaseRead(
       pid: info.prdPid,
       productName: info.prdName,
       fingerprint,
+      // Taken from this printer's replies, never the entry: shows in a
+      // debug log what a model with no fixture actually got.
+      optionalSegments: ctx.entry.optionalSegments,
+      adfDuplex: ctx.entry.adfDuplex,
+      paraProfile: ctx.entry.paraProfile,
     });
     if (resolved.matchedBy === "generic") {
       // Built from the derivation itself, so there is nothing to compare.
@@ -424,7 +428,7 @@ twoPhaseRead(
     // failure here is logged rather than allowed to end the session.
     try {
       const dialect = ctx.entry.displayName;
-      for (const d of compareWithEntry(deriveCapabilities(info, capaTokens), ctx.entry)) {
+      for (const d of compareWithEntry(resolved.derived, ctx.entry)) {
         // A disagreement the entry already flags as unconfirmed is known;
         // repeating it at info on every scan would read as a new problem.
         if (isExpectedDisagreement(d, ctx.entry)) {

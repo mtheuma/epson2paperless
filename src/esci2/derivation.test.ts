@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  capabilityFields,
   compareWithEntry,
   deriveCapabilities,
   isExpectedDisagreement,
@@ -11,8 +12,10 @@ import { parseCapaTokens, parseInfoTokens, parseStatErrors } from "./capabilitie
 import { REGISTRY, type RegistryEntry } from "./dialects/registry.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
 import {
+  DIAGNOSTICS,
   EXPECTED_DISAGREEMENTS,
   REPLAY_FIXTURES,
+  bodiesFromDiagnostic,
   readFirstInitPollStatus,
   readInit1Bodies,
 } from "./test-support/capability-bodies.js";
@@ -25,11 +28,15 @@ const ascii = (s: string) => Buffer.from(s, "ascii");
 const ET4950_FP = "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2";
 
 describe("deriveCapabilities — rules", () => {
-  it("QIT and CCT are present exactly when CAPA advertises the matching list", () => {
+  it("QIT and CCT are present exactly when their list carries the value PARA sends", () => {
     expect(derive(NO_INFO, ascii("#QITLISTPREFON  OFF #CCTLISTPREFCOL MONO"))).toEqual(
       expect.objectContaining({ qit: true, cct: true }),
     );
     expect(derive(NO_INFO, ascii("#GMMLISTUG10UG18"))).toEqual(
+      expect.objectContaining({ qit: false, cct: false }),
+    );
+    // Synthetic: every recorded list carries OFF and COL.
+    expect(derive(NO_INFO, ascii("#QITLISTPREFON  #CCTLISTPREFMONO"))).toEqual(
       expect.objectContaining({ qit: false, cct: false }),
     );
   });
@@ -41,9 +48,23 @@ describe("deriveCapabilities — rules", () => {
     );
   });
 
-  it("ADF duplex is present exactly when CAPA carries an #ADFDPLX segment", () => {
-    expect(derive(NO_INFO, ascii("#ADFDPLX#GMMLISTUG10")).adfDuplex).toBe(true);
-    expect(derive(NO_INFO, ascii("#ADFRSMSLISTd300d600")).adfDuplex).toBe(false);
+  it("ADF duplex is present exactly when CAPA carries #ADFDPLX and INFO an ADF scan area", () => {
+    const adf = ascii("#ADFAREAd850i0001400");
+    expect(derive(adf, ascii("#ADFDPLX#GMMLISTUG10")).adfDuplex).toBe(true);
+    expect(derive(adf, ascii("#ADFRSMSLISTd300d600")).adfDuplex).toBe(false);
+    expect(derive(ascii("#FB AREAd850i0001170"), ascii("#ADFDPLX")).adfDuplex).toBe(false);
+  });
+
+  it("capabilityFields puts the live fields in the dialect's shape", () => {
+    const derived = derive(
+      ascii("#ADFAREAd850i0001550"),
+      ascii("#ADFDPLX#ADFCRP #QITLISTPREFON  OFF "),
+    );
+    expect(capabilityFields(derived)).toEqual({
+      adfDuplex: true,
+      optionalSegments: { qit: true, cct: false },
+      paraProfile: "adf-crp",
+    });
   });
 });
 
@@ -131,10 +152,20 @@ describe("compareWithEntry", () => {
   });
 
   it("returns one disagreement per differing field, naming both values", () => {
-    expect(compareWithEntry({ ...agreeing, cct: false, adfDuplex: false }, entry)).toEqual([
-      { field: "cct", derived: false, entry: true },
-      { field: "adfDuplex", derived: false, entry: true },
+    expect(
+      compareWithEntry(
+        { ...agreeing, sourceDetection: "fixed-adf", duplexBackRotated: false },
+        entry,
+      ),
+    ).toEqual([
+      { field: "sourceDetection", derived: "fixed-adf", entry: "init-poll-status" },
+      { field: "duplexBackRotated", derived: false, entry: true },
     ]);
+  });
+
+  it("never compares the live fields: the entry has none to compare with", () => {
+    const live = { qit: false, cct: false, adfDuplex: false, paraProfile: "adf-crp" } as const;
+    expect(compareWithEntry({ ...agreeing, ...live }, entry)).toEqual([]);
   });
 
   it("compares sources structurally and maps the entry's stat-length to the status read", () => {
@@ -227,95 +258,57 @@ describe("content-based source decision agrees with the length-based one on ever
   });
 });
 
-// Models with no replay fixture: the facts their reporters posted in the
-// unsupported-printer diagnostic block. A diagnostic carries only the lists,
-// the duplex flag and the scan areas (and older blocks have no CCT line), so
-// INFO and CAPA bodies are rebuilt from the lines present and only the
-// fields they determine are compared.
-const DIAGNOSTICS: ReadonlyArray<{ model: string; issue: number; fp: string; block: string }> = [
-  {
-    model: "ET-2950",
-    issue: 92,
-    fp: "b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb",
-    block: `
-Source caps:       flatbed: Y  ADF: N  duplex: N
-Scan area (FB):    d850i0001170
-Scan area (ADF):   (absent)
-QIT list:          PREFON  OFF`,
-  },
-  {
-    model: "ET-15000",
-    issue: 106,
-    fp: "d1d7293e92fa726e006429beacca1255e474de0d66b3559f87176d4e4b3d0e55",
-    block: `
-Source caps:       flatbed: Y  ADF: Y  duplex: N
-Scan area (FB):    d850i0001400
-Scan area (ADF):   d850i0001400
-QIT list:          (absent)
-CCT list:          (absent)`,
-  },
-  {
-    model: "ET-2810",
-    issue: 132,
-    fp: "708704b6abb184cede037fcd9893ea81f69651fde28780cde0162dfa33a33f6e",
-    block: `
-Source caps:       flatbed: Y  ADF: N  duplex: N
-Scan area (FB):    d850i0001170
-Scan area (ADF):   (absent)
-QIT list:          (absent)
-CCT list:          (absent)`,
-  },
-  {
-    model: "ET-8500",
-    issue: 120,
-    fp: "05b5c7eaad217e9538883f3fffe9796464689a5d9006c5b3e3c3fd2c24e21467",
-    block: `
-Source caps:       flatbed: Y  ADF: N  duplex: N
-Scan area (FB):    d850i0001170
-Scan area (ADF):   (absent)
-QIT list:          PREFON  OFF
-CCT list:          (absent)`,
-  },
-  {
-    model: "WF-3835",
-    issue: 174,
-    fp: "860a899be9dc4fc27b68f8aed21a49ccfe87733a3974813f0c2ade6810e89dc7",
-    block: `
-Source caps:       flatbed: Y  ADF: Y  duplex: N
-Scan area (FB):    d850i0001170
-Scan area (ADF):   d850i0001400
-QIT list:          PREFON  OFF
-CCT list:          (absent)`,
-  },
-];
+/**
+ * The live fields every recorded model derives: the values its registry
+ * entry carried before they were derived. Each one is asserted from that
+ * model's own replies: every replay fixture, and every issue diagnostic for
+ * the fields its block determines.
+ */
+type LiveFields = Pick<DerivedCapabilities, "qit" | "cct" | "adfDuplex" | "paraProfile">;
+const LIVE_FIELDS: Record<string, Partial<LiveFields>> = {
+  "ET-4950 family": { qit: true, cct: true, adfDuplex: true, paraProfile: "standard" },
+  "ET-2750": { qit: false, cct: false, adfDuplex: false, paraProfile: "standard" },
+  "XP-7100": { qit: true, cct: false, adfDuplex: true, paraProfile: "standard" },
+  "ET-4800": { qit: false, cct: false, adfDuplex: false, paraProfile: "standard" },
+  "ET-7700": { qit: true, cct: false, adfDuplex: false, paraProfile: "standard" },
+  "FF-680W": { qit: false, cct: false, adfDuplex: true, paraProfile: "adf-crp" },
+  "DS-575W": { qit: false, cct: false, adfDuplex: true, paraProfile: "adf-crp" },
+  // Its block has no CCT line, so its session sends #CCT exactly when its
+  // own CAPA lists COL; nothing recorded says which.
+  "ET-2950": { qit: true, adfDuplex: false, paraProfile: "standard" },
+  "ET-15000": { qit: false, cct: false, adfDuplex: false, paraProfile: "standard" },
+  "ET-2810": { qit: false, cct: false, adfDuplex: false, paraProfile: "standard" },
+  "ET-8500": { qit: true, cct: false, adfDuplex: false, paraProfile: "standard" },
+  "WF-3835": { qit: true, cct: false, adfDuplex: false, paraProfile: "standard" },
+};
+const LIVE = ["qit", "cct", "adfDuplex", "paraProfile"] as const;
 
-function bodiesFromDiagnostic(block: string): { info: Buffer; capa: Buffer; fields: string[] } {
-  const infoSegments: string[] = [];
-  const capaSegments: string[] = [];
-  const fields: string[] = [];
-  const duplex = block.match(/duplex: ([YN])/);
-  if (duplex) {
-    fields.push("adfDuplex");
-    if (duplex[1] === "Y") capaSegments.push("#ADFDPLX");
-  }
-  for (const [label, token, field] of [
-    ["QIT", "#QITLIST", "qit"],
-    ["CCT", "#CCTLIST", "cct"],
-  ] as const) {
-    const line = block.match(new RegExp(`^${label} list: +(.+)$`, "m"));
-    if (!line) continue;
-    fields.push(field);
-    if (line[1] !== "(absent)") capaSegments.push(token + line[1]);
-  }
-  const fbArea = block.match(/^Scan area \(FB\): +(.+)$/m);
-  const adfArea = block.match(/^Scan area \(ADF\): +(.+)$/m);
-  if (fbArea && adfArea) {
-    fields.push("sources", "sourceDetection");
-    if (fbArea[1] !== "(absent)") infoSegments.push("#FB AREA" + fbArea[1]);
-    if (adfArea[1] !== "(absent)") infoSegments.push("#ADFAREA" + adfArea[1]);
-  }
-  return { info: ascii(infoSegments.join("")), capa: ascii(capaSegments.join("")), fields };
-}
+describe("live fields derived for every replay fixture", () => {
+  it.each(REPLAY_FIXTURES)("$model: $path", ({ model, path }) => {
+    const { info, capa } = readInit1Bodies(path);
+    const derived = derive(info, capa);
+    for (const field of LIVE) expect(derived[field], field).toBe(LIVE_FIELDS[model][field]);
+  });
+});
+
+describe("live fields derived for models known only from issue diagnostics", () => {
+  it.each(DIAGNOSTICS)("$model (#$issue)", ({ model, block }) => {
+    const { info, capa, fields } = bodiesFromDiagnostic(block);
+    const derived = derive(info, capa);
+    for (const field of LIVE.filter((f) => fields.includes(f))) {
+      expect(LIVE_FIELDS[model][field], field).toBeDefined();
+      expect(derived[field], field).toBe(LIVE_FIELDS[model][field]);
+    }
+  });
+
+  it("checks every live field of every block except the ET-2950's CCT", () => {
+    for (const { model, block } of DIAGNOSTICS) {
+      const { fields } = bodiesFromDiagnostic(block);
+      const unchecked = LIVE.filter((f) => !fields.includes(f));
+      expect(unchecked, model).toEqual(model === "ET-2950" ? ["cct"] : []);
+    }
+  });
+});
 
 describe("shadow derivation agrees with models known only from issue diagnostics", () => {
   it.each(DIAGNOSTICS)("$model (#$issue)", ({ fp, block }) => {
@@ -324,15 +317,5 @@ describe("shadow derivation agrees with models known only from issue diagnostics
     const { info, capa, fields } = bodiesFromDiagnostic(block);
     const disagreements = compareWithEntry(derive(info, capa), entry!);
     expect(disagreements.filter((d) => fields.includes(d.field))).toEqual([]);
-  });
-
-  it("the ET-2950 block predates the CCT line, so CCT goes unchecked for it", () => {
-    const et2950 = DIAGNOSTICS.find((d) => d.model === "ET-2950")!;
-    expect(bodiesFromDiagnostic(et2950.block).fields).toEqual([
-      "adfDuplex",
-      "qit",
-      "sources",
-      "sourceDetection",
-    ]);
   });
 });

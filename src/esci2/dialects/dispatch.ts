@@ -1,8 +1,15 @@
-import { REGISTRY_ENTRIES, type RegistryEntry } from "./registry.js";
-import type { ParaSpec } from "../para-composer.js";
+import { REGISTRY_ENTRIES, type Dialect, type RegistryEntry } from "./registry.js";
+import {
+  STANDARD_BASE_DPI,
+  baseDpiFor,
+  scaleEdges,
+  type Extents,
+  type ParaSpec,
+} from "../para-composer.js";
 import { buildDiagnostic, UnsupportedDialectError } from "../diagnostic.js";
 import type { CapaTokens, InfoTokens } from "../capabilities.js";
 import { buildGenericEntry, GenericDialectUnusableError, printerIdentity } from "./generic.js";
+import { capabilityFields, deriveCapabilities, type DerivedCapabilities } from "../derivation.js";
 import { createLogger } from "../../logger.js";
 
 const log = createLogger("scanner-esci2");
@@ -11,8 +18,10 @@ const log = createLogger("scanner-esci2");
 export type IdentityMatch = "pid" | "name" | "fingerprint" | "generic";
 
 export interface ResolvedEntry {
-  entry: RegistryEntry;
+  entry: Dialect;
   matchedBy: IdentityMatch;
+  /** The derivation the dialect was built with, for the caller's shadow comparison. */
+  derived: DerivedCapabilities;
 }
 
 /** What INIT1 knows when it resolves the dialect. */
@@ -29,7 +38,8 @@ export interface Init1Replies {
 
 /**
  * Looks up the registry entry by model identity: the INFO product ID, then
- * the INFO product name, then the CAPA fingerprint. When none matches, the
+ * the INFO product name, then the CAPA fingerprint, and completes it with the
+ * capability fields derived from this printer's own replies. When none matches, the
  * printer gets the generic dialect, built from its own replies, with a
  * warning and the diagnostic block for the report. Throws
  * UnsupportedDialectError with the diagnostic block only when the generic
@@ -44,7 +54,8 @@ export interface Init1Replies {
  * host-triggered ones that carry no panel PID.
  */
 export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
-  const { info, fingerprint } = replies;
+  const { info, capa, fingerprint } = replies;
+  const derived = deriveCapabilities(info, capa);
   // prdPid is canonical upper-case hex, and entries store names upper-case
   // (both pinned by registry.test.ts), so only the reported name needs folding.
   const { prdPid } = info;
@@ -67,18 +78,44 @@ export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
           `please file an issue with the diagnostic block below:\n\n${buildDiagnostic(replies)}`,
       );
     }
-    return { entry: byIdentity, matchedBy };
+    return { entry: withCapabilities(byIdentity, derived), matchedBy, derived };
   }
 
-  if (byFingerprint !== undefined) return { entry: byFingerprint, matchedBy: "fingerprint" };
-  return { entry: resolveGenericEntry(replies), matchedBy: "generic" };
+  if (byFingerprint !== undefined) {
+    return { entry: withCapabilities(byFingerprint, derived), matchedBy: "fingerprint", derived };
+  }
+  return { entry: resolveGenericEntry(replies, derived), matchedBy: "generic", derived };
 }
 
-function resolveGenericEntry(replies: Init1Replies): RegistryEntry {
+/**
+ * A registry entry completed with the capability fields derived from the
+ * printer's own replies, the same ones the generic dialect is built with.
+ *
+ * The entry's windows are pinned at its windowDpi, and the composer reads
+ * them at the derived profile's reference DPI. When the two differ (a
+ * printer whose replies give it the other profile), the windows are
+ * rescaled so they keep their physical size.
+ */
+export function withCapabilities(entry: RegistryEntry, derived: DerivedCapabilities): Dialect {
+  const fields = capabilityFields(derived);
+  const dpi = baseDpiFor(fields.paraProfile);
+  const scale = dpi / (entry.windowDpi ?? STANDARD_BASE_DPI);
+  if (scale === 1) return { ...entry, ...fields };
+  const rescale = (e: Extents | null) => (e === null ? null : scaleEdges(e, scale));
+  return {
+    ...entry,
+    fbExtents: rescale(entry.fbExtents),
+    adfExtents: rescale(entry.adfExtents),
+    windowDpi: dpi,
+    ...fields,
+  };
+}
+
+function resolveGenericEntry(replies: Init1Replies, derived: DerivedCapabilities): Dialect {
   const diagnostic = buildDiagnostic(replies);
-  let entry: RegistryEntry;
+  let entry: Dialect;
   try {
-    entry = buildGenericEntry(replies.info, replies.capa);
+    entry = buildGenericEntry(replies.info, replies.capa, derived);
   } catch (err) {
     if (!(err instanceof GenericDialectUnusableError)) throw err;
     throw new UnsupportedDialectError(replies.fingerprint, diagnostic, err.message);
@@ -123,7 +160,7 @@ export function applyEntrySourceOverride(
  * Origin-independent: an adf-duplex PARA against a simplex-only ADF is wrong
  * whether the panel or the host asked for it.
  */
-export function assertSourceSupported(entry: RegistryEntry, source: ParaSpec["source"]): void {
+export function assertSourceSupported(entry: Dialect, source: ParaSpec["source"]): void {
   if (source === "adf-duplex" && !entry.adfDuplex) {
     throw new Error(
       `${entry.displayName} has no duplex ADF — refusing to compose an adf-duplex PARA ` +
@@ -139,7 +176,7 @@ export function assertSourceSupported(entry: RegistryEntry, source: ParaSpec["so
  * duplex folded in by the call site).
  */
 export function makeParaSpec(
-  entry: RegistryEntry,
+  entry: Dialect,
   source: ParaSpec["source"],
   action: ParaSpec["action"],
   resolution?: number,

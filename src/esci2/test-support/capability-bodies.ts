@@ -12,7 +12,7 @@
 // split them.
 
 import { readFileSync } from "node:fs";
-import type { Disagreement } from "../derivation.js";
+import type { DerivedCapabilities, Disagreement } from "../derivation.js";
 
 export interface CapabilityBodies {
   info: Buffer;
@@ -152,4 +152,110 @@ export function readInit1Bodies(path: string): CapabilityBodies {
  */
 export function readFirstInitPollStatus(path: string): { header: Buffer; body: Buffer | null } {
   return firstReply(readPrinterPayloads(path), "STAT", path);
+}
+
+// Models with no replay fixture: the facts their reporters posted in the
+// unsupported-printer diagnostic block. A diagnostic carries only the lists,
+// the duplex flag and the scan areas (and older blocks have no CCT line), so
+// INFO and CAPA bodies are rebuilt from the lines present
+// (bodiesFromDiagnostic), and only the fields they determine are checked.
+export const DIAGNOSTICS: ReadonlyArray<{
+  model: string;
+  issue: number;
+  fp: string;
+  block: string;
+}> = [
+  {
+    model: "ET-2950",
+    issue: 92,
+    fp: "b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb",
+    block: `
+Source caps:       flatbed: Y  ADF: N  duplex: N
+Scan area (FB):    d850i0001170
+Scan area (ADF):   (absent)
+QIT list:          PREFON  OFF`,
+  },
+  {
+    model: "ET-15000",
+    issue: 106,
+    fp: "d1d7293e92fa726e006429beacca1255e474de0d66b3559f87176d4e4b3d0e55",
+    block: `
+Source caps:       flatbed: Y  ADF: Y  duplex: N
+Scan area (FB):    d850i0001400
+Scan area (ADF):   d850i0001400
+QIT list:          (absent)
+CCT list:          (absent)`,
+  },
+  {
+    model: "ET-2810",
+    issue: 132,
+    fp: "708704b6abb184cede037fcd9893ea81f69651fde28780cde0162dfa33a33f6e",
+    block: `
+Source caps:       flatbed: Y  ADF: N  duplex: N
+Scan area (FB):    d850i0001170
+Scan area (ADF):   (absent)
+QIT list:          (absent)
+CCT list:          (absent)`,
+  },
+  {
+    model: "ET-8500",
+    issue: 120,
+    fp: "05b5c7eaad217e9538883f3fffe9796464689a5d9006c5b3e3c3fd2c24e21467",
+    block: `
+Source caps:       flatbed: Y  ADF: N  duplex: N
+Scan area (FB):    d850i0001170
+Scan area (ADF):   (absent)
+QIT list:          PREFON  OFF
+CCT list:          (absent)`,
+  },
+  {
+    model: "WF-3835",
+    issue: 174,
+    fp: "860a899be9dc4fc27b68f8aed21a49ccfe87733a3974813f0c2ade6810e89dc7",
+    block: `
+Source caps:       flatbed: Y  ADF: Y  duplex: N
+Scan area (FB):    d850i0001170
+Scan area (ADF):   d850i0001400
+QIT list:          PREFON  OFF
+CCT list:          (absent)`,
+  },
+];
+
+/**
+ * INFO and CAPA bodies rebuilt from a diagnostic block, and the derived
+ * fields those lines determine.
+ */
+export function bodiesFromDiagnostic(block: string): CapabilityBodies & {
+  fields: (keyof DerivedCapabilities)[];
+} {
+  const infoSegments: string[] = [];
+  const capaSegments: string[] = [];
+  const fields: (keyof DerivedCapabilities)[] = [];
+  const fbArea = block.match(/^Scan area \(FB\): +(.+)$/m);
+  const adfArea = block.match(/^Scan area \(ADF\): +(.+)$/m);
+  if (fbArea && fbArea[1] !== "(absent)") infoSegments.push("#FB AREA" + fbArea[1]);
+  if (adfArea && adfArea[1] !== "(absent)") infoSegments.push("#ADFAREA" + adfArea[1]);
+  const duplex = block.match(/duplex: ([YN])/);
+  // ADF duplex also needs an ADF scan area, so it is determined only with both lines.
+  if (duplex && adfArea) {
+    fields.push("adfDuplex");
+    if (duplex[1] === "Y") capaSegments.push("#ADFDPLX");
+  }
+  for (const [label, token, field] of [
+    ["QIT", "#QITLIST", "qit"],
+    ["CCT", "#CCTLIST", "cct"],
+  ] as const) {
+    const line = block.match(new RegExp(`^${label} list: +(.+)$`, "m"));
+    if (!line) continue;
+    fields.push(field);
+    if (line[1] !== "(absent)") capaSegments.push(token + line[1]);
+  }
+  if (fbArea && adfArea) fields.push("sources", "sourceDetection");
+  // A printer with a flatbed is never adf-crp, whatever its ADF lists.
+  if (fbArea && fbArea[1] !== "(absent)") fields.push("paraProfile");
+  return {
+    info: Buffer.from(infoSegments.join(""), "ascii"),
+    capa: Buffer.from(capaSegments.join(""), "ascii"),
+    fields,
+  };
 }
