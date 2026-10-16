@@ -4,16 +4,17 @@ import {
   applyEntrySourceOverride,
   makeParaSpec,
   assertSourceSupported,
+  withCapabilities,
 } from "./dispatch.js";
-import { REGISTRY } from "./registry.js";
+import { REGISTRY, type RegistryEntry } from "./registry.js";
 import { UnsupportedDialectError } from "../diagnostic.js";
 import { computeCapaFingerprint } from "../capa-fingerprint.js";
 import { parseCapaTokens, parseInfoTokens } from "../capabilities.js";
-import { deriveCapabilities } from "../derivation.js";
+import { compareWithEntry, deriveCapabilities } from "../derivation.js";
 import { composePara } from "../para-composer.js";
 import { parseParaSegments } from "../test-support/para-parse.js";
 import { REPLAY_FIXTURES, readInit1Bodies } from "../test-support/capability-bodies.js";
-import { recordedDialect } from "../test-support/dialects.js";
+import { recordedDialect, unresolvedFields } from "../test-support/dialects.js";
 
 const ET4950_FP = "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2";
 const ET2750_FP = "de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7";
@@ -64,14 +65,14 @@ function lookup(info: Buffer, capa: Buffer, fingerprint = computeCapaFingerprint
 describe("lookupRegistryEntry", () => {
   it("resolves by the INFO product ID first", () => {
     const { resolved, warnings } = lookup(ET4950.info, ET4950.capa);
-    expect(resolved.entry).toMatchObject(REGISTRY.get(ET4950_FP)!);
+    expect(resolved.entry).toMatchObject(unresolvedFields(REGISTRY.get(ET4950_FP)!));
     expect(resolved.matchedBy).toBe("pid");
     expect(warnings).toEqual([]);
   });
 
   it("resolves by the INFO product name when the printer reports a name", () => {
     const { resolved, warnings } = lookup(FF680W.info, FF680W.capa);
-    expect(resolved.entry).toMatchObject(REGISTRY.get(FF680W_FP)!);
+    expect(resolved.entry).toMatchObject(unresolvedFields(REGISTRY.get(FF680W_FP)!));
     expect(resolved.matchedBy).toBe("name");
     expect(warnings).toEqual([]);
   });
@@ -79,8 +80,12 @@ describe("lookupRegistryEntry", () => {
   // The ET-3950 and XP-4100 case: a model whose PID isn't recorded resolves
   // through the CAPA fingerprint it shares with a sibling.
   it("falls back to the CAPA fingerprint when the PID isn't recorded", () => {
-    const { resolved, warnings } = lookup(UNKNOWN_PID_INFO, ET4950.capa);
-    expect(resolved.entry).toMatchObject(REGISTRY.get(ET4950_FP)!);
+    // The ET-4950's own INFO reply, under a PID no entry records.
+    const text = ET4950.info.toString("latin1");
+    expect(text).toContain("PID 11D1");
+    const info = Buffer.from(text.replace("PID 11D1", "PID 9999"), "latin1");
+    const { resolved, warnings } = lookup(info, ET4950.capa);
+    expect(resolved.entry).toMatchObject(unresolvedFields(REGISTRY.get(ET4950_FP)!));
     expect(resolved.matchedBy).toBe("fingerprint");
     expect(warnings).toEqual([]);
   });
@@ -88,7 +93,7 @@ describe("lookupRegistryEntry", () => {
   it("matches the PID case-insensitively", () => {
     const info = Buffer.from("#PRDh010PID 11d1        ", "ascii");
     expect(lookup(info, STUB_CAPA, UNKNOWN_FP).resolved.entry).toMatchObject(
-      REGISTRY.get(ET4950_FP)!,
+      unresolvedFields(REGISTRY.get(ET4950_FP)!),
     );
   });
 
@@ -98,7 +103,7 @@ describe("lookupRegistryEntry", () => {
       const fingerprint = computeCapaFingerprint(capa);
       expect(REGISTRY.has(fingerprint)).toBe(false);
       const { resolved, warnings } = lookup(ET4950.info, capa, fingerprint);
-      expect(resolved.entry).toMatchObject(REGISTRY.get(ET4950_FP)!);
+      expect(resolved.entry).toMatchObject(unresolvedFields(REGISTRY.get(ET4950_FP)!));
       expect(resolved.matchedBy).toBe("pid");
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain("by its PID 11D1");
@@ -108,7 +113,7 @@ describe("lookupRegistryEntry", () => {
 
     it("warns with the diagnostic and proceeds with the identified model (name)", () => {
       const { resolved, warnings } = lookup(FF680W.info, doctored(FF680W.capa));
-      expect(resolved.entry).toMatchObject(REGISTRY.get(FF680W_FP)!);
+      expect(resolved.entry).toMatchObject(unresolvedFields(REGISTRY.get(FF680W_FP)!));
       expect(resolved.matchedBy).toBe("name");
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain("by its product name FF-680W");
@@ -117,7 +122,7 @@ describe("lookupRegistryEntry", () => {
 
     it("names the model the fingerprint belongs to, and still follows the PID", () => {
       const { resolved, warnings } = lookup(ET4950.info, XP7100.capa);
-      expect(resolved.entry).toMatchObject(REGISTRY.get(ET4950_FP)!);
+      expect(resolved.entry).toMatchObject(unresolvedFields(REGISTRY.get(ET4950_FP)!));
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain("it is the XP-7100");
     });
@@ -179,7 +184,9 @@ describe("lookupRegistryEntry", () => {
   it.each(REPLAY_FIXTURES)("resolves the $model fixture $path by identity", ({ model, path }) => {
     const { info, capa } = readInit1Bodies(path);
     const { resolved, warnings } = lookup(info, capa);
-    expect(resolved.entry).toMatchObject(REGISTRY.get(computeCapaFingerprint(capa))!);
+    expect(resolved.entry).toMatchObject(
+      unresolvedFields(REGISTRY.get(computeCapaFingerprint(capa))!),
+    );
     expect(resolved.matchedBy).toBe(model === "FF-680W" || model === "DS-575W" ? "name" : "pid");
     expect(warnings).toEqual([]);
   });
@@ -287,6 +294,76 @@ describe("an override's capability fields follow the printer's own replies", () 
       qit: resolved.derived.qit,
       cct: resolved.derived.cct,
     });
+  });
+});
+
+describe("an override that inherits the generic window", () => {
+  it("is sent the window computed at the wire DPI, not the reference window scaled", () => {
+    // The DS-575W keeps its own window; inheriting it would change 75 DPI.
+    const DS575W = readInit1Bodies(
+      "tools/pcap-extract/captures/ds-575w/adf-simplex-400-mono-jpg.jsonl",
+    );
+    const info = parseInfoTokens(DS575W.info);
+    const derived = deriveCapabilities(info, parseCapaTokens(DS575W.capa));
+    const entry = REGISTRY.get(computeCapaFingerprint(DS575W.capa))!;
+    const acqAt75 = (e: RegistryEntry) => {
+      const para = composePara(
+        makeParaSpec(withCapabilities(e, info, derived), "adf-simplex", "jpg", 75),
+      );
+      return parseParaSegments(para).find((s) => s.code === "ACQ")?.values;
+    };
+    // Scaled from 1700 x 3100 at 200 DPI, the window rounds one pixel past
+    // the 637 x 1162 area; the generic window is clipped to it.
+    expect(acqAt75(entry)).toEqual([0, 0, 638, 1163]);
+    expect(acqAt75({ ...entry, adfExtents: "generic" })).toEqual([0, 0, 637, 1162]);
+  });
+
+  // An ET-4950 whose INFO reply advertises a narrower flatbed and no ADF.
+  const NARROW_FB_ONLY = Buffer.from(
+    "#PRDh010PID 11D1        #FB ALGNLEFT#FB AREAd800i0001100",
+    "ascii",
+  );
+
+  it("follows the printer's own scan area", () => {
+    const { resolved } = lookup(NARROW_FB_ONLY, ET4950.capa);
+    expect(resolved.entry.displayName).toMatch(/ET-4950/);
+    expect(resolved.entry.fbExtents).toMatchObject({ x0: 0, y0: 0, w: 2400, h: 3300 });
+    const para = composePara(makeParaSpec(resolved.entry, "flatbed", "jpg", 600));
+    expect(parseParaSegments(para).find((s) => s.code === "ACQ")?.values).toEqual([
+      0, 0, 4800, 6600,
+    ]);
+  });
+
+  it("has no window where INFO advertises no area: warns with the diagnostic, then refuses a scan from it", () => {
+    const { resolved, warnings } = lookup(NARROW_FB_ONLY, ET4950.capa);
+    expect(resolved.entry.adfExtents).toBeNull();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("advertises no usable adf scan area");
+    expect(warnings[0]).toContain(`CAPA fingerprint:  ${ET4950_FP}`);
+    expect(() => assertSourceSupported(resolved.entry, "adf-simplex")).toThrow(
+      /has no ADF scan window.*no usable ADF scan area/,
+    );
+    expect(() => assertSourceSupported(resolved.entry, "flatbed")).not.toThrow();
+  });
+
+  it("is still a source the override claims, so the shadow comparison reports the missing area", () => {
+    const { resolved } = lookup(NARROW_FB_ONLY, ET4950.capa);
+    expect(resolved.override).toBe(REGISTRY.get(ET4950_FP));
+    expect(compareWithEntry(resolved.derived, resolved.override!)).toContainEqual({
+      field: "sources",
+      derived: { flatbed: true, adf: false },
+      entry: { flatbed: true, adf: true },
+    });
+  });
+
+  it("is replaced as a whole: a dialect given its own window sends that one", () => {
+    const dialect = recordedDialect(ET4950_FP);
+    expect(dialect.fbExtents?.generic).toBeDefined();
+    const own = { ...dialect, fbExtents: { x0: 0, y0: 0, w: 1000, h: 1000 } };
+    const para = composePara(makeParaSpec(own, "flatbed", "jpg", 600));
+    expect(parseParaSegments(para).find((s) => s.code === "ACQ")?.values).toEqual([
+      0, 0, 2000, 2000,
+    ]);
   });
 });
 

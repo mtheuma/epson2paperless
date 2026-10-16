@@ -92,20 +92,23 @@ async function waitForPdf(outputDir: string): Promise<void> {
 }
 
 // Fixed capability-body packets used by driveScannerToPara for both init cycles.
-// INFO_BODY_PACKET and RESA_BODY_PACKET stay synthetic — the scanner only
-// checks the declared length. CAPA_BODY_PACKET must use the real ET-4950 body
-// because INIT1_CAPA fingerprints it and resolves the matching dialect.
-const INFO_BODY_PACKET = buildIsPacket(0xa000, Buffer.alloc(244, 0x2d));
+// RESA_BODY_PACKET stays synthetic — the scanner only checks the declared
+// length. CAPA_BODY_PACKET and INFO_BODY_PACKET must use the real ET-4950
+// bodies: INIT1_CAPA fingerprints the CAPA reply to resolve the dialect, and
+// the ET-4950 family's scan windows are the generic ones, computed from the
+// scan areas in its INFO reply.
 const RESA_BODY_PACKET = buildIsPacket(0xa000, Buffer.alloc(164, 0x2d));
 
-// Real ET-4950 CAPA#1 body, extracted from the committed Frida fixture.
+// Real ET-4950 INIT1 bodies, extracted from the committed Frida fixture.
 // Synthetic filler (Buffer.alloc(336, 0x2d)) would fingerprint to a value not
 // in the registry and abort every helper-driven test at INIT1 CAPA. Loading the
 // real body keeps these tests resolving to the ET-4950 family registry entry.
-const ET4950_CAPA_BODY = readInit1Bodies(
+const ET4950_INIT1 = readInit1Bodies(
   "tools/frida-capture/captures/2026-04-24T09-05-08-flatbed-1p-jpg.jsonl",
-).capa;
-const CAPA_BODY_PACKET = buildIsPacket(0xa000, ET4950_CAPA_BODY);
+);
+const INFO_BODY_PACKET = buildIsPacket(0xa000, ET4950_INIT1.info);
+const INFO_HEADER = `INFOx${ET4950_INIT1.info.length.toString(16).toUpperCase().padStart(7, "0")}`;
+const CAPA_BODY_PACKET = buildIsPacket(0xa000, ET4950_INIT1.capa);
 
 /**
  * Drive a fresh scanner session from CONNECTING through to just after
@@ -176,7 +179,7 @@ async function driveScannerToPara(args: {
 
   // Cycle 1: FS Y ACK, @INFO hdr+body, @CAPA hdr+body, FIN
   await feedLegacyAck();
-  await feedEsci2Reply("INFOx00000F4");
+  await feedEsci2Reply(INFO_HEADER);
   fake.feed(INFO_BODY_PACKET);
   await waitImmediate();
   await feedEsci2Reply("CAPAx0000150");
@@ -186,7 +189,7 @@ async function driveScannerToPara(args: {
 
   // Cycle 2: FS Z ACK, @INFO, @CAPA, @RESA, FIN
   await feedLegacyAck();
-  await feedEsci2Reply("INFOx00000F4");
+  await feedEsci2Reply(INFO_HEADER);
   fake.feed(INFO_BODY_PACKET);
   await waitImmediate();
   await feedEsci2Reply("CAPAx0000150");

@@ -86,7 +86,7 @@ describe("generic dialect — fixture replay with every override ignored", () =>
       ).wireDpi;
       const spec = {
         ...makeParaSpec(entry, source, "jpg", dpi),
-        ...genericParaFields(info, entry, source, dpi),
+        ...genericParaFields(entry),
       };
       expect(extractScannerParaWrite(fake).equals(composePara(spec))).toBe(true);
     },

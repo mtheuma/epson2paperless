@@ -59,7 +59,7 @@ describe("the generic dialect, on every fixture model with its override ignored"
         for (const action of ["jpg", "pdf"] as const) {
           const spec = {
             ...makeParaSpec(entry, source, action, dpi),
-            ...genericParaFields(infoTokens, entry, source, dpi),
+            ...genericParaFields(entry),
           };
           const segments = parseParaSegments(composePara(spec));
           const values = (code: string) => segments.find((s) => s.code === code)?.values;
@@ -163,8 +163,8 @@ describe("buildGenericEntry", () => {
 
   it("is A4 at 300 DPI, right-aligned in a right-aligned ADF", () => {
     const entry = buildGenericEntry(info(FB + ADF), capa(NEUTRAL_CAPA));
-    expect(entry.fbExtents).toEqual({ x0: 0, y0: 0, w: 2481, h: 3506 });
-    expect(entry.adfExtents).toEqual({ x0: 69, y0: 0, w: 2481, h: 3506 });
+    expect(entry.fbExtents).toMatchObject({ x0: 0, y0: 0, w: 2481, h: 3506 });
+    expect(entry.adfExtents).toMatchObject({ x0: 69, y0: 0, w: 2481, h: 3506 });
   });
 
   it("sends #QIT / #CCT only when their list carries the value it sends", () => {
@@ -182,7 +182,7 @@ describe("buildGenericEntry", () => {
     const entry = buildGenericEntry(info(adf), capa("#ADFCRP " + NEUTRAL_CAPA));
     const spec = {
       ...makeParaSpec(entry, "adf-simplex", "jpg", 200),
-      ...genericParaFields(info(adf), entry, "adf-simplex", 200),
+      ...genericParaFields(entry),
     };
     const segments = parseParaSegments(composePara(spec));
     expect(segments.find((s) => s.code === "DFA")?.values).toEqual([0, 1400]);

@@ -26,7 +26,7 @@ _Avoid_: profile (reserved for the PARA layout variant), driver
 A dialect value computed from the printer's own INFO, CAPA or STAT replies rather than written down per model.
 
 **Model override**:
-A per-model record that supplies only what capabilities cannot: a captured colour pair, a scan window, and genuine quirks. Matched by model identity, or by CAPA fingerprint as a fallback.
+A per-model record that supplies only what capabilities cannot: a captured colour pair, a scan window (where it differs from the generic one), and genuine quirks. Matched by model identity, or by CAPA fingerprint as a fallback.
 _Avoid_: registry entry (the pre-override, fingerprint-keyed record), dialect entry
 
 **Generic dialect**:

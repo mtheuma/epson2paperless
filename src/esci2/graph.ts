@@ -107,8 +107,7 @@ export interface Esci2Ctx {
   entry: Dialect | undefined;
   /**
    * Set when the session runs the generic dialect (no registry entry
-   * matched): the parsed INFO reply its scan window is computed from at the
-   * wire DPI. Undefined otherwise.
+   * matched): its parsed INFO reply. Undefined otherwise.
    */
   genericInfo?: InfoTokens;
   /** Panel-selected output format; drives action-aware dialects' PARA splice. */
@@ -417,7 +416,7 @@ twoPhaseRead(
       adfDuplex: ctx.entry.adfDuplex,
       paraProfile: ctx.entry.paraProfile,
     });
-    if (resolved.matchedBy === "generic") {
+    if (resolved.override === undefined) {
       // Built from the derivation itself, so there is nothing to compare.
       ctx.genericInfo = info;
       applyEntrySourceOverride(ctx, ctx.entry);
@@ -428,7 +427,7 @@ twoPhaseRead(
     // failure here is logged rather than allowed to end the session.
     try {
       const dialect = ctx.entry.displayName;
-      for (const d of compareWithEntry(resolved.derived, ctx.entry)) {
+      for (const d of compareWithEntry(resolved.derived, resolved.override)) {
         // A disagreement the entry already flags as unconfirmed is known;
         // repeating it at info on every scan would read as a new problem.
         if (isExpectedDisagreement(d, ctx.entry)) {
@@ -989,7 +988,7 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
     quality,
   );
   if (ctx.genericInfo !== undefined) {
-    Object.assign(spec, genericParaFields(ctx.genericInfo, ctx.entry!, paraSource, sel.wireDpi));
+    Object.assign(spec, genericParaFields(ctx.entry!));
   }
   const paraPayload = composePara(spec);
   return [

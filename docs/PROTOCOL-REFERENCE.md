@@ -356,9 +356,14 @@ keyed by model identity. Entries are pure data:
   replies (`src/esci2/capa-fingerprint.ts`). A model whose PID isn't known yet
   (ET-3950, XP-4100) resolves through the fingerprint it shares with a sibling.
 - Dispatch metadata (`sourceDetection`, `initPollIterations`).
-- Scan extents (`fbExtents`, `adfExtents`) — manually pinned per family, at
-  `windowDpi` (300 unless set; 200 for the `adf-crp` scanners). A session whose
-  derived profile reads them at another reference DPI rescales them first.
+- Scan extents (`fbExtents`, `adfExtents`) — the captured paper size, pinned at
+  `windowDpi` (300 unless set; 200 for the `adf-crp` scanners), or `"generic"`
+  to inherit the generic scan window (see the generic dialect below). An entry
+  keeps its own only where the generic window differs from it at some
+  advertised DPI on some source: the ET-2750 (2477×3500), XP-7100 (Letter),
+  FF-680W (long page) and DS-575W (the generic window is clipped at 75 DPI,
+  where its own scales one pixel past the area). A session whose derived
+  profile reads a pinned window at another reference DPI rescales it first.
 - A `gmm` constant plus named `gammaClass` and `cmxClass` lookups resolved from
   `src/esci2/data/gamma-classes.ts` and `cmx-classes.ts`. Class definitions are
   inlined verbatim from captured fixtures; never algorithmically generated.
@@ -514,8 +519,9 @@ through full selection semantics instead of being silently discarded.
 
 ### Extent scaling from the registry reference DPI
 
-The registry's `fbExtents` / `adfExtents` are pinned at a fixed reference DPI per
-PARA profile: `STANDARD_BASE_DPI` (300) for the standard profile, `ADF_CRP_BASE_DPI`
+A registry entry's own `fbExtents` / `adfExtents` are pinned at a fixed reference
+DPI per PARA profile (an inherited `"generic"` window isn't scaled: it is computed
+at the wire DPI): `STANDARD_BASE_DPI` (300) for the standard profile, `ADF_CRP_BASE_DPI`
 (200) for `adf-crp` (FF-680W / DS-575W). `composePara` scales both the `#RSM` /
 `#RSS` resolution fields and the `#ACQ` extents by `resolution / referenceDpi`:
 
