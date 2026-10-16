@@ -1,6 +1,7 @@
 // src/esci2/dialects/registry.ts
 import type { GammaClassName, CmxClassName, Extents, ParaProfile } from "../para-composer.js";
 import type { ToneCurveName } from "../../postprocess/tone-curves.js";
+import type { SourceGeometry, WindowSource } from "../scan-window.js";
 
 export interface RegistryEntry {
   /**
@@ -26,9 +27,15 @@ export interface RegistryEntry {
    */
   sourceDetection: "stat-length" | "stat-content" | "fixed-flatbed" | "fixed-adf";
   initPollIterations: number;
-  /** Flatbed scan extents; null for ADF-only hardware (mirrors adfExtents' null for flatbed-only models). */
-  fbExtents: Extents | null;
-  adfExtents: Extents | null;
+  /**
+   * Flatbed scan window: the captured paper size, "generic" to inherit the
+   * generic window, or null for ADF-only hardware (mirrors adfExtents' null
+   * for flatbed-only models). An entry keeps its own window only where the
+   * generic one differs from it at some advertised DPI (scan-window.test.ts
+   * holds the comparison).
+   */
+  fbExtents: EntryWindow;
+  adfExtents: EntryWindow;
   /**
    * The DPI fbExtents and adfExtents are given at: the reference DPI of the
    * PARA profile they were captured under (baseDpiFor). Omitted means 300,
@@ -104,8 +111,25 @@ export interface CapabilityFields {
   paraProfile: ParaProfile;
 }
 
+/**
+ * A source's scan window on a registry entry. "generic" inherits the generic
+ * window, computed from the printer's own scan area at every wire DPI
+ * (genericWindow).
+ */
+export type EntryWindow = Extents | "generic" | null;
+
 /** What a session runs: its registry entry (or the generic one) plus the capability fields. */
-export interface Dialect extends RegistryEntry, CapabilityFields {}
+export interface Dialect extends Omit<RegistryEntry, "fbExtents" | "adfExtents">, CapabilityFields {
+  /** The source's window at the PARA profile's reference DPI; null when it has none. */
+  fbExtents: Extents | null;
+  adfExtents: Extents | null;
+  /**
+   * The sources whose window is the generic one, with the geometry it is
+   * computed from. makeParaSpec sends it computed at the wire DPI rather than
+   * scaling the reference window, which can overrun the scan area.
+   */
+  genericWindows: Partial<Record<WindowSource, SourceGeometry>>;
+}
 
 /**
  * Whether SCAN_COLOR_MODE=grayscale is honoured on the wire for this dialect.
@@ -131,8 +155,8 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     displayName: "ET-4950 / ET-3950 / ET-4956 (ESC/I-2 over TLS)",
     sourceDetection: "stat-length",
     initPollIterations: 3,
-    fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
-    adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
+    fbExtents: "generic",
+    adfExtents: "generic",
     duplexBackRotated: true, // reversing ADF — backs arrive upside down
     gmm: "UG10",
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
@@ -211,8 +235,8 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     displayName: "ET-4800 (ESC/I-2 over plain TCP)",
     sourceDetection: "stat-length",
     initPollIterations: 3, // same as ET-4950 family; fixtures trimmed to 3 cycles
-    fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
-    adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
+    fbExtents: "generic",
+    adfExtents: "generic",
     duplexBackRotated: false, // ADF simplex — no back sides
     gmm: "UG18",
     gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
@@ -410,8 +434,9 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
   // (PID 112B, FW FB 1.31): its reported CAPA shape matches the ET-8500 —
   // GMM "UG10UG18", CMX "UNITUM08", QIT present (PREFON OFF), CCT absent, and
   // the #FB AREA value "d850i0001170" byte-identical to the ET-4800/ET-8500 —
-  // so every field is inherited from that sibling: A4 extents from the
-  // ET-4800 family, et4800-um08 CMX, and the near-identity et4950-stock gamma
+  // so every field is inherited from that sibling: the A4 window of the
+  // ET-4800 family (now the generic window, which equals it at every
+  // advertised DPI), et4800-um08 CMX, and the near-identity et4950-stock gamma
   // (same photo-scanner rationale as the ET-8500: gamma isn't advertised in
   // CAPA, and a flat curve degrades mildly if wrong instead of crushing
   // shadows). The fingerprint still differs from the ET-8500's somewhere in
@@ -435,7 +460,7 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     displayName: "ET-7700 (ESC/I-2)",
     sourceDetection: "fixed-flatbed",
     initPollIterations: 3,
-    fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
+    fbExtents: "generic",
     adfExtents: null,
     duplexBackRotated: false, // no ADF
     gmm: "UG18",

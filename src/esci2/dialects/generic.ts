@@ -8,7 +8,7 @@ import {
   type DerivedCapabilities,
 } from "../derivation.js";
 import { baseDpiFor, type Extents, type ParaProfile, type ParaSpec } from "../para-composer.js";
-import { genericWindow, type WindowSource } from "../scan-window.js";
+import { genericWindowIn, sourceGeometry, type WindowSource } from "../scan-window.js";
 import type { Dialect } from "./registry.js";
 
 /**
@@ -88,11 +88,9 @@ export function printerIdentity(info: InfoTokens): string {
 }
 
 /**
- * Builds the generic dialect. Its windows are the generic window at the
- * profile's reference DPI; the PARA itself takes the generic window at the
- * wire DPI instead (genericParaFields), since scaling a reference window can
- * overrun the scan area. Its capability fields are the ones every session
- * takes (capabilityFields).
+ * Builds the generic dialect. Every window it has is the generic one, sent
+ * computed at the wire DPI (makeParaSpec). Its capability fields are the
+ * ones every session takes (capabilityFields).
  *
  * Throws GenericDialectUnusableError when the CAPA reply can't be parsed,
  * when it lists no JPG format, when INFO advertises no usable scan area, or
@@ -110,13 +108,17 @@ export function buildGenericEntry(
     throw new GenericDialectUnusableError("its CAPA reply lists no JPG format");
   }
   const profile = derived.paraProfile;
+  const genericWindows: Dialect["genericWindows"] = {};
   const windowFor = (source: WindowSource): Extents | null => {
     if (!derived.sources[source]) return null;
-    const window = genericWindow(info, source, profile, baseDpiFor(profile));
-    if (window === null) {
+    const geometry = sourceGeometry(info, source);
+    const window =
+      geometry === null ? null : genericWindowIn(geometry, source, profile, baseDpiFor(profile));
+    if (geometry === null || window === null) {
       const area = source === "flatbed" ? info.fbArea : info.adfArea;
       throw new GenericDialectUnusableError(`its ${source} scan area (${area}) isn't usable`);
     }
+    genericWindows[source] = geometry;
     return window;
   };
   const fbExtents = windowFor("flatbed");
@@ -139,6 +141,7 @@ export function buildGenericEntry(
     initPollIterations: fbExtents !== null ? POLLS_WITH_FLATBED : POLLS_ADF_ONLY,
     fbExtents,
     adfExtents,
+    genericWindows,
     duplexBackRotated: derived.duplexBackRotated,
     gmm: pair.gmm,
     gammaClass: { jpg: pair.gamma, pdf: pair.gamma },
@@ -149,28 +152,15 @@ export function buildGenericEntry(
 }
 
 /**
- * The PARA fields the generic dialect computes per scan rather than keeping
- * on its entry:
- *
- * - acqExtents: the generic window for `source` at the wire DPI, the
- *   reference window scaled, then clipped to the scan area at that DPI, so
- *   no DPI lands past the edge;
- * - adfCrpDfaLength (crop mode): the ADF area's height, which is the value
- *   the FF-680W and DS-575W captures carry there.
- *
- * Throws if the area leaves nothing to scan at that DPI.
+ * The PARA field the generic dialect takes from the printer rather than from
+ * a capture: in crop mode, the #DFA length is the ADF area's height, which is
+ * the value the FF-680W and DS-575W captures carry there. (Its window is a
+ * generic one, which makeParaSpec already computes at the wire DPI.)
  */
 export function genericParaFields(
   info: InfoTokens,
   entry: Dialect,
-  source: ParaSpec["source"],
-  dpi: number,
-): Pick<ParaSpec, "acqExtents" | "adfCrpDfaLength"> {
-  const windowSource: WindowSource = source === "flatbed" ? "flatbed" : "adf";
-  const acqExtents = genericWindow(info, windowSource, entry.paraProfile, dpi);
-  if (acqExtents === null) {
-    throw new Error(`${entry.displayName}: no ${windowSource} scan window at ${dpi} DPI`);
-  }
-  if (entry.paraProfile !== "adf-crp") return { acqExtents };
-  return { acqExtents, adfCrpDfaLength: parseArea(info.adfArea)!.height };
+): Pick<ParaSpec, "adfCrpDfaLength"> {
+  if (entry.paraProfile !== "adf-crp") return {};
+  return { adfCrpDfaLength: parseArea(info.adfArea)!.height };
 }

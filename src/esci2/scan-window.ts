@@ -2,7 +2,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { parseArea, type InfoTokens } from "./capabilities.js";
 import { baseDpiFor, scaleAcqExtents, type Extents, type ParaProfile } from "./para-composer.js";
-import type { Dialect, RegistryEntry } from "./dialects/registry.js";
+import type { Dialect } from "./dialects/registry.js";
 
 /**
  * Shadow derivation for the scan window (report-only). The printer's INFO
@@ -71,7 +71,7 @@ export type WindowProblem =
   | { source: WindowSource; problem: "outside-scan-area"; window: Extents; maxArea: Extents }
   | { source: WindowSource; problem: "x0-misaligned"; window: Extents; expectedX0: number };
 
-function entryWindows(entry: RegistryEntry): [WindowSource, Extents][] {
+function entryWindows(entry: Dialect): [WindowSource, Extents][] {
   const out: [WindowSource, Extents][] = [];
   if (entry.fbExtents !== null) out.push(["flatbed", entry.fbExtents]);
   if (entry.adfExtents !== null) out.push(["adf", entry.adfExtents]);
@@ -119,9 +119,10 @@ export function windowProblems(info: InfoTokens, entry: Dialect): WindowProblem[
 const GENERIC_A4_AT_300 = { w: 2481, h: 3506 };
 
 /**
- * The window a printer with no entry would scan at `dpi`, or null when INFO
- * advertises no area for `source`, when the profile has no such source
- * (adf-crp has no flatbed), or when clipping leaves nothing to scan.
+ * The window a printer with no entry, or whose entry inherits it
+ * ("generic"), scans at `dpi`; null when INFO advertises no area for
+ * `source`, when the profile has no such source (adf-crp has no flatbed), or
+ * when clipping leaves nothing to scan.
  *
  * - standard: A4 at 300 DPI, x0 from the alignment rule.
  * - adf-crp: the full ADF scan area at 200 DPI (crop mode stops at the end
@@ -138,9 +139,18 @@ export function genericWindow(
   profile: ParaProfile,
   dpi: number,
 ): Extents | null {
-  if (profile === "adf-crp" && source === "flatbed") return null;
   const geometry = sourceGeometry(info, source);
-  if (geometry === null) return null;
+  return geometry === null ? null : genericWindowIn(geometry, source, profile, dpi);
+}
+
+/** genericWindow for a source whose geometry is already read from INFO. */
+export function genericWindowIn(
+  geometry: SourceGeometry,
+  source: WindowSource,
+  profile: ParaProfile,
+  dpi: number,
+): Extents | null {
+  if (profile === "adf-crp" && source === "flatbed") return null;
   const baseDpi = baseDpiFor(profile);
   const baseAreaW = toPixels(geometry.area.width, baseDpi);
   let reference: Extents;

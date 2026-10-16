@@ -59,7 +59,7 @@ describe("the generic dialect, on every fixture model with its override ignored"
         for (const action of ["jpg", "pdf"] as const) {
           const spec = {
             ...makeParaSpec(entry, source, action, dpi),
-            ...genericParaFields(infoTokens, entry, source, dpi),
+            ...genericParaFields(infoTokens, entry),
           };
           const segments = parseParaSegments(composePara(spec));
           const values = (code: string) => segments.find((s) => s.code === code)?.values;
@@ -182,7 +182,7 @@ describe("buildGenericEntry", () => {
     const entry = buildGenericEntry(info(adf), capa("#ADFCRP " + NEUTRAL_CAPA));
     const spec = {
       ...makeParaSpec(entry, "adf-simplex", "jpg", 200),
-      ...genericParaFields(info(adf), entry, "adf-simplex", 200),
+      ...genericParaFields(info(adf), entry),
     };
     const segments = parseParaSegments(composePara(spec));
     expect(segments.find((s) => s.code === "DFA")?.values).toEqual([0, 1400]);

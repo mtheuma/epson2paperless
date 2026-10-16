@@ -1,4 +1,9 @@
-import { REGISTRY_ENTRIES, type Dialect, type RegistryEntry } from "./registry.js";
+import {
+  REGISTRY_ENTRIES,
+  type Dialect,
+  type EntryWindow,
+  type RegistryEntry,
+} from "./registry.js";
 import {
   STANDARD_BASE_DPI,
   baseDpiFor,
@@ -10,6 +15,7 @@ import { buildDiagnostic, UnsupportedDialectError } from "../diagnostic.js";
 import type { CapaTokens, InfoTokens } from "../capabilities.js";
 import { buildGenericEntry, GenericDialectUnusableError, printerIdentity } from "./generic.js";
 import { capabilityFields, deriveCapabilities, type DerivedCapabilities } from "../derivation.js";
+import { genericWindowIn, sourceGeometry, type WindowSource } from "../scan-window.js";
 import { createLogger } from "../../logger.js";
 
 const log = createLogger("scanner-esci2");
@@ -78,11 +84,15 @@ export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
           `please file an issue with the diagnostic block below:\n\n${buildDiagnostic(replies)}`,
       );
     }
-    return { entry: withCapabilities(byIdentity, derived), matchedBy, derived };
+    return { entry: withCapabilities(byIdentity, info, derived), matchedBy, derived };
   }
 
   if (byFingerprint !== undefined) {
-    return { entry: withCapabilities(byFingerprint, derived), matchedBy: "fingerprint", derived };
+    return {
+      entry: withCapabilities(byFingerprint, info, derived),
+      matchedBy: "fingerprint",
+      derived,
+    };
   }
   return { entry: resolveGenericEntry(replies, derived), matchedBy: "generic", derived };
 }
@@ -91,22 +101,37 @@ export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
  * A registry entry completed with the capability fields derived from the
  * printer's own replies, the same ones the generic dialect is built with.
  *
- * The entry's windows are pinned at its windowDpi, and the composer reads
- * them at the derived profile's reference DPI. When the two differ (a
- * printer whose replies give it the other profile), the windows are
- * rescaled so they keep their physical size.
+ * The entry's own windows are pinned at its windowDpi, and the composer
+ * reads them at the derived profile's reference DPI. When the two differ (a
+ * printer whose replies give it the other profile), they are rescaled so
+ * they keep their physical size. A window the entry inherits ("generic") is
+ * the generic window for this printer's scan area, at that reference DPI
+ * here and at the wire DPI in the PARA (makeParaSpec); null when the
+ * printer advertises no area for the source.
  */
-export function withCapabilities(entry: RegistryEntry, derived: DerivedCapabilities): Dialect {
+export function withCapabilities(
+  entry: RegistryEntry,
+  info: InfoTokens,
+  derived: DerivedCapabilities,
+): Dialect {
   const fields = capabilityFields(derived);
   const dpi = baseDpiFor(fields.paraProfile);
   const scale = dpi / (entry.windowDpi ?? STANDARD_BASE_DPI);
-  if (scale === 1) return { ...entry, ...fields };
-  const rescale = (e: Extents | null) => (e === null ? null : scaleEdges(e, scale));
+  const genericWindows: Dialect["genericWindows"] = {};
+  const window = (source: WindowSource, e: EntryWindow): Extents | null => {
+    if (e !== "generic") return e === null || scale === 1 ? e : scaleEdges(e, scale);
+    const geometry = sourceGeometry(info, source);
+    if (geometry === null) return null;
+    const generic = genericWindowIn(geometry, source, fields.paraProfile, dpi);
+    if (generic !== null) genericWindows[source] = geometry;
+    return generic;
+  };
   return {
     ...entry,
-    fbExtents: rescale(entry.fbExtents),
-    adfExtents: rescale(entry.adfExtents),
-    windowDpi: dpi,
+    fbExtents: window("flatbed", entry.fbExtents),
+    adfExtents: window("adf", entry.adfExtents),
+    ...(scale === 1 ? {} : { windowDpi: dpi }),
+    genericWindows,
     ...fields,
   };
 }
@@ -174,6 +199,10 @@ export function assertSourceSupported(entry: Dialect, source: ParaSpec["source"]
  * Pure projection of a registry entry + source/action axes onto a ParaSpec.
  * Called at PARA-build time after the source axis has been resolved (with
  * duplex folded in by the call site).
+ *
+ * A generic window is sent computed at the wire DPI (acqExtents): the
+ * reference window scaled, then clipped to the scan area, so no DPI lands
+ * past its edge. Throws if the area leaves nothing to scan at that DPI.
  */
 export function makeParaSpec(
   entry: Dialect,
@@ -183,6 +212,17 @@ export function makeParaSpec(
   colorMode?: ParaSpec["colorMode"],
   jpegQuality?: number,
 ): ParaSpec {
+  const windowSource: WindowSource = source === "flatbed" ? "flatbed" : "adf";
+  const geometry = entry.genericWindows[windowSource];
+  let acqExtents: Extents | undefined;
+  if (geometry !== undefined) {
+    const dpi = resolution ?? baseDpiFor(entry.paraProfile);
+    const window = genericWindowIn(geometry, windowSource, entry.paraProfile, dpi);
+    if (window === null) {
+      throw new Error(`${entry.displayName}: no ${windowSource} scan window at ${dpi} DPI`);
+    }
+    acqExtents = window;
+  }
   return {
     source,
     action,
@@ -197,5 +237,6 @@ export function makeParaSpec(
     colorMode,
     monoGammaClass: entry.monoGammaClass,
     jpegQuality,
+    ...(acqExtents && { acqExtents }),
   };
 }

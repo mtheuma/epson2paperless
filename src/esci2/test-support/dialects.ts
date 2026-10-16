@@ -7,7 +7,7 @@ import { parseCapaTokens, parseInfoTokens } from "../capabilities.js";
 import { deriveCapabilities } from "../derivation.js";
 import { computeCapaFingerprint } from "../capa-fingerprint.js";
 import { withCapabilities } from "../dialects/dispatch.js";
-import { REGISTRY, type Dialect } from "../dialects/registry.js";
+import { REGISTRY, type Dialect, type RegistryEntry } from "../dialects/registry.js";
 import {
   DIAGNOSTICS,
   REPLAY_FIXTURES,
@@ -52,5 +52,18 @@ export function recordedDialect(fingerprint: string): Dialect {
   const entry = REGISTRY.get(fingerprint);
   if (entry === undefined) throw new Error(`recordedDialect: no entry for ${fingerprint}`);
   const { info, capa } = recordedBodies(fingerprint);
-  return withCapabilities(entry, deriveCapabilities(parseInfoTokens(info), parseCapaTokens(capa)));
+  const infoTokens = parseInfoTokens(info);
+  return withCapabilities(entry, infoTokens, deriveCapabilities(infoTokens, parseCapaTokens(capa)));
+}
+
+/**
+ * The fields a dialect resolved from `entry` carries unchanged, for
+ * toMatchObject: all but the windows, which a session resolves against the
+ * printer's own scan area (an inherited "generic" window becomes extents).
+ */
+export function unresolvedFields(
+  entry: RegistryEntry,
+): Omit<RegistryEntry, "fbExtents" | "adfExtents"> {
+  const { fbExtents: _fb, adfExtents: _adf, ...rest } = entry;
+  return rest;
 }

@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { isDeepStrictEqual } from "node:util";
 import {
   alignedX0,
   genericWindow,
@@ -9,9 +10,11 @@ import {
   type WindowSource,
 } from "./scan-window.js";
 import { parseCapaTokens, parseInfoTokens } from "./capabilities.js";
-import type { Dialect } from "./dialects/registry.js";
+import { REGISTRY, type Dialect } from "./dialects/registry.js";
+import { makeParaSpec, withCapabilities } from "./dialects/dispatch.js";
+import { deriveCapabilities } from "./derivation.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
-import { scaleAcqExtents } from "./para-composer.js";
+import { composePara, scaleAcqExtents, type Extents, type ParaSpec } from "./para-composer.js";
 import { advertisedDpiSet } from "./resolution.js";
 import { REPLAY_FIXTURES, readInit1Bodies } from "./test-support/capability-bodies.js";
 import { recordedDialect } from "./test-support/dialects.js";
@@ -257,4 +260,146 @@ describe("genericWindowDifferences — on record for a future paper-size decisio
       },
     ]);
   });
+});
+
+describe("model overrides inherit the generic window where theirs matches it", () => {
+  // Each fixture model's own window as captured, at its reference DPI: the
+  // registry's value where the override keeps it, else the value it carried
+  // before it inherited the generic window.
+  const A4 = { x0: 0, y0: 0, w: 2481, h: 3506 };
+  const A4_RIGHT = { x0: 69, y0: 0, w: 2481, h: 3506 };
+  const LETTER = { x0: 0, y0: 0, w: 2550, h: 3300 };
+  const CAPTURED: Record<string, Record<WindowSource, Extents | null>> = {
+    "ET-4950 family": { flatbed: A4, adf: A4_RIGHT },
+    "ET-2750": { flatbed: { x0: 0, y0: 0, w: 2477, h: 3500 }, adf: null },
+    "XP-7100": { flatbed: LETTER, adf: LETTER },
+    "ET-4800": { flatbed: A4, adf: A4_RIGHT },
+    "ET-7700": { flatbed: A4, adf: null },
+    "FF-680W": { flatbed: null, adf: { x0: 0, y0: 0, w: 1700, h: 7200 } },
+    "DS-575W": { flatbed: null, adf: { x0: 0, y0: 0, w: 1700, h: 3100 } },
+  };
+
+  /** One fixture per model and CAPA fingerprint: the window rule reads only INIT1. */
+  const models = [
+    ...new Map(
+      REPLAY_FIXTURES.map(({ model, path }) => {
+        const bodies = readInit1Bodies(path);
+        const fp = computeCapaFingerprint(bodies.capa);
+        const tokens = parseInfoTokens(bodies.info);
+        const capa = parseCapaTokens(bodies.capa);
+        const entry = REGISTRY.get(fp)!;
+        const derived = deriveCapabilities(tokens, capa);
+        // The override with its captured window, and as the session runs it.
+        const captured = withCapabilities(
+          { ...entry, fbExtents: CAPTURED[model].flatbed, adfExtents: CAPTURED[model].adf },
+          tokens,
+          derived,
+        );
+        const session = withCapabilities(entry, tokens, derived);
+        return [`${model} ${fp}`, { model, entry, tokens, capa, captured, session }] as const;
+      }),
+    ).values(),
+  ];
+
+  /**
+   * Every (source, advertised DPI) pair of every fixture model, each checked
+   * on its own: the window the captured override sends there (scaled the way
+   * composePara scales it), and the generic window.
+   */
+  const pairs = models.flatMap(({ model, tokens, capa, captured }) =>
+    (["flatbed", "adf"] as const).flatMap((source) => {
+      const window = source === "flatbed" ? captured.fbExtents : captured.adfExtents;
+      if (window === null || sourceGeometry(tokens, source) === null) return [];
+      const paraSource = source === "flatbed" ? "flatbed" : "adf-simplex";
+      return advertisedDpiSet(capa, paraSource).map((dpi) => ({
+        model,
+        source,
+        dpi,
+        override: scaleAcqExtents(captured.paraProfile, window, dpi),
+        generic: genericWindow(tokens, source, captured.paraProfile, dpi),
+      }));
+    }),
+  );
+  const differing = pairs.filter((p) => !isDeepStrictEqual(p.override, p.generic));
+  const differingModels = new Set(differing.map((p) => p.model));
+
+  it("covers every fixture model, both sources, and more than the reference DPIs", () => {
+    expect(new Set(pairs.map((p) => p.model))).toEqual(new Set(Object.keys(CAPTURED)));
+    expect(new Set(pairs.map((p) => p.source))).toEqual(new Set(["flatbed", "adf"]));
+    for (const model of Object.keys(CAPTURED)) {
+      expect(pairs.filter((p) => p.model === model).length, model).toBeGreaterThan(2);
+    }
+  });
+
+  it("differs from the generic window on these pairs only", () => {
+    const byModel: Record<string, string[]> = {};
+    for (const p of differing) (byModel[p.model] ??= []).push(`${p.source} @ ${p.dpi}`);
+    const at = (source: string, dpis: number[]) => dpis.map((dpi) => `${source} @ ${dpi}`);
+    expect(byModel).toEqual({
+      // 2477 x 3500: a few pixels under A4.
+      "ET-2750": at("flatbed", [75, 150, 300, 600, 1200]),
+      // US Letter, on both sources.
+      "XP-7100": [
+        ...at("flatbed", [75, 150, 300, 600, 1200]),
+        ...at("adf", [75, 150, 300, 600, 1200]),
+      ],
+      // A 36-inch page (long paper).
+      "FF-680W": at("adf", [50, 75, 100, 150, 200, 240, 300, 360, 400, 600]),
+      // The full ADF area: the same window at every DPI but this one (below).
+      "DS-575W": at("adf", [75]),
+    });
+  });
+
+  it("DS-575W at 75 DPI: its rounded scaling passes the area's edge; the generic window is clipped", () => {
+    const p = differing.find((d) => d.model === "DS-575W")!;
+    expect(p.override).toEqual({ x0: 0, y0: 0, w: 638, h: 1163 });
+    expect(p.generic).toEqual({ x0: 0, y0: 0, w: 637, h: 1162 });
+  });
+
+  it.each(models)(
+    "$model inherits the generic window exactly when every pair matches",
+    ({ model, entry }) => {
+      const inherits = !differingModels.has(model);
+      for (const source of ["flatbed", "adf"] as const) {
+        const own = source === "flatbed" ? entry.fbExtents : entry.adfExtents;
+        const captured = CAPTURED[model][source];
+        if (captured === null) expect(own, `${model} ${source}`).toBeNull();
+        else expect(own, `${model} ${source}`).toEqual(inherits ? "generic" : captured);
+      }
+    },
+  );
+
+  // For each model that inherits: every source it has, at every DPI it
+  // advertises for that source.
+  const paraCases = models
+    .filter(({ model }) => !differingModels.has(model))
+    .flatMap(({ model, capa, captured, session }) => {
+      const sources: ParaSpec["source"][] = [];
+      if (captured.fbExtents !== null) sources.push("flatbed");
+      if (captured.adfExtents !== null) sources.push("adf-simplex");
+      if (captured.adfExtents !== null && captured.adfDuplex) sources.push("adf-duplex");
+      return sources.flatMap((source) =>
+        advertisedDpiSet(capa, source).map((dpi) => ({ model, source, dpi, captured, session })),
+      );
+    });
+
+  it("checks PARA for the ET-4950 family, ET-4800 and ET-7700 on every source they have", () => {
+    expect(new Set(paraCases.map((c) => c.model))).toEqual(
+      new Set(["ET-4950 family", "ET-4800", "ET-7700"]),
+    );
+    expect(new Set(paraCases.map((c) => c.source))).toEqual(
+      new Set(["flatbed", "adf-simplex", "adf-duplex"]),
+    );
+  });
+
+  it.each(paraCases)(
+    "$model $source at $dpi DPI: the PARA is byte-identical to the captured window's",
+    ({ source, dpi, captured, session }) => {
+      for (const action of ["jpg", "pdf"] as const) {
+        const before = composePara(makeParaSpec(captured, source, action, dpi));
+        const after = composePara(makeParaSpec(session, source, action, dpi));
+        expect(after.equals(before), action).toBe(true);
+      }
+    },
+  );
 });

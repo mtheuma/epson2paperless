@@ -20,7 +20,7 @@ import {
   readInit1Bodies,
 } from "./test-support/capability-bodies.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
-import { recordedDialect } from "./test-support/dialects.js";
+import { recordedDialect, unresolvedFields } from "./test-support/dialects.js";
 
 describe("esci2Graph (smoke)", () => {
   it("builds with the expected initial state and timeout", () => {
@@ -1582,7 +1582,9 @@ describe("esci2Graph INIT1_CAPA_DATA — model identity", () => {
     try {
       const result = state.decide(ctx, { type: 0xa000, payload: changed });
       expect("error" in result).toBe(false);
-      expect(ctx.entry).toMatchObject(REGISTRY.get(computeCapaFingerprint(capa))!);
+      expect(ctx.entry).toMatchObject(
+        unresolvedFields(REGISTRY.get(computeCapaFingerprint(capa))!),
+      );
       const warnings = warn.mock.calls.map((args) => args.join(" "));
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain(`CAPA fingerprint:  ${computeCapaFingerprint(changed)}`);
@@ -1742,7 +1744,9 @@ describe("esci2Graph — generic dialect", () => {
 
   it("still resolves a known printer to its own entry", () => {
     const { ctx } = resolve(ET4800.info, ET4800.capa);
-    expect(ctx.entry).toMatchObject(REGISTRY.get(computeCapaFingerprint(ET4800.capa))!);
+    expect(ctx.entry).toMatchObject(
+      unresolvedFields(REGISTRY.get(computeCapaFingerprint(ET4800.capa))!),
+    );
     expect(ctx.genericInfo).toBeUndefined();
   });
 

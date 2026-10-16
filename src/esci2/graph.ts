@@ -107,8 +107,8 @@ export interface Esci2Ctx {
   entry: Dialect | undefined;
   /**
    * Set when the session runs the generic dialect (no registry entry
-   * matched): the parsed INFO reply its scan window is computed from at the
-   * wire DPI. Undefined otherwise.
+   * matched): the parsed INFO reply its crop-mode #DFA length is read from
+   * (genericParaFields). Undefined otherwise.
    */
   genericInfo?: InfoTokens;
   /** Panel-selected output format; drives action-aware dialects' PARA splice. */
@@ -989,7 +989,7 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
     quality,
   );
   if (ctx.genericInfo !== undefined) {
-    Object.assign(spec, genericParaFields(ctx.genericInfo, ctx.entry!, paraSource, sel.wireDpi));
+    Object.assign(spec, genericParaFields(ctx.genericInfo, ctx.entry!));
   }
   const paraPayload = composePara(spec);
   return [
