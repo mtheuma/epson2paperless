@@ -7,6 +7,7 @@ import {
   type RegistryEntry,
 } from "./registry.js";
 import { recordedDialect } from "../test-support/dialects.js";
+import { STANDARD_BASE_DPI, baseDpiFor } from "../para-composer.js";
 
 describe("REGISTRY", () => {
   it("contains exactly twelve known fingerprints", () => {
@@ -164,6 +165,14 @@ describe("REGISTRY", () => {
       ),
     ).toBe(false);
     expect(supportsWireGrayscale(undefined)).toBe(false);
+  });
+
+  it("every recorded model derives the profile its windows are pinned for", () => {
+    // So no recorded printer's windows are rescaled (withCapabilities).
+    for (const [fp, e] of REGISTRY) {
+      const profile = recordedDialect(fp).paraProfile;
+      expect(baseDpiFor(profile), e.displayName).toBe(e.windowDpi ?? STANDARD_BASE_DPI);
+    }
   });
 
   it("no entry carries a capability-derived field: sessions take those from the printer", () => {

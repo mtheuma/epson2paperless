@@ -356,7 +356,9 @@ keyed by model identity. Entries are pure data:
   replies (`src/esci2/capa-fingerprint.ts`). A model whose PID isn't known yet
   (ET-3950, XP-4100) resolves through the fingerprint it shares with a sibling.
 - Dispatch metadata (`sourceDetection`, `initPollIterations`).
-- Scan extents (`fbExtents`, `adfExtents`) — manually pinned per family.
+- Scan extents (`fbExtents`, `adfExtents`) — manually pinned per family, at
+  `windowDpi` (300 unless set; 200 for the `adf-crp` scanners). A session whose
+  derived profile reads them at another reference DPI rescales them first.
 - A `gmm` constant plus named `gammaClass` and `cmxClass` lookups resolved from
   `src/esci2/data/gamma-classes.ts` and `cmx-classes.ts`. Class definitions are
   inlined verbatim from captured fixtures; never algorithmically generated.

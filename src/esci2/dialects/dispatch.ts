@@ -1,5 +1,11 @@
 import { REGISTRY_ENTRIES, type Dialect, type RegistryEntry } from "./registry.js";
-import type { ParaSpec } from "../para-composer.js";
+import {
+  STANDARD_BASE_DPI,
+  baseDpiFor,
+  scaleEdges,
+  type Extents,
+  type ParaSpec,
+} from "../para-composer.js";
 import { buildDiagnostic, UnsupportedDialectError } from "../diagnostic.js";
 import type { CapaTokens, InfoTokens } from "../capabilities.js";
 import { buildGenericEntry, GenericDialectUnusableError, printerIdentity } from "./generic.js";
@@ -84,9 +90,25 @@ export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
 /**
  * A registry entry completed with the capability fields derived from the
  * printer's own replies, the same ones the generic dialect is built with.
+ *
+ * The entry's windows are pinned at its windowDpi, and the composer reads
+ * them at the derived profile's reference DPI. When the two differ (a
+ * printer whose replies give it the other profile), the windows are
+ * rescaled so they keep their physical size.
  */
 export function withCapabilities(entry: RegistryEntry, derived: DerivedCapabilities): Dialect {
-  return { ...entry, ...capabilityFields(derived) };
+  const fields = capabilityFields(derived);
+  const dpi = baseDpiFor(fields.paraProfile);
+  const scale = dpi / (entry.windowDpi ?? STANDARD_BASE_DPI);
+  if (scale === 1) return { ...entry, ...fields };
+  const rescale = (e: Extents | null) => (e === null ? null : scaleEdges(e, scale));
+  return {
+    ...entry,
+    fbExtents: rescale(entry.fbExtents),
+    adfExtents: rescale(entry.adfExtents),
+    windowDpi: dpi,
+    ...fields,
+  };
 }
 
 function resolveGenericEntry(replies: Init1Replies, derived: DerivedCapabilities): Dialect {

@@ -10,6 +10,8 @@ import { UnsupportedDialectError } from "../diagnostic.js";
 import { computeCapaFingerprint } from "../capa-fingerprint.js";
 import { parseCapaTokens, parseInfoTokens } from "../capabilities.js";
 import { deriveCapabilities } from "../derivation.js";
+import { composePara } from "../para-composer.js";
+import { parseParaSegments } from "../test-support/para-parse.js";
 import { REPLAY_FIXTURES, readInit1Bodies } from "../test-support/capability-bodies.js";
 import { recordedDialect } from "../test-support/dialects.js";
 
@@ -262,6 +264,18 @@ describe("an override's capability fields follow the printer's own replies", () 
     const { resolved } = lookup(FF680W.info, capa);
     expect(resolved.matchedBy).toBe("name");
     expect(resolved.entry.paraProfile).toBe("standard");
+    // Its window (1700 x 7200 at 200 DPI, 8.5 x 36 in) keeps its physical
+    // size at the standard profile's 300 DPI reference, and on the wire.
+    expect(resolved.entry.adfExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 10800 });
+    const para = composePara(makeParaSpec(resolved.entry, "adf-simplex", "jpg", 300));
+    const acq = parseParaSegments(para).find((s) => s.code === "ACQ");
+    expect(acq?.values).toEqual([0, 0, 2550, 10800]);
+  });
+
+  it("keeps a crop-mode scanner's window as recorded when its profile matches", () => {
+    const { resolved } = lookup(FF680W.info, FF680W.capa);
+    expect(resolved.entry.paraProfile).toBe("adf-crp");
+    expect(resolved.entry.adfExtents).toEqual(REGISTRY.get(FF680W_FP)!.adfExtents);
   });
 
   it("returns the derivation the dialect was completed with", () => {

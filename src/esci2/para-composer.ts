@@ -118,6 +118,11 @@ export function scaleAcqExtents(profile: ParaProfile, e: Extents, resolution: nu
   if (profile === "adf-crp") {
     return { x0: e.x0, y0: e.y0, w: Math.round(e.w * scale), h: Math.round(e.h * scale) };
   }
+  return scaleEdges(e, scale);
+}
+
+/** Scales a window by its edges: near edge rounded, far edge floored (see scaleAcqExtents). */
+export function scaleEdges(e: Extents, scale: number): Extents {
   const x0 = Math.round(e.x0 * scale);
   const y0 = Math.round(e.y0 * scale);
   const x1 = Math.floor((e.x0 + e.w) * scale);

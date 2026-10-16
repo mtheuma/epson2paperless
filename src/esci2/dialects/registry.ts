@@ -30,6 +30,14 @@ export interface RegistryEntry {
   fbExtents: Extents | null;
   adfExtents: Extents | null;
   /**
+   * The DPI fbExtents and adfExtents are given at: the reference DPI of the
+   * PARA profile they were captured under (baseDpiFor). Omitted means 300,
+   * the standard profile's; the crop-mode (adf-crp) scanners set 200. A
+   * session whose derived profile has a different reference DPI rescales the
+   * windows (withCapabilities), so their physical size is kept.
+   */
+  windowDpi?: number;
+  /**
    * Whether duplex back sides arrive physically rotated 180° and need the
    * host-side compensation (EXIF Orientation=3 / PDF /Rotate 180). True for
    * reversing-ADF hardware, which re-feeds the sheet; false for single-pass
@@ -248,6 +256,7 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 8,
     fbExtents: null, // ADF-only hardware — no flatbed
     adfExtents: { x0: 0, y0: 0, w: 1700, h: 7200 },
+    windowDpi: 200,
     duplexBackRotated: true, // single-pass hardware, but the compensation has shipped unchallenged — flip on a hardware report
     duplexBackRotationUnverified: true,
     gmm: "UG18",
@@ -283,6 +292,7 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 12,
     fbExtents: null, // ADF-only hardware — no flatbed
     adfExtents: { x0: 0, y0: 0, w: 1700, h: 3100 },
+    windowDpi: 200,
     duplexBackRotated: false, // single-pass dual sensor — backs arrive upright (hardware-confirmed, #128)
     gmm: "UG18",
     gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
