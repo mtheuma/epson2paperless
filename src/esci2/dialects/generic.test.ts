@@ -129,7 +129,7 @@ describe("genericColourPair", () => {
 describe("buildGenericEntry", () => {
   it("reads its source from the status content and polls 3 times with a flatbed and an ADF", () => {
     const entry = buildGenericEntry(info(FB + ADF), capa(NEUTRAL_CAPA));
-    expect(entry.sourceDetection).toBe("stat-content");
+    expect(entry.sourceDetection).toBe("init-poll-status");
     expect(entry.initPollIterations).toBe(3);
   });
 

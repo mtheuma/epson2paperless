@@ -10,7 +10,7 @@ import {
   buildPurereadPacket,
   parseIsPacket,
 } from "../protocol.js";
-import { parseCapaTokens } from "./capabilities.js";
+import { parseCapaTokens, parseStatErrors } from "./capabilities.js";
 import { DEFAULT_JPEG_QUALITY } from "../config.js";
 import { setLogLevel } from "../logger.js";
 import {
@@ -940,39 +940,8 @@ describe("esci2Graph POST_MODE_STAT — duplex capability guard", () => {
 });
 
 describe("esci2Graph INIT_POLL_STAT source detection", () => {
-  it("detects source=adf when STAT header length is 0 on iteration 0", () => {
-    const state = esci2Graph.states.INIT_POLL_STAT;
-    expect(state.kind).toBe("decision");
-    if (state.kind !== "decision") return;
-    const ctx = makeCtx({ initPollIteration: 0, source: "flatbed" }); // start flatbed to confirm mutation
-    // STAT reply with length=0 (ADF signature — no status queued)
-    const payload = Buffer.from("STATx0000000" + " ".repeat(52), "ascii");
-    state.decide(ctx, { type: 0xa000, payload });
-    expect(ctx.source).toBe("adf");
-  });
-
-  it("detects source=flatbed when STAT header length is 12 on iteration 0", () => {
-    const state = esci2Graph.states.INIT_POLL_STAT;
-    expect(state.kind).toBe("decision");
-    if (state.kind !== "decision") return;
-    const ctx = makeCtx({ initPollIteration: 0 });
-    // STAT reply with length=12 (flatbed signature — queued filler #---#---#---)
-    const payload = Buffer.from("STATx000000c#---#---#---", "ascii");
-    state.decide(ctx, { type: 0xa000, payload });
-    expect(ctx.source).toBe("flatbed");
-  });
-
-  it("defaults source=adf for unexpected STAT header length on iteration 0", () => {
-    const state = esci2Graph.states.INIT_POLL_STAT;
-    expect(state.kind).toBe("decision");
-    if (state.kind !== "decision") return;
-    const ctx = makeCtx({ initPollIteration: 0 });
-    // STAT reply with unexpected length=8
-    const payload = Buffer.from("STATx0000008#-------", "ascii");
-    state.decide(ctx, { type: 0xa000, payload });
-    expect(ctx.source).toBe("adf");
-  });
-
+  // Which source the reply's content selects is covered by the
+  // "source from the status reply's content" blocks below.
   it("does NOT update source on iteration 1+", () => {
     const state = esci2Graph.states.INIT_POLL_STAT;
     expect(state.kind).toBe("decision");
@@ -1004,30 +973,12 @@ describe("esci2Graph INIT_POLL_STAT source detection", () => {
     const result = state.decide(ctx, { type: 0xa000, payload });
     expect("next" in result && result.next).toBe("INIT_POLL_STAT_DRAIN");
   });
-
-  it("skips source-detect override when dialect.sourceDetection is fixed-flatbed (preserves pre-set source)", () => {
-    const state = esci2Graph.states.INIT_POLL_STAT;
-    expect(state.kind).toBe("decision");
-    if (state.kind !== "decision") return;
-    // ET-2750 STAT replies declare length=0 even though the IS frame packs
-    // a 52-byte filler inline. Applying the stat-length heuristic would
-    // misclassify ET-2750 as ADF — the fixed-flatbed dialect must skip
-    // detection and trust the pre-set source.
-    const ctx = makeCtx({
-      entry: recordedDialect("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7"),
-      source: "flatbed",
-      initPollIteration: 0,
-    });
-    const payload = Buffer.from("STATx0000000" + " ".repeat(52), "ascii");
-    state.decide(ctx, { type: 0xa000, payload });
-    expect(ctx.source).toBe("flatbed");
-  });
 });
 
 describe("applyEntrySourceOverride", () => {
   // The TLS scanner shell pre-sets ctx.source = "adf" (scanner.ts) because
-  // the dominant TLS path is ADF + flatbed with stat-length detection.
-  // A TLS entry that uses sourceDetection: "fixed-flatbed" (e.g. the
+  // the dominant TLS path is ADF + flatbed, read from the status reply.
+  // A flatbed-only TLS printer (fixed-flatbed detection, e.g. the
   // ET-2950) would otherwise carry "adf" all the way to composePara, which
   // throws on flatbed-only hardware. applyEntrySourceOverride pins the
   // source at the entry-resolution moment to keep every downstream
@@ -1060,7 +1011,7 @@ describe("applyEntrySourceOverride", () => {
     expect(ctx.source).toBe("flatbed");
   });
 
-  it("leaves source untouched for stat-length entries so INIT_POLL_STAT can decide per-fixture", () => {
+  it("leaves source untouched for a printer with both sources, so INIT_POLL_STAT can decide", () => {
     const ctx = makeCtx({
       source: "adf",
       transport: "tls",
@@ -1594,17 +1545,14 @@ describe("esci2Graph INIT1_CAPA_DATA — model identity", () => {
   });
 });
 
-describe("esci2Graph INIT_POLL — status-content source shadow", () => {
-  const STATUS_LINES = [
-    "Status-content source decision disagrees with the length-based one",
-    "Status reply carries an error a content-based source decision would fail on",
-  ];
+describe("esci2Graph INIT_POLL — source from the status reply's content (model overrides)", () => {
+  const STATUS_LINE = 'Status reply carries an error other than "ADF paper empty"';
   const ET4950_ENTRY = recordedDialect(
     "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2",
   );
 
   // Feeds the first init-poll STAT reply (header, then the drained body when
-  // the header declares one) and returns ctx plus the status-shadow lines.
+  // the header declares one) and returns ctx plus the status-error lines.
   function firstStatus(
     entry: import("./dialects/registry.js").Dialect,
     header: Buffer,
@@ -1628,7 +1576,7 @@ describe("esci2Graph INIT_POLL — status-content source shadow", () => {
         expect("next" in drainResult && drainResult.next).toBe("INIT_POLL_FIN");
       }
       const lines = infoSpy.mock.calls.filter((args) =>
-        args.some((a) => STATUS_LINES.some((l) => String(a).includes(l))),
+        args.some((a) => String(a).includes(STATUS_LINE)),
       );
       return { ctx, lines };
     } finally {
@@ -1638,37 +1586,46 @@ describe("esci2Graph INIT_POLL — status-content source shadow", () => {
   const statHeader = (length: number) =>
     Buffer.from(`STATx${length.toString(16).toUpperCase().padStart(7, "0")}` + "#---".repeat(13));
 
-  it.each(REPLAY_FIXTURES)("is silent for the $model fixture $path", ({ path, source }) => {
-    const entry = recordedDialect(computeCapaFingerprint(readInit1Bodies(path).capa));
-    const { header, body } = readFirstInitPollStatus(path);
-    const { ctx, lines } = firstStatus(entry, header, body);
-    expect(lines).toEqual([]);
-    // Fixed-source entries never consult the status; the rest land on the
-    // source the session was recorded scanning from.
-    const expected =
-      entry.sourceDetection === "fixed-flatbed"
-        ? "flatbed"
-        : entry.sourceDetection === "fixed-adf"
-          ? "adf"
-          : source;
-    expect(ctx.source).toBe(expected);
+  it.each(REPLAY_FIXTURES)(
+    "lands on the recorded source for the $model fixture $path",
+    ({ path, source }) => {
+      const entry = recordedDialect(computeCapaFingerprint(readInit1Bodies(path).capa));
+      const { header, body } = readFirstInitPollStatus(path);
+      const { ctx, lines } = firstStatus(entry, header, body);
+      expect(lines).toEqual([]);
+      expect(ctx.source).toBe(source);
+    },
+  );
+
+  it("ADF paper empty → flatbed", () => {
+    const { ctx } = firstStatus(ET4950_ENTRY, statHeader(12), Buffer.from("#ERRADF PE  "));
+    expect(ctx.source).toBe("flatbed");
   });
 
-  it("logs when the content says ADF but the length says flatbed", () => {
-    // Synthetic: a 12-byte status with no error — the shape driveScannerToPara feeds.
+  it("no error → ADF, read from the reply itself when there is no body", () => {
+    const { ctx } = firstStatus(ET4950_ENTRY, statHeader(0), null);
+    expect(ctx.source).toBe("adf");
+  });
+
+  it("decides from the content, not the length: a 12-byte status with no error → ADF", () => {
+    // Synthetic: every recorded 12-byte status is "ADF paper empty".
     const { ctx, lines } = firstStatus(ET4950_ENTRY, statHeader(12), Buffer.from("#---#---#---"));
-    expect(ctx.source).toBe("flatbed");
-    expect(lines).toHaveLength(1);
-    expect(lines[0][2]).toEqual(
-      expect.objectContaining({ contentBased: "adf", lengthBased: "flatbed" }),
-    );
+    expect(ctx.source).toBe("adf");
+    expect(lines).toEqual([]);
   });
 
-  it("logs a status error other than ADF paper empty, without changing the source", () => {
-    const { ctx, lines } = firstStatus(ET4950_ENTRY, statHeader(12), Buffer.from("#ERRADF JAM "));
-    expect(ctx.source).toBe("flatbed");
-    expect(lines).toHaveLength(1);
-    expect(lines[0][2]).toEqual(expect.objectContaining({ errors: ["ADF JAM"] }));
+  it("an error other than ADF paper empty is logged, and the length decides", () => {
+    const flatbed = firstStatus(ET4950_ENTRY, statHeader(12), Buffer.from("#ERRADF JAM "));
+    expect(flatbed.ctx.source).toBe("flatbed");
+    expect(flatbed.lines).toHaveLength(1);
+    expect(flatbed.lines[0][2]).toEqual(
+      expect.objectContaining({ errors: ["ADF JAM"], source: "flatbed" }),
+    );
+    // Synthetic: tokens inline in a zero-length reply, which has no body.
+    const inline = Buffer.from("STATx0000000#ERRADF JAM " + "#---".repeat(10));
+    const adf = firstStatus(ET4950_ENTRY, inline, null);
+    expect(adf.ctx.source).toBe("adf");
+    expect(adf.lines).toHaveLength(1);
   });
 
   it("judges tokens the printer puts inline in the reply along with the body", () => {
@@ -1679,6 +1636,26 @@ describe("esci2Graph INIT_POLL — status-content source shadow", () => {
     expect(lines[0][2]).toEqual(expect.objectContaining({ errors: ["ADF JAM"] }));
   });
 
+  it("ET-2750: fixed to the flatbed, so its filler-packed zero-length status is never read", () => {
+    // Its STAT reply declares length 0 but packs filler inline. Read by
+    // content it carries no error, which would say ADF; as a flatbed-only
+    // printer it never reaches that rule.
+    const path = "tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl";
+    const entry = recordedDialect(computeCapaFingerprint(readInit1Bodies(path).capa));
+    const { header, body } = readFirstInitPollStatus(path);
+    expect(body).toBeNull();
+    expect(header.length).toBeGreaterThan(12);
+    expect(parseStatErrors(header)).toEqual([]);
+    expect(entry.sourceDetection).toBe("fixed-flatbed");
+    // Even from a pre-set ADF default (the TLS shell's), the session is flatbed.
+    const stat = esci2Graph.states.INIT_POLL_STAT;
+    if (stat.kind !== "decision") throw new Error("INIT_POLL_STAT not a decision");
+    const ctx = makeCtx({ entry, initPollIteration: 0, source: "adf" });
+    applyEntrySourceOverride(ctx, entry);
+    stat.decide(ctx, { type: 0xa000, payload: header });
+    expect(ctx.source).toBe("flatbed");
+  });
+
   it("only the first poll cycle is judged", () => {
     const stat = esci2Graph.states.INIT_POLL_STAT;
     const drain = esci2Graph.states.INIT_POLL_STAT_DRAIN;
@@ -1687,7 +1664,7 @@ describe("esci2Graph INIT_POLL — status-content source shadow", () => {
     const infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
       stat.decide(ctx, { type: 0xa000, payload: statHeader(12) });
-      drain.decide(ctx, { type: 0xa000, payload: Buffer.from("#ERRADF JAM ") });
+      drain.decide(ctx, { type: 0xa000, payload: Buffer.from("#ERRADF PE  ") });
       expect(ctx.source).toBe("adf");
       expect(infoSpy).not.toHaveBeenCalled();
     } finally {
@@ -1731,7 +1708,7 @@ describe("esci2Graph — generic dialect", () => {
     const { ctx, result, warnings, infos } = resolve(UNKNOWN_INFO, UNKNOWN_CAPA);
     expect("error" in result).toBe(false);
     expect(ctx.entry!.displayName).toBe("generic ESC/I-2 dialect (PID FFFF)");
-    expect(ctx.entry!.sourceDetection).toBe("stat-content");
+    expect(ctx.entry!.sourceDetection).toBe("init-poll-status");
     expect(ctx.genericInfo).toBeDefined();
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("PID FFFF not recognised — generic ESC/I-2 dialect");

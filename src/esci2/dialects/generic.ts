@@ -128,12 +128,6 @@ export function buildGenericEntry(
     names: [],
     capaFingerprints: [],
     displayName: `generic ESC/I-2 dialect (${printerIdentity(info)})`,
-    sourceDetection:
-      fbExtents !== null && adfExtents !== null
-        ? "stat-content"
-        : fbExtents !== null
-          ? "fixed-flatbed"
-          : "fixed-adf",
     initPollIterations: fbExtents !== null ? POLLS_WITH_FLATBED : POLLS_ADF_ONLY,
     fbExtents,
     adfExtents,

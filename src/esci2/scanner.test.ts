@@ -1369,8 +1369,8 @@ describe("runEsci2ScanOverPlain — ET-4800 fixture replay", () => {
     const scannerPara = extractScannerParaWrite(fake);
     expect(scannerPara.equals(capturedPara)).toBe(true);
 
-    // Cross-check that the scanner auto-detected the correct source via the
-    // stat-length heuristic: the captured PARA equals what the composer builds
+    // Cross-check that the scanner auto-detected the correct source from the
+    // first status reply: the captured PARA equals what the composer builds
     // for that source axis (ET-4800 PARA is action-invariant, so action only
     // selects identical gamma/cmx classes here).
     const paraSource: ParaSpec["source"] = opts.source === "flatbed" ? "flatbed" : "adf-simplex";

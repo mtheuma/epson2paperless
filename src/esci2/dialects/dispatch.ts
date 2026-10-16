@@ -178,16 +178,15 @@ function resolveGenericEntry(replies: Init1Replies, derived: DerivedCapabilities
 }
 
 /**
- * Pins ctx.source for entries with fixed source detection. Replaces the
- * legacy applyDialectSourceOverride helper.
+ * Pins ctx.source for a single-source printer (fixed source detection).
  *
  * Necessary because scanner shells pre-set a transport-level default before
- * the registry resolves. Fixed-source entries override that default once the
- * CAPA fingerprint is known.
+ * the dialect resolves. A printer whose INFO advertises one source overrides
+ * that default once its replies are read.
  */
 export function applyEntrySourceOverride(
   ctx: { source: "adf" | "flatbed" },
-  entry: RegistryEntry,
+  entry: Pick<Dialect, "sourceDetection">,
 ): void {
   if (entry.sourceDetection === "fixed-flatbed") {
     ctx.source = "flatbed";
@@ -201,10 +200,10 @@ export function applyEntrySourceOverride(
  * window for, and adf-duplex on a simplex-only ADF.
  *
  * Called from buildParaSend after the source axis resolves — NOT at entry
- * resolution. `stat-length` entries don't know their source until
- * INIT_POLL_STAT, and `duplex=true` on a flatbed scan is inert and must stay
- * that way (SCAN_SIDES defaults to "duplex", so flatbed-only models see it on
- * every default host-triggered scan).
+ * resolution. A printer with both sources doesn't know its source until the
+ * init poll's first status reply, and `duplex=true` on a flatbed scan is
+ * inert and must stay that way (SCAN_SIDES defaults to "duplex", so
+ * flatbed-only models see it on every default host-triggered scan).
  *
  * Origin-independent: an adf-duplex PARA against a simplex-only ADF is wrong
  * whether the panel or the host asked for it.

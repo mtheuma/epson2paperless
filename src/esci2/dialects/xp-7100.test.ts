@@ -17,8 +17,8 @@ describe("XP-7100 registry entry", () => {
   it("supports flatbed + ADF + duplex (has adfExtents)", () => {
     expect(entry.adfExtents).not.toBeNull();
   });
-  it("uses stat-length source detection", () => {
-    expect(entry.sourceDetection).toBe("stat-length");
+  it("reads its source from the init poll's status reply", () => {
+    expect(entry.sourceDetection).toBe("init-poll-status");
   });
   it("uses 3 init-poll iterations", () => {
     expect(entry.initPollIterations).toBe(3);

@@ -92,7 +92,7 @@ export interface Esci2Ctx {
   capaTokens: CapaTokens | undefined;
   /**
    * The first init-poll STAT reply (header and inline tokens), kept until its
-   * body is drained so the status-content shadow judges both together.
+   * body is drained so the source is judged from both together.
    * Undefined otherwise.
    */
   firstStatusReply?: Buffer;
@@ -415,6 +415,7 @@ twoPhaseRead(
       optionalSegments: ctx.entry.optionalSegments,
       adfDuplex: ctx.entry.adfDuplex,
       paraProfile: ctx.entry.paraProfile,
+      sourceDetection: ctx.entry.sourceDetection,
     });
     if (resolved.override === undefined) {
       // Built from the derivation itself, so there is nothing to compare.
@@ -632,91 +633,57 @@ g.state("UNLOCKING", {
 });
 
 /**
- * How a source-detecting entry reads the first init-poll status reply: once
- * from its header (fromHeader, in INIT_POLL_STAT) and once from the whole
- * reply, its drained body included (fromReply, in whichever state completes
- * it). Every per-mode difference lives here.
+ * Whether this cycle's status reply decides the source: the first cycle's,
+ * on a printer with both sources.
  */
-interface StatusSourceRule {
-  fromHeader(ctx: Esci2Ctx, statLength: number): void;
-  fromReply(ctx: Esci2Ctx, state: string, status: Buffer[]): TransitionResult<Esci2Ctx> | undefined;
-}
-
-const STATUS_SOURCE_RULES: Record<"stat-length" | "stat-content", StatusSourceRule> = {
-  // The captured entries' rule: the reply's declared length decides; its
-  // content is only shadowed.
-  "stat-length": {
-    fromHeader: (ctx, statLength) => {
-      ctx.source = sourceFromStatLength(statLength);
-      log.debug("Source detected from first STAT", { statLength, source: ctx.source });
-    },
-    fromReply: (ctx, _state, status) => {
-      reportStatusSourceShadow(ctx, ...status);
-      return undefined;
-    },
-  },
-  // The generic dialect's rule: the reply's error tokens decide, and an
-  // error other than "ADF paper empty" ends the session.
-  "stat-content": {
-    fromHeader: () => {},
-    fromReply: (ctx, state, status) => {
-      const errors = status.flatMap((part) => parseStatErrors(part));
-      const decision = sourceFromStatusErrors(errors);
-      if ("unexpectedErrors" in decision) {
-        return {
-          error: new Error(
-            `${state}: the printer reports ${decision.unexpectedErrors.join(", ")}, so the ` +
-              "scan source can't be told from its status — clear it on the printer and scan again",
-          ),
-        };
-      }
-      ctx.source = decision.source;
-      log.debug("Source detected from the first status reply's content", {
-        errors,
-        source: ctx.source,
-      });
-      return undefined;
-    },
-  },
-};
-
-/** The entry's status-source rule on the first init-poll cycle; undefined otherwise. */
-function firstStatusRule(ctx: Esci2Ctx): StatusSourceRule | undefined {
-  if (ctx.initPollIteration !== 0) return undefined;
-  const detection = ctx.entry!.sourceDetection;
-  return detection === "stat-length" || detection === "stat-content"
-    ? STATUS_SOURCE_RULES[detection]
-    : undefined;
+function readsFirstStatus(ctx: Esci2Ctx): boolean {
+  return ctx.initPollIteration === 0 && ctx.entry!.sourceDetection === "init-poll-status";
 }
 
 /**
- * Shadow of the content-based source decision: reads the first status
- * reply's error tokens (from the reply itself and its drained body, if any)
- * and reports, at info, where they disagree with the length-based source
- * already in ctx.source, or carry an error a content-based decision would
- * end the session on. Report-only.
+ * Sets ctx.source from the content of the init poll's first status reply
+ * (the reply itself, then its drained body, if any): "ADF paper empty" means
+ * the flatbed, no error means the ADF.
+ *
+ * On any other error the generic dialect ends the session, while a model
+ * override logs it and takes the source from the reply's declared length
+ * (sourceFromStatLength), so the scan carries on.
  */
-function reportStatusSourceShadow(ctx: Esci2Ctx, ...status: Buffer[]): void {
-  try {
-    const errors = status.flatMap((part) => parseStatErrors(part));
-    const decision = sourceFromStatusErrors(errors);
-    if ("unexpectedErrors" in decision) {
-      log.info("Status reply carries an error a content-based source decision would fail on", {
-        dialect: ctx.entry!.displayName,
-        errors: decision.unexpectedErrors,
-        lengthBased: ctx.source,
-      });
-    } else if (decision.source !== ctx.source) {
-      log.info("Status-content source decision disagrees with the length-based one", {
-        dialect: ctx.entry!.displayName,
-        contentBased: decision.source,
-        lengthBased: ctx.source,
-        errors,
-      });
-    }
-  } catch (err) {
-    log.warn("Status-content source decision failed (report-only; the scan continues)", err);
+function sourceFromFirstStatus(
+  ctx: Esci2Ctx,
+  state: string,
+  status: Buffer[],
+): TransitionResult<Esci2Ctx> | undefined {
+  const errors = status.flatMap((part) => parseStatErrors(part));
+  const decision = sourceFromStatusErrors(errors);
+  const statLength = parseEsci2ReplyHeader(status[0])?.length ?? 0;
+  if ("source" in decision) {
+    ctx.source = decision.source;
+    // The declared length rides along for triage on models with no fixture:
+    // on every recorded one, 12 bytes is "ADF paper empty" and 0 is none.
+    log.debug("Source detected from the first status reply's content", {
+      errors,
+      statLength,
+      source: ctx.source,
+    });
+    return undefined;
   }
+  // genericInfo is set exactly when the session runs the generic dialect.
+  if (ctx.genericInfo !== undefined) {
+    return {
+      error: new Error(
+        `${state}: the printer reports ${decision.unexpectedErrors.join(", ")}, so the ` +
+          "scan source can't be told from its status — clear it on the printer and scan again",
+      ),
+    };
+  }
+  ctx.source = sourceFromStatLength(statLength);
+  log.info('Status reply carries an error other than "ADF paper empty"', {
+    dialect: ctx.entry!.displayName,
+    errors: decision.unexpectedErrors,
+    source: ctx.source,
+  });
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -790,8 +757,8 @@ export function nameInitPollEarlyStop(ctx: Esci2Ctx, reason: Error): Error {
 }
 
 // INIT_POLL_STAT: decision on STAT reply — drain if length>0, else FIN.
-// On the first iteration (ctx.initPollIteration === 0) also detects source
-// by the reply's length (sourceFromStatLength).
+// On the first iteration (ctx.initPollIteration === 0) also detects the
+// source from the reply's content (sourceFromFirstStatus).
 g.state(
   "INIT_POLL_STAT",
   decision<Esci2Ctx>((ctx, packet) => {
@@ -801,24 +768,20 @@ g.state(
     if (header === null) {
       return { error: new Error("INIT_POLL_STAT: unparseable reply header") };
     }
-    // Source detection — only on the FIRST iteration, and only when the
-    // dialect reads it from the status reply ("stat-length" from its length,
-    // here; "stat-content" from its tokens, once any body is drained).
+    // Source detection: only on the FIRST iteration, and only on a printer
+    // with both sources (sourceDetection "init-poll-status"), from the
+    // reply's content once any body is drained.
     //
-    // ET-2750 uses `sourceDetection: "fixed-flatbed"` because it is
-    // flatbed-only hardware AND its STAT replies declare length=0 even
-    // though the IS frame packs an inline 52-byte filler — applying the
-    // stat-length heuristic would misclassify it as ADF, so skip the
-    // override entirely and trust the `source: "flatbed"` value the
-    // scanner shell pre-set in `initialCtx`.
-    const rule = firstStatusRule(ctx);
-    if (rule) {
-      rule.fromHeader(ctx, header.length);
+    // A single-source printer is fixed to it and never reads the reply. The
+    // ET-2750 relies on that: its STAT replies declare length=0 but pack a
+    // 52-byte #--- filler inline, which carries no error and so would read
+    // as ADF on flatbed-only hardware.
+    if (readsFirstStatus(ctx)) {
       // The reply's own tail is #--- filler unless the printer put tokens
       // inline, so it is judged too: here when there is no body to drain,
       // otherwise alongside the body in INIT_POLL_STAT_DRAIN.
       if (header.length === 0) {
-        const failed = rule.fromReply(ctx, "INIT_POLL_STAT", [packet.payload]);
+        const failed = sourceFromFirstStatus(ctx, "INIT_POLL_STAT", [packet.payload]);
         if (failed) return failed;
       } else {
         ctx.firstStatusReply = packet.payload;
@@ -843,9 +806,8 @@ g.state(
   decision<Esci2Ctx>((ctx, packet) => {
     const typeGuard = expectIsType(packet, 0xa000, "INIT_POLL_STAT_DRAIN");
     if (typeGuard) return typeGuard;
-    const rule = firstStatusRule(ctx);
-    if (rule) {
-      const failed = rule.fromReply(ctx, "INIT_POLL_STAT_DRAIN", [
+    if (readsFirstStatus(ctx)) {
+      const failed = sourceFromFirstStatus(ctx, "INIT_POLL_STAT_DRAIN", [
         ctx.firstStatusReply ?? Buffer.alloc(0),
         packet.payload,
       ]);
