@@ -227,10 +227,12 @@ describe("content-based source decision agrees with the length-based one on ever
   });
 
   it("covers flatbed and ADF sessions of every fixture model that reads its status", () => {
-    expect(new Set(statusFixtures.map((f) => f.model))).toEqual(
-      new Set(["ET-4950 family", "XP-7100", "ET-4800"]),
-    );
-    expect(new Set(statusFixtures.map((f) => f.source))).toEqual(new Set(["flatbed", "adf"]));
+    const models = ["ET-4950 family", "XP-7100", "ET-4800"];
+    expect(new Set(statusFixtures.map((f) => f.model))).toEqual(new Set(models));
+    for (const model of models) {
+      const sources = statusFixtures.filter((f) => f.model === model).map((f) => f.source);
+      expect(new Set(sources), model).toEqual(new Set(["flatbed", "adf"]));
+    }
   });
 
   it.each(statusFixtures)("$model: $path", ({ path, source }) => {

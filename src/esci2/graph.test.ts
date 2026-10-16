@@ -1614,8 +1614,7 @@ describe("esci2Graph INIT_POLL — source from the status reply's content (model
     expect(lines).toEqual([]);
   });
 
-  it("an error other than ADF paper empty keeps today's handling: logged, source from the length", () => {
-    // Ticket 14 makes it end the session instead.
+  it("an error other than ADF paper empty is logged, and the length decides", () => {
     const flatbed = firstStatus(ET4950_ENTRY, statHeader(12), Buffer.from("#ERRADF JAM "));
     expect(flatbed.ctx.source).toBe("flatbed");
     expect(flatbed.lines).toHaveLength(1);

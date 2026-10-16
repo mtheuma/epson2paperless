@@ -415,6 +415,7 @@ twoPhaseRead(
       optionalSegments: ctx.entry.optionalSegments,
       adfDuplex: ctx.entry.adfDuplex,
       paraProfile: ctx.entry.paraProfile,
+      sourceDetection: ctx.entry.sourceDetection,
     });
     if (resolved.override === undefined) {
       // Built from the derivation itself, so there is nothing to compare.
@@ -644,10 +645,9 @@ function readsFirstStatus(ctx: Esci2Ctx): boolean {
  * (the reply itself, then its drained body, if any): "ADF paper empty" means
  * the flatbed, no error means the ADF.
  *
- * Any other error is handled as before the content rule applied to model
- * overrides: the generic dialect ends the session, and a model override
- * logs it and takes the source from the reply's declared length (the
- * overrides' former rule), so the scan carries on.
+ * On any other error the generic dialect ends the session, while a model
+ * override logs it and takes the source from the reply's declared length
+ * (sourceFromStatLength), so the scan carries on.
  */
 function sourceFromFirstStatus(
   ctx: Esci2Ctx,
@@ -656,10 +656,14 @@ function sourceFromFirstStatus(
 ): TransitionResult<Esci2Ctx> | undefined {
   const errors = status.flatMap((part) => parseStatErrors(part));
   const decision = sourceFromStatusErrors(errors);
+  const statLength = parseEsci2ReplyHeader(status[0])?.length ?? 0;
   if ("source" in decision) {
     ctx.source = decision.source;
+    // The declared length rides along for triage on models with no fixture:
+    // on every recorded one, 12 bytes is "ADF paper empty" and 0 is none.
     log.debug("Source detected from the first status reply's content", {
       errors,
+      statLength,
       source: ctx.source,
     });
     return undefined;
@@ -673,7 +677,7 @@ function sourceFromFirstStatus(
       ),
     };
   }
-  ctx.source = sourceFromStatLength(parseEsci2ReplyHeader(status[0])?.length ?? 0);
+  ctx.source = sourceFromStatLength(statLength);
   log.info('Status reply carries an error other than "ADF paper empty"', {
     dialect: ctx.entry!.displayName,
     errors: decision.unexpectedErrors,

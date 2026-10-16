@@ -137,11 +137,11 @@ export function compareWithEntry(
 }
 
 /**
- * The model overrides' former source rule, from the first init-poll STAT
- * reply's declared length. ET-4950 fixtures: length 0 → ADF (printer queued
- * no status); length 12 → flatbed (queued `#ERRADF PE  `). Other lengths
- * default to ADF. Still the fallback when an override's status carries an
- * error other than "ADF paper empty" (sourceFromFirstStatus in graph.ts).
+ * The source from the first init-poll STAT reply's declared length, for a
+ * model override whose status carries an error other than "ADF paper empty"
+ * (sourceFromFirstStatus in graph.ts). ET-4950 fixtures: length 0 → ADF
+ * (printer queued no status); length 12 → flatbed (queued `#ERRADF PE  `).
+ * Other lengths default to ADF.
  */
 export function sourceFromStatLength(length: number): "adf" | "flatbed" {
   return length === 12 ? "flatbed" : "adf";
