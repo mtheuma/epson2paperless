@@ -1,7 +1,7 @@
 // src/esci2/dialects/registry.ts
 import type { GammaClassName, CmxClassName, Extents, ParaProfile } from "../para-composer.js";
 import type { ToneCurveName } from "../../postprocess/tone-curves.js";
-import type { SourceGeometry, WindowSource } from "../scan-window.js";
+import type { SourceGeometry } from "../scan-window.js";
 
 export interface RegistryEntry {
   /**
@@ -28,11 +28,12 @@ export interface RegistryEntry {
   sourceDetection: "stat-length" | "stat-content" | "fixed-flatbed" | "fixed-adf";
   initPollIterations: number;
   /**
-   * Flatbed scan window: the captured paper size, "generic" to inherit the
-   * generic window, or null for ADF-only hardware (mirrors adfExtents' null
-   * for flatbed-only models). An entry keeps its own window only where the
-   * generic one differs from it at some advertised DPI (scan-window.test.ts
-   * holds the comparison).
+   * The flatbed and ADF scan windows: each the captured paper size,
+   * "generic" to inherit the generic window, or null for a source the
+   * hardware lacks (no flatbed on ADF-only models, no ADF on flatbed-only
+   * ones). An entry keeps its own window only where the generic one differs
+   * from it on some source at some advertised DPI (scan-window.test.ts holds
+   * the comparison).
    */
   fbExtents: EntryWindow;
   adfExtents: EntryWindow;
@@ -118,17 +119,22 @@ export interface CapabilityFields {
  */
 export type EntryWindow = Extents | "generic" | null;
 
+/**
+ * A session's scan window for one source, at the PARA profile's reference
+ * DPI. `generic` is set when it is the generic window: the scan-area
+ * geometry it is computed from, which makeParaSpec uses to compute it again
+ * at the wire DPI rather than scaling it (scaling can overrun the area).
+ * Replacing the window replaces both.
+ */
+export interface DialectWindow extends Extents {
+  generic?: SourceGeometry;
+}
+
 /** What a session runs: its registry entry (or the generic one) plus the capability fields. */
 export interface Dialect extends Omit<RegistryEntry, "fbExtents" | "adfExtents">, CapabilityFields {
-  /** The source's window at the PARA profile's reference DPI; null when it has none. */
-  fbExtents: Extents | null;
-  adfExtents: Extents | null;
-  /**
-   * The sources whose window is the generic one, with the geometry it is
-   * computed from. makeParaSpec sends it computed at the wire DPI rather than
-   * scaling the reference window, which can overrun the scan area.
-   */
-  genericWindows: Partial<Record<WindowSource, SourceGeometry>>;
+  /** null when the source has no window: the hardware lacks it, or its scan area isn't usable. */
+  fbExtents: DialectWindow | null;
+  adfExtents: DialectWindow | null;
 }
 
 /**

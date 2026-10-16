@@ -288,6 +288,9 @@ describe("model overrides inherit the generic window where theirs matches it", (
         const tokens = parseInfoTokens(bodies.info);
         const capa = parseCapaTokens(bodies.capa);
         const entry = REGISTRY.get(fp)!;
+        if (!(model in CAPTURED)) {
+          throw new Error(`${model} has a replay fixture: record its captured window in CAPTURED`);
+        }
         const derived = deriveCapabilities(tokens, capa);
         // The override with its captured window, and as the session runs it.
         const captured = withCapabilities(

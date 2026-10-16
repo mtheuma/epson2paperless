@@ -10,7 +10,7 @@ import { REGISTRY, type RegistryEntry } from "./registry.js";
 import { UnsupportedDialectError } from "../diagnostic.js";
 import { computeCapaFingerprint } from "../capa-fingerprint.js";
 import { parseCapaTokens, parseInfoTokens } from "../capabilities.js";
-import { deriveCapabilities } from "../derivation.js";
+import { compareWithEntry, deriveCapabilities } from "../derivation.js";
 import { composePara } from "../para-composer.js";
 import { parseParaSegments } from "../test-support/para-parse.js";
 import { REPLAY_FIXTURES, readInit1Bodies } from "../test-support/capability-bodies.js";
@@ -80,7 +80,11 @@ describe("lookupRegistryEntry", () => {
   // The ET-3950 and XP-4100 case: a model whose PID isn't recorded resolves
   // through the CAPA fingerprint it shares with a sibling.
   it("falls back to the CAPA fingerprint when the PID isn't recorded", () => {
-    const { resolved, warnings } = lookup(UNKNOWN_PID_INFO, ET4950.capa);
+    // The ET-4950's own INFO reply, under a PID no entry records.
+    const text = ET4950.info.toString("latin1");
+    expect(text).toContain("PID 11D1");
+    const info = Buffer.from(text.replace("PID 11D1", "PID 9999"), "latin1");
+    const { resolved, warnings } = lookup(info, ET4950.capa);
     expect(resolved.entry).toMatchObject(unresolvedFields(REGISTRY.get(ET4950_FP)!));
     expect(resolved.matchedBy).toBe("fingerprint");
     expect(warnings).toEqual([]);
@@ -314,15 +318,51 @@ describe("an override that inherits the generic window", () => {
     expect(acqAt75({ ...entry, adfExtents: "generic" })).toEqual([0, 0, 637, 1162]);
   });
 
-  it("follows the printer's own scan area, and has no window where it advertises none", () => {
-    const info = Buffer.from("#PRDh010PID 11D1        #FB ALGNLEFT#FB AREAd800i0001100", "ascii");
-    const { resolved } = lookup(info, ET4950.capa);
+  // An ET-4950 whose INFO reply advertises a narrower flatbed and no ADF.
+  const NARROW_FB_ONLY = Buffer.from(
+    "#PRDh010PID 11D1        #FB ALGNLEFT#FB AREAd800i0001100",
+    "ascii",
+  );
+
+  it("follows the printer's own scan area", () => {
+    const { resolved } = lookup(NARROW_FB_ONLY, ET4950.capa);
     expect(resolved.entry.displayName).toMatch(/ET-4950/);
-    expect(resolved.entry.fbExtents).toEqual({ x0: 0, y0: 0, w: 2400, h: 3300 });
-    expect(resolved.entry.adfExtents).toBeNull();
+    expect(resolved.entry.fbExtents).toMatchObject({ x0: 0, y0: 0, w: 2400, h: 3300 });
     const para = composePara(makeParaSpec(resolved.entry, "flatbed", "jpg", 600));
     expect(parseParaSegments(para).find((s) => s.code === "ACQ")?.values).toEqual([
       0, 0, 4800, 6600,
+    ]);
+  });
+
+  it("has no window where INFO advertises no area: warns with the diagnostic, then refuses a scan from it", () => {
+    const { resolved, warnings } = lookup(NARROW_FB_ONLY, ET4950.capa);
+    expect(resolved.entry.adfExtents).toBeNull();
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("advertises no usable adf scan area");
+    expect(warnings[0]).toContain(`CAPA fingerprint:  ${ET4950_FP}`);
+    expect(() => assertSourceSupported(resolved.entry, "adf-simplex")).toThrow(
+      /has no ADF scan window.*no usable ADF scan area/,
+    );
+    expect(() => assertSourceSupported(resolved.entry, "flatbed")).not.toThrow();
+  });
+
+  it("is still a source the override claims, so the shadow comparison reports the missing area", () => {
+    const { resolved } = lookup(NARROW_FB_ONLY, ET4950.capa);
+    expect(resolved.override).toBe(REGISTRY.get(ET4950_FP));
+    expect(compareWithEntry(resolved.derived, resolved.override!)).toContainEqual({
+      field: "sources",
+      derived: { flatbed: true, adf: false },
+      entry: { flatbed: true, adf: true },
+    });
+  });
+
+  it("is replaced as a whole: a dialect given its own window sends that one", () => {
+    const dialect = recordedDialect(ET4950_FP);
+    expect(dialect.fbExtents?.generic).toBeDefined();
+    const own = { ...dialect, fbExtents: { x0: 0, y0: 0, w: 1000, h: 1000 } };
+    const para = composePara(makeParaSpec(own, "flatbed", "jpg", 600));
+    expect(parseParaSegments(para).find((s) => s.code === "ACQ")?.values).toEqual([
+      0, 0, 2000, 2000,
     ]);
   });
 });

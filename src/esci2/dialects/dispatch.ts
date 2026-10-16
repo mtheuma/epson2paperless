@@ -1,6 +1,7 @@
 import {
   REGISTRY_ENTRIES,
   type Dialect,
+  type DialectWindow,
   type EntryWindow,
   type RegistryEntry,
 } from "./registry.js";
@@ -15,7 +16,7 @@ import { buildDiagnostic, UnsupportedDialectError } from "../diagnostic.js";
 import type { CapaTokens, InfoTokens } from "../capabilities.js";
 import { buildGenericEntry, GenericDialectUnusableError, printerIdentity } from "./generic.js";
 import { capabilityFields, deriveCapabilities, type DerivedCapabilities } from "../derivation.js";
-import { genericWindowIn, sourceGeometry, type WindowSource } from "../scan-window.js";
+import { genericWindowIn, inheritedWindow, type WindowSource } from "../scan-window.js";
 import { createLogger } from "../../logger.js";
 
 const log = createLogger("scanner-esci2");
@@ -25,6 +26,12 @@ export type IdentityMatch = "pid" | "name" | "fingerprint" | "generic";
 
 export interface ResolvedEntry {
   entry: Dialect;
+  /**
+   * The model override as written, before its windows are resolved against
+   * the printer's scan area: what the shadow comparison holds the derivation
+   * to. Undefined for the generic dialect.
+   */
+  override?: RegistryEntry;
   matchedBy: IdentityMatch;
   /** The derivation the dialect was built with, for the caller's shadow comparison. */
   derived: DerivedCapabilities;
@@ -84,17 +91,40 @@ export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
           `please file an issue with the diagnostic block below:\n\n${buildDiagnostic(replies)}`,
       );
     }
-    return { entry: withCapabilities(byIdentity, info, derived), matchedBy, derived };
+    return { ...resolveOverride(byIdentity, replies, derived), matchedBy };
   }
 
   if (byFingerprint !== undefined) {
-    return {
-      entry: withCapabilities(byFingerprint, info, derived),
-      matchedBy: "fingerprint",
-      derived,
-    };
+    return { ...resolveOverride(byFingerprint, replies, derived), matchedBy: "fingerprint" };
   }
   return { entry: resolveGenericEntry(replies, derived), matchedBy: "generic", derived };
+}
+
+/**
+ * Completes an override into the session's dialect. A window it inherits
+ * for a source the printer advertises no usable scan area for can't be
+ * computed, so that source has none: say so with the diagnostic block now,
+ * since a scan from it fails at PARA build (assertSourceSupported).
+ */
+function resolveOverride(
+  override: RegistryEntry,
+  replies: Init1Replies,
+  derived: DerivedCapabilities,
+): Pick<ResolvedEntry, "entry" | "override" | "derived"> {
+  const entry = withCapabilities(override, replies.info, derived);
+  const missing = (["flatbed", "adf"] as const).filter(
+    (source) =>
+      (source === "flatbed" ? override.fbExtents : override.adfExtents) === "generic" &&
+      (source === "flatbed" ? entry.fbExtents : entry.adfExtents) === null,
+  );
+  if (missing.length > 0) {
+    log.warn(
+      `${override.displayName}: its INFO reply advertises no usable ${missing.join(" or ")} ` +
+        `scan area, so scans from it will fail. Please file an issue with the diagnostic ` +
+        `block below:\n\n${buildDiagnostic(replies)}`,
+    );
+  }
+  return { entry, override, derived };
 }
 
 /**
@@ -117,21 +147,15 @@ export function withCapabilities(
   const fields = capabilityFields(derived);
   const dpi = baseDpiFor(fields.paraProfile);
   const scale = dpi / (entry.windowDpi ?? STANDARD_BASE_DPI);
-  const genericWindows: Dialect["genericWindows"] = {};
-  const window = (source: WindowSource, e: EntryWindow): Extents | null => {
+  const window = (source: WindowSource, e: EntryWindow): DialectWindow | null => {
     if (e !== "generic") return e === null || scale === 1 ? e : scaleEdges(e, scale);
-    const geometry = sourceGeometry(info, source);
-    if (geometry === null) return null;
-    const generic = genericWindowIn(geometry, source, fields.paraProfile, dpi);
-    if (generic !== null) genericWindows[source] = geometry;
-    return generic;
+    return inheritedWindow(info, source, fields.paraProfile);
   };
   return {
     ...entry,
     fbExtents: window("flatbed", entry.fbExtents),
     adfExtents: window("adf", entry.adfExtents),
     ...(scale === 1 ? {} : { windowDpi: dpi }),
-    genericWindows,
     ...fields,
   };
 }
@@ -173,8 +197,8 @@ export function applyEntrySourceOverride(
 }
 
 /**
- * Rejects a PARA source the hardware can't do. Currently only guards
- * adf-duplex against simplex-only ADFs.
+ * Rejects a PARA source the hardware can't do: one the dialect has no scan
+ * window for, and adf-duplex on a simplex-only ADF.
  *
  * Called from buildParaSend after the source axis resolves — NOT at entry
  * resolution. `stat-length` entries don't know their source until
@@ -186,6 +210,14 @@ export function applyEntrySourceOverride(
  * whether the panel or the host asked for it.
  */
 export function assertSourceSupported(entry: Dialect, source: ParaSpec["source"]): void {
+  if ((source === "flatbed" ? entry.fbExtents : entry.adfExtents) === null) {
+    const name = source === "flatbed" ? "flatbed" : "ADF";
+    throw new Error(
+      `${entry.displayName} has no ${name} scan window: the model has no ${name}, or its ` +
+        `INFO reply advertises no usable ${name} scan area. Please report it with the ` +
+        `diagnostic block logged when the session started.`,
+    );
+  }
   if (source === "adf-duplex" && !entry.adfDuplex) {
     throw new Error(
       `${entry.displayName} has no duplex ADF — refusing to compose an adf-duplex PARA ` +
@@ -213,7 +245,7 @@ export function makeParaSpec(
   jpegQuality?: number,
 ): ParaSpec {
   const windowSource: WindowSource = source === "flatbed" ? "flatbed" : "adf";
-  const geometry = entry.genericWindows[windowSource];
+  const geometry = (source === "flatbed" ? entry.fbExtents : entry.adfExtents)?.generic;
   let acqExtents: Extents | undefined;
   if (geometry !== undefined) {
     const dpi = resolution ?? baseDpiFor(entry.paraProfile);

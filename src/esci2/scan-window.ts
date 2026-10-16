@@ -2,7 +2,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { parseArea, type InfoTokens } from "./capabilities.js";
 import { baseDpiFor, scaleAcqExtents, type Extents, type ParaProfile } from "./para-composer.js";
-import type { Dialect } from "./dialects/registry.js";
+import type { Dialect, DialectWindow } from "./dialects/registry.js";
 
 /**
  * Shadow derivation for the scan window (report-only). The printer's INFO
@@ -71,10 +71,15 @@ export type WindowProblem =
   | { source: WindowSource; problem: "outside-scan-area"; window: Extents; maxArea: Extents }
   | { source: WindowSource; problem: "x0-misaligned"; window: Extents; expectedX0: number };
 
+/**
+ * The entry's own windows. An inherited one is left out: it is the generic
+ * window, which fits the area and follows the alignment rule by
+ * construction, so there is nothing to check or to record.
+ */
 function entryWindows(entry: Dialect): [WindowSource, Extents][] {
   const out: [WindowSource, Extents][] = [];
-  if (entry.fbExtents !== null) out.push(["flatbed", entry.fbExtents]);
-  if (entry.adfExtents !== null) out.push(["adf", entry.adfExtents]);
+  if (entry.fbExtents !== null && !entry.fbExtents.generic) out.push(["flatbed", entry.fbExtents]);
+  if (entry.adfExtents !== null && !entry.adfExtents.generic) out.push(["adf", entry.adfExtents]);
   return out;
 }
 
@@ -173,6 +178,22 @@ export function genericWindowIn(
   const w = Math.min(scaled.x0 + scaled.w, areaW) - x0;
   const h = Math.min(scaled.y0 + scaled.h, areaH) - y0;
   return w > 0 && h > 0 ? { x0, y0, w, h } : null;
+}
+
+/**
+ * The generic window for `source` at the profile's reference DPI, carrying
+ * the geometry makeParaSpec computes it from at the wire DPI. Null when INFO
+ * advertises no usable scan area for the source.
+ */
+export function inheritedWindow(
+  info: InfoTokens,
+  source: WindowSource,
+  profile: ParaProfile,
+): DialectWindow | null {
+  const geometry = sourceGeometry(info, source);
+  if (geometry === null) return null;
+  const window = genericWindowIn(geometry, source, profile, baseDpiFor(profile));
+  return window === null ? null : { ...window, generic: geometry };
 }
 
 export interface GenericWindowDifference {

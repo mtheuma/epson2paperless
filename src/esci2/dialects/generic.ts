@@ -1,5 +1,5 @@
 // src/esci2/dialects/generic.ts
-import { parseArea, type CapaTokens, type InfoTokens } from "../capabilities.js";
+import type { CapaTokens, InfoTokens } from "../capabilities.js";
 import type { ColourPair } from "../data/colour-pair.js";
 import {
   capabilityFields,
@@ -7,9 +7,9 @@ import {
   listItems,
   type DerivedCapabilities,
 } from "../derivation.js";
-import { baseDpiFor, type Extents, type ParaProfile, type ParaSpec } from "../para-composer.js";
-import { genericWindowIn, sourceGeometry, type WindowSource } from "../scan-window.js";
-import type { Dialect } from "./registry.js";
+import type { ParaProfile, ParaSpec } from "../para-composer.js";
+import { inheritedWindow, type WindowSource } from "../scan-window.js";
+import type { Dialect, DialectWindow } from "./registry.js";
 
 /**
  * The generic dialect: what an ESC/I-2 printer with no model override is
@@ -108,17 +108,13 @@ export function buildGenericEntry(
     throw new GenericDialectUnusableError("its CAPA reply lists no JPG format");
   }
   const profile = derived.paraProfile;
-  const genericWindows: Dialect["genericWindows"] = {};
-  const windowFor = (source: WindowSource): Extents | null => {
+  const windowFor = (source: WindowSource): DialectWindow | null => {
     if (!derived.sources[source]) return null;
-    const geometry = sourceGeometry(info, source);
-    const window =
-      geometry === null ? null : genericWindowIn(geometry, source, profile, baseDpiFor(profile));
-    if (geometry === null || window === null) {
+    const window = inheritedWindow(info, source, profile);
+    if (window === null) {
       const area = source === "flatbed" ? info.fbArea : info.adfArea;
       throw new GenericDialectUnusableError(`its ${source} scan area (${area}) isn't usable`);
     }
-    genericWindows[source] = geometry;
     return window;
   };
   const fbExtents = windowFor("flatbed");
@@ -141,7 +137,6 @@ export function buildGenericEntry(
     initPollIterations: fbExtents !== null ? POLLS_WITH_FLATBED : POLLS_ADF_ONLY,
     fbExtents,
     adfExtents,
-    genericWindows,
     duplexBackRotated: derived.duplexBackRotated,
     gmm: pair.gmm,
     gammaClass: { jpg: pair.gamma, pdf: pair.gamma },
@@ -157,10 +152,8 @@ export function buildGenericEntry(
  * the value the FF-680W and DS-575W captures carry there. (Its window is a
  * generic one, which makeParaSpec already computes at the wire DPI.)
  */
-export function genericParaFields(
-  info: InfoTokens,
-  entry: Dialect,
-): Pick<ParaSpec, "adfCrpDfaLength"> {
-  if (entry.paraProfile !== "adf-crp") return {};
-  return { adfCrpDfaLength: parseArea(info.adfArea)!.height };
+export function genericParaFields(entry: Dialect): Pick<ParaSpec, "adfCrpDfaLength"> {
+  const area = entry.adfExtents?.generic?.area;
+  if (entry.paraProfile !== "adf-crp" || area === undefined) return {};
+  return { adfCrpDfaLength: area.height };
 }
