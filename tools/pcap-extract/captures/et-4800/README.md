@@ -38,8 +38,8 @@ committed fixtures are trimmed to the first 3 STAT cycles, cutting at FS Y cycle
 boundaries and resuming at FS X. This keeps the replay aligned with the scanner
 (`driveFixture` feeds every `p>h` event regardless of what the scanner emits, so
 the fixture's cycle count must match the scanner's). The leading STAT cycle is
-preserved, so the `stat-length` source-detection signal survives the trim
-(flatbed first STAT = 12 bytes, ADF first STAT = 0 bytes). This mirrors
+preserved, so the source-detection signal survives the trim (flatbed first
+STAT = 12 bytes, `#ERRADF PE  `; ADF first STAT = 0 bytes). This mirrors
 `trimStatCycles(raw, 3)` used by the ET-4950 Frida replay, applied here at
 fixture-generation time for the pcap-extract `{dir, hex}` shape.
 

@@ -18,14 +18,6 @@ export interface RegistryEntry {
    */
   capaFingerprints: readonly string[];
   displayName: string;
-  /**
-   * How the session learns its source. "stat-length" and "stat-content" both
-   * read the first init-poll status reply, by its declared length (the
-   * entries' captured rule) or by its error tokens (the generic dialect's:
-   * "ADF paper empty" means flatbed, no error means ADF). The fixed ones never
-   * consult it.
-   */
-  sourceDetection: "stat-length" | "stat-content" | "fixed-flatbed" | "fixed-adf";
   initPollIterations: number;
   /**
    * The flatbed and ADF scan windows: each the captured paper size,
@@ -110,7 +102,19 @@ export interface CapabilityFields {
   optionalSegments: { qit: boolean; cct: boolean };
   /** PARA layout: "adf-crp" for the crop-mode ADF-only scanners, else "standard". */
   paraProfile: ParaProfile;
+  /** How the session learns its source. */
+  sourceDetection: SourceDetection;
 }
+
+/**
+ * How a session learns its source, from the sources INFO advertises. A
+ * printer with both reads it from the content of the init poll's first
+ * status reply ("ADF paper empty" means the flatbed, no error the ADF); a
+ * single-source printer is fixed to it, and never consults the reply. Null
+ * when INFO advertises no scan area at all: the session keeps the scanner
+ * shell's default source.
+ */
+export type SourceDetection = "init-poll-status" | "fixed-flatbed" | "fixed-adf" | null;
 
 /**
  * A source's scan window on a registry entry. "generic" inherits the generic
@@ -159,7 +163,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     names: [],
     capaFingerprints: ["2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2"],
     displayName: "ET-4950 / ET-3950 / ET-4956 (ESC/I-2 over TLS)",
-    sourceDetection: "stat-length",
     initPollIterations: 3,
     fbExtents: "generic",
     adfExtents: "generic",
@@ -189,7 +192,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     names: [],
     capaFingerprints: ["de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7"],
     displayName: "ET-2750 / XP-4100 (ESC/I-2 over plain TCP)",
-    sourceDetection: "fixed-flatbed",
     initPollIterations: 2,
     fbExtents: { x0: 0, y0: 0, w: 2477, h: 3500 },
     adfExtents: null,
@@ -205,7 +207,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     names: [],
     capaFingerprints: ["56d26c61896ca417807ac68d37775036fa1e702ee44c0beaa27d8a6ea9fa457e"],
     displayName: "XP-7100 (ESC/I-2 over plain TCP)",
-    sourceDetection: "stat-length",
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2550, h: 3300 },
     adfExtents: { x0: 0, y0: 0, w: 2550, h: 3300 },
@@ -221,7 +222,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     names: [],
     capaFingerprints: ["b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb"],
     displayName: "ET-2950 (ESC/I-2 over TLS)",
-    sourceDetection: "fixed-flatbed",
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
     adfExtents: null,
@@ -239,7 +239,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     names: [],
     capaFingerprints: ["7870a725ab969136d5eb04387bf01d3cc3168aabb3d11cfaca7d59a4169971c2"],
     displayName: "ET-4800 (ESC/I-2 over plain TCP)",
-    sourceDetection: "stat-length",
     initPollIterations: 3, // same as ET-4950 family; fixtures trimmed to 3 cycles
     fbExtents: "generic",
     adfExtents: "generic",
@@ -261,7 +260,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     names: [],
     capaFingerprints: ["d1d7293e92fa726e006429beacca1255e474de0d66b3559f87176d4e4b3d0e55"],
     displayName: "ET-15000 (ESC/I-2 over plain TCP)",
-    sourceDetection: "stat-length",
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
     adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
@@ -275,14 +273,13 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
   // FF-680W: ADF-only FastFoto scanner. The panel JobNumberIn flow observed
   // from Epson's Mac software uses plain TCP ESC/I-2, an 8-cycle init poll,
   // and a 200-DPI ADF PARA dialect with CRP/SKEW/DPLX defaults. The INFO body
-  // has no FB AREA segment, so keep source fixed to ADF rather than applying
-  // the flatbed-oriented plain-TCP default.
+  // has no FB AREA segment, so the session is fixed to the ADF rather than
+  // keeping the flatbed-oriented plain-TCP default.
   {
     pids: [],
     names: ["FF-680W"],
     capaFingerprints: ["5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd"],
     displayName: "FF-680W (ESC/I-2 over plain TCP)",
-    sourceDetection: "fixed-adf",
     initPollIterations: 8,
     fbExtents: null, // ADF-only hardware — no flatbed
     adfExtents: { x0: 0, y0: 0, w: 1700, h: 7200 },
@@ -297,8 +294,9 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
   },
   // DS-575W: ADF-only, button-only sheet-fed scanner — a FastFoto/DS-family
   // sibling of the FF-680W (PID 0169 vs 016B). ESC/I-2 over plain TCP, 12-cycle
-  // init poll, fixed-ADF (the init-poll STAT is len=12, which stat-length would
-  // misread as flatbed). Its #ADFCRP PARA is byte-identical in layout to the
+  // init poll, fixed to the ADF (its INFO has no flatbed; its first init-poll
+  // statuses report ADF paper empty, which a status read would take for the
+  // flatbed). Its #ADFCRP PARA is byte-identical in layout to the
   // FF-680W's, so it reuses the adf-crp profile; the only differences are ADF
   // extents and the colour axis. Colour scans reuse the FF-680W's RGB gamma
   // (ff680w-adf) and the ET-2750's CMX (et2750-um08) — both byte-identical in
@@ -318,7 +316,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     names: ["DS-575W"],
     capaFingerprints: ["90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b074"],
     displayName: "DS-575W (ESC/I-2 over plain TCP)",
-    sourceDetection: "fixed-adf",
     initPollIterations: 12,
     fbExtents: null, // ADF-only hardware — no flatbed
     adfExtents: { x0: 0, y0: 0, w: 1700, h: 3100 },
@@ -389,7 +386,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     names: [],
     capaFingerprints: ["708704b6abb184cede037fcd9893ea81f69651fde28780cde0162dfa33a33f6e"],
     displayName: "ET-2810 / XP-3200 (ESC/I-2)",
-    sourceDetection: "fixed-flatbed",
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
     adfExtents: null,
@@ -424,7 +420,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     names: [],
     capaFingerprints: ["05b5c7eaad217e9538883f3fffe9796464689a5d9006c5b3e3c3fd2c24e21467"],
     displayName: "ET-8500 (ESC/I-2)",
-    sourceDetection: "fixed-flatbed",
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
     adfExtents: null,
@@ -464,7 +459,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     names: [],
     capaFingerprints: ["72319314b621fea0aab6cc16f4fd891534cec08f33ce80116a849f6f6e1e58d4"],
     displayName: "ET-7700 (ESC/I-2)",
-    sourceDetection: "fixed-flatbed",
     initPollIterations: 3,
     fbExtents: "generic",
     adfExtents: null,
@@ -508,7 +502,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     names: [],
     capaFingerprints: ["860a899be9dc4fc27b68f8aed21a49ccfe87733a3974813f0c2ade6810e89dc7"],
     displayName: "WF-3835 (ESC/I-2 over plain TCP)",
-    sourceDetection: "stat-length",
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
     adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },

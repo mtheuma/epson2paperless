@@ -64,6 +64,7 @@ describe("deriveCapabilities — rules", () => {
       adfDuplex: true,
       optionalSegments: { qit: true, cct: false },
       paraProfile: "adf-crp",
+      sourceDetection: "fixed-adf",
     });
   });
 });
@@ -154,34 +155,28 @@ describe("compareWithEntry", () => {
   it("returns one disagreement per differing field, naming both values", () => {
     expect(
       compareWithEntry(
-        { ...agreeing, sourceDetection: "fixed-adf", duplexBackRotated: false },
-        entry,
-      ),
-    ).toEqual([
-      { field: "sourceDetection", derived: "fixed-adf", entry: "init-poll-status" },
-      { field: "duplexBackRotated", derived: false, entry: true },
-    ]);
-  });
-
-  it("never compares the live fields: the entry has none to compare with", () => {
-    const live = { qit: false, cct: false, adfDuplex: false, paraProfile: "adf-crp" } as const;
-    expect(compareWithEntry({ ...agreeing, ...live }, entry)).toEqual([]);
-  });
-
-  it("compares sources structurally and maps the entry's stat-length to the status read", () => {
-    expect(
-      compareWithEntry(
-        { ...agreeing, sources: { flatbed: true, adf: false }, sourceDetection: "fixed-flatbed" },
+        { ...agreeing, sources: { flatbed: false, adf: true }, duplexBackRotated: false },
         entry,
       ),
     ).toEqual([
       {
         field: "sources",
-        derived: { flatbed: true, adf: false },
+        derived: { flatbed: false, adf: true },
         entry: { flatbed: true, adf: true },
       },
-      { field: "sourceDetection", derived: "fixed-flatbed", entry: "init-poll-status" },
+      { field: "duplexBackRotated", derived: false, entry: true },
     ]);
+  });
+
+  it("never compares the live fields: the entry has none to compare with", () => {
+    const live = {
+      qit: false,
+      cct: false,
+      adfDuplex: false,
+      paraProfile: "adf-crp",
+      sourceDetection: "fixed-adf",
+    } as const;
+    expect(compareWithEntry({ ...agreeing, ...live }, entry)).toEqual([]);
   });
 });
 
@@ -224,20 +219,21 @@ describe("shadow derivation agrees with every replay fixture", () => {
 });
 
 describe("content-based source decision agrees with the length-based one on every fixture", () => {
-  // Only stat-length entries make a length-based decision; for the rest the
-  // source is fixed and the status content is never consulted.
-  const statLengthFixtures = REPLAY_FIXTURES.filter(({ path }) => {
-    const entry = REGISTRY.get(computeCapaFingerprint(readInit1Bodies(path).capa));
-    return entry?.sourceDetection === "stat-length";
+  // Only a printer with both sources reads its status; the rest are fixed to
+  // their one source and never consult it.
+  const statusFixtures = REPLAY_FIXTURES.filter(({ path }) => {
+    const { info, capa } = readInit1Bodies(path);
+    return derive(info, capa).sourceDetection === "init-poll-status";
   });
 
-  it("covers flatbed and ADF sessions of every stat-length fixture model", () => {
-    expect(new Set(statLengthFixtures.map((f) => f.model))).toEqual(
+  it("covers flatbed and ADF sessions of every fixture model that reads its status", () => {
+    expect(new Set(statusFixtures.map((f) => f.model))).toEqual(
       new Set(["ET-4950 family", "XP-7100", "ET-4800"]),
     );
+    expect(new Set(statusFixtures.map((f) => f.source))).toEqual(new Set(["flatbed", "adf"]));
   });
 
-  it.each(statLengthFixtures)("$model: $path", ({ path, source }) => {
+  it.each(statusFixtures)("$model: $path", ({ path, source }) => {
     const { header, body } = readFirstInitPollStatus(path);
     const lengthBased = sourceFromStatLength(body?.length ?? 0);
     const errors = [header, body ?? Buffer.alloc(0)].flatMap((b) => parseStatErrors(b));
@@ -264,24 +260,100 @@ describe("content-based source decision agrees with the length-based one on ever
  * model's own replies: every replay fixture, and every issue diagnostic for
  * the fields its block determines.
  */
-type LiveFields = Pick<DerivedCapabilities, "qit" | "cct" | "adfDuplex" | "paraProfile">;
+type LiveFields = Pick<
+  DerivedCapabilities,
+  "qit" | "cct" | "adfDuplex" | "paraProfile" | "sourceDetection"
+>;
+// Source detection: "init-poll-status" was the entry's "stat-length".
+const STATUS = "init-poll-status";
 const LIVE_FIELDS: Record<string, Partial<LiveFields>> = {
-  "ET-4950 family": { qit: true, cct: true, adfDuplex: true, paraProfile: "standard" },
-  "ET-2750": { qit: false, cct: false, adfDuplex: false, paraProfile: "standard" },
-  "XP-7100": { qit: true, cct: false, adfDuplex: true, paraProfile: "standard" },
-  "ET-4800": { qit: false, cct: false, adfDuplex: false, paraProfile: "standard" },
-  "ET-7700": { qit: true, cct: false, adfDuplex: false, paraProfile: "standard" },
-  "FF-680W": { qit: false, cct: false, adfDuplex: true, paraProfile: "adf-crp" },
-  "DS-575W": { qit: false, cct: false, adfDuplex: true, paraProfile: "adf-crp" },
+  "ET-4950 family": {
+    qit: true,
+    cct: true,
+    adfDuplex: true,
+    paraProfile: "standard",
+    sourceDetection: STATUS,
+  },
+  "ET-2750": {
+    qit: false,
+    cct: false,
+    adfDuplex: false,
+    paraProfile: "standard",
+    sourceDetection: "fixed-flatbed",
+  },
+  "XP-7100": {
+    qit: true,
+    cct: false,
+    adfDuplex: true,
+    paraProfile: "standard",
+    sourceDetection: STATUS,
+  },
+  "ET-4800": {
+    qit: false,
+    cct: false,
+    adfDuplex: false,
+    paraProfile: "standard",
+    sourceDetection: STATUS,
+  },
+  "ET-7700": {
+    qit: true,
+    cct: false,
+    adfDuplex: false,
+    paraProfile: "standard",
+    sourceDetection: "fixed-flatbed",
+  },
+  "FF-680W": {
+    qit: false,
+    cct: false,
+    adfDuplex: true,
+    paraProfile: "adf-crp",
+    sourceDetection: "fixed-adf",
+  },
+  "DS-575W": {
+    qit: false,
+    cct: false,
+    adfDuplex: true,
+    paraProfile: "adf-crp",
+    sourceDetection: "fixed-adf",
+  },
   // Its block has no CCT line, so its session sends #CCT exactly when its
   // own CAPA lists COL; nothing recorded says which.
-  "ET-2950": { qit: true, adfDuplex: false, paraProfile: "standard" },
-  "ET-15000": { qit: false, cct: false, adfDuplex: false, paraProfile: "standard" },
-  "ET-2810": { qit: false, cct: false, adfDuplex: false, paraProfile: "standard" },
-  "ET-8500": { qit: true, cct: false, adfDuplex: false, paraProfile: "standard" },
-  "WF-3835": { qit: true, cct: false, adfDuplex: false, paraProfile: "standard" },
+  "ET-2950": {
+    qit: true,
+    adfDuplex: false,
+    paraProfile: "standard",
+    sourceDetection: "fixed-flatbed",
+  },
+  "ET-15000": {
+    qit: false,
+    cct: false,
+    adfDuplex: false,
+    paraProfile: "standard",
+    sourceDetection: STATUS,
+  },
+  "ET-2810": {
+    qit: false,
+    cct: false,
+    adfDuplex: false,
+    paraProfile: "standard",
+    sourceDetection: "fixed-flatbed",
+  },
+  "ET-8500": {
+    qit: true,
+    cct: false,
+    adfDuplex: false,
+    paraProfile: "standard",
+    sourceDetection: "fixed-flatbed",
+  },
+  "WF-3835": {
+    qit: true,
+    cct: false,
+    adfDuplex: false,
+    paraProfile: "standard",
+    sourceDetection: STATUS,
+  },
 };
-const LIVE = ["qit", "cct", "adfDuplex", "paraProfile"] as const;
+const LIVE = ["qit", "cct", "adfDuplex", "paraProfile", "sourceDetection"] as const;
 
 describe("live fields derived for every replay fixture", () => {
   it.each(REPLAY_FIXTURES)("$model: $path", ({ model, path }) => {

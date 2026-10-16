@@ -207,8 +207,8 @@ describe("applyEntrySourceOverride", () => {
     expect(ctx.source).toBe("adf");
   });
 
-  it("leaves ctx.source unchanged for stat-length entries", () => {
-    const entry = recordedDialect(ET4950_FP); // stat-length
+  it("leaves ctx.source unchanged for a printer with both sources", () => {
+    const entry = recordedDialect(ET4950_FP); // flatbed + ADF: read from the status
     const ctx = { source: "adf" as "adf" | "flatbed", duplex: false };
     applyEntrySourceOverride(ctx, entry);
     expect(ctx.source).toBe("adf");
@@ -283,6 +283,18 @@ describe("an override's capability fields follow the printer's own replies", () 
     const { resolved } = lookup(FF680W.info, FF680W.capa);
     expect(resolved.entry.paraProfile).toBe("adf-crp");
     expect(resolved.entry.adfExtents).toEqual(REGISTRY.get(FF680W_FP)!.adfExtents);
+  });
+
+  it("an override's source detection follows the sources its INFO advertises", () => {
+    expect(lookup(ET4950.info, ET4950.capa).resolved.entry.sourceDetection).toBe(
+      "init-poll-status",
+    );
+    const text = ET4950.info.toString("latin1");
+    expect(text).toContain("#ADFAREA");
+    const noAdf = Buffer.from(text.replace(/#ADFAREA[^#]*/, ""), "latin1");
+    const { resolved } = lookup(noAdf, ET4950.capa);
+    expect(resolved.matchedBy).toBe("pid");
+    expect(resolved.entry.sourceDetection).toBe("fixed-flatbed");
   });
 
   it("returns the derivation the dialect was completed with", () => {

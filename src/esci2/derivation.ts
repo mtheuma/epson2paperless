@@ -1,7 +1,7 @@
 // src/esci2/derivation.ts
 import { isDeepStrictEqual } from "node:util";
 import type { CapaTokens, InfoTokens } from "./capabilities.js";
-import type { CapabilityFields, RegistryEntry } from "./dialects/registry.js";
+import type { CapabilityFields, RegistryEntry, SourceDetection } from "./dialects/registry.js";
 import type { ParaProfile } from "./para-composer.js";
 
 /**
@@ -26,12 +26,8 @@ export interface DerivedCapabilities {
   adfDuplex: boolean;
   /** Which sources the printer has: each one advertises a scan area in INFO. */
   sources: { flatbed: boolean; adf: boolean };
-  /**
-   * How the session learns its source. A printer with both sources reads it
-   * from the init poll's status reply; a single-source printer is fixed to
-   * it. Null when INFO advertises no scan area at all.
-   */
-  sourceDetection: "init-poll-status" | "fixed-flatbed" | "fixed-adf" | null;
+  /** How the session learns its source (live). */
+  sourceDetection: SourceDetection;
   /** PARA layout: "adf-crp" for an ADF-only printer whose ADF can crop (live). */
   paraProfile: ParaProfile;
   /** Duplex back pages arrive turned 180° (a two-pass ADF re-feeds the sheet). */
@@ -39,7 +35,7 @@ export interface DerivedCapabilities {
 }
 
 /** The fields still compared with the registry entry rather than used directly. */
-export type ShadowedField = "sources" | "sourceDetection" | "duplexBackRotated";
+export type ShadowedField = "sources" | "duplexBackRotated";
 
 /** One differing field, typed by the field it names. */
 export type Disagreement = {
@@ -83,11 +79,6 @@ const SHADOWED: {
   [K in ShadowedField]: (entry: RegistryEntry) => DerivedCapabilities[K];
 } = {
   sources: (e) => ({ flatbed: e.fbExtents !== null, adf: e.adfExtents !== null }),
-  // "stat-length" and "stat-content" both read the init poll's status reply.
-  sourceDetection: (e) =>
-    e.sourceDetection === "stat-length" || e.sourceDetection === "stat-content"
-      ? "init-poll-status"
-      : e.sourceDetection,
   duplexBackRotated: (e) => e.duplexBackRotated,
 };
 
@@ -114,6 +105,7 @@ export function capabilityFields(derived: DerivedCapabilities): CapabilityFields
     adfDuplex: derived.adfDuplex,
     optionalSegments: { qit: derived.qit, cct: derived.cct },
     paraProfile: derived.paraProfile,
+    sourceDetection: derived.sourceDetection,
   };
 }
 
@@ -145,10 +137,11 @@ export function compareWithEntry(
 }
 
 /**
- * Today's source rule for `stat-length` entries, from the first init-poll
- * STAT reply's declared length. ET-4950 fixtures: length 0 → ADF (printer
- * queued no status); length 12 → flatbed (queued `#ERRADF PE  `). Other
- * lengths default to ADF.
+ * The model overrides' former source rule, from the first init-poll STAT
+ * reply's declared length. ET-4950 fixtures: length 0 → ADF (printer queued
+ * no status); length 12 → flatbed (queued `#ERRADF PE  `). Other lengths
+ * default to ADF. Still the fallback when an override's status carries an
+ * error other than "ADF paper empty" (sourceFromFirstStatus in graph.ts).
  */
 export function sourceFromStatLength(length: number): "adf" | "flatbed" {
   return length === 12 ? "flatbed" : "adf";
@@ -157,8 +150,8 @@ export function sourceFromStatLength(length: number): "adf" | "flatbed" {
 /**
  * The source a printer with both sources is on, read from the content of the
  * init poll's first status reply: "ADF paper empty" means the flatbed, no
- * error means the ADF. Any other error is one a content-based decision would
- * end the session on, so it is returned for the caller to report.
+ * error means the ADF. Any other error leaves the source undecided, so it is
+ * returned for the caller to handle.
  */
 export type StatusSourceDecision = { source: "flatbed" | "adf" } | { unexpectedErrors: string[] };
 

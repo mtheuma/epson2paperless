@@ -219,9 +219,9 @@ The IMG loop's termination condition differs by source:
 
 **POSTSCAN drain.** After ADF scans the printer queues a final `#ERRADF PE` (ADF Paper End) status message in its output buffer. If this message is not consumed before the session closes, the printer's internal state machine does not advance cleanly, and the panel displays "Scanning Error" on subsequent scans. The two POSTSCAN cycles (`FS Y → STAT → pure-read(declared length) → FIN`, twice) drain this queued status. The drain consumes the length declared by the STAT reply — 12 bytes (`#ERRADF PE  `) on every captured ADF post-scan, but the implementation reads the declared length verbatim rather than hardcoding 12. The structure mirrors the `INIT_POLL_STAT_DRAIN` mechanism: the printer uses the IS payload-length field as a general signal that the host should issue a drain read before continuing. Flatbed scans do not produce an ADF status message and skip these two POSTSCAN cycles entirely, going directly from `FIN_AFTER_IMG` to `UNLOCKING`.
 
-**Source detection.** The push-scan SOAP body does not indicate whether the printer will scan from the ADF or the flatbed glass — the panel does not expose a source selector. Instead, the printer detects its own source (via the ADF paper sensor) and signals the result in the first `@STAT` reply during INIT_POLL cycle 1. Dialects with `sourceDetection: "stat-length"` (the flatbed + ADF models: ET-4950 family, XP-7100, ET-4800, ET-15000, WF-3835) apply this heuristic: an ADF-mode printer returns a zero-length `STATx0000000` reply and a flatbed-mode printer returns a 12-byte `STATx000000C` reply with filler content. The scanner reads this length field and sets `ctx.source`, which governs the PARA blob selection, the IMG loop terminator, and the POSTSCAN branching.
+**Source detection.** The push-scan SOAP body does not indicate whether the printer will scan from the ADF or the flatbed glass — the panel does not expose a source selector. Instead, the printer detects its own source (via the ADF paper sensor) and signals the result in the first `@STAT` reply during INIT_POLL cycle 1. A printer whose INFO reply advertises both a flatbed and an ADF scan area (`sourceDetection: "init-poll-status"`, derived for every session; on the recorded models: ET-4950 family, XP-7100, ET-4800, ET-15000, WF-3835) reads that reply's content: an ADF-mode printer queues no status (a zero-length `STATx0000000` reply), and a flatbed-mode printer queues `#ERRADF PE  ` ("ADF paper empty", a 12-byte `STATx000000C` reply). `#ERRADF PE` sets `ctx.source` to flatbed and no error to ADF; `ctx.source` governs the PARA blob selection, the IMG loop terminator, and the POSTSCAN branching. A reply carrying any other error is handled as it was before the content rule: the generic dialect ends the session, and a model override logs it and takes the source from the reply's declared length (12 → flatbed, anything else → ADF).
 
-The ET-2750 dialect uses `sourceDetection: "fixed-flatbed"` and skips this heuristic: its STAT reply declares `length=0` in the 12-byte ESC/I-2 header but packs a 52-byte filler (`#---#---#---…`) inline in the same 64-byte IS frame, so applying the stat-length rule would misclassify it as ADF. ET-2750 hardware is flatbed-only — there's no ADF to detect — so the graph trusts the `source: "flatbed"` value the scanner shell pre-sets in `initialCtx`. The `INIT_POLL_STAT` decision is conditioned on `ctx.entry.sourceDetection === "stat-length"` for the override path. Every other flatbed-only dialect (ET-2950, ET-2810 / XP-3200, ET-8500, ET-7700) is `fixed-flatbed` too and takes the same skip-the-heuristic path.
+A printer that advertises one source is fixed to it (`fixed-flatbed` / `fixed-adf`) and never reads the reply. The ET-2750 depends on that: its STAT reply declares `length=0` in the 12-byte ESC/I-2 header but packs a 52-byte filler (`#---#---#---…`) inline in the same 64-byte IS frame. The filler carries no error, so a content read would say ADF on flatbed-only hardware. As a flatbed-only printer it is `fixed-flatbed`, and the graph pins `ctx.source = "flatbed"` at INIT1. Every other flatbed-only model (ET-2950, ET-2810 / XP-3200, ET-8500, ET-7700) takes the same path.
 
 ### Transport adapters
 
@@ -240,11 +240,11 @@ The WF-3620 ESC/I path uses no transport-shape adapters. It still emits LOCK and
 
 ### Source: ADF vs flatbed
 
-For dialects with **`sourceDetection: "stat-length"`** (the flatbed + ADF models: ET-4950 family, XP-7100, ET-4800, ET-15000, WF-3835), the scanner detects the physical source from the first `@STAT` reply in INIT_POLL cycle 1: declared length `0` → ADF; declared length `12` → flatbed; any other non-zero length falls back to ADF (no other lengths have been observed in practice — the fallback exists for diagnostic resilience). When the declared length is non-zero, those bytes are drained with a pure-read before the next command is sent — the printer queues them as pending output, and failing to drain them desynchronises the IS framing for all subsequent packets.
+For a printer with both sources (**`sourceDetection: "init-poll-status"`**, derived from INFO: ET-4950 family, XP-7100, ET-4800, ET-15000, WF-3835), the scanner detects the physical source from the content of the first `@STAT` reply in INIT_POLL cycle 1: `#ERRADF PE` → flatbed; no error → ADF. Every recorded flatbed session's reply is the 12-byte `#ERRADF PE  ` and every ADF session's is empty, so on the fixtures this agrees with the reply's declared length. When the declared length is non-zero, those bytes are drained with a pure-read before the next command is sent — the printer queues them as pending output, and failing to drain them desynchronises the IS framing for all subsequent packets. The tokens are judged from the reply and its drained body together.
 
-For dialects with **`sourceDetection: "fixed-flatbed"`** (the flatbed-only models), the heuristic is skipped entirely — there is no ADF to detect. ET-2750 additionally needs the override because its STAT reply declares length `0` (with a 52-byte filler packed inline in the same 64-byte IS frame), so applying the stat-length rule would misclassify it as ADF. The scanner shell pre-sets `source: "flatbed"` in `initialCtx`, and the `INIT_POLL_STAT` decision is gated on `ctx.entry.sourceDetection === "stat-length"` — the override path doesn't run on these dialects and the pre-set value survives.
+A printer with one source (**`fixed-flatbed`** / **`fixed-adf`**) never reads the reply, and `ctx.source` is pinned at INIT1. The ET-2750 relies on that: its STAT reply declares length `0` with a 52-byte filler packed inline in the same 64-byte IS frame, and that filler carries no error, so a content read would misclassify it as ADF.
 
-ADF precedence (the `stat-length` dialects above): when the ADF feeder has paper loaded, the printer picks ADF regardless of whether a document is also present on the glass. The INIT_POLL STAT reply returns length 0 in this case. Users who want flatbed must clear the ADF first.
+ADF precedence (the printers with both sources, above): when the ADF feeder has paper loaded, the printer picks ADF regardless of whether a document is also present on the glass. The INIT_POLL STAT reply carries no error in this case. Users who want flatbed must clear the ADF first.
 
 The composed PARA length depends on the dialect (which gamma / CMX classes and optional segments it carries) and the source axis. Actual `composePara` output per registry entry:
 
@@ -340,7 +340,7 @@ Wire differences from the ET-4950 (decoded from the pcap captures under `tools/p
 
 - **No TLS handshake.** The printer sends the welcome IS packet (type `0x8000`) immediately after TCP connect. (Before the real session the driver opens a throwaway connection on 1865 — a rejected TLS probe on XP-7100 / ET-4800 / FF-680W / DS-575W, an aborted SYN/RST on ET-2750 — so each capture holds two `tcp.port==1865` conversations; isolate the real plain-TCP one — see [REVERSE-ENGINEERING.md](REVERSE-ENGINEERING.md).)
 - **INIT_POLL count is per-dialect:** 2 for ET-2750, 3 for XP-7100 and ET-4800, 8 for FF-680W, 12 for DS-575W (`ctx.entry.initPollIterations`). The ET-2750 capture ends after its two cycles, so how it answers a third FS Y is untested.
-- **Source detection / STAT.** XP-7100 and ET-4800 use `sourceDetection: "stat-length"` like the ET-4950 family (length 0 → ADF, 12 → flatbed). ET-2750 uses `"fixed-flatbed"`: its STAT reply packs a 52-byte filler inline in a single 64-byte IS frame while the 12-byte header still declares `length=0`, so the stat-length rule would misclassify it as ADF — the graph skips the override and trusts the `source: "flatbed"` value from `initialCtx`. ET-2750 hardware is flatbed-only, so this is correct. The FF-680W uses `sourceDetection: "fixed-adf"` (ADF-only hardware); the graph pins `ctx.source = "adf"` from the registry entry, mirroring ET-2750's `fixed-flatbed` approach in the opposite direction.
+- **Source detection / STAT.** XP-7100 and ET-4800 read the first status reply's content like the ET-4950 family (`#ERRADF PE` → flatbed, no error → ADF). ET-2750 is flatbed-only, so it is `fixed-flatbed` and never reads it: its STAT reply packs a 52-byte filler inline in a single 64-byte IS frame while the 12-byte header still declares `length=0`, and that filler carries no error, which a content read would take for ADF. The FF-680W and DS-575W are ADF-only, so they are `fixed-adf` (the DS-575W's first statuses report `ADF PE`, which a content read would take for the flatbed).
 - **PARA bodies are dialect-specific** and generally larger than the ET-4950 family's, carrying `#GMMUG18`, the optional segments the printer's CAPA lists, and a model-specific inline `#CMXUM08` ICC-matrix block. Per-dialect sizes are in the [PARA table above](#source-adf-vs-flatbed).
 
 These dialects are resolved by the same model-identity lookup used by the rest of the ESC/I-2 family. The scanner shell picks the entry point (`runEsci2Scan` for TLS vs `runEsci2ScanOverPlain` for plain TCP) and pre-sets `ctx.transport` in the initial ctx. On the `esci2-plain` transport, config-time validation rejects `ESCI_FORCE_SOURCE` (a legacy-ESC/I-only knob) and `PRINTER_CERT_FINGERPRINT` (no TLS layer to pin) at startup.
@@ -355,7 +355,8 @@ keyed by model identity. Entries are pure data:
   instead by the FF-680W and DS-575W, and sha256 fingerprints over their CAPA
   replies (`src/esci2/capa-fingerprint.ts`). A model whose PID isn't known yet
   (ET-3950, XP-4100) resolves through the fingerprint it shares with a sibling.
-- Dispatch metadata (`sourceDetection`, `initPollIterations`).
+- Dispatch metadata (`initPollIterations`). Source detection is derived from
+  the sources INFO advertises, never carried by the entry.
 - Scan extents (`fbExtents`, `adfExtents`) — the captured paper size, pinned at
   `windowDpi` (300 unless set; 200 for the `adf-crp` scanners), or `"generic"`
   to inherit the generic scan window (see the generic dialect below). An entry
@@ -399,9 +400,9 @@ built at INIT1 from their own replies. The session logs a warning ("not
 recognised — generic ESC/I-2 dialect, experimental, please report") and the
 diagnostic block at `info`. The generic dialect is:
 
-- the capability-derived fields (`deriveCapabilities`): sources, `#QIT` /
-  `#CCT`, ADF duplex and the PARA profile (the same ones every session
-  takes), and back-page rotation (`#ADFDPLX2SCN`);
+- the capability-derived fields (`deriveCapabilities`): `#QIT` / `#CCT`,
+  ADF duplex, the PARA profile and source detection (the same ones every
+  session takes), plus sources and back-page rotation (`#ADFDPLX2SCN`);
 - the neutral pair: the `et4950-stock` tone curve with the identity UM08
   matrix, in `UG18` (or `UG10` if that's all `#GMMLIST` offers). A printer
   whose `#CMXLIST` lacks `UM08` is sent SoC-style (`UG10`, no `#CMX`) on the
@@ -413,8 +414,9 @@ diagnostic block at `info`. The generic dialect is:
   inside the area;
 - a poll count of 3 with a flatbed, 12 ADF-only (timing parity with the
   captured driver only);
-- source detection from the first status reply's content (`stat-content`):
-  `#ERRADF PE` → flatbed, no error → ADF, any other error ends the session.
+- source detection from the first status reply's content, as for every
+  printer: `#ERRADF PE` → flatbed, no error → ADF. Any other error ends the
+  session (a model override still logs it and goes by the reply's length).
   Single-source printers are fixed to their source.
 
 It has no verified DPIs and no greyscale on the wire (pages convert
