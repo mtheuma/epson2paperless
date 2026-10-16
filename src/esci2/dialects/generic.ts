@@ -1,7 +1,12 @@
 // src/esci2/dialects/generic.ts
 import { parseArea, type CapaTokens, type InfoTokens } from "../capabilities.js";
 import type { ColourPair } from "../data/colour-pair.js";
-import { capabilityFields, deriveCapabilities, listItems } from "../derivation.js";
+import {
+  capabilityFields,
+  deriveCapabilities,
+  listItems,
+  type DerivedCapabilities,
+} from "../derivation.js";
 import { baseDpiFor, type Extents, type ParaProfile, type ParaSpec } from "../para-composer.js";
 import { genericWindow, type WindowSource } from "../scan-window.js";
 import type { Dialect } from "./registry.js";
@@ -93,14 +98,17 @@ export function printerIdentity(info: InfoTokens): string {
  * when it lists no JPG format, when INFO advertises no usable scan area, or
  * when the colour pair can't be formed.
  */
-export function buildGenericEntry(info: InfoTokens, capa: CapaTokens): Dialect {
+export function buildGenericEntry(
+  info: InfoTokens,
+  capa: CapaTokens,
+  derived: DerivedCapabilities = deriveCapabilities(info, capa),
+): Dialect {
   if (capa.segments.length === 0) {
     throw new GenericDialectUnusableError("its CAPA reply couldn't be parsed");
   }
   if (!listItems(capa.fmtList).includes("JPG")) {
     throw new GenericDialectUnusableError("its CAPA reply lists no JPG format");
   }
-  const derived = deriveCapabilities(info, capa);
   const profile = derived.paraProfile;
   const windowFor = (source: WindowSource): Extents | null => {
     if (!derived.sources[source]) return null;

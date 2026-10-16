@@ -9,6 +9,7 @@ import { REGISTRY } from "./registry.js";
 import { UnsupportedDialectError } from "../diagnostic.js";
 import { computeCapaFingerprint } from "../capa-fingerprint.js";
 import { parseCapaTokens, parseInfoTokens } from "../capabilities.js";
+import { deriveCapabilities } from "../derivation.js";
 import { REPLAY_FIXTURES, readInit1Bodies } from "../test-support/capability-bodies.js";
 import { recordedDialect } from "../test-support/dialects.js";
 
@@ -234,6 +235,44 @@ describe("makeParaSpec", () => {
     const entry = recordedDialect(FF680W_FP);
     const spec = makeParaSpec(entry, "adf-duplex", "jpg");
     expect(spec.profile).toBe("adf-crp");
+  });
+});
+
+describe("an override's capability fields follow the printer's own replies", () => {
+  // The ET-2950 (PID 11D0) is known only from a diagnostic with no CCT line,
+  // so whether it sends #CCT is whatever its live CAPA lists.
+  const ET2950_INFO = Buffer.from("#PRDh010PID 11D0        #FB AREAd850i0001170", "ascii");
+
+  it.each([
+    ["#QITLISTPREFON  OFF #CCTLISTPREFCOL MONO", { qit: true, cct: true }],
+    ["#QITLISTPREFON  OFF ", { qit: true, cct: false }],
+    ["#CCTLISTPREFMONO", { qit: false, cct: false }],
+  ])("ET-2950 with CAPA lists %j sends %o", (lists, segments) => {
+    const { resolved } = lookup(ET2950_INFO, Buffer.from(lists + "#GMMLISTUG10", "ascii"));
+    expect(resolved.matchedBy).toBe("pid");
+    expect(resolved.entry.displayName).toMatch(/ET-2950/);
+    expect(resolved.entry.optionalSegments).toEqual(segments);
+    expect(resolved.entry.paraProfile).toBe("standard");
+  });
+
+  it("a known crop-mode scanner whose CAPA drops #ADFCRP gets the standard profile", () => {
+    const text = FF680W.capa.toString("latin1");
+    expect(text).toContain("#ADFCRP");
+    const capa = Buffer.from(text.replace(/#ADFCRP[^#]*/, ""), "latin1");
+    const { resolved } = lookup(FF680W.info, capa);
+    expect(resolved.matchedBy).toBe("name");
+    expect(resolved.entry.paraProfile).toBe("standard");
+  });
+
+  it("returns the derivation the dialect was completed with", () => {
+    const { resolved } = lookup(ET4950.info, ET4950.capa);
+    expect(resolved.derived).toEqual(
+      deriveCapabilities(parseInfoTokens(ET4950.info), parseCapaTokens(ET4950.capa)),
+    );
+    expect(resolved.entry.optionalSegments).toEqual({
+      qit: resolved.derived.qit,
+      cct: resolved.derived.cct,
+    });
   });
 });
 

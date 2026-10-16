@@ -36,7 +36,6 @@ import {
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
 import {
   compareWithEntry,
-  deriveCapabilities,
   isExpectedDisagreement,
   sourceFromStatLength,
   sourceFromStatusErrors,
@@ -412,6 +411,11 @@ twoPhaseRead(
       pid: info.prdPid,
       productName: info.prdName,
       fingerprint,
+      // Taken from this printer's replies, never the entry: shows in a
+      // debug log what a model with no fixture actually got.
+      optionalSegments: ctx.entry.optionalSegments,
+      adfDuplex: ctx.entry.adfDuplex,
+      paraProfile: ctx.entry.paraProfile,
     });
     if (resolved.matchedBy === "generic") {
       // Built from the derivation itself, so there is nothing to compare.
@@ -424,7 +428,7 @@ twoPhaseRead(
     // failure here is logged rather than allowed to end the session.
     try {
       const dialect = ctx.entry.displayName;
-      for (const d of compareWithEntry(deriveCapabilities(info, capaTokens), ctx.entry)) {
+      for (const d of compareWithEntry(resolved.derived, ctx.entry)) {
         // A disagreement the entry already flags as unconfirmed is known;
         // repeating it at info on every scan would read as a new problem.
         if (isExpectedDisagreement(d, ctx.entry)) {

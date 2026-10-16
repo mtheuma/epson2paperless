@@ -231,9 +231,13 @@ export function bodiesFromDiagnostic(block: string): CapabilityBodies & {
   const infoSegments: string[] = [];
   const capaSegments: string[] = [];
   const fields: (keyof DerivedCapabilities)[] = [];
+  const fbArea = block.match(/^Scan area \(FB\): +(.+)$/m);
+  const adfArea = block.match(/^Scan area \(ADF\): +(.+)$/m);
+  if (fbArea && fbArea[1] !== "(absent)") infoSegments.push("#FB AREA" + fbArea[1]);
+  if (adfArea && adfArea[1] !== "(absent)") infoSegments.push("#ADFAREA" + adfArea[1]);
   const duplex = block.match(/duplex: ([YN])/);
   // ADF duplex also needs an ADF scan area, so it is determined only with both lines.
-  if (duplex && block.match(/^Scan area \(ADF\): /m)) {
+  if (duplex && adfArea) {
     fields.push("adfDuplex");
     if (duplex[1] === "Y") capaSegments.push("#ADFDPLX");
   }
@@ -246,17 +250,9 @@ export function bodiesFromDiagnostic(block: string): CapabilityBodies & {
     fields.push(field);
     if (line[1] !== "(absent)") capaSegments.push(token + line[1]);
   }
-  const fbArea = block.match(/^Scan area \(FB\): +(.+)$/m);
-  const adfArea = block.match(/^Scan area \(ADF\): +(.+)$/m);
-  if (fbArea && adfArea) {
-    fields.push("sources", "sourceDetection");
-    if (fbArea[1] !== "(absent)") {
-      infoSegments.push("#FB AREA" + fbArea[1]);
-      // A printer with a flatbed is never adf-crp, whatever its ADF lists.
-      fields.push("paraProfile");
-    }
-    if (adfArea[1] !== "(absent)") infoSegments.push("#ADFAREA" + adfArea[1]);
-  }
+  if (fbArea && adfArea) fields.push("sources", "sourceDetection");
+  // A printer with a flatbed is never adf-crp, whatever its ADF lists.
+  if (fbArea && fbArea[1] !== "(absent)") fields.push("paraProfile");
   return {
     info: Buffer.from(infoSegments.join(""), "ascii"),
     capa: Buffer.from(capaSegments.join(""), "ascii"),

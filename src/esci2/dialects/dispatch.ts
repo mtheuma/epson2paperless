@@ -3,7 +3,7 @@ import type { ParaSpec } from "../para-composer.js";
 import { buildDiagnostic, UnsupportedDialectError } from "../diagnostic.js";
 import type { CapaTokens, InfoTokens } from "../capabilities.js";
 import { buildGenericEntry, GenericDialectUnusableError, printerIdentity } from "./generic.js";
-import { capabilityFields, deriveCapabilities } from "../derivation.js";
+import { capabilityFields, deriveCapabilities, type DerivedCapabilities } from "../derivation.js";
 import { createLogger } from "../../logger.js";
 
 const log = createLogger("scanner-esci2");
@@ -14,6 +14,8 @@ export type IdentityMatch = "pid" | "name" | "fingerprint" | "generic";
 export interface ResolvedEntry {
   entry: Dialect;
   matchedBy: IdentityMatch;
+  /** The derivation the dialect was built with, for the caller's shadow comparison. */
+  derived: DerivedCapabilities;
 }
 
 /** What INIT1 knows when it resolves the dialect. */
@@ -47,6 +49,7 @@ export interface Init1Replies {
  */
 export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
   const { info, capa, fingerprint } = replies;
+  const derived = deriveCapabilities(info, capa);
   // prdPid is canonical upper-case hex, and entries store names upper-case
   // (both pinned by registry.test.ts), so only the reported name needs folding.
   const { prdPid } = info;
@@ -69,32 +72,28 @@ export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
           `please file an issue with the diagnostic block below:\n\n${buildDiagnostic(replies)}`,
       );
     }
-    return { entry: withCapabilities(byIdentity, info, capa), matchedBy };
+    return { entry: withCapabilities(byIdentity, derived), matchedBy, derived };
   }
 
   if (byFingerprint !== undefined) {
-    return { entry: withCapabilities(byFingerprint, info, capa), matchedBy: "fingerprint" };
+    return { entry: withCapabilities(byFingerprint, derived), matchedBy: "fingerprint", derived };
   }
-  return { entry: resolveGenericEntry(replies), matchedBy: "generic" };
+  return { entry: resolveGenericEntry(replies, derived), matchedBy: "generic", derived };
 }
 
 /**
  * A registry entry completed with the capability fields derived from the
  * printer's own replies, the same ones the generic dialect is built with.
  */
-export function withCapabilities(
-  entry: RegistryEntry,
-  info: InfoTokens,
-  capa: CapaTokens,
-): Dialect {
-  return { ...entry, ...capabilityFields(deriveCapabilities(info, capa)) };
+export function withCapabilities(entry: RegistryEntry, derived: DerivedCapabilities): Dialect {
+  return { ...entry, ...capabilityFields(derived) };
 }
 
-function resolveGenericEntry(replies: Init1Replies): Dialect {
+function resolveGenericEntry(replies: Init1Replies, derived: DerivedCapabilities): Dialect {
   const diagnostic = buildDiagnostic(replies);
   let entry: Dialect;
   try {
-    entry = buildGenericEntry(replies.info, replies.capa);
+    entry = buildGenericEntry(replies.info, replies.capa, derived);
   } catch (err) {
     if (!(err instanceof GenericDialectUnusableError)) throw err;
     throw new UnsupportedDialectError(replies.fingerprint, diagnostic, err.message);

@@ -2,7 +2,7 @@
 import { isDeepStrictEqual } from "node:util";
 import { parseArea, type InfoTokens } from "./capabilities.js";
 import { baseDpiFor, scaleAcqExtents, type Extents, type ParaProfile } from "./para-composer.js";
-import type { Dialect } from "./dialects/registry.js";
+import type { Dialect, RegistryEntry } from "./dialects/registry.js";
 
 /**
  * Shadow derivation for the scan window (report-only). The printer's INFO
@@ -71,7 +71,7 @@ export type WindowProblem =
   | { source: WindowSource; problem: "outside-scan-area"; window: Extents; maxArea: Extents }
   | { source: WindowSource; problem: "x0-misaligned"; window: Extents; expectedX0: number };
 
-function entryWindows(entry: Dialect): [WindowSource, Extents][] {
+function entryWindows(entry: RegistryEntry): [WindowSource, Extents][] {
   const out: [WindowSource, Extents][] = [];
   if (entry.fbExtents !== null) out.push(["flatbed", entry.fbExtents]);
   if (entry.adfExtents !== null) out.push(["adf", entry.adfExtents]);
