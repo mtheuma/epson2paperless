@@ -830,16 +830,22 @@ g.state(
 const warnedDuplexOrientation = new Set<string>();
 
 // Back-page rotation comes from the printer's INFO duplex type. Where no
-// capture or hardware report has confirmed it for this model, say so on the
-// first duplex scan, or a wrong call could never be reported.
+// capture or hardware report has confirmed that orientation for this model
+// (none recorded, or one that vouched for the other), say so on the first
+// duplex scan, or a wrong call could never be reported.
 function warnOnUnconfirmedDuplexOrientation(entry: Dialect): void {
-  if (entry.duplexOrientationEvidence !== undefined) return;
+  const evidence = entry.duplexOrientationEvidence;
+  if (evidence?.backRotated === entry.duplexBackRotated) return;
   if (warnedDuplexOrientation.has(entry.displayName)) return;
   warnedDuplexOrientation.add(entry.displayName);
+  const choice = entry.duplexBackRotated
+    ? "turned 180° (the printer reports a two-pass ADF)"
+    : "left as delivered (the printer reports no two-pass ADF)";
+  const contrary =
+    evidence === undefined ? "" : ` That contradicts what was confirmed (${evidence.source}).`;
   log.warn(
     `${entry.displayName}: which way up duplex back pages arrive hasn't been confirmed ` +
-      `on this model. Back pages are ${entry.duplexBackRotated ? "turned 180°" : "left as delivered"}, ` +
-      "following the duplex type the printer reports; if they come out upside down, " +
+      `on this model. Back pages are ${choice}.${contrary} If they come out upside down, ` +
       "please open an issue.",
   );
 }

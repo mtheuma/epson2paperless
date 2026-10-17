@@ -71,8 +71,9 @@ const RULES: {
   // "No flatbed" is redundant on every printer seen so far (only ADF-only
   // printers list #ADFCRP), but it is the documented rule.
   paraProfile: (info, capa) => (capa.adfCrop && !sourcesOf(info).flatbed ? "adf-crp" : "standard"),
-  // Single-pass ("1SCN") or no duplex: back pages arrive upright.
-  duplexBackRotated: (info) => info.adfDuplexType === "2SCN",
+  // Single-pass ("1SCN"), no duplex type, or no duplex ADF: back pages
+  // arrive the same way up as the front.
+  duplexBackRotated: (info, capa) => RULES.adfDuplex(info, capa) && info.adfDuplexType === "2SCN",
 };
 
 const SHADOWED: {

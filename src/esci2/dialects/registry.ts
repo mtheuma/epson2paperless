@@ -38,13 +38,15 @@ export interface RegistryEntry {
    */
   windowDpi?: number;
   /**
-   * What confirms which way up this model's duplex back pages arrive (the
-   * duplexBackRotated capability): a duplex capture whose orientation has
-   * been checked, or a hardware report. Omitted where neither exists; a
-   * duplex scan on such a model then warns once per process, inviting the
-   * report that would settle it. Unused on models with no duplex ADF.
+   * What confirmed which way up this model's duplex back pages arrive: a
+   * duplex capture whose orientation has been checked, or a hardware report
+   * (`source`), and the orientation it confirmed (`backRotated`). The
+   * session still derives the orientation from INFO; this only silences the
+   * warning, and only while the two agree. Omitted where neither exists: a
+   * duplex scan then warns once per process, inviting the report that would
+   * settle it. Only a model with a duplex ADF carries it.
    */
-  duplexOrientationEvidence?: string;
+  duplexOrientationEvidence?: { backRotated: boolean; source: string };
   gmm: string;
   gammaClass: { jpg: GammaClassName; pdf: GammaClassName };
   cmxClass: { jpg: CmxClassName | null; pdf: CmxClassName | null };
@@ -164,8 +166,10 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3,
     fbExtents: "generic",
     adfExtents: "generic",
-    duplexOrientationEvidence:
-      "ET-4956 hardware (the maintainer's): duplex backs arrive turned 180°, a two-pass ADF",
+    duplexOrientationEvidence: {
+      backRotated: true,
+      source: "ET-4956 hardware (the maintainer's): duplex backs arrive turned 180°",
+    },
     gmm: "UG10",
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
     cmxClass: { jpg: null, pdf: null },
@@ -208,7 +212,10 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2550, h: 3300 },
     adfExtents: { x0: 0, y0: 0, w: 2550, h: 3300 },
-    duplexOrientationEvidence: "hardware report: duplex backs arrive turned 180°, a two-pass ADF",
+    duplexOrientationEvidence: {
+      backRotated: true,
+      source: "hardware report (#65): duplex scans with backs turned 180° came out right",
+    },
     gmm: "UG18",
     gammaClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
     cmxClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
@@ -282,8 +289,11 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     // Rendered raw, both sides of the duplex fixture read upside down (the
     // sheet went in top edge first): the back is not turned relative to the
     // front, as a single-pass ADF reads it.
-    duplexOrientationEvidence:
-      "duplex capture ff-680w/adf-duplex-200, rendered raw: the back arrives the same way up as the front",
+    duplexOrientationEvidence: {
+      backRotated: false,
+      source:
+        "duplex capture ff-680w/adf-duplex-200, rendered raw: back the same way up as the front",
+    },
     gmm: "UG18",
     gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
     cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
@@ -318,8 +328,10 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     fbExtents: null, // ADF-only hardware — no flatbed
     adfExtents: { x0: 0, y0: 0, w: 1700, h: 3100 },
     windowDpi: 200,
-    duplexOrientationEvidence:
-      "hardware report (#128): backs arrive upright; the 180° compensation inverted them",
+    duplexOrientationEvidence: {
+      backRotated: false,
+      source: "hardware report (#128): backs arrive upright; the 180° compensation inverted them",
+    },
     gmm: "UG18",
     gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
     cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },

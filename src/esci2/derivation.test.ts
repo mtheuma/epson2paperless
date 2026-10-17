@@ -112,9 +112,19 @@ describe("deriveCapabilities — PARA profile and back-page rotation", () => {
   });
 
   it("back pages are rotated exactly for a two-pass (2SCN) duplex ADF", () => {
-    expect(derive(ascii("#ADFDPLX2SCN"), NO_CAPA).duplexBackRotated).toBe(true);
-    expect(derive(ascii("#ADFDPLX1SCN"), NO_CAPA).duplexBackRotated).toBe(false);
-    expect(derive(ascii("#ADFAREAd850i0001400"), NO_CAPA).duplexBackRotated).toBe(false);
+    const DUPLEX = ascii("#ADFDPLX");
+    const area = "#ADFAREAd850i0001400";
+    expect(derive(ascii(area + "#ADFDPLX2SCN"), DUPLEX).duplexBackRotated).toBe(true);
+    expect(derive(ascii(area + "#ADFDPLX1SCN"), DUPLEX).duplexBackRotated).toBe(false);
+    expect(derive(ascii(area), DUPLEX).duplexBackRotated).toBe(false);
+  });
+
+  it("no duplex ADF means no rotated back pages, whatever INFO's duplex type says", () => {
+    // CAPA lacks #ADFDPLX, or INFO has no ADF scan area: adfDuplex is false.
+    expect(derive(ascii("#ADFAREAd850i0001400#ADFDPLX2SCN"), NO_CAPA).duplexBackRotated).toBe(
+      false,
+    );
+    expect(derive(ascii("#ADFDPLX2SCN"), ascii("#ADFDPLX")).duplexBackRotated).toBe(false);
   });
 });
 

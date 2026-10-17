@@ -1004,6 +1004,21 @@ describe("esci2Graph POST_MODE_STAT — unconfirmed duplex orientation warning",
     expect(orientationWarnings({ entry, source: "adf", duplex: true })).toHaveLength(1);
   });
 
+  it("warns when the recorded evidence vouched for the other orientation", () => {
+    // As after a firmware update that changes the duplex type INFO reports:
+    // the evidence confirmed back pages left as delivered, the printer now
+    // says two-pass.
+    const entry = {
+      ...recordedDialect("2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2"),
+      displayName: "Model E",
+      duplexOrientationEvidence: { backRotated: false, source: "a checked capture" },
+    };
+    const lines = orientationWarnings({ entry, source: "adf", duplex: true });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("turned 180°");
+    expect(lines[0]).toContain("a checked capture");
+  });
+
   it("names the as-delivered choice for a single-pass ADF", () => {
     const entry = { ...unconfirmed("Model D"), duplexBackRotated: false };
     const [line] = orientationWarnings({ entry, source: "adf", duplex: true });

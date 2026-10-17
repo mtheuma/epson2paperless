@@ -279,7 +279,7 @@ Within a dialect, the per-source variants differ in three places: the source tok
 
 The panel's Sides selection is carried in `PushScanIDIn[0]`: `0` = 1-Sided, `1` = 2-Sided. For ADF scans, the scanner threads this as `ctx.duplex`, which `makeParaSpec` folds into the `adf-duplex` source axis passed to `composePara`. Duplex replaces the `#ADF` source token with `#ADFDPLX` (four bytes wider), increasing the composed PARA length by 4 bytes (e.g. 936 → 940 on the ET-4950 family). The rest of the body is identical.
 
-Duplex scans produce image sides in the order front/back/front/back/... On reversing-ADF hardware (ET-4950 family, XP-7100) the back side of each sheet comes out physically flipped 180° because of the ADF's U-turn paper path — the sheet is pulled through, reversed, and re-fed, so the physical image is upside-down relative to the front side. Single-pass scanners (DS-575W, FF-680W) capture both sides in one pass and deliver the back the same way up as the front — hardware-confirmed on the DS-575W in issue #128, where the blanket compensation inverted them, and checked on the FF-680W's duplex fixture rendered raw. Whether the compensation applies comes from the printer's INFO duplex type on every session (`duplexBackRotated`: `#ADFDPLX2SCN`, two-pass, rotates; `1SCN`, single-pass, or no duplex, does not), resolved by the engine at flush time. A model override records what confirmed it (`duplexOrientationEvidence`); a duplex scan on a model without that record, including any printer on the generic dialect, logs one warning per process naming the choice made and inviting a report. Back sides are identified by the `#typIMGB` token in their `#pst` / `#pen` responses; front sides carry `#typIMGA`. The graph updates `ctx.pageSide` on every `IMG_META` reply (the `typ` token is consistent across all packets within a page); when the page completes, the engine reads `ctx.pageSide` from the `flushPage` barrier and pushes the 1-based page index into a `backPageIndices: number[]` array. The array is forwarded to `finalizeSession` so the EXIF / `/Rotate` injection path knows which pages need rotation; pages flushed under a `duplexBackRotated: false` dialect are never recorded in it.
+Duplex scans produce image sides in the order front/back/front/back/... On reversing-ADF hardware (ET-4950 family, XP-7100) the back side of each sheet comes out physically flipped 180° because of the ADF's U-turn paper path — the sheet is pulled through, reversed, and re-fed, so the physical image is upside-down relative to the front side. Single-pass scanners (DS-575W, FF-680W) capture both sides in one pass and deliver the back the same way up as the front — hardware-confirmed on the DS-575W in issue #128, where the blanket compensation inverted them, and checked on the FF-680W's duplex fixture rendered raw. Whether the compensation applies comes from the printer's INFO duplex type on every session (`duplexBackRotated`: `#ADFDPLX2SCN`, two-pass, rotates; `1SCN`, single-pass, or no duplex, does not), resolved by the engine at flush time. A model override records what confirmed it, and which way (`duplexOrientationEvidence`); a duplex scan on a model without that record, or whose record vouched for the other orientation, including any printer on the generic dialect, logs one warning per process naming the choice made and inviting a report. Back sides are identified by the `#typIMGB` token in their `#pst` / `#pen` responses; front sides carry `#typIMGA`. The graph updates `ctx.pageSide` on every `IMG_META` reply (the `typ` token is consistent across all packets within a page); when the page completes, the engine reads `ctx.pageSide` from the `flushPage` barrier and pushes the 1-based page index into a `backPageIndices: number[]` array. The array is forwarded to `finalizeSession` so the EXIF / `/Rotate` injection path knows which pages need rotation; pages flushed under a `duplexBackRotated: false` dialect are never recorded in it.
 
 For JPEG output, back-side images have a minimal EXIF APP1 segment prepended after the JPEG SOI marker (via `src/exif.ts`) that sets `Orientation = 3` (rotate 180°). This is a 36-byte synthetic APP1 — the minimum valid structure — since the scanner-produced JPEGs contain no EXIF data of their own. For PDF output, the page's PDF dictionary `/Rotate` entry is set to 180° (via `src/pdf.ts` using pdf-lib). Both approaches allow the viewing application to display pages right-side up without modifying the raw pixel data.
 
@@ -373,7 +373,7 @@ keyed by model identity. Entries are pure data:
   rejects a mixed pair; a test holds every entry to it, ET-8500 and ET-7700
   excepted until their colour fix.
 
-Three fields are never on an entry. Every session, registry entry or generic
+Five fields are never on an entry. Every session, registry entry or generic
 dialect alike, takes them from the printer's own INFO and CAPA replies
 (`capabilityFields` in `src/esci2/derivation.ts`):
 
@@ -382,7 +382,12 @@ dialect alike, takes them from the printer's own INFO and CAPA replies
 - ADF duplex: `#ADFDPLX` in CAPA and an ADF scan area in INFO. An
   `adf-duplex` PARA for a printer without it is refused before it is sent;
 - the PARA profile: `adf-crp` when CAPA lists `#ADFCRP` and INFO has no
-  flatbed scan area, else standard.
+  flatbed scan area, else standard;
+- source detection: read from the init poll's first status reply when INFO
+  advertises both scan areas, else fixed to the one source;
+- back-page rotation: duplex back pages are turned 180° when the ADF is
+  duplex and INFO reports it two-pass (`#ADFDPLX2SCN`), else left as
+  delivered (see [Sides: 1-sided vs 2-sided](#sides-1-sided-vs-2-sided)).
 
 At INIT1_CAPA the graph computes the fingerprint, looks up the entry via
 `lookupRegistryEntry` (product ID, then product name, then CAPA fingerprint),

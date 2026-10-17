@@ -174,24 +174,33 @@ describe("REGISTRY", () => {
     }
   });
 
-  it("records duplex-orientation evidence for exactly the duplex models that have it", () => {
-    // Each recorded model with a duplex ADF, and whether its derived rotation
-    // has been confirmed (a checked capture or a hardware report).
-    const duplexModels = [...REGISTRY]
-      .filter(([fp]) => recordedDialect(fp).adfDuplex)
-      .map(([, e]) => e.displayName);
-    expect(new Set(duplexModels)).toEqual(
-      new Set([
-        "ET-4950 / ET-3950 / ET-4956 (ESC/I-2 over TLS)",
-        "XP-7100 (ESC/I-2 over plain TCP)",
-        "FF-680W (ESC/I-2 over plain TCP)",
-        "DS-575W (ESC/I-2 over plain TCP)",
-      ]),
+  it("pins which models' duplex orientation is confirmed, and which way", () => {
+    // A checked capture or a hardware report, by model: whether back pages
+    // were confirmed turned 180°.
+    const confirmed = Object.fromEntries(
+      REGISTRY_ENTRIES.flatMap((e) =>
+        e.duplexOrientationEvidence
+          ? [[e.displayName, e.duplexOrientationEvidence.backRotated]]
+          : [],
+      ),
     );
+    expect(confirmed).toEqual({
+      "ET-4950 / ET-3950 / ET-4956 (ESC/I-2 over TLS)": true,
+      "XP-7100 (ESC/I-2 over plain TCP)": true,
+      "FF-680W (ESC/I-2 over plain TCP)": false,
+      "DS-575W (ESC/I-2 over plain TCP)": false,
+    });
+  });
+
+  it("holds every piece of orientation evidence to a duplex model whose replies derive it", () => {
     for (const [fp, e] of REGISTRY) {
-      const duplex = recordedDialect(fp).adfDuplex;
-      // Evidence is only about duplex back pages: a model without duplex has none to give.
-      expect(e.duplexOrientationEvidence !== undefined, e.displayName).toBe(duplex);
+      if (e.duplexOrientationEvidence === undefined) continue;
+      const dialect = recordedDialect(fp);
+      // Evidence is about duplex back pages: a model without duplex has none to give.
+      expect(dialect.adfDuplex, e.displayName).toBe(true);
+      expect(dialect.duplexBackRotated, e.displayName).toBe(
+        e.duplexOrientationEvidence.backRotated,
+      );
     }
   });
 
