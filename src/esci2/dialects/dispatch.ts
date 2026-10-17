@@ -132,9 +132,7 @@ function resolveOverride(
     log.warn(
       `${override.displayName}: its INFO reply advertises no usable ${missing.join(" or ")} ` +
         `scan area, so scans from it will fail. Please file an issue with the diagnostic ` +
-        `block below:
-
-${buildDiagnostic(replies)}`,
+        `block below:\n\n${buildDiagnostic(replies)}`,
     );
   }
   return entry;
