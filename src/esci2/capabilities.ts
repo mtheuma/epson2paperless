@@ -184,14 +184,16 @@ export function parseCapaTokens(body: Buffer): CapaTokens {
 
 /**
  * Error tokens from a STAT reply, e.g. "ADF PE" (ADF paper empty) from
- * `#ERRADF PE  `. Each `#ERR` segment is a 4-character location followed by
- * a 4-character code; both are returned trimmed and space-joined. Empty when
- * the reply reports no error (a bare `#ERR` included).
+ * `#ERRADF PE  `. Each `#ERR` segment is a 4-character location (the unit:
+ * ADF, FB or TPU) followed by a 4-character code; both are returned trimmed
+ * and space-joined, split at the field boundary so a four-letter location
+ * stays apart from its code. Empty when the reply reports no error (a bare
+ * `#ERR` included).
  */
 export function parseStatErrors(body: Buffer): string[] {
   return splitHashSegments(body)
     .filter((seg) => seg.startsWith("#ERR"))
-    .map((seg) => seg.slice(4).replace(/\s+/g, " ").trim())
+    .map((seg) => `${seg.slice(4, 8).trim()} ${seg.slice(8).trim()}`.trim())
     .filter((err) => err.length > 0); // a bare #ERR names no error
 }
 

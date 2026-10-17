@@ -150,9 +150,17 @@ describe("parseCapaTokens — resolution lists and JPEG quality range", () => {
 describe("parseStatErrors", () => {
   it("returns each #ERR token as location and code, trimmed", () => {
     expect(parseStatErrors(Buffer.from("#ERRADF PE  ", "ascii"))).toEqual(["ADF PE"]);
-    expect(parseStatErrors(Buffer.from("#ERRADF JAM #ERRFB  OPN ", "ascii"))).toEqual([
-      "ADF JAM",
+    expect(parseStatErrors(Buffer.from("#ERRADF PJ  #ERRFB  OPN ", "ascii"))).toEqual([
+      "ADF PJ",
       "FB OPN",
+    ]);
+  });
+
+  it("splits the location from the code at four characters, even with no space between", () => {
+    // Synthetic: a four-letter location (here an unknown one) fills its field.
+    expect(parseStatErrors(Buffer.from("#ERRZZZZERR #ERRFB  LOCK", "ascii"))).toEqual([
+      "ZZZZ ERR",
+      "FB LOCK",
     ]);
   });
 

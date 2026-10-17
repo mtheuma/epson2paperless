@@ -34,7 +34,7 @@ import {
   type ResolvedDialect,
 } from "./dialects/dispatch.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
-import { sourceFromStatusErrors } from "./derivation.js";
+import { judgeStatusErrors } from "./derivation.js";
 import { composePara, baseDpiFor, type ParaSpec } from "./para-composer.js";
 import {
   parseCapaTokens,
@@ -599,11 +599,12 @@ function readsFirstStatus(ctx: Esci2Ctx): boolean {
 
 /**
  * Judges the content of the init poll's first status reply (the reply
- * itself, then its drained body, if any). Any error other than "ADF paper
- * empty" ends the session, naming it: the printer reported it before
- * scanning, so the scan would not go ahead anyway. On a printer with both
- * sources (sourceDetection "init-poll-status") the reply also sets
- * ctx.source: "ADF paper empty" means the flatbed, no error means the ADF. A
+ * itself, then its drained body, if any), as Epson's driver does
+ * (judgeStatusErrors): an error on the unit being scanned ends the session,
+ * naming it, since the scan would not go ahead anyway; an error on any other
+ * unit is logged as a warning and the scan carries on. On a printer with
+ * both sources (sourceDetection "init-poll-status") the reply also sets
+ * ctx.source: "ADF paper empty" means the flatbed, anything else the ADF. A
  * single-source printer is fixed to its source, which the reply never
  * changes.
  */
@@ -613,17 +614,28 @@ function judgeFirstStatus(
   status: Buffer[],
 ): TransitionResult<Esci2Ctx> | undefined {
   const errors = status.flatMap((part) => parseStatErrors(part));
-  const decision = sourceFromStatusErrors(errors);
-  if ("unexpectedErrors" in decision) {
+  const detects = ctx.entry!.sourceDetection === "init-poll-status";
+  // A fixed-source printer is judged against its source. So is one whose
+  // INFO advertises no scan area (sourceDetection null): it keeps the
+  // scanner shell's default, which is the unit its PARA will scan.
+  const judgement = judgeStatusErrors(errors, detects ? "detect" : ctx.source);
+  if ("blocking" in judgement) {
     return {
       error: new Error(
         `${state}: the printer reported an error before scanning ` +
-          `(${decision.unexpectedErrors.join(", ")}) — clear it on the printer and scan again`,
+          `(${judgement.blocking.join(", ")}) — clear it on the printer and scan again`,
       ),
     };
   }
-  if (ctx.entry!.sourceDetection !== "init-poll-status") return undefined;
-  ctx.source = decision.source;
+  if (judgement.warnings.length > 0) {
+    const scanned = judgement.source === "flatbed" ? "flatbed" : "ADF";
+    log.warn(
+      `Init poll: the printer reported ${judgement.warnings.join(", ")}, which is not ` +
+        `on the ${scanned} being scanned — the scan continues.`,
+    );
+  }
+  if (!detects) return undefined;
+  ctx.source = judgement.source;
   // The declared length rides along for triage on models with no fixture:
   // on every recorded one, 12 bytes is "ADF paper empty" and 0 is none.
   log.debug("Source detected from the first status reply's content", {
@@ -717,9 +729,9 @@ g.state(
       return { error: new Error("INIT_POLL_STAT: unparseable reply header") };
     }
     // The FIRST iteration's reply is judged from its content once any body
-    // is drained (judgeFirstStatus): an error other than "ADF paper empty"
-    // ends the session, and on a printer with both sources it decides the
-    // source.
+    // is drained (judgeFirstStatus): an error on the unit being scanned
+    // ends the session, one on another unit warns, and on a printer with both
+    // sources it decides the source.
     //
     // A single-source printer is fixed to its source, which the reply never
     // changes. The ET-2750 relies on that: its STAT replies declare length=0
