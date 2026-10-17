@@ -1,7 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
   capabilityFields,
-  compareWithEntry,
   deriveCapabilities,
   sourceFromStatusErrors,
   type DerivedCapabilities,
@@ -22,7 +21,6 @@ const NO_CAPA = Buffer.alloc(0);
 const derive = (info: Buffer, capa: Buffer) =>
   deriveCapabilities(parseInfoTokens(info), parseCapaTokens(capa));
 const ascii = (s: string) => Buffer.from(s, "ascii");
-const ET4950_FP = "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2";
 
 describe("deriveCapabilities — rules", () => {
   it("QIT and CCT are present exactly when their list carries the value PARA sends", () => {
@@ -144,53 +142,18 @@ describe("sourceFromStatusErrors — content-based source decision", () => {
   });
 });
 
-describe("compareWithEntry", () => {
-  const entry = REGISTRY.get(ET4950_FP)!;
-  const agreeing: DerivedCapabilities = {
-    qit: true,
-    cct: true,
-    adfDuplex: true,
-    sources: { flatbed: true, adf: true },
-    sourceDetection: "init-poll-status",
-    paraProfile: "standard",
-    duplexBackRotated: true,
-  };
-
-  it("returns nothing when every field agrees", () => {
-    expect(compareWithEntry(agreeing, entry)).toEqual([]);
-  });
-
-  it("returns one disagreement per differing field, naming both values", () => {
-    expect(
-      compareWithEntry({ ...agreeing, sources: { flatbed: false, adf: true } }, entry),
-    ).toEqual([
-      {
-        field: "sources",
-        derived: { flatbed: false, adf: true },
-        entry: { flatbed: true, adf: true },
-      },
-    ]);
-  });
-
-  it("never compares the live fields: the entry has none to compare with", () => {
-    const live = {
-      qit: false,
-      cct: false,
-      adfDuplex: false,
-      paraProfile: "adf-crp",
-      sourceDetection: "fixed-adf",
-      duplexBackRotated: false,
-    } as const;
-    expect(compareWithEntry({ ...agreeing, ...live }, entry)).toEqual([]);
-  });
+/** The sources a registry entry has a window for, own or inherited. */
+const entrySources = (entry: RegistryEntry) => ({
+  flatbed: entry.fbExtents !== null,
+  adf: entry.adfExtents !== null,
 });
 
-describe("shadow derivation agrees with every replay fixture", () => {
+describe("derived sources agree with the registry entry on every replay fixture", () => {
   it.each(REPLAY_FIXTURES)("$model: $path", ({ path }) => {
     const { info, capa } = readInit1Bodies(path);
     const entry = REGISTRY.get(computeCapaFingerprint(capa));
     expect(entry).toBeDefined();
-    expect(compareWithEntry(derive(info, capa), entry!)).toEqual([]);
+    expect(derive(info, capa).sources).toEqual(entrySources(entry!));
   });
 
   it("adf-crp is derived for exactly the FF-680W and DS-575W", () => {
@@ -387,12 +350,20 @@ describe("live fields derived for models known only from issue diagnostics", () 
   });
 });
 
-describe("shadow derivation agrees with models known only from issue diagnostics", () => {
-  it.each(DIAGNOSTICS)("$model (#$issue)", ({ fp, block }) => {
+describe("derived sources agree with the registry entry for models known only from issue diagnostics", () => {
+  // A block determines the sources only when it carries both area lines.
+  const withSources = DIAGNOSTICS.filter(({ block }) =>
+    bodiesFromDiagnostic(block).fields.includes("sources"),
+  );
+
+  it("covers every diagnostic block", () => {
+    expect(withSources).toEqual(DIAGNOSTICS);
+  });
+
+  it.each(withSources)("$model (#$issue)", ({ fp, block }) => {
     const entry: RegistryEntry | undefined = REGISTRY.get(fp);
     expect(entry).toBeDefined();
-    const { info, capa, fields } = bodiesFromDiagnostic(block);
-    const disagreements = compareWithEntry(derive(info, capa), entry!);
-    expect(disagreements.filter((d) => fields.includes(d.field))).toEqual([]);
+    const { info, capa } = bodiesFromDiagnostic(block);
+    expect(derive(info, capa).sources).toEqual(entrySources(entry!));
   });
 });

@@ -2,11 +2,10 @@ import { describe, it, expect } from "vitest";
 import { isDeepStrictEqual } from "node:util";
 import {
   alignedX0,
+  fitsScanArea,
   genericWindow,
-  genericWindowDifferences,
   sourceGeometry,
   toPixels,
-  windowProblems,
   type WindowSource,
 } from "./scan-window.js";
 import { parseCapaTokens, parseInfoTokens } from "./capabilities.js";
@@ -14,12 +13,17 @@ import { REGISTRY, type Dialect } from "./dialects/registry.js";
 import { makeParaSpec, withCapabilities } from "./dialects/dispatch.js";
 import { deriveCapabilities } from "./derivation.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
-import { composePara, scaleAcqExtents, type Extents, type ParaSpec } from "./para-composer.js";
+import {
+  baseDpiFor,
+  composePara,
+  scaleAcqExtents,
+  type Extents,
+  type ParaSpec,
+} from "./para-composer.js";
 import { advertisedDpiSet } from "./resolution.js";
 import { REPLAY_FIXTURES, readInit1Bodies } from "./test-support/capability-bodies.js";
 import { recordedDialect } from "./test-support/dialects.js";
 
-const ET4950_FP = "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2";
 const info = (s: string) => parseInfoTokens(Buffer.from(s, "ascii"));
 
 function fixture(path: string) {
@@ -70,47 +74,77 @@ describe("alignedX0", () => {
   });
 });
 
-describe("windowProblems", () => {
-  const entry = recordedDialect(ET4950_FP);
+/**
+ * An entry's own windows: an inherited one is the generic window, which fits
+ * the area and follows the alignment rule by construction.
+ */
+function ownWindows(entry: Dialect): [WindowSource, Extents][] {
+  const out: [WindowSource, Extents][] = [];
+  if (entry.fbExtents !== null && !entry.fbExtents.generic) out.push(["flatbed", entry.fbExtents]);
+  if (entry.adfExtents !== null && !entry.adfExtents.generic) out.push(["adf", entry.adfExtents]);
+  return out;
+}
+
+describe("fitsScanArea", () => {
   const et4950Info = info(
     "#ADFALGNRIGT#ADFAREAd850i0001400#ADFAMAXd850i0002000#FB ALGNLEFT#FB AREAd850i0001170",
   );
 
-  it("finds none for an entry that fits and follows the alignment", () => {
-    expect(windowProblems(et4950Info, entry)).toEqual([]);
+  it("holds for a window inside the area", () => {
+    const full = { x0: 0, y0: 0, w: 2550, h: 3510 };
+    expect(fitsScanArea(et4950Info, "flatbed", full, "standard")).toBe(true);
   });
 
-  it("reports a window that leaves the largest scan region", () => {
-    const tall: Dialect = { ...entry, fbExtents: { x0: 0, y0: 0, w: 2481, h: 3600 } };
-    expect(windowProblems(et4950Info, tall)).toEqual([
-      expect.objectContaining({ source: "flatbed", problem: "outside-scan-area" }),
-    ]);
+  it("fails for a window that leaves the area", () => {
+    const tall = { x0: 0, y0: 0, w: 2481, h: 3600 };
+    expect(fitsScanArea(et4950Info, "flatbed", tall, "standard")).toBe(false);
+    const shifted = { x0: 100, y0: 0, w: 2481, h: 3506 };
+    expect(fitsScanArea(et4950Info, "flatbed", shifted, "standard")).toBe(false);
   });
 
   it("bounds a standard ADF window by the ADF area, not its long-paper maximum", () => {
     // 4300 rows fit the 20-inch #ADFAMAX (6000) but not the 14-inch area (4200).
-    const long: Dialect = { ...entry, adfExtents: { x0: 69, y0: 0, w: 2481, h: 4300 } };
-    expect(windowProblems(et4950Info, long)).toEqual([
-      expect.objectContaining({ source: "adf", problem: "outside-scan-area" }),
-    ]);
+    const long = { x0: 69, y0: 0, w: 2481, h: 4300 };
+    expect(fitsScanArea(et4950Info, "adf", long, "standard")).toBe(false);
   });
 
-  it("reports an x0 the alignment rule doesn't give", () => {
-    const shifted: Dialect = { ...entry, adfExtents: { x0: 0, y0: 0, w: 2481, h: 3506 } };
-    expect(windowProblems(et4950Info, shifted)).toEqual([
-      expect.objectContaining({ source: "adf", problem: "x0-misaligned", expectedX0: 69 }),
-    ]);
+  it("bounds a crop-mode window by the long-paper maximum, at 200 DPI", () => {
+    const tokens = info("#ADFALGNCNTR#ADFAREAd850i0001550#ADFAMAXd850i0024000");
+    // 36 inches at 200 DPI: past the 15.5-inch area, inside the 240-inch maximum.
+    const long = { x0: 0, y0: 0, w: 1700, h: 7200 };
+    expect(fitsScanArea(tokens, "adf", long, "adf-crp")).toBe(true);
+    expect(fitsScanArea(tokens, "adf", { ...long, w: 1701 }, "adf-crp")).toBe(false);
   });
 
-  it("skips the x0 check when INFO gives no alignment", () => {
-    const shifted: Dialect = { ...entry, adfExtents: { x0: 0, y0: 0, w: 2481, h: 3506 } };
-    const noAlign = info("#ADFAREAd850i0001400#FB AREAd850i0001170");
-    expect(windowProblems(noAlign, shifted)).toEqual([]);
+  it("fails for a source INFO advertises no area for", () => {
+    const window = { x0: 0, y0: 0, w: 100, h: 100 };
+    expect(fitsScanArea(info("#FB AREAd850i0001170"), "adf", window, "standard")).toBe(false);
+  });
+});
+
+describe("every fixture entry's own window fits its scan area and follows the alignment", () => {
+  const cases = REPLAY_FIXTURES.flatMap(({ model, path }) => {
+    const { info: tokens, entry } = fixture(path);
+    return ownWindows(entry).map(([source, window]) => ({
+      model,
+      path,
+      source,
+      window,
+      tokens,
+      entry,
+    }));
   });
 
-  it.each(REPLAY_FIXTURES)("finds none for the $model entry against $path", ({ path }) => {
-    const { info: tokens, entry: e } = fixture(path);
-    expect(windowProblems(tokens, e)).toEqual([]);
+  it("covers both sources", () => {
+    expect(new Set(cases.map((c) => c.source))).toEqual(new Set(["flatbed", "adf"]));
+  });
+
+  it.each(cases)("$model $source ($path)", ({ source, window, tokens, entry }) => {
+    expect(fitsScanArea(tokens, source, window, entry.paraProfile)).toBe(true);
+    const geometry = sourceGeometry(tokens, source)!;
+    const areaW = toPixels(geometry.area.width, baseDpiFor(entry.paraProfile));
+    const expectedX0 = alignedX0(geometry.align, areaW, window.w);
+    if (expectedX0 !== null) expect(window.x0).toBe(expectedX0);
   });
 });
 
@@ -217,13 +251,18 @@ describe("genericWindow", () => {
   });
 });
 
-describe("genericWindowDifferences — on record for a future paper-size decision", () => {
+describe("generic vs own windows — on record for a future paper-size decision", () => {
   it("the generic window matches every entry except the captured non-A4 sizes", () => {
     // Every fixture of a model must report the same differences; one each.
     const seen = new Set<string>();
     const differences = REPLAY_FIXTURES.flatMap(({ model, path }) => {
       const { info: tokens, entry } = fixture(path);
-      return genericWindowDifferences(tokens, entry).map((d) => ({ model, ...d }));
+      const dpi = baseDpiFor(entry.paraProfile);
+      return ownWindows(entry).flatMap(([source, window]) => {
+        const generic = genericWindow(tokens, source, entry.paraProfile, dpi);
+        if (generic === null || isDeepStrictEqual(generic, window)) return [];
+        return [{ model, source, entry: window, generic }];
+      });
     }).filter((d) => {
       const key = JSON.stringify(d);
       if (seen.has(key)) return false;

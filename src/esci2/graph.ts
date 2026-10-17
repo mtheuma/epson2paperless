@@ -34,7 +34,7 @@ import {
   type ResolvedEntry,
 } from "./dialects/dispatch.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
-import { compareWithEntry, sourceFromStatusErrors } from "./derivation.js";
+import { sourceFromStatusErrors } from "./derivation.js";
 import { composePara, baseDpiFor, type ParaSpec } from "./para-composer.js";
 import {
   parseCapaTokens,
@@ -44,7 +44,6 @@ import {
   type InfoTokens,
 } from "./capabilities.js";
 import { advertisedDpiSet, selectWireDpi } from "./resolution.js";
-import { genericWindowDifferences, windowProblems } from "./scan-window.js";
 import { genericParaFields } from "./dialects/generic.js";
 import { createLogger } from "../logger.js";
 
@@ -413,30 +412,7 @@ twoPhaseRead(
       sourceDetection: ctx.entry.sourceDetection,
       duplexBackRotated: ctx.entry.duplexBackRotated,
     });
-    if (resolved.override === undefined) {
-      // Built from the derivation itself, so there is nothing to compare.
-      ctx.genericInfo = info;
-      applyEntrySourceOverride(ctx, ctx.entry);
-      return;
-    }
-    // Shadow derivation: report-only, silent when the printer's own replies
-    // agree with the entry. Nothing sent to the printer depends on it, so a
-    // failure here is logged rather than allowed to end the session.
-    try {
-      const dialect = ctx.entry.displayName;
-      for (const d of compareWithEntry(resolved.derived, resolved.override)) {
-        log.info("Capability derivation disagrees with the dialect entry", { dialect, ...d });
-      }
-      for (const p of windowProblems(info, ctx.entry)) {
-        log.info("Scan window disagrees with the printer's scan area", { dialect, ...p });
-      }
-      // A different paper size, not a disagreement: debug only.
-      for (const d of genericWindowDifferences(info, ctx.entry)) {
-        log.debug("Generic scan window differs from the dialect entry's", { dialect, ...d });
-      }
-    } catch (err) {
-      log.warn("Capability derivation failed (report-only; the scan continues)", err);
-    }
+    if (resolved.matchedBy === "generic") ctx.genericInfo = info;
     applyEntrySourceOverride(ctx, ctx.entry);
   },
 );

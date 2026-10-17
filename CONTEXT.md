@@ -83,6 +83,3 @@ _Avoid_: source (reserved for flatbed/ADF), origin
 **Own capture**:
 A capture of this service's traffic to a printer. It proves the printer accepted the bytes, not that the colours are right.
 _Avoid_: driver capture
-
-**Shadow derivation**:
-Computing capability-derived fields alongside the values a model override (or registry entry) supplies, and reporting where they disagree, without changing what is sent.

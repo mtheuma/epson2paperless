@@ -1,50 +1,36 @@
 // src/esci2/derivation.ts
-import { isDeepStrictEqual } from "node:util";
 import type { CapaTokens, InfoTokens } from "./capabilities.js";
-import type { CapabilityFields, RegistryEntry, SourceDetection } from "./dialects/registry.js";
+import type { CapabilityFields, SourceDetection } from "./dialects/registry.js";
 import type { ParaProfile } from "./para-composer.js";
 
 /**
  * Capability derivation: dialect fields computed from the printer's own INFO
- * and CAPA replies.
+ * and CAPA replies. Every session takes them from here (capabilityFields),
+ * and no registry entry carries them. Each field is one rule in RULES.
  *
- * Some of them are live: every session takes them from here
- * (capabilityFields), and no registry entry carries them. The rest are still
- * shadowed: compared with what the registry entry says and reported, without
- * changing what is sent. Once a shadowed field agrees with every fixture
- * model, a later change makes it live and drops it from the registry.
- *
- * Each field is one rule in RULES. A shadowed field also has a row in
- * SHADOWED saying where the entry keeps the value it is compared with.
+ * An entry's null windows still say which sources the model lacks; a test
+ * holds them to `sources` on every fixture and diagnostic.
  */
 export interface DerivedCapabilities {
-  /** PARA carries the optional #QIT segment (live). */
+  /** PARA carries the optional #QIT segment. */
   qit: boolean;
-  /** PARA carries the optional #CCT segment (live). */
+  /** PARA carries the optional #CCT segment. */
   cct: boolean;
-  /** The ADF can scan both sides (live). */
+  /** The ADF can scan both sides. */
   adfDuplex: boolean;
-  /** Which sources the printer has: each one advertises a scan area in INFO. */
+  /**
+   * Which sources the printer has: each one advertises a scan area in INFO.
+   * Source detection follows from it; the generic dialect also takes its
+   * windows from it.
+   */
   sources: { flatbed: boolean; adf: boolean };
-  /** How the session learns its source (live). */
+  /** How the session learns its source. */
   sourceDetection: SourceDetection;
-  /** PARA layout: "adf-crp" for an ADF-only printer whose ADF can crop (live). */
+  /** PARA layout: "adf-crp" for an ADF-only printer whose ADF can crop. */
   paraProfile: ParaProfile;
-  /** Duplex back pages arrive turned 180°: a two-pass ADF turns the sheet over (live). */
+  /** Duplex back pages arrive turned 180°: a two-pass ADF turns the sheet over. */
   duplexBackRotated: boolean;
 }
-
-/** The fields still compared with the registry entry rather than used directly. */
-export type ShadowedField = "sources";
-
-/** One differing field, typed by the field it names. */
-export type Disagreement = {
-  [K in ShadowedField]: {
-    field: K;
-    derived: DerivedCapabilities[K];
-    entry: DerivedCapabilities[K];
-  };
-}[ShadowedField];
 
 /**
  * A CAPA list's items: four characters each ("UG10UG18" → UG10, UG18), trimmed
@@ -76,12 +62,6 @@ const RULES: {
   duplexBackRotated: (info, capa) => RULES.adfDuplex(info, capa) && info.adfDuplexType === "2SCN",
 };
 
-const SHADOWED: {
-  [K in ShadowedField]: (entry: RegistryEntry) => DerivedCapabilities[K];
-} = {
-  sources: (e) => ({ flatbed: e.fbExtents !== null, adf: e.adfExtents !== null }),
-};
-
 /** A scan-area segment with no value advertises no source. */
 function sourcesOf(info: InfoTokens): DerivedCapabilities["sources"] {
   const advertises = (area: string | null) => area !== null && area.length > 0;
@@ -89,7 +69,6 @@ function sourcesOf(info: InfoTokens): DerivedCapabilities["sources"] {
 }
 
 const FIELD_NAMES = Object.keys(RULES) as (keyof DerivedCapabilities)[];
-const SHADOWED_FIELDS = Object.keys(SHADOWED) as ShadowedField[];
 
 /** Takes the parsed INFO and CAPA replies, so the session's own parse is reused. */
 export function deriveCapabilities(info: InfoTokens, capa: CapaTokens): DerivedCapabilities {
@@ -108,22 +87,6 @@ export function capabilityFields(derived: DerivedCapabilities): CapabilityFields
     sourceDetection: derived.sourceDetection,
     duplexBackRotated: derived.duplexBackRotated,
   };
-}
-
-/** Per-field disagreements between a derivation and a registry entry, in SHADOWED order. */
-export function compareWithEntry(
-  derived: DerivedCapabilities,
-  entry: RegistryEntry,
-): Disagreement[] {
-  const out: Disagreement[] = [];
-  const check = <K extends ShadowedField>(field: K) => {
-    const fromEntry = SHADOWED[field](entry);
-    if (!isDeepStrictEqual(derived[field], fromEntry)) {
-      out.push({ field, derived: derived[field], entry: fromEntry });
-    }
-  };
-  SHADOWED_FIELDS.forEach(check);
-  return out;
 }
 
 /**

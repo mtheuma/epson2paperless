@@ -1,16 +1,15 @@
 // src/esci2/scan-window.ts
-import { isDeepStrictEqual } from "node:util";
 import { parseArea, type InfoTokens } from "./capabilities.js";
 import { baseDpiFor, scaleAcqExtents, type Extents, type ParaProfile } from "./para-composer.js";
-import type { Dialect, DialectWindow } from "./dialects/registry.js";
+import type { DialectWindow } from "./dialects/registry.js";
 
 /**
- * Shadow derivation for the scan window (report-only). The printer's INFO
- * reply gives each source's scan area, in 1/100 inch, and its alignment. A
- * registry entry's window is a paper size placed in that area, so its width
- * and height can't be derived. What can be checked is that it fits and that
- * its x0 follows the alignment. The generic window is what a printer with no
- * entry would get (ticket 10).
+ * Scan windows from the printer's INFO reply, which gives each source's
+ * scan area, in 1/100 inch, and its alignment. A registry entry's own window
+ * is a paper size placed in that area, so its width and height can't be
+ * derived; what can be checked is that it fits (fitsScanArea, on a CAPA
+ * fingerprint mismatch). The generic window is what a printer with no entry,
+ * or an entry that inherits it, gets.
  */
 
 export type WindowSource = "flatbed" | "adf";
@@ -91,59 +90,6 @@ export function fitsScanArea(
   );
 }
 
-export type WindowProblem =
-  | { source: WindowSource; problem: "outside-scan-area"; window: Extents; maxArea: Extents }
-  | { source: WindowSource; problem: "x0-misaligned"; window: Extents; expectedX0: number };
-
-/**
- * The entry's own windows. An inherited one is left out: it is the generic
- * window, which fits the area and follows the alignment rule by
- * construction, so there is nothing to check or to record.
- */
-function entryWindows(entry: Dialect): [WindowSource, Extents][] {
-  const out: [WindowSource, Extents][] = [];
-  if (entry.fbExtents !== null && !entry.fbExtents.generic) out.push(["flatbed", entry.fbExtents]);
-  if (entry.adfExtents !== null && !entry.adfExtents.generic) out.push(["adf", entry.adfExtents]);
-  return out;
-}
-
-/**
- * Where an entry's windows, at its reference DPI, leave the printer's scan
- * area (its long-paper maximum, for crop mode) or start where the alignment
- * says they shouldn't. A window for a source the printer advertises no area
- * for is a sources disagreement, reported by compareWithEntry, so it is
- * skipped here.
- */
-export function windowProblems(info: InfoTokens, entry: Dialect): WindowProblem[] {
-  const dpi = baseDpiFor(entry.paraProfile);
-  const out: WindowProblem[] = [];
-  for (const [source, window] of entryWindows(entry)) {
-    const geometry = sourceGeometry(info, source);
-    if (geometry === null) continue;
-    const bound = entry.paraProfile === "adf-crp" ? geometry.maxArea : geometry.area;
-    const maxW = toPixels(bound.width, dpi);
-    const maxH = toPixels(bound.height, dpi);
-    if (
-      window.x0 < 0 ||
-      window.y0 < 0 ||
-      window.x0 + window.w > maxW ||
-      window.y0 + window.h > maxH
-    ) {
-      out.push({
-        source,
-        problem: "outside-scan-area",
-        window,
-        maxArea: { x0: 0, y0: 0, w: maxW, h: maxH },
-      });
-    }
-    const expectedX0 = alignedX0(geometry.align, toPixels(geometry.area.width, dpi), window.w);
-    if (expectedX0 !== null && expectedX0 !== window.x0) {
-      out.push({ source, problem: "x0-misaligned", window, expectedX0 });
-    }
-  }
-  return out;
-}
-
 /** A4 at 300 DPI, the generic window's paper size on a standard printer. */
 const GENERIC_A4_AT_300 = { w: 2481, h: 3506 };
 
@@ -218,31 +164,4 @@ export function inheritedWindow(
   if (geometry === null) return null;
   const window = genericWindowIn(geometry, source, profile, baseDpiFor(profile));
   return window === null ? null : { ...window, generic: geometry };
-}
-
-export interface GenericWindowDifference {
-  source: WindowSource;
-  entry: Extents;
-  generic: Extents;
-}
-
-/**
- * Where the generic window, at the entry's reference DPI, differs from the
- * entry's own. Not a disagreement: the entry's window is a captured paper
- * size (XP-7100 Letter, ET-2750, FF-680W's long page). Kept on record for a
- * future paper-size decision.
- */
-export function genericWindowDifferences(
-  info: InfoTokens,
-  entry: Dialect,
-): GenericWindowDifference[] {
-  const profile = entry.paraProfile;
-  const out: GenericWindowDifference[] = [];
-  for (const [source, window] of entryWindows(entry)) {
-    const generic = genericWindow(info, source, profile, baseDpiFor(profile));
-    if (generic !== null && !isDeepStrictEqual(generic, window)) {
-      out.push({ source, entry: window, generic });
-    }
-  }
-  return out;
 }

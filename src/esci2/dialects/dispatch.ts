@@ -31,20 +31,12 @@ export type IdentityMatch = "pid" | "name" | "fingerprint" | "generic";
 
 export interface ResolvedEntry {
   entry: Dialect;
-  /**
-   * The model override as written, before its windows are resolved against
-   * the printer's scan area: what the shadow comparison holds the derivation
-   * to. Undefined for the generic dialect.
-   */
-  override?: RegistryEntry;
   matchedBy: IdentityMatch;
-  /** The derivation the dialect was built with, for the caller's shadow comparison. */
-  derived: DerivedCapabilities;
 }
 
 /** What INIT1 knows when it resolves the dialect. */
 export interface Init1Replies {
-  /** INFO and CAPA, parsed once by the caller and shared with the shadow derivation. */
+  /** INFO and CAPA, parsed once by the caller. */
   info: InfoTokens;
   capa: CapaTokens;
   fingerprint: string;
@@ -97,13 +89,14 @@ export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
           `please file an issue with the diagnostic block below:\n\n${buildDiagnostic(replies)}`,
       );
     }
-    return { ...resolveOverride(byIdentity, replies, derived, fingerprintMatches), matchedBy };
+    return { entry: resolveOverride(byIdentity, replies, derived, fingerprintMatches), matchedBy };
   }
 
   if (byFingerprint !== undefined) {
-    return { ...resolveOverride(byFingerprint, replies, derived, true), matchedBy: "fingerprint" };
+    const entry = resolveOverride(byFingerprint, replies, derived, true);
+    return { entry, matchedBy: "fingerprint" };
   }
-  return { entry: resolveGenericEntry(replies, derived), matchedBy: "generic", derived };
+  return { entry: resolveGenericEntry(replies, derived), matchedBy: "generic" };
 }
 
 /**
@@ -124,7 +117,7 @@ function resolveOverride(
   replies: Init1Replies,
   derived: DerivedCapabilities,
   fingerprintMatches: boolean,
-): Pick<ResolvedEntry, "entry" | "override" | "derived"> {
+): Dialect {
   const completed = withCapabilities(override, replies.info, derived);
   const entry = fingerprintMatches ? completed : keepFittingWindows(completed, replies.info);
   const missing = (["flatbed", "adf"] as const).filter(
@@ -139,7 +132,7 @@ function resolveOverride(
         `block below:\n\n${buildDiagnostic(replies)}`,
     );
   }
-  return { entry, override, derived };
+  return entry;
 }
 
 /**

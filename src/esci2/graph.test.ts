@@ -12,7 +12,6 @@ import {
 } from "../protocol.js";
 import { parseCapaTokens, parseStatErrors } from "./capabilities.js";
 import { DEFAULT_JPEG_QUALITY } from "../config.js";
-import { setLogLevel } from "../logger.js";
 import {
   REPLAY_FIXTURES,
   readFirstInitPollStatus,
@@ -247,7 +246,7 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
   });
 
   it("INIT_POLL_STAT_DRAIN advances to INIT_POLL_FIN with a FIN send on 0xa000", () => {
-    // A decision state so the first cycle's body can feed the status shadow.
+    // A decision state so the first cycle's body can feed the status decision.
     const state = esci2Graph.states.INIT_POLL_STAT_DRAIN;
     expect(state.kind).toBe("decision");
     if (state.kind !== "decision") return;
@@ -1550,9 +1549,7 @@ describe("esci2Graph T27 UNLOCKING", () => {
   });
 });
 
-describe("esci2Graph INIT1_CAPA_DATA — shadow derivation", () => {
-  const SHADOW_LINE = "Capability derivation disagrees with the dialect entry";
-
+describe("esci2Graph INIT1_CAPA_DATA — resolving a fixture model's dialect", () => {
   // Feeds INIT1's CAPA body to the state that resolves the dialect, with
   // INFO already captured, and returns the info-level lines it logged.
   function resolveDialect(
@@ -1571,29 +1568,13 @@ describe("esci2Graph INIT1_CAPA_DATA — shadow derivation", () => {
       infoSpy.mockRestore();
     }
   }
-  const shadowLines = (lines: unknown[][]) =>
-    lines.filter((args) => args.some((a) => String(a).includes(SHADOW_LINE)));
 
-  it.each(REPLAY_FIXTURES)(
-    "logs no shadow line at any level for the $model fixture $path",
-    ({ path }) => {
-      const { info, capa } = readInit1Bodies(path);
-      setLogLevel("debug");
-      let result: ReturnType<typeof resolveDialect>;
-      try {
-        result = resolveDialect(info, capa);
-      } finally {
-        setLogLevel("info");
-      }
-      expect(result.ctx.entry).toBeDefined();
-      expect(shadowLines(result.lines)).toEqual([]);
-      // Every entry's window fits its scan area and follows the alignment.
-      const windowLines = result.lines.filter((args) =>
-        args.some((a) => String(a).includes("Scan window disagrees")),
-      );
-      expect(windowLines).toEqual([]);
-    },
-  );
+  it.each(REPLAY_FIXTURES)("logs nothing at info for the $model fixture $path", ({ path }) => {
+    const { info, capa } = readInit1Bodies(path);
+    const { ctx, lines } = resolveDialect(info, capa);
+    expect(ctx.entry).toBeDefined();
+    expect(lines).toEqual([]);
+  });
 });
 
 describe("esci2Graph INIT1_CAPA_DATA — model identity", () => {
@@ -1787,8 +1768,6 @@ describe("esci2Graph — generic dialect", () => {
     expect(
       infos.some((line) => line.includes("[INFO]") && line.includes("CAPA fingerprint:")),
     ).toBe(true);
-    // Nothing to shadow: the dialect is the derivation.
-    expect(infos.some((line) => line.includes("disagrees"))).toBe(false);
   });
 
   it("takes back-page rotation from INFO, and warns on its first duplex scan (no evidence)", () => {

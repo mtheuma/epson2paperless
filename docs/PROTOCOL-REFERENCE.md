@@ -395,7 +395,10 @@ and stores it on the session context. INFO is read before CAPA, so the identity
 is available on every trigger path, host-triggered scans included. A product
 ID or name hit whose fingerprint isn't one of the entry's (as after a firmware
 update that changes the CAPA reply) logs a warning with the diagnostic block
-and proceeds with that entry. At PARA build time the entry plus the runtime
+and proceeds with that entry. Such a printer keeps each of the entry's own
+scan windows only while it still fits the scan area INFO reports (the
+long-paper maximum for `adf-crp`); one that doesn't is replaced by the
+generic window, with a warning. At PARA build time the entry plus the runtime
 source/action axes feed into `makeParaSpec`, and `composePara` assembles the
 PARA body.
 
