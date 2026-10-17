@@ -1,8 +1,8 @@
 // src/esci2/test-support/capability-bodies.ts
 //
-// Recovers the INIT1 INFO and CAPA reply bodies, and the first init-poll STAT
-// reply, from a committed ESC/I-2 replay fixture, for tests that check
-// capability derivation against the printers we have recordings of.
+// Recovers the INIT1 INFO and CAPA reply bodies, and the first init-poll and
+// pre-PARA STAT replies, from a committed ESC/I-2 replay fixture, for tests
+// that check capability derivation against the printers we have recordings of.
 //
 // Both fixture formats carry the printer→host byte stream: pcap-extract
 // events as `{ dir: "p>h", hex }`, Frida events as `{ hook: "recv",

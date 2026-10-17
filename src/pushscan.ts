@@ -90,7 +90,7 @@ export interface PushScanInfo {
    *
    * Meaningful only when the printer is in ADF mode. Flatbed scans always
    * physically produce a single side regardless of this value — the scanner
-   * auto-detects source via the first @STAT reply and ignores `duplex` in
+   * auto-detects source via the @STAT reply before PARA and ignores `duplex` in
    * that branch.
    */
   duplex: boolean;

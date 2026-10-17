@@ -50,7 +50,7 @@ const RULES: {
   sources: (info) => sourcesOf(info),
   sourceDetection: (info) => {
     const { flatbed, adf } = sourcesOf(info);
-    if (flatbed && adf) return "init-poll-status";
+    if (flatbed && adf) return "pre-para-status";
     if (flatbed) return "fixed-flatbed";
     return adf ? "fixed-adf" : null;
   },

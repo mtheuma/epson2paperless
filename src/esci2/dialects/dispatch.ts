@@ -254,7 +254,7 @@ export function applyEntrySourceOverride(
  *
  * Called from buildParaSend after the source axis resolves — NOT at entry
  * resolution. A printer with both sources doesn't know its source until the
- * init poll's first status reply, and `duplex=true` on a flatbed scan is
+ * status reply before PARA, and `duplex=true` on a flatbed scan is
  * inert and must stay that way (SCAN_SIDES defaults to "duplex", so
  * flatbed-only models see it on every default host-triggered scan).
  *

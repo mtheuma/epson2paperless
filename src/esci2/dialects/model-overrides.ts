@@ -171,13 +171,14 @@ export interface CapabilityFields {
 
 /**
  * How a session learns its source, from the sources INFO advertises. A
- * printer with both reads it from the content of the init poll's first
- * status reply ("ADF paper empty" means the flatbed, anything else the ADF); a
- * single-source printer is fixed to it, which the reply never changes. Null
+ * printer with both reads it from the content of the status reply before
+ * PARA, the one its errors are judged on ("ADF paper empty" means the
+ * flatbed, anything else the ADF); a single-source printer is fixed to it,
+ * which the reply never changes. Null
  * when INFO advertises no scan area at all: the session keeps the scanner
  * shell's default source.
  */
-export type SourceDetection = "init-poll-status" | "fixed-flatbed" | "fixed-adf" | null;
+export type SourceDetection = "pre-para-status" | "fixed-flatbed" | "fixed-adf" | null;
 
 /**
  * A source's scan window on a model override. "generic" inherits the generic

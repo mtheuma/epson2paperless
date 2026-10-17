@@ -117,15 +117,19 @@ const CAPA_BODY_PACKET = buildIsPacket(0xa000, ET4950_INIT1.capa);
  * PARA body write (source detection tests) or feeding PARA / TRDT / IMG
  * replies to exercise later states (IMG-loop, post-scan tests).
  *
- * If `firstStatReplyHex` declares a non-zero length (flatbed path), the
- * helper automatically feeds the matching pure-read-drain response.
+ * `preParaStatReplyHex` is the mode switch's STAT reply (POST_MODE_STAT),
+ * the status before PARA, which decides the source. If it declares a
+ * non-zero length (flatbed path), the helper automatically feeds the
+ * matching pure-read-drain response. The init poll's statuses are all
+ * length 0.
  *
  * Caller owns teardown — either feed a 0x9000 fatal async and await
  * `sessionPromise`, or drive through to a natural UNLOCK.
  */
 async function driveScannerToPara(args: {
   outputDir: string;
-  firstStatReplyHex: string;
+  /** The status before PARA; defaults to a length-0 reply (the ADF). */
+  preParaStatReplyHex?: string;
   duplex?: boolean;
   action?: "jpg" | "pdf";
   /** Answer FS Y with a NAK on this init-poll cycle (2 or 3), ending the poll early. */
@@ -139,7 +143,13 @@ async function driveScannerToPara(args: {
   feedEsci2Reply: (bodyHex: string) => Promise<void>;
   feedLegacyAck: () => Promise<void>;
 }> {
-  const { outputDir, firstStatReplyHex, duplex = false, action = "jpg", timeoutMs } = args;
+  const {
+    outputDir,
+    preParaStatReplyHex = "STATx0000000",
+    duplex = false,
+    action = "jpg",
+    timeoutMs,
+  } = args;
   const { nakFsYOnPollCycle, modeSwitchReply } = args;
   if (nakFsYOnPollCycle !== undefined && nakFsYOnPollCycle !== 2 && nakFsYOnPollCycle !== 3) {
     throw new Error(`nakFsYOnPollCycle must be 2 or 3, got ${nakFsYOnPollCycle}`);
@@ -200,28 +210,8 @@ async function driveScannerToPara(args: {
   await waitImmediate();
   await feedEsci2Reply("FIN x0000000");
 
-  // INIT_POLL cycle 1 with the test-provided STAT reply; drain if length > 0
-  await feedLegacyAck();
-  await feedEsci2Reply(firstStatReplyHex);
-  const firstStatLength =
-    parseEsci2ReplyHeader(Buffer.from(firstStatReplyHex, "ascii"))?.length ?? 0;
-  if (firstStatLength > 0) {
-    fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
-    await waitImmediate();
-    // Length 12 is the flatbed fixtures' "#ERRADF PE  " status; any other
-    // length gets token-free filler, which carries no error: the content
-    // rule reads it as ADF.
-    const body =
-      firstStatLength === 12
-        ? Buffer.from("#ERRADF PE  ", "ascii")
-        : Buffer.alloc(firstStatLength, 0x2d);
-    fake.feed(buildIsPacket(0xa000, body));
-    await waitImmediate();
-  }
-  await feedEsci2Reply("FIN x0000000");
-
-  // INIT_POLL cycles 2 + 3 (length-0 STATs, no drain)
-  for (let cycle = 2; cycle <= 3; cycle++) {
+  // INIT_POLL cycles 1-3 (length-0 STATs, no drain)
+  for (let cycle = 1; cycle <= 3; cycle++) {
     if (cycle === nakFsYOnPollCycle) {
       fake.feed(buildIsPacket(0xa000, Buffer.from([0x15])));
       await waitImmediate();
@@ -232,7 +222,7 @@ async function driveScannerToPara(args: {
     await feedEsci2Reply("FIN x0000000");
   }
 
-  // MODE_SWITCH + POST_MODE_STAT (length-0, no drain)
+  // MODE_SWITCH + POST_MODE_STAT with the test-provided STAT reply; drain if length > 0
   if (modeSwitchReply !== undefined) {
     // No wait: a non-ACK fails the session, and the caller must attach its
     // rejection handler before the next tick.
@@ -240,7 +230,22 @@ async function driveScannerToPara(args: {
     return { fake, sessionPromise, feedEsci2Reply, feedLegacyAck };
   }
   await feedLegacyAck();
-  await feedEsci2Reply("STATx0000000");
+  await feedEsci2Reply(preParaStatReplyHex);
+  const preParaStatLength =
+    parseEsci2ReplyHeader(Buffer.from(preParaStatReplyHex, "ascii"))?.length ?? 0;
+  if (preParaStatLength > 0) {
+    fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
+    await waitImmediate();
+    // Length 12 is the flatbed fixtures' "#ERRADF PE  " status; any other
+    // length gets token-free filler, which carries no error: the content
+    // rule reads it as ADF.
+    const body =
+      preParaStatLength === 12
+        ? Buffer.from("#ERRADF PE  ", "ascii")
+        : Buffer.alloc(preParaStatLength, 0x2d);
+    fake.feed(buildIsPacket(0xa000, body));
+    await waitImmediate();
+  }
 
   return { fake, sessionPromise, feedEsci2Reply, feedLegacyAck };
 }
@@ -252,7 +257,7 @@ async function driveScannerToPara(args: {
  */
 async function drivePastImgTerminator(
   outputDir: string,
-  firstStatReplyHex: string,
+  preParaStatReplyHex: string,
 ): Promise<{
   fake: FakeTlsSocket;
   sessionPromise: Promise<void>;
@@ -260,7 +265,7 @@ async function drivePastImgTerminator(
 }> {
   const { fake, sessionPromise, feedEsci2Reply } = await driveScannerToPara({
     outputDir,
-    firstStatReplyHex,
+    preParaStatReplyHex,
   });
   // PARA reply
   fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
@@ -584,7 +589,6 @@ describe("scanner init-poll early stop", () => {
     try {
       const { fake, sessionPromise } = await driveScannerToPara({
         outputDir,
-        firstStatReplyHex: "STATx0000000",
         nakFsYOnPollCycle: 2,
       });
       // INIT1's FS Y plus init-poll cycles 1 and 2: the NAK'd cycle 2 sent no third FS Y.
@@ -617,7 +621,6 @@ describe("scanner init-poll early stop", () => {
     try {
       const { sessionPromise } = await driveScannerToPara({
         outputDir,
-        firstStatReplyHex: "STATx0000000",
         nakFsYOnPollCycle: 2,
         modeSwitchReply: Buffer.from([0x15]),
       });
@@ -634,7 +637,6 @@ describe("scanner init-poll early stop", () => {
     try {
       const { sessionPromise } = await driveScannerToPara({
         outputDir,
-        firstStatReplyHex: "STATx0000000",
         nakFsYOnPollCycle: 2,
         timeoutMs: 50,
       });
@@ -652,7 +654,6 @@ describe("scanner init-poll early stop", () => {
     try {
       const { fake, sessionPromise } = await driveScannerToPara({
         outputDir,
-        firstStatReplyHex: "STATx0000000",
         nakFsYOnPollCycle: 2,
       });
       const settled = rejectionOf(sessionPromise);
@@ -669,7 +670,6 @@ describe("scanner init-poll early stop", () => {
     try {
       const { fake, sessionPromise } = await driveScannerToPara({
         outputDir,
-        firstStatReplyHex: "STATx0000000",
         nakFsYOnPollCycle: 2,
       });
       fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
@@ -690,7 +690,7 @@ describe("scanner init-poll early stop", () => {
   });
 });
 
-describe("scanner source detection from first @STAT reply", () => {
+describe("scanner source detection from the status before PARA", () => {
   let outputDir: string;
 
   beforeEach(() => {
@@ -701,10 +701,10 @@ describe("scanner source detection from first @STAT reply", () => {
     rmSync(outputDir, { recursive: true, force: true });
   });
 
-  async function drivePastParaWith(firstStatReplyHex: string): Promise<Buffer> {
+  async function drivePastParaWith(preParaStatReplyHex: string): Promise<Buffer> {
     const { fake, sessionPromise } = await driveScannerToPara({
       outputDir,
-      firstStatReplyHex,
+      preParaStatReplyHex,
     });
     // PARA body is the only send > 500 bytes so far (PARA header is ~32B;
     // everything before it is shorter). Capture it before teardown.
@@ -722,7 +722,7 @@ describe("scanner source detection from first @STAT reply", () => {
     return paraBodyWrite;
   }
 
-  it("detects source='adf' when first STAT returns length 0", async () => {
+  it("detects source='adf' when the status before PARA returns length 0", async () => {
     const paraBody = await drivePastParaWith("STATx0000000");
     // ADF simplex PARA body: IS-framing 12B + inner 8B + 936-byte data body = 956 total bytes.
     expect(paraBody.length).toBe(12 + 8 + 936);
@@ -730,7 +730,7 @@ describe("scanner source detection from first @STAT reply", () => {
     expect(paraBody.subarray(20, 24).toString("ascii")).toBe("#ADF");
   });
 
-  it("detects source='flatbed' when first STAT returns length 12", async () => {
+  it("detects source='flatbed' when the status before PARA reports ADF paper empty", async () => {
     const paraBody = await drivePastParaWith("STATx000000C");
     // Flatbed PARA body: IS-framing 12B + inner 8B + 928-byte data body = 948 total.
     expect(paraBody.length).toBe(12 + 8 + 928);
@@ -738,7 +738,7 @@ describe("scanner source detection from first @STAT reply", () => {
     expect(paraBody.subarray(20, 24).toString("ascii")).toBe("#FB ");
   });
 
-  it("defaults to ADF when first STAT has an unexpected length", async () => {
+  it("defaults to ADF when the status before PARA has an unexpected length", async () => {
     const paraBody = await drivePastParaWith("STATx000002A"); // 42 — unexpected
     expect(paraBody.length).toBe(12 + 8 + 936);
     expect(paraBody.subarray(20, 24).toString("ascii")).toBe("#ADF");
@@ -1370,7 +1370,7 @@ describe("runEsci2ScanOverPlain — ET-4800 fixture replay", () => {
     expect(scannerPara.equals(capturedPara)).toBe(true);
 
     // Cross-check that the scanner auto-detected the correct source from the
-    // first status reply: the captured PARA equals what the composer builds
+    // status before PARA: the captured PARA equals what the composer builds
     // for that source axis (ET-4800 PARA is action-invariant, so action only
     // selects identical gamma/cmx classes here).
     const paraSource: ParaSpec["source"] = opts.source === "flatbed" ? "flatbed" : "adf-simplex";
