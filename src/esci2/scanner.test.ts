@@ -128,7 +128,8 @@ const CAPA_BODY_PACKET = buildIsPacket(0xa000, ET4950_INIT1.capa);
  */
 async function driveScannerToPara(args: {
   outputDir: string;
-  preParaStatReplyHex: string;
+  /** The status before PARA; defaults to a length-0 reply (the ADF). */
+  preParaStatReplyHex?: string;
   duplex?: boolean;
   action?: "jpg" | "pdf";
   /** Answer FS Y with a NAK on this init-poll cycle (2 or 3), ending the poll early. */
@@ -142,7 +143,13 @@ async function driveScannerToPara(args: {
   feedEsci2Reply: (bodyHex: string) => Promise<void>;
   feedLegacyAck: () => Promise<void>;
 }> {
-  const { outputDir, preParaStatReplyHex, duplex = false, action = "jpg", timeoutMs } = args;
+  const {
+    outputDir,
+    preParaStatReplyHex = "STATx0000000",
+    duplex = false,
+    action = "jpg",
+    timeoutMs,
+  } = args;
   const { nakFsYOnPollCycle, modeSwitchReply } = args;
   if (nakFsYOnPollCycle !== undefined && nakFsYOnPollCycle !== 2 && nakFsYOnPollCycle !== 3) {
     throw new Error(`nakFsYOnPollCycle must be 2 or 3, got ${nakFsYOnPollCycle}`);
@@ -582,7 +589,6 @@ describe("scanner init-poll early stop", () => {
     try {
       const { fake, sessionPromise } = await driveScannerToPara({
         outputDir,
-        preParaStatReplyHex: "STATx0000000",
         nakFsYOnPollCycle: 2,
       });
       // INIT1's FS Y plus init-poll cycles 1 and 2: the NAK'd cycle 2 sent no third FS Y.
@@ -615,7 +621,6 @@ describe("scanner init-poll early stop", () => {
     try {
       const { sessionPromise } = await driveScannerToPara({
         outputDir,
-        preParaStatReplyHex: "STATx0000000",
         nakFsYOnPollCycle: 2,
         modeSwitchReply: Buffer.from([0x15]),
       });
@@ -632,7 +637,6 @@ describe("scanner init-poll early stop", () => {
     try {
       const { sessionPromise } = await driveScannerToPara({
         outputDir,
-        preParaStatReplyHex: "STATx0000000",
         nakFsYOnPollCycle: 2,
         timeoutMs: 50,
       });
@@ -650,7 +654,6 @@ describe("scanner init-poll early stop", () => {
     try {
       const { fake, sessionPromise } = await driveScannerToPara({
         outputDir,
-        preParaStatReplyHex: "STATx0000000",
         nakFsYOnPollCycle: 2,
       });
       const settled = rejectionOf(sessionPromise);
@@ -667,7 +670,6 @@ describe("scanner init-poll early stop", () => {
     try {
       const { fake, sessionPromise } = await driveScannerToPara({
         outputDir,
-        preParaStatReplyHex: "STATx0000000",
         nakFsYOnPollCycle: 2,
       });
       fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));

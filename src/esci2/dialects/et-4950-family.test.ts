@@ -10,8 +10,8 @@ describe("ET-4950 model override", () => {
   it("supports flatbed + ADF", () => {
     expect(entry.adfExtents).not.toBeNull();
   });
-  it("reads its source from the init poll's status reply", () => {
-    expect(entry.sourceDetection).toBe("init-poll-status");
+  it("reads its source from the status reply before PARA", () => {
+    expect(entry.sourceDetection).toBe("pre-para-status");
   });
   it("uses 3 init-poll iterations", () => {
     expect(entry.initPollIterations).toBe(3);

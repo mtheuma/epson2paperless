@@ -178,7 +178,7 @@ export interface CapabilityFields {
  * when INFO advertises no scan area at all: the session keeps the scanner
  * shell's default source.
  */
-export type SourceDetection = "init-poll-status" | "fixed-flatbed" | "fixed-adf" | null;
+export type SourceDetection = "pre-para-status" | "fixed-flatbed" | "fixed-adf" | null;
 
 /**
  * A source's scan window on a model override. "generic" inherits the generic

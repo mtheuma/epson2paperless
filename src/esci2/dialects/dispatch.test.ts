@@ -311,7 +311,7 @@ describe("an override's capability fields follow the printer's own replies", () 
 
   it("an override's source detection follows the sources its INFO advertises", () => {
     expect(lookup(ET4950.info, ET4950.capa).resolved.dialect.sourceDetection).toBe(
-      "init-poll-status",
+      "pre-para-status",
     );
     const text = ET4950.info.toString("latin1");
     expect(text).toContain("#ADFAREA");
@@ -372,7 +372,7 @@ describe("an override that inherits the generic window", () => {
   it("has no window where INFO advertises an unusable area: warns with the diagnostic, then refuses a scan from it", () => {
     const badAdf = Buffer.concat([NARROW_FB_ONLY, Buffer.from("#ADFAREAd850", "ascii")]);
     const { resolved, warnings } = lookup(badAdf, ET4950.capa);
-    expect(resolved.dialect.sourceDetection).toBe("init-poll-status");
+    expect(resolved.dialect.sourceDetection).toBe("pre-para-status");
     expect(resolved.dialect.adfExtents).toBeNull();
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("advertises no usable adf scan area");
@@ -433,7 +433,7 @@ describe("on a CAPA fingerprint mismatch, an override's own window must fit the 
   it("a source advertised with an area that isn't usable is left with no window, warned about once", () => {
     const badFb = Buffer.from(xp7100Info.replace(/#FB AREAd\d{3}/, "#FB AREAd000"), "latin1");
     const { resolved, warnings } = lookup(badFb, doctored(XP7100.capa));
-    expect(resolved.dialect.sourceDetection).toBe("init-poll-status");
+    expect(resolved.dialect.sourceDetection).toBe("pre-para-status");
     expect(resolved.dialect.fbExtents).toBeNull();
     expect(warnings.filter((w) => w.includes("advertises no usable flatbed"))).toHaveLength(1);
   });
@@ -451,7 +451,7 @@ describe("on a CAPA fingerprint mismatch, an override's own window must fit the 
     expect(resolved.matchedBy).not.toBe("generic");
     expect(resolved.dialect.displayName).toMatch(/ET-2750/);
     // The printer reports both sources, so the status before PARA can pick the ADF.
-    expect(resolved.dialect.sourceDetection).toBe("init-poll-status");
+    expect(resolved.dialect.sourceDetection).toBe("pre-para-status");
     expect(resolved.dialect.adfExtents).toMatchObject({ x0: 0, y0: 0, w: 2481, h: 3506 });
     expect(resolved.dialect.adfExtents?.generic).toBeDefined();
     expect(() => assertSourceSupported(resolved.dialect, "adf-simplex")).not.toThrow();

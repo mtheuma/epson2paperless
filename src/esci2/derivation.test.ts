@@ -77,8 +77,8 @@ describe("deriveCapabilities — sources and source detection", () => {
     expect(derive(ascii(ADF), NO_CAPA).sources).toEqual({ flatbed: false, adf: true });
   });
 
-  it("both sources read the init poll's status; one source is fixed to it", () => {
-    expect(derive(ascii(ADF + FB), NO_CAPA).sourceDetection).toBe("init-poll-status");
+  it("both sources read the status before PARA; one source is fixed to it", () => {
+    expect(derive(ascii(ADF + FB), NO_CAPA).sourceDetection).toBe("pre-para-status");
     expect(derive(ascii(FB), NO_CAPA).sourceDetection).toBe("fixed-flatbed");
     expect(derive(ascii(ADF), NO_CAPA).sourceDetection).toBe("fixed-adf");
   });
@@ -237,7 +237,7 @@ describe("content-based source decision lands on the recorded source on every fi
   // their one source and never consult it.
   const statusFixtures = REPLAY_FIXTURES.filter(({ path }) => {
     const { info, capa } = readInit1Bodies(path);
-    return derive(info, capa).sourceDetection === "init-poll-status";
+    return derive(info, capa).sourceDetection === "pre-para-status";
   });
 
   it("covers flatbed and ADF sessions of every fixture model that reads its status", () => {
@@ -255,6 +255,10 @@ describe("content-based source decision lands on the recorded source on every fi
     // Every recorded flatbed status is the 12-byte "ADF paper empty"; every
     // recorded ADF status is empty.
     expect(body?.length ?? 0).toBe(source === "flatbed" ? 12 : 0);
+    // The first status, which once decided the source, says the same: moving
+    // the decision to the status before PARA changed no recorded session.
+    const first = readFirstInitPollStatus(path);
+    expect(sourceFromStatusErrors(statusErrors(first.header, first.body))).toBe(source);
   });
 
   it.each(REPLAY_FIXTURES)(
@@ -296,8 +300,9 @@ type LiveFields = Pick<
   DerivedCapabilities,
   "qit" | "cct" | "adfDuplex" | "paraProfile" | "sourceDetection" | "duplexBackRotated"
 >;
-// Source detection: "init-poll-status" was the entry's "stat-length".
-const STATUS = "init-poll-status";
+// Source detection: "pre-para-status" was "pre-para-status", and before
+// that the entry's "stat-length".
+const STATUS = "pre-para-status";
 const LIVE_FIELDS: Record<string, Partial<LiveFields>> = {
   "ET-4950 family": {
     qit: true,

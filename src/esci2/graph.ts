@@ -444,12 +444,12 @@ twoPhaseRead(
 
 /**
  * statThenDrain — builds three states that encode the "STAT reply →
- * (optional) drain → FIN" sub-flow that recurs in INIT_POLL (inline),
- * POST_MODE (T24), and POSTSCAN×2 (T26).
+ * (optional) drain → FIN" sub-flow that recurs in INIT_POLL and
+ * POSTSCAN×2 (T26). Both drain the status unread.
  *
  *   `${prefix}_STAT`       — decision: parses reply header length and either
  *                            advances to _STAT_DRAIN with a pure-read or jumps
- *                            straight to _FIN. POST_MODE skips the drain when
+ *                            straight to _FIN. INIT_POLL skips the drain when
  *                            length === 0; POSTSCAN always drains (legacy
  *                            scanner sent buildPurereadPacket(header?.length ??
  *                            12) before FIN unconditionally — firmware
@@ -459,14 +459,17 @@ twoPhaseRead(
  *                            we replay back to the printer regardless).
  *   `${prefix}_STAT_DRAIN` — static: 0xa000 → sends FIN, goes to _FIN.
  *   `${prefix}_FIN`        — static: 0xa000 → next (with optional finSend).
+ *                            Not registered when `next` is null: INIT_POLL's
+ *                            FIN state is its own decision (loop-back vs
+ *                            advance).
  *
- * INIT_POLL does not use this helper because its FIN state is a custom decision
- * (loop-back vs advance). POST_MODE and POSTSCAN use it directly.
+ * POST_MODE_STAT doesn't use it: its reply is read (the source and the
+ * errors) and it goes on to PARA, not FIN.
  */
 function statThenDrain(
   g: GraphBuilder<Esci2Ctx>,
   prefix: string,
-  next: string,
+  next: string | null,
   finSend?: SendSpec<Esci2Ctx> | SendSpec<Esci2Ctx>[],
   alwaysDrain = false,
 ): void {
@@ -512,6 +515,7 @@ function statThenDrain(
     ...(alwaysDrain ? { bypassIgnoreFilter: true as const } : {}),
   });
 
+  if (next === null) return;
   g.state(`${prefix}_FIN`, {
     on: { 0xa000: { next, ...(finSend !== undefined ? { send: finSend } : {}) } },
   });
@@ -597,9 +601,9 @@ g.state("UNLOCKING", {
 // INIT_POLL cycle — 3 iterations of FS Y → STAT → (optional drain) → FIN
 // ---------------------------------------------------------------------------
 //
-// Inlined rather than using statThenDrain because INIT_POLL_FIN is a decision
-// state that does the loop-back check on the same 0xa000 packet that completes
-// the FIN exchange, rather than a plain static transition.
+// INIT_POLL_STAT / _STAT_DRAIN come from statThenDrain; INIT_POLL_FIN is its
+// own decision state that does the loop-back check on the same 0xa000 packet
+// that completes the FIN exchange, rather than a plain static transition.
 
 // INIT_POLL_FS_Y: receives 0xa000 (FS Y ACK, payload[0]=0x06); sends STAT.
 //
@@ -664,39 +668,10 @@ export function nameInitPollEarlyStop(ctx: Esci2Ctx, reason: Error): Error {
 }
 
 // INIT_POLL_STAT: decision on STAT reply — drain if length>0, else FIN.
+// INIT_POLL_STAT_DRAIN: drains queued status bytes, then sends FIN.
 // The init poll's statuses are not read: the source and the errors both come
 // from the status before PARA (POST_MODE_STAT), as Epson's driver reads them.
-g.state(
-  "INIT_POLL_STAT",
-  decision<Esci2Ctx>((ctx, packet) => {
-    const typeGuard = expectIsType(packet, 0xa000, "INIT_POLL_STAT");
-    if (typeGuard) return typeGuard;
-    const header = parseEsci2ReplyHeader(packet.payload);
-    if (header === null) {
-      return { error: new Error("INIT_POLL_STAT: unparseable reply header") };
-    }
-    if (header.length > 0) {
-      return {
-        next: "INIT_POLL_STAT_DRAIN",
-        send: buildPurereadPacket(header.length),
-      };
-    }
-    return {
-      next: "INIT_POLL_FIN",
-      send: buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
-    };
-  }),
-);
-
-// INIT_POLL_STAT_DRAIN: drains queued status bytes, unread, then sends FIN.
-awaitReply(
-  g,
-  "INIT_POLL_STAT_DRAIN",
-  0xa000,
-  () => true,
-  "INIT_POLL_FIN",
-  buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
-);
+statThenDrain(g, "INIT_POLL", null);
 
 // INIT_POLL_FIN: decision on FIN reply — loop or advance to MODE_SWITCH.
 // INIT_POLL_FIN increments initPollIteration; if below the dialect's
@@ -882,7 +857,7 @@ function warnOnOtherUnitErrors(ctx: Esci2Ctx, warnings: string[]): void {
  * time: one parse of one reply decides the source, then is judged against
  * it.
  *
- * A printer with both sources (sourceDetection "init-poll-status") takes
+ * A printer with both sources (sourceDetection "pre-para-status") takes
  * its source from the reply (sourceFromStatusErrors): "ADF paper empty"
  * means the flatbed, anything else the ADF. A single-source printer is fixed
  * to its source, which the reply never changes. The ET-2750 relies on that:
@@ -902,7 +877,7 @@ function settlePreParaStatus(
   status: Buffer[],
 ): TransitionResult<Esci2Ctx> | undefined {
   const errors = status.flatMap((part) => parseStatErrors(part));
-  if (ctx.entry!.sourceDetection === "init-poll-status") {
+  if (ctx.entry!.sourceDetection === "pre-para-status") {
     ctx.source = sourceFromStatusErrors(errors);
     // The declared length rides along for triage on models with no fixture:
     // on every recorded one, 12 bytes is "ADF paper empty" and 0 is none.

@@ -235,7 +235,8 @@ export const configSchema = z
       });
     }
     // ESCI_FORCE_SOURCE only applies to the legacy ESC/I scanner —
-    // ESC/I-2 (TLS or plain) detects source via INIT_POLL_STAT.
+    // ESC/I-2 (TLS or plain) detects source via the status before PARA
+    // (POST_MODE_STAT).
     if (
       (cfg.printerProtocol === "esci2" || cfg.printerProtocol === "esci2-plain") &&
       cfg.esciForceSource

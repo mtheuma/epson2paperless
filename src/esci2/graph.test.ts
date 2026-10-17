@@ -1092,7 +1092,7 @@ describe("applyEntrySourceOverride", () => {
     expect(ctx.source).toBe("flatbed");
   });
 
-  it("leaves source untouched for a printer with both sources, so INIT_POLL_STAT can decide", () => {
+  it("leaves source untouched for a printer with both sources, so POST_MODE_STAT can decide", () => {
     const ctx = makeCtx({
       source: "adf",
       transport: "tls",
@@ -1852,15 +1852,16 @@ describe("esci2Graph POST_MODE_STAT — the status before PARA is judged against
 
   // Synthetic from here: no fixture's status reports an error other than ADF PE.
   it("an error on the unit being scanned ends the session before PARA, naming it", () => {
-    const adf = { entry: ET4950_ENTRY, source: "adf" as const };
-    expect(prePara(adf, statHeader(12), Buffer.from("#ERRADF PJ  ")).outcome).toBe(
+    // The ADF: no paper empty.
+    const et4950 = { entry: ET4950_ENTRY };
+    expect(prePara(et4950, statHeader(12), Buffer.from("#ERRADF PJ  ")).outcome).toBe(
       STOP("POST_MODE_STAT_DRAIN", "ADF PJ"),
     );
     // Tokens inline in a zero-length reply, which has no body.
     const inline = Buffer.from("STATx0000000#ERRADF PJ  " + "#---".repeat(10));
-    expect(prePara(adf, inline, null).outcome).toBe(STOP("POST_MODE_STAT", "ADF PJ"));
-    const flatbed = { entry: ET4950_ENTRY, source: "flatbed" as const };
-    expect(prePara(flatbed, statHeader(24), Buffer.from("#ERRADF PE  #ERRFB  LOCK")).outcome).toBe(
+    expect(prePara(et4950, inline, null).outcome).toBe(STOP("POST_MODE_STAT", "ADF PJ"));
+    // The flatbed: paper empty.
+    expect(prePara(et4950, statHeader(24), Buffer.from("#ERRADF PE  #ERRFB  LOCK")).outcome).toBe(
       STOP("POST_MODE_STAT_DRAIN", "FB LOCK"),
     );
   });
@@ -1919,23 +1920,24 @@ describe("esci2Graph POST_MODE_STAT — the status before PARA is judged against
 
   it("a flatbed scan carries on past ADF paper empty without a warning", () => {
     const entry = model("Model PE");
-    expect(
-      prePara({ entry, source: "flatbed" }, statHeader(12), Buffer.from("#ERRADF PE  ")),
-    ).toMatchObject({ outcome: "PARA", warnings: [] });
+    expect(prePara({ entry }, statHeader(12), Buffer.from("#ERRADF PE  "))).toMatchObject({
+      ctx: { source: "flatbed" },
+      outcome: "PARA",
+      warnings: [],
+    });
   });
 
   it("judges the reply's inline tokens along with the body", () => {
     // Synthetic: no fixture carries tokens in the STAT reply header.
     const header = Buffer.from("STATx000000C#ERRFB  OPN " + "#---".repeat(10));
-    const flatbed = { entry: ET4950_ENTRY, source: "flatbed" as const };
-    expect(prePara(flatbed, header, Buffer.from("#ERRADF PE  ")).outcome).toBe(
+    expect(prePara({ entry: ET4950_ENTRY }, header, Buffer.from("#ERRADF PE  ")).outcome).toBe(
       STOP("POST_MODE_STAT_DRAIN", "FB OPN"),
     );
   });
 
   it("keeps one code per unit, the last the reply gives", () => {
     const body = Buffer.from("#ERRADF PE  #ERRADF PJ  ");
-    expect(prePara({ entry: ET4950_ENTRY, source: "adf" }, statHeader(24), body).outcome).toBe(
+    expect(prePara({ entry: ET4950_ENTRY }, statHeader(24), body).outcome).toBe(
       STOP("POST_MODE_STAT_DRAIN", "ADF PJ"),
     );
     const flatbed = prePara(
@@ -1961,11 +1963,7 @@ describe("esci2Graph POST_MODE_STAT — the status before PARA is judged against
         ),
       ],
     });
-    const adf = prePara(
-      { entry: model("Model A"), source: "adf" },
-      statHeader(12),
-      Buffer.from("#ERRFB  LTF "),
-    );
+    const adf = prePara({ entry: model("Model A") }, statHeader(12), Buffer.from("#ERRFB  LTF "));
     expect(adf.outcome).toBe("PARA");
     expect(adf.warnings).toEqual([
       expect.stringMatching(
@@ -2039,7 +2037,7 @@ describe("esci2Graph — generic dialect", () => {
     const { ctx, result, warnings, infos } = resolve(UNKNOWN_INFO, UNKNOWN_CAPA);
     expect("error" in result).toBe(false);
     expect(ctx.entry!.displayName).toBe("generic ESC/I-2 dialect (PID FFFF)");
-    expect(ctx.entry!.sourceDetection).toBe("init-poll-status");
+    expect(ctx.entry!.sourceDetection).toBe("pre-para-status");
     expect(ctx.genericDialect).toBe(true);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("PID FFFF not recognised — generic ESC/I-2 dialect");

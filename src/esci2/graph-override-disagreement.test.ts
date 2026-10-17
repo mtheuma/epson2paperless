@@ -65,7 +65,7 @@ describe("esci2Graph INIT1_CAPA_DATA — no runtime comparison with the override
       const { entry } = ctx as Esci2Ctx;
       expect(entry?.fbExtents).toBeNull();
       // Detection follows INFO, which advertises both sources.
-      expect(entry?.sourceDetection).toBe("init-poll-status");
+      expect(entry?.sourceDetection).toBe("pre-para-status");
       expect(infoSpy.mock.calls).toEqual([]);
     } finally {
       infoSpy.mockRestore();
