@@ -143,6 +143,22 @@ export function readFirstInitPollStatus(path: string): { header: Buffer; body: B
   return firstReply(readPrinterPayloads(path), "STAT", path);
 }
 
+/**
+ * The last STAT reply before the PARA reply: the mode switch's
+ * (POST_MODE_STAT), whose errors a scan is judged on. `body` is null for a
+ * zero-length reply.
+ */
+export function readPreParaStatus(path: string): { header: Buffer; body: Buffer | null } {
+  const payloads = readPrinterPayloads(path);
+  const isReply = (p: Buffer, cmd: string) => p.toString("latin1", 0, 5) === `${cmd}x`;
+  const para = payloads.findIndex((p) => isReply(p, "PARA"));
+  if (para < 0) throw new Error(`readPreParaStatus: no PARA reply in ${path}`);
+  let stat = para - 1;
+  while (stat >= 0 && !isReply(payloads[stat], "STAT")) stat -= 1;
+  if (stat < 0) throw new Error(`readPreParaStatus: no STAT reply before PARA in ${path}`);
+  return firstReply(payloads.slice(stat), "STAT", path);
+}
+
 // Models with no replay fixture: the facts their reporters posted in the
 // unsupported-printer diagnostic block. A diagnostic carries only the lists,
 // the duplex flag and the scan areas (and older blocks have no CCT line), so
