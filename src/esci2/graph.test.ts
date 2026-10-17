@@ -1843,7 +1843,65 @@ describe("esci2Graph POST_MODE_STAT — the status before PARA is judged against
     for (const entry of [ET4950_ENTRY, recordedDialect(FF680W_FP)]) {
       expect(
         prePara({ entry, source: "adf" }, statHeader(12), Buffer.from("#ERRADF PE  ")).outcome,
-      ).toBe(STOP("POST_MODE_STAT_DRAIN", "ADF PE"));
+      ).toBe(
+        "POST_MODE_STAT_DRAIN: the printer reported an error before scanning (ADF PE) — " +
+          "load the document into the ADF and scan again",
+      );
+    }
+  });
+
+  it("a stop on a reported error is never blamed on an early-stopped init poll", () => {
+    const stat = esci2Graph.states.POST_MODE_STAT;
+    if (stat.kind !== "decision") throw new Error("POST_MODE_STAT not a decision");
+    const ctx = makeCtx({
+      entry: ET4950_ENTRY,
+      source: "flatbed",
+      initPollEarlyStop: { cycle: 2, reply: "15" },
+    });
+    const inline = Buffer.from("STATx0000000#ERRFB  OPN " + "#---".repeat(10));
+    const result = stat.decide(ctx, { type: 0xa000, payload: inline });
+    if (!("error" in result)) throw new Error("expected the session to end");
+    expect(nameInitPollEarlyStop(ctx, result.error).message).toBe(STOP("POST_MODE_STAT", "FB OPN"));
+  });
+
+  it("the source comes from the first status, the errors from the one before PARA", () => {
+    // Synthetic: on every fixture the two agree.
+    const poll = esci2Graph.states.INIT_POLL_STAT;
+    const pollDrain = esci2Graph.states.INIT_POLL_STAT_DRAIN;
+    const stat = esci2Graph.states.POST_MODE_STAT;
+    const drain = esci2Graph.states.POST_MODE_STAT_DRAIN;
+    if (
+      poll.kind !== "decision" ||
+      pollDrain.kind !== "decision" ||
+      stat.kind !== "decision" ||
+      drain.kind !== "decision"
+    ) {
+      throw new Error("not decisions");
+    }
+    const session = (first: string, prePara: string) => {
+      const ctx = makeCtx({ entry: model(`Model ${first}|${prePara}`), initPollIteration: 0 });
+      poll.decide(ctx, { type: 0xa000, payload: statHeader(first.length) });
+      if (first.length > 0) pollDrain.decide(ctx, { type: 0xa000, payload: Buffer.from(first) });
+      let result = stat.decide(ctx, { type: 0xa000, payload: statHeader(prePara.length) });
+      if (prePara.length > 0 && "next" in result) {
+        result = drain.decide(ctx, { type: 0xa000, payload: Buffer.from(prePara) });
+      }
+      return {
+        source: ctx.source,
+        outcome: "error" in result ? result.error.message : result.next,
+      };
+    };
+    const info = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      // The feeder emptied after the first poll: the ADF scan stops.
+      expect(session("", "#ERRADF PE  ")).toEqual({
+        source: "adf",
+        outcome: expect.stringContaining("(ADF PE)"),
+      });
+      // A paper-empty first poll that clears: still the flatbed, which scans.
+      expect(session("#ERRADF PE  ", "")).toEqual({ source: "flatbed", outcome: "PARA" });
+    } finally {
+      info.mockRestore();
     }
   });
 

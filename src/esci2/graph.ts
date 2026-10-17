@@ -94,7 +94,8 @@ export interface Esci2Ctx {
   /**
    * Set when the init poll stopped early on a non-ACK to FS Y (see
    * INIT_POLL_FS_Y): the cycle it happened on and a preview of the reply.
-   * Cleared once PARA is accepted, so only a failure in the mode switch or
+   * Cleared once PARA is accepted, or when the status before PARA reports
+   * an error that stops the scan, so only a failure in the mode switch or
    * the settings exchange is blamed on it (`nameInitPollEarlyStop`).
    */
   initPollEarlyStop?: { cycle: number; reply: string };
@@ -946,10 +947,18 @@ function judgePreParaStatus(
     ctx.source,
   );
   if ("blocking" in judgement) {
+    // The printer named the cause itself, so an early-stopped init poll
+    // isn't blamed for it (nameInitPollEarlyStop).
+    ctx.initPollEarlyStop = undefined;
+    // ADF paper empty has nothing to clear: the feeder needs the document.
+    const advice =
+      judgement.blocking === "ADF PE"
+        ? "load the document into the ADF and scan again"
+        : "clear it on the printer and scan again";
     return {
       error: new Error(
         `${state}: the printer reported an error before scanning ` +
-          `(${judgement.blocking}) — clear it on the printer and scan again`,
+          `(${judgement.blocking}) — ${advice}`,
       ),
     };
   }
