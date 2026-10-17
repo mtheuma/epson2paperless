@@ -10,7 +10,7 @@ import {
   type WindowSource,
 } from "./scan-window.js";
 import { parseCapaTokens, parseInfoTokens } from "./capabilities.js";
-import { REGISTRY } from "./dialects/registry.js";
+import { OVERRIDES_BY_FINGERPRINT } from "./dialects/model-overrides.js";
 import { makeParaSpec, withCapabilities } from "./dialects/dispatch.js";
 import { deriveCapabilities } from "./derivation.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
@@ -293,7 +293,7 @@ describe("generic vs own windows — on record for a future paper-size decision"
 
 describe("model overrides inherit the generic window where theirs matches it", () => {
   // Each fixture model's own window as captured, at its reference DPI: the
-  // registry's value where the override keeps it, else the value it carried
+  // override's value where the override keeps it, else the value it carried
   // before it inherited the generic window.
   const A4 = { x0: 0, y0: 0, w: 2481, h: 3506 };
   const A4_RIGHT = { x0: 69, y0: 0, w: 2481, h: 3506 };
@@ -316,7 +316,7 @@ describe("model overrides inherit the generic window where theirs matches it", (
         const fp = computeCapaFingerprint(bodies.capa);
         const tokens = parseInfoTokens(bodies.info);
         const capa = parseCapaTokens(bodies.capa);
-        const entry = REGISTRY.get(fp)!;
+        const entry = OVERRIDES_BY_FINGERPRINT.get(fp)!;
         if (!(model in CAPTURED)) {
           throw new Error(`${model} has a replay fixture: record its captured window in CAPTURED`);
         }

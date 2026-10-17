@@ -13,7 +13,7 @@ function loadFixture(name: string): Buffer {
   return readFileSync(path.join(FIXTURE_DIR, name));
 }
 
-describe("XP-7100 registry entry", () => {
+describe("XP-7100 model override", () => {
   it("supports flatbed + ADF + duplex (has adfExtents)", () => {
     expect(entry.adfExtents).not.toBeNull();
   });

@@ -1,13 +1,17 @@
 // src/esci2/test-support/dialects.ts
 //
-// Registry entries completed into the dialect a session would run, for tests
+// Model overrides completed into the dialect a session would run, for tests
 // that compose PARA or drive graph states for a known model.
 
 import { parseCapaTokens, parseInfoTokens } from "../capabilities.js";
 import { deriveCapabilities } from "../derivation.js";
 import { computeCapaFingerprint } from "../capa-fingerprint.js";
 import { withCapabilities } from "../dialects/dispatch.js";
-import { REGISTRY, type Dialect, type RegistryEntry } from "../dialects/registry.js";
+import {
+  OVERRIDES_BY_FINGERPRINT,
+  type Dialect,
+  type ModelOverride,
+} from "../dialects/model-overrides.js";
 import {
   DIAGNOSTICS,
   REPLAY_FIXTURES,
@@ -44,12 +48,12 @@ function fixtureBodiesByFingerprint(): Map<string, CapabilityBodies> {
 }
 
 /**
- * The registry entry for a CAPA fingerprint, completed with the capability
+ * The model override for a CAPA fingerprint, completed with the capability
  * fields derived from that model's recorded bodies: the dialect its session
  * runs (for a diagnostic-only model, as far as its block tells).
  */
 export function recordedDialect(fingerprint: string): Dialect {
-  const entry = REGISTRY.get(fingerprint);
+  const entry = OVERRIDES_BY_FINGERPRINT.get(fingerprint);
   if (entry === undefined) throw new Error(`recordedDialect: no entry for ${fingerprint}`);
   const { info, capa } = recordedBodies(fingerprint);
   const infoTokens = parseInfoTokens(info);
@@ -62,8 +66,8 @@ export function recordedDialect(fingerprint: string): Dialect {
  * printer's own scan area (an inherited "generic" window becomes extents).
  */
 export function unresolvedFields(
-  entry: RegistryEntry,
-): Omit<RegistryEntry, "fbExtents" | "adfExtents"> {
+  entry: ModelOverride,
+): Omit<ModelOverride, "fbExtents" | "adfExtents"> {
   const { fbExtents: _fb, adfExtents: _adf, ...rest } = entry;
   return rest;
 }

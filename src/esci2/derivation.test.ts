@@ -6,7 +6,7 @@ import {
   type DerivedCapabilities,
 } from "./derivation.js";
 import { parseCapaTokens, parseInfoTokens, parseStatErrors } from "./capabilities.js";
-import { REGISTRY, type RegistryEntry } from "./dialects/registry.js";
+import { OVERRIDES_BY_FINGERPRINT, type ModelOverride } from "./dialects/model-overrides.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
 import {
   DIAGNOSTICS,
@@ -142,16 +142,16 @@ describe("sourceFromStatusErrors — content-based source decision", () => {
   });
 });
 
-/** The sources a registry entry has a window for, own or inherited. */
-const entrySources = (entry: RegistryEntry) => ({
+/** The sources a model override has a window for, own or inherited. */
+const entrySources = (entry: ModelOverride) => ({
   flatbed: entry.fbExtents !== null,
   adf: entry.adfExtents !== null,
 });
 
-describe("derived sources agree with the registry entry on every replay fixture", () => {
+describe("derived sources agree with the model override on every replay fixture", () => {
   it.each(REPLAY_FIXTURES)("$model: $path", ({ path }) => {
     const { info, capa } = readInit1Bodies(path);
-    const entry = REGISTRY.get(computeCapaFingerprint(capa));
+    const entry = OVERRIDES_BY_FINGERPRINT.get(computeCapaFingerprint(capa));
     expect(entry).toBeDefined();
     expect(derive(info, capa).sources).toEqual(entrySources(entry!));
   });
@@ -204,8 +204,8 @@ describe("content-based source decision lands on the recorded source on every fi
 });
 
 /**
- * The live fields every recorded model derives: the values its registry
- * entry carried before they were derived. Each one is asserted from that
+ * The live fields every recorded model derives: the values its model
+ * override carried before they were derived. Each one is asserted from that
  * model's own replies: every replay fixture, and every issue diagnostic for
  * the fields its block determines.
  */
@@ -350,9 +350,9 @@ describe("live fields derived for models known only from issue diagnostics", () 
   });
 });
 
-describe("derived sources agree with the registry entry for models known only from issue diagnostics", () => {
+describe("derived sources agree with the model override for models known only from issue diagnostics", () => {
   it.each(DIAGNOSTICS)("$model (#$issue)", ({ fp, block }) => {
-    const entry: RegistryEntry | undefined = REGISTRY.get(fp);
+    const entry: ModelOverride | undefined = OVERRIDES_BY_FINGERPRINT.get(fp);
     expect(entry).toBeDefined();
     const { info, capa, fields } = bodiesFromDiagnostic(block);
     // A block determines the sources only when it carries both area lines;

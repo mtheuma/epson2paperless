@@ -12,7 +12,7 @@ import { resolveSessionTimestamp } from "../output.js";
 import type { WhitePoint } from "../postprocess/auto-color.js";
 import { esci2Graph, type Esci2Ctx } from "./graph.js";
 import { withEsci2UnlockOnDestroy, withTlsErrorLabels } from "./transport.js";
-import { supportsWireGrayscale } from "./dialects/registry.js";
+import { supportsWireGrayscale } from "./dialects/model-overrides.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
 import {
   DEFAULT_JPEG_QUALITY,

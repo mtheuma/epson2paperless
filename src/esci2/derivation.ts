@@ -1,12 +1,12 @@
 // src/esci2/derivation.ts
 import type { CapaTokens, InfoTokens } from "./capabilities.js";
-import type { CapabilityFields, SourceDetection } from "./dialects/registry.js";
+import type { CapabilityFields, SourceDetection } from "./dialects/model-overrides.js";
 import type { ParaProfile } from "./para-composer.js";
 
 /**
  * Capability derivation: dialect fields computed from the printer's own INFO
  * and CAPA replies. Every session takes them from here (capabilityFields),
- * and no registry entry carries them. Each field is one rule in RULES.
+ * and no model override carries them. Each field is one rule in RULES.
  *
  * An entry's null windows still say which sources the model lacks; a test
  * holds them to `sources` on every fixture and diagnostic.

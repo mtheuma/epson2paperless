@@ -8,7 +8,7 @@ import { splitHashSegments } from "./segments.js";
  * `#FB CNTd...` both drop.
  *
  * Adding a prefix here is forward-compatible. Removing one changes existing
- * fingerprints and breaks every registry entry built before the removal.
+ * fingerprints and breaks every model override built before the removal.
  */
 const VOLATILE_PREFIXES: readonly string[] = ["#ADFSCNT", "#ADFDCNT", "#ADFJAM", "#FB CNT"];
 

@@ -1,12 +1,12 @@
 import { describe, it, expect, vi } from "vitest";
 import {
-  lookupRegistryEntry,
+  resolveDialect,
   applyEntrySourceOverride,
   makeParaSpec,
   assertSourceSupported,
   withCapabilities,
 } from "./dispatch.js";
-import { REGISTRY, type RegistryEntry } from "./registry.js";
+import { OVERRIDES_BY_FINGERPRINT, type ModelOverride } from "./model-overrides.js";
 import { UnsupportedDialectError } from "../diagnostic.js";
 import { computeCapaFingerprint } from "../capa-fingerprint.js";
 import { parseCapaTokens, parseInfoTokens } from "../capabilities.js";
@@ -32,7 +32,7 @@ const ET4950 = readInit1Bodies(
 const XP7100 = readInit1Bodies("tools/pcap-extract/captures/xp-7100/jpg-flatbed.jsonl");
 const FF680W = readInit1Bodies("tools/pcap-extract/captures/ff-680w/adf-simplex-200.jsonl");
 
-/** A CAPA body no registry entry was recorded with: one extra segment. */
+/** A CAPA body no model override was recorded with: one extra segment. */
 const doctored = (capa: Buffer) => Buffer.concat([capa, Buffer.from("#ZZZZd001", "ascii")]);
 
 /**
@@ -43,7 +43,7 @@ function lookup(info: Buffer, capa: Buffer, fingerprint = computeCapaFingerprint
   const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
   const log = vi.spyOn(console, "log").mockImplementation(() => {});
   try {
-    const resolved = lookupRegistryEntry({
+    const resolved = resolveDialect({
       info: parseInfoTokens(info),
       capa: parseCapaTokens(capa),
       fingerprint,
@@ -62,17 +62,21 @@ function lookup(info: Buffer, capa: Buffer, fingerprint = computeCapaFingerprint
   }
 }
 
-describe("lookupRegistryEntry", () => {
+describe("resolveDialect", () => {
   it("resolves by the INFO product ID first", () => {
     const { resolved, warnings } = lookup(ET4950.info, ET4950.capa);
-    expect(resolved.entry).toMatchObject(unresolvedFields(REGISTRY.get(ET4950_FP)!));
+    expect(resolved.dialect).toMatchObject(
+      unresolvedFields(OVERRIDES_BY_FINGERPRINT.get(ET4950_FP)!),
+    );
     expect(resolved.matchedBy).toBe("pid");
     expect(warnings).toEqual([]);
   });
 
   it("resolves by the INFO product name when the printer reports a name", () => {
     const { resolved, warnings } = lookup(FF680W.info, FF680W.capa);
-    expect(resolved.entry).toMatchObject(unresolvedFields(REGISTRY.get(FF680W_FP)!));
+    expect(resolved.dialect).toMatchObject(
+      unresolvedFields(OVERRIDES_BY_FINGERPRINT.get(FF680W_FP)!),
+    );
     expect(resolved.matchedBy).toBe("name");
     expect(warnings).toEqual([]);
   });
@@ -85,15 +89,17 @@ describe("lookupRegistryEntry", () => {
     expect(text).toContain("PID 11D1");
     const info = Buffer.from(text.replace("PID 11D1", "PID 9999"), "latin1");
     const { resolved, warnings } = lookup(info, ET4950.capa);
-    expect(resolved.entry).toMatchObject(unresolvedFields(REGISTRY.get(ET4950_FP)!));
+    expect(resolved.dialect).toMatchObject(
+      unresolvedFields(OVERRIDES_BY_FINGERPRINT.get(ET4950_FP)!),
+    );
     expect(resolved.matchedBy).toBe("fingerprint");
     expect(warnings).toEqual([]);
   });
 
   it("matches the PID case-insensitively", () => {
     const info = Buffer.from("#PRDh010PID 11d1        ", "ascii");
-    expect(lookup(info, STUB_CAPA, UNKNOWN_FP).resolved.entry).toMatchObject(
-      unresolvedFields(REGISTRY.get(ET4950_FP)!),
+    expect(lookup(info, STUB_CAPA, UNKNOWN_FP).resolved.dialect).toMatchObject(
+      unresolvedFields(OVERRIDES_BY_FINGERPRINT.get(ET4950_FP)!),
     );
   });
 
@@ -101,9 +107,11 @@ describe("lookupRegistryEntry", () => {
     it("warns with the diagnostic and proceeds with the identified model (PID)", () => {
       const capa = doctored(ET4950.capa);
       const fingerprint = computeCapaFingerprint(capa);
-      expect(REGISTRY.has(fingerprint)).toBe(false);
+      expect(OVERRIDES_BY_FINGERPRINT.has(fingerprint)).toBe(false);
       const { resolved, warnings } = lookup(ET4950.info, capa, fingerprint);
-      expect(resolved.entry).toMatchObject(unresolvedFields(REGISTRY.get(ET4950_FP)!));
+      expect(resolved.dialect).toMatchObject(
+        unresolvedFields(OVERRIDES_BY_FINGERPRINT.get(ET4950_FP)!),
+      );
       expect(resolved.matchedBy).toBe("pid");
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain("by its PID 11D1");
@@ -113,7 +121,9 @@ describe("lookupRegistryEntry", () => {
 
     it("warns with the diagnostic and proceeds with the identified model (name)", () => {
       const { resolved, warnings } = lookup(FF680W.info, doctored(FF680W.capa));
-      expect(resolved.entry).toMatchObject(unresolvedFields(REGISTRY.get(FF680W_FP)!));
+      expect(resolved.dialect).toMatchObject(
+        unresolvedFields(OVERRIDES_BY_FINGERPRINT.get(FF680W_FP)!),
+      );
       expect(resolved.matchedBy).toBe("name");
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain("by its product name FF-680W");
@@ -122,7 +132,9 @@ describe("lookupRegistryEntry", () => {
 
     it("names the model the fingerprint belongs to, and still follows the PID", () => {
       const { resolved, warnings } = lookup(ET4950.info, XP7100.capa);
-      expect(resolved.entry).toMatchObject(unresolvedFields(REGISTRY.get(ET4950_FP)!));
+      expect(resolved.dialect).toMatchObject(
+        unresolvedFields(OVERRIDES_BY_FINGERPRINT.get(ET4950_FP)!),
+      );
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain("it is the XP-7100");
     });
@@ -132,7 +144,7 @@ describe("lookupRegistryEntry", () => {
     it("gets the generic dialect, with a warning and the diagnostic block at info", () => {
       const { resolved, warnings, infos } = lookup(UNKNOWN_PID_INFO, STUB_CAPA, UNKNOWN_FP);
       expect(resolved.matchedBy).toBe("generic");
-      expect(resolved.entry.displayName).toBe("generic ESC/I-2 dialect (PID 9999)");
+      expect(resolved.dialect.displayName).toBe("generic ESC/I-2 dialect (PID 9999)");
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain(
         "PID 9999 not recognised — generic ESC/I-2 dialect, experimental, please report",
@@ -184,8 +196,8 @@ describe("lookupRegistryEntry", () => {
   it.each(REPLAY_FIXTURES)("resolves the $model fixture $path by identity", ({ model, path }) => {
     const { info, capa } = readInit1Bodies(path);
     const { resolved, warnings } = lookup(info, capa);
-    expect(resolved.entry).toMatchObject(
-      unresolvedFields(REGISTRY.get(computeCapaFingerprint(capa))!),
+    expect(resolved.dialect).toMatchObject(
+      unresolvedFields(OVERRIDES_BY_FINGERPRINT.get(computeCapaFingerprint(capa))!),
     );
     expect(resolved.matchedBy).toBe(model === "FF-680W" || model === "DS-575W" ? "name" : "pid");
     expect(warnings).toEqual([]);
@@ -259,9 +271,9 @@ describe("an override's capability fields follow the printer's own replies", () 
   ])("ET-2950 with CAPA lists %j sends %o", (lists, segments) => {
     const { resolved } = lookup(ET2950_INFO, Buffer.from(lists + "#GMMLISTUG10", "ascii"));
     expect(resolved.matchedBy).toBe("pid");
-    expect(resolved.entry.displayName).toMatch(/ET-2950/);
-    expect(resolved.entry.optionalSegments).toEqual(segments);
-    expect(resolved.entry.paraProfile).toBe("standard");
+    expect(resolved.dialect.displayName).toMatch(/ET-2950/);
+    expect(resolved.dialect.optionalSegments).toEqual(segments);
+    expect(resolved.dialect.paraProfile).toBe("standard");
   });
 
   it("a known crop-mode scanner whose CAPA drops #ADFCRP gets the standard profile", () => {
@@ -270,11 +282,11 @@ describe("an override's capability fields follow the printer's own replies", () 
     const capa = Buffer.from(text.replace(/#ADFCRP[^#]*/, ""), "latin1");
     const { resolved, warnings } = lookup(FF680W.info, capa);
     expect(resolved.matchedBy).toBe("name");
-    expect(resolved.entry.paraProfile).toBe("standard");
+    expect(resolved.dialect.paraProfile).toBe("standard");
     // Its window (1700 x 7200 at 200 DPI, 8.5 x 36 in) keeps its physical
     // size at the standard profile's 300 DPI reference...
     const rescaled = withCapabilities(
-      REGISTRY.get(FF680W_FP)!,
+      OVERRIDES_BY_FINGERPRINT.get(FF680W_FP)!,
       parseInfoTokens(FF680W.info),
       deriveCapabilities(parseInfoTokens(FF680W.info), parseCapaTokens(capa)),
     );
@@ -282,21 +294,23 @@ describe("an override's capability fields follow the printer's own replies", () 
     // ...where it no longer fits: only crop mode scans past the 15.5-inch
     // ADF area. The changed CAPA is a fingerprint mismatch, so the session
     // gets the generic window (A4, centred) instead, with a warning.
-    expect(resolved.entry.adfExtents).toMatchObject({ x0: 34, y0: 0, w: 2481, h: 3506 });
+    expect(resolved.dialect.adfExtents).toMatchObject({ x0: 34, y0: 0, w: 2481, h: 3506 });
     expect(warnings.filter((w) => w.includes("adf scan window"))).toHaveLength(1);
-    const para = composePara(makeParaSpec(resolved.entry, "adf-simplex", "jpg", 300));
+    const para = composePara(makeParaSpec(resolved.dialect, "adf-simplex", "jpg", 300));
     const acq = parseParaSegments(para).find((s) => s.code === "ACQ");
     expect(acq?.values).toEqual([34, 0, 2481, 3506]);
   });
 
   it("keeps a crop-mode scanner's window as recorded when its profile matches", () => {
     const { resolved } = lookup(FF680W.info, FF680W.capa);
-    expect(resolved.entry.paraProfile).toBe("adf-crp");
-    expect(resolved.entry.adfExtents).toEqual(REGISTRY.get(FF680W_FP)!.adfExtents);
+    expect(resolved.dialect.paraProfile).toBe("adf-crp");
+    expect(resolved.dialect.adfExtents).toEqual(
+      OVERRIDES_BY_FINGERPRINT.get(FF680W_FP)!.adfExtents,
+    );
   });
 
   it("an override's source detection follows the sources its INFO advertises", () => {
-    expect(lookup(ET4950.info, ET4950.capa).resolved.entry.sourceDetection).toBe(
+    expect(lookup(ET4950.info, ET4950.capa).resolved.dialect.sourceDetection).toBe(
       "init-poll-status",
     );
     const text = ET4950.info.toString("latin1");
@@ -304,7 +318,7 @@ describe("an override's capability fields follow the printer's own replies", () 
     const noAdf = Buffer.from(text.replace(/#ADFAREA[^#]*/, ""), "latin1");
     const { resolved } = lookup(noAdf, ET4950.capa);
     expect(resolved.matchedBy).toBe("pid");
-    expect(resolved.entry.sourceDetection).toBe("fixed-flatbed");
+    expect(resolved.dialect.sourceDetection).toBe("fixed-flatbed");
   });
 });
 
@@ -316,8 +330,8 @@ describe("an override that inherits the generic window", () => {
     );
     const info = parseInfoTokens(DS575W.info);
     const derived = deriveCapabilities(info, parseCapaTokens(DS575W.capa));
-    const entry = REGISTRY.get(computeCapaFingerprint(DS575W.capa))!;
-    const acqAt75 = (e: RegistryEntry) => {
+    const entry = OVERRIDES_BY_FINGERPRINT.get(computeCapaFingerprint(DS575W.capa))!;
+    const acqAt75 = (e: ModelOverride) => {
       const para = composePara(
         makeParaSpec(withCapabilities(e, info, derived), "adf-simplex", "jpg", 75),
       );
@@ -337,9 +351,9 @@ describe("an override that inherits the generic window", () => {
 
   it("follows the printer's own scan area", () => {
     const { resolved } = lookup(NARROW_FB_ONLY, ET4950.capa);
-    expect(resolved.entry.displayName).toMatch(/ET-4950/);
-    expect(resolved.entry.fbExtents).toMatchObject({ x0: 0, y0: 0, w: 2400, h: 3300 });
-    const para = composePara(makeParaSpec(resolved.entry, "flatbed", "jpg", 600));
+    expect(resolved.dialect.displayName).toMatch(/ET-4950/);
+    expect(resolved.dialect.fbExtents).toMatchObject({ x0: 0, y0: 0, w: 2400, h: 3300 });
+    const para = composePara(makeParaSpec(resolved.dialect, "flatbed", "jpg", 600));
     expect(parseParaSegments(para).find((s) => s.code === "ACQ")?.values).toEqual([
       0, 0, 4800, 6600,
     ]);
@@ -347,14 +361,14 @@ describe("an override that inherits the generic window", () => {
 
   it("has no window where INFO advertises no area: warns with the diagnostic, then refuses a scan from it", () => {
     const { resolved, warnings } = lookup(NARROW_FB_ONLY, ET4950.capa);
-    expect(resolved.entry.adfExtents).toBeNull();
+    expect(resolved.dialect.adfExtents).toBeNull();
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("advertises no usable adf scan area");
     expect(warnings[0]).toContain(`CAPA fingerprint:  ${ET4950_FP}`);
-    expect(() => assertSourceSupported(resolved.entry, "adf-simplex")).toThrow(
+    expect(() => assertSourceSupported(resolved.dialect, "adf-simplex")).toThrow(
       /has no ADF scan window.*no usable ADF scan area/,
     );
-    expect(() => assertSourceSupported(resolved.entry, "flatbed")).not.toThrow();
+    expect(() => assertSourceSupported(resolved.dialect, "flatbed")).not.toThrow();
   });
 
   it("is replaced as a whole: a dialect given its own window sends that one", () => {
@@ -379,14 +393,14 @@ describe("on a CAPA fingerprint mismatch, an override's own window must fit the 
     const { resolved, warnings } = lookup(NARROW_FB, doctored(XP7100.capa));
     expect(resolved.matchedBy).toBe("pid");
     // The generic window: A4 at 300 DPI, clipped to the 2400-pixel width.
-    expect(resolved.entry.fbExtents).toMatchObject({ x0: 0, y0: 0, w: 2400, h: 3506 });
-    expect(resolved.entry.fbExtents?.generic).toBeDefined();
-    const para = composePara(makeParaSpec(resolved.entry, "flatbed", "jpg", 600));
+    expect(resolved.dialect.fbExtents).toMatchObject({ x0: 0, y0: 0, w: 2400, h: 3506 });
+    expect(resolved.dialect.fbExtents?.generic).toBeDefined();
+    const para = composePara(makeParaSpec(resolved.dialect, "flatbed", "jpg", 600));
     expect(parseParaSegments(para).find((s) => s.code === "ACQ")?.values).toEqual([
       0, 0, 4800, 7012,
     ]);
     // The ADF area is unchanged, so its window still fits and is kept.
-    expect(resolved.entry.adfExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 3300 });
+    expect(resolved.dialect.adfExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 3300 });
     const fit = warnings.filter((w) => w.includes("doesn't fit"));
     expect(fit).toHaveLength(1);
     expect(fit[0]).toContain("XP-7100");
@@ -397,8 +411,8 @@ describe("on a CAPA fingerprint mismatch, an override's own window must fit the 
   it("a source INFO advertises no area for is left with no window, warned about once", () => {
     const noFb = Buffer.from(xp7100Info.replace(/#FB AREA[^#]*/, ""), "latin1");
     const { resolved, warnings } = lookup(noFb, doctored(XP7100.capa));
-    expect(resolved.entry.fbExtents).toBeNull();
-    expect(resolved.entry.adfExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 3300 });
+    expect(resolved.dialect.fbExtents).toBeNull();
+    expect(resolved.dialect.adfExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 3300 });
     expect(warnings.filter((w) => w.includes("doesn't fit"))).toEqual([]);
     expect(warnings.filter((w) => w.includes("advertises no usable flatbed"))).toHaveLength(1);
   });
@@ -406,14 +420,14 @@ describe("on a CAPA fingerprint mismatch, an override's own window must fit the 
   it("a window that still fits is kept, with no window warning", () => {
     const { resolved, warnings } = lookup(XP7100.info, doctored(XP7100.capa));
     expect(resolved.matchedBy).toBe("pid");
-    expect(resolved.entry.fbExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 3300 });
-    expect(resolved.entry.adfExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 3300 });
+    expect(resolved.dialect.fbExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 3300 });
+    expect(resolved.dialect.adfExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 3300 });
     expect(warnings.filter((w) => w.includes("doesn't fit"))).toEqual([]);
   });
 
   it("is not checked when the fingerprint matches: the recorded window is sent", () => {
     const { resolved, warnings } = lookup(NARROW_FB, XP7100.capa);
-    expect(resolved.entry.fbExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 3300 });
+    expect(resolved.dialect.fbExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 3300 });
     expect(warnings).toEqual([]);
   });
 });
@@ -443,9 +457,9 @@ describe("assertSourceSupported", () => {
     const capa = Buffer.from(text.replace("#ADFDPLX", ""), "latin1");
     const { resolved } = lookup(ET4950.info, capa);
     expect(resolved.matchedBy).toBe("pid");
-    expect(resolved.entry.adfDuplex).toBe(false);
-    expect(() => assertSourceSupported(resolved.entry, "adf-duplex")).toThrow(/no duplex ADF/);
-    expect(() => assertSourceSupported(resolved.entry, "adf-simplex")).not.toThrow();
+    expect(resolved.dialect.adfDuplex).toBe(false);
+    expect(() => assertSourceSupported(resolved.dialect, "adf-duplex")).toThrow(/no duplex ADF/);
+    expect(() => assertSourceSupported(resolved.dialect, "adf-simplex")).not.toThrow();
   });
 
   it("allows adf-duplex on duplex-capable hardware", () => {

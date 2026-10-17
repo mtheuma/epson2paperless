@@ -1,9 +1,9 @@
-// src/esci2/dialects/registry.ts
+// src/esci2/dialects/model-overrides.ts
 import type { GammaClassName, CmxClassName, Extents, ParaProfile } from "../para-composer.js";
 import type { ToneCurveName } from "../../postprocess/tone-curves.js";
 import type { SourceGeometry } from "../scan-window.js";
 
-export interface RegistryEntry {
+export interface ModelOverride {
   /**
    * Model identity, matched first: the product IDs this entry's models report
    * in their INFO `#PRD` reply (`PID xxxx`, upper-case hex).
@@ -27,8 +27,8 @@ export interface RegistryEntry {
    * from it on some source at some advertised DPI (scan-window.test.ts holds
    * the comparison).
    */
-  fbExtents: EntryWindow;
-  adfExtents: EntryWindow;
+  fbExtents: OverrideWindow;
+  adfExtents: OverrideWindow;
   /**
    * The DPI fbExtents and adfExtents are given at: the reference DPI of the
    * PARA profile they were captured under (baseDpiFor). Omitted means 300,
@@ -78,7 +78,7 @@ export interface RegistryEntry {
 
 /**
  * The dialect fields a session always takes from the printer's own INFO and
- * CAPA replies (capabilityFields), for a registry entry and the generic
+ * CAPA replies (capabilityFields), for a model override and the generic
  * dialect alike. No entry can override them (ADR 0001).
  */
 export interface CapabilityFields {
@@ -117,11 +117,11 @@ export interface CapabilityFields {
 export type SourceDetection = "init-poll-status" | "fixed-flatbed" | "fixed-adf" | null;
 
 /**
- * A source's scan window on a registry entry. "generic" inherits the generic
+ * A source's scan window on a model override. "generic" inherits the generic
  * window, computed from the printer's own scan area at every wire DPI
  * (genericWindow).
  */
-export type EntryWindow = Extents | "generic" | null;
+export type OverrideWindow = Extents | "generic" | null;
 
 /**
  * A session's scan window for one source, at the PARA profile's reference
@@ -134,8 +134,8 @@ export interface DialectWindow extends Extents {
   generic?: SourceGeometry;
 }
 
-/** What a session runs: its registry entry (or the generic one) plus the capability fields. */
-export interface Dialect extends Omit<RegistryEntry, "fbExtents" | "adfExtents">, CapabilityFields {
+/** What a session runs: its model override (or the generic one) plus the capability fields. */
+export interface Dialect extends Omit<ModelOverride, "fbExtents" | "adfExtents">, CapabilityFields {
   /** null when the source has no window: the hardware lacks it, or its scan area isn't usable. */
   fbExtents: DialectWindow | null;
   adfExtents: DialectWindow | null;
@@ -155,7 +155,7 @@ export function supportsWireGrayscale(entry: Dialect | undefined): boolean {
   return entry?.paraProfile === "adf-crp" && entry.monoGammaClass !== undefined;
 }
 
-export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
+export const MODEL_OVERRIDES: readonly ModelOverride[] = [
   // The ET-3950 shares this CAPA fingerprint; its PID is not yet known, so it
   // resolves by fingerprint.
   {
@@ -524,18 +524,19 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
 ];
 
 /**
- * REGISTRY_ENTRIES indexed by CAPA fingerprint, for callers that already hold
- * one (mostly tests). The session lookup, `lookupRegistryEntry`, reads
- * REGISTRY_ENTRIES alone, so that array is the one source a test doctors.
+ * MODEL_OVERRIDES indexed by CAPA fingerprint, for callers that already hold
+ * one (mostly tests). The session lookup, `resolveDialect`, reads
+ * MODEL_OVERRIDES alone, so that array is the one source a test doctors.
  */
-export const REGISTRY: ReadonlyMap<string, RegistryEntry> = indexByFingerprint(REGISTRY_ENTRIES);
+export const OVERRIDES_BY_FINGERPRINT: ReadonlyMap<string, ModelOverride> =
+  indexByFingerprint(MODEL_OVERRIDES);
 
 /**
  * Builds the fingerprint index, refusing a fingerprint listed by two entries
  * rather than letting the later one silently win.
  */
-function indexByFingerprint(entries: readonly RegistryEntry[]): Map<string, RegistryEntry> {
-  const index = new Map<string, RegistryEntry>();
+function indexByFingerprint(entries: readonly ModelOverride[]): Map<string, ModelOverride> {
+  const index = new Map<string, ModelOverride>();
   for (const entry of entries) {
     for (const fp of entry.capaFingerprints) {
       const other = index.get(fp);

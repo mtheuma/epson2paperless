@@ -1,11 +1,11 @@
 // src/esci2/scan-window.ts
 import { parseArea, type InfoTokens } from "./capabilities.js";
 import { baseDpiFor, scaleAcqExtents, type Extents, type ParaProfile } from "./para-composer.js";
-import type { Dialect, DialectWindow } from "./dialects/registry.js";
+import type { Dialect, DialectWindow } from "./dialects/model-overrides.js";
 
 /**
  * Scan windows from the printer's INFO reply, which gives each source's
- * scan area, in 1/100 inch, and its alignment. A registry entry's own window
+ * scan area, in 1/100 inch, and its alignment. A model override's own window
  * is a paper size placed in that area, so its width and height can't be
  * derived; what can be checked is that it fits (fitsScanArea, on a CAPA
  * fingerprint mismatch). The generic window is what a printer with no entry,
@@ -118,7 +118,7 @@ const GENERIC_A4_AT_300 = { w: 2481, h: 3506 };
  *   of the paper).
  *
  * The reference window is scaled to `dpi` the way composePara scales a
- * registry window (scaleAcqExtents), then clipped to the scan area at `dpi`.
+ * override window (scaleAcqExtents), then clipped to the scan area at `dpi`.
  * Clipping last is what guarantees no overrun: adf-crp's rounded scaling of
  * a full-area window lands one pixel past the edge at 75 DPI.
  */

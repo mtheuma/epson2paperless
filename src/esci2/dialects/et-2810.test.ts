@@ -6,7 +6,7 @@ import { recordedDialect } from "../test-support/dialects.js";
 const ET2810_FP = "708704b6abb184cede037fcd9893ea81f69651fde28780cde0162dfa33a33f6e";
 const entry = recordedDialect(ET2810_FP);
 
-// The registry entry's static fields are asserted in registry.test.ts alongside
+// The model override's static fields are asserted in model-overrides.test.ts alongside
 // the other dialects. This file covers only what's specific to the ET-2810's
 // composed PARA. The ET-2810 is an entry-level A4 EcoTank (flatbed-only,
 // ESC/I-2 over plain TCP). Its CAPA is ET-4800-shaped — same FB AREA

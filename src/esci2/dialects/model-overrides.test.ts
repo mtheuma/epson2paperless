@@ -1,21 +1,23 @@
-// src/esci2/dialects/registry.test.ts
+// src/esci2/dialects/model-overrides.test.ts
 import { describe, it, expect } from "vitest";
 import {
-  REGISTRY,
-  REGISTRY_ENTRIES,
+  OVERRIDES_BY_FINGERPRINT,
+  MODEL_OVERRIDES,
   supportsWireGrayscale,
-  type RegistryEntry,
-} from "./registry.js";
+  type ModelOverride,
+} from "./model-overrides.js";
 import { recordedDialect } from "../test-support/dialects.js";
 import { STANDARD_BASE_DPI, baseDpiFor } from "../para-composer.js";
 
-describe("REGISTRY", () => {
+describe("OVERRIDES_BY_FINGERPRINT", () => {
   it("contains exactly twelve known fingerprints", () => {
-    expect(REGISTRY.size).toBe(12);
+    expect(OVERRIDES_BY_FINGERPRINT.size).toBe(12);
   });
 
   it("includes ET-4950 family entry", () => {
-    const e = REGISTRY.get("2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2");
+    const e = OVERRIDES_BY_FINGERPRINT.get(
+      "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2",
+    );
     expect(e).toBeDefined();
     expect(e!.initPollIterations).toBe(3);
     expect(e!.gmm).toBe("UG10");
@@ -23,7 +25,9 @@ describe("REGISTRY", () => {
   });
 
   it("includes ET-2750 entry", () => {
-    const e = REGISTRY.get("de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7");
+    const e = OVERRIDES_BY_FINGERPRINT.get(
+      "de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7",
+    );
     expect(e).toBeDefined();
     expect(e!.initPollIterations).toBe(2);
     expect(e!.gmm).toBe("UG18");
@@ -32,7 +36,9 @@ describe("REGISTRY", () => {
   });
 
   it("includes XP-7100 entry", () => {
-    const e = REGISTRY.get("56d26c61896ca417807ac68d37775036fa1e702ee44c0beaa27d8a6ea9fa457e");
+    const e = OVERRIDES_BY_FINGERPRINT.get(
+      "56d26c61896ca417807ac68d37775036fa1e702ee44c0beaa27d8a6ea9fa457e",
+    );
     expect(e).toBeDefined();
     expect(e!.initPollIterations).toBe(3);
     expect(e!.gmm).toBe("UG18");
@@ -43,7 +49,9 @@ describe("REGISTRY", () => {
   });
 
   it("includes ET-2950 entry that reuses ET-4950 LUT", () => {
-    const e = REGISTRY.get("b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb");
+    const e = OVERRIDES_BY_FINGERPRINT.get(
+      "b1bf50879666d04c1975d607566790bbdf0bdfa5e2e1e7b27b629e8fa540e8cb",
+    );
     expect(e).toBeDefined();
     expect(e!.gammaClass).toEqual({ jpg: "et4950-stock", pdf: "et4950-stock" });
     expect(e!.cmxClass).toEqual({ jpg: null, pdf: null });
@@ -51,7 +59,9 @@ describe("REGISTRY", () => {
   });
 
   it("includes ET-4800 entry (flatbed + ADF simplex, plain TCP)", () => {
-    const e = REGISTRY.get("7870a725ab969136d5eb04387bf01d3cc3168aabb3d11cfaca7d59a4169971c2");
+    const e = OVERRIDES_BY_FINGERPRINT.get(
+      "7870a725ab969136d5eb04387bf01d3cc3168aabb3d11cfaca7d59a4169971c2",
+    );
     expect(e).toBeDefined();
     expect(e!.initPollIterations).toBe(3);
     expect(e!.gmm).toBe("UG18");
@@ -62,7 +72,9 @@ describe("REGISTRY", () => {
   });
 
   it("includes ET-15000 entry (flatbed + ADF simplex, plain TCP)", () => {
-    const e = REGISTRY.get("d1d7293e92fa726e006429beacca1255e474de0d66b3559f87176d4e4b3d0e55");
+    const e = OVERRIDES_BY_FINGERPRINT.get(
+      "d1d7293e92fa726e006429beacca1255e474de0d66b3559f87176d4e4b3d0e55",
+    );
     expect(e).toBeDefined();
     expect(e!.initPollIterations).toBe(3);
     expect(e!.gmm).toBe("UG18");
@@ -73,7 +85,9 @@ describe("REGISTRY", () => {
   });
 
   it("includes ET-8500 entry (flatbed-only, TLS; TLS-sibling gamma + ET-4800 CMX)", () => {
-    const e = REGISTRY.get("05b5c7eaad217e9538883f3fffe9796464689a5d9006c5b3e3c3fd2c24e21467");
+    const e = OVERRIDES_BY_FINGERPRINT.get(
+      "05b5c7eaad217e9538883f3fffe9796464689a5d9006c5b3e3c3fd2c24e21467",
+    );
     expect(e).toBeDefined();
     expect(e!.initPollIterations).toBe(3);
     expect(e!.gmm).toBe("UG18");
@@ -84,7 +98,9 @@ describe("REGISTRY", () => {
   });
 
   it("includes ET-7700 entry (flatbed-only; ET-8500-shaped, speculative from #145)", () => {
-    const e = REGISTRY.get("72319314b621fea0aab6cc16f4fd891534cec08f33ce80116a849f6f6e1e58d4");
+    const e = OVERRIDES_BY_FINGERPRINT.get(
+      "72319314b621fea0aab6cc16f4fd891534cec08f33ce80116a849f6f6e1e58d4",
+    );
     expect(e).toBeDefined();
     expect(e!.initPollIterations).toBe(3);
     expect(e!.gmm).toBe("UG18");
@@ -95,7 +111,9 @@ describe("REGISTRY", () => {
   });
 
   it("includes WF-3835 entry (flatbed + ADF simplex, plain TCP; speculative from #174)", () => {
-    const e = REGISTRY.get("860a899be9dc4fc27b68f8aed21a49ccfe87733a3974813f0c2ade6810e89dc7");
+    const e = OVERRIDES_BY_FINGERPRINT.get(
+      "860a899be9dc4fc27b68f8aed21a49ccfe87733a3974813f0c2ade6810e89dc7",
+    );
     expect(e).toBeDefined();
     expect(e!.initPollIterations).toBe(3);
     expect(e!.gmm).toBe("UG18");
@@ -106,7 +124,9 @@ describe("REGISTRY", () => {
   });
 
   it("includes FF-680W entry (ADF-only, plain TCP)", () => {
-    const e = REGISTRY.get("5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd");
+    const e = OVERRIDES_BY_FINGERPRINT.get(
+      "5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd",
+    );
     expect(e).toBeDefined();
     expect(e!.fbExtents).toBeNull(); // ADF-only hardware — no fabricated flatbed extents
     expect(e!.initPollIterations).toBe(8);
@@ -118,7 +138,9 @@ describe("REGISTRY", () => {
   });
 
   it("includes DS-575W entry (ADF-only, greyscale-capable, plain TCP)", () => {
-    const e = REGISTRY.get("90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b074");
+    const e = OVERRIDES_BY_FINGERPRINT.get(
+      "90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b074",
+    );
     expect(e).toBeDefined();
     expect(e!.fbExtents).toBeNull(); // ADF-only hardware — no fabricated flatbed extents
     expect(e!.initPollIterations).toBe(12);
@@ -154,14 +176,14 @@ describe("REGISTRY", () => {
 
   it("every recorded model derives the profile its windows are pinned for", () => {
     // So no recorded printer's windows are rescaled (withCapabilities).
-    for (const [fp, e] of REGISTRY) {
+    for (const [fp, e] of OVERRIDES_BY_FINGERPRINT) {
       const profile = recordedDialect(fp).paraProfile;
       expect(baseDpiFor(profile), e.displayName).toBe(e.windowDpi ?? STANDARD_BASE_DPI);
     }
   });
 
   it("no entry carries a capability-derived field: sessions take those from the printer", () => {
-    for (const e of REGISTRY_ENTRIES) {
+    for (const e of MODEL_OVERRIDES) {
       for (const field of [
         "adfDuplex",
         "optionalSegments",
@@ -178,7 +200,7 @@ describe("REGISTRY", () => {
     // A checked capture or a hardware report, by model: whether back pages
     // were confirmed turned 180°.
     const confirmed = Object.fromEntries(
-      REGISTRY_ENTRIES.flatMap((e) =>
+      MODEL_OVERRIDES.flatMap((e) =>
         e.duplexOrientationEvidence
           ? [[e.displayName, e.duplexOrientationEvidence.backRotated]]
           : [],
@@ -193,7 +215,7 @@ describe("REGISTRY", () => {
   });
 
   it("holds every piece of orientation evidence to a duplex model whose replies derive it", () => {
-    for (const [fp, e] of REGISTRY) {
+    for (const [fp, e] of OVERRIDES_BY_FINGERPRINT) {
       if (e.duplexOrientationEvidence === undefined) continue;
       const dialect = recordedDialect(fp);
       // Evidence is about duplex back pages: a model without duplex has none to give.
@@ -205,7 +227,7 @@ describe("REGISTRY", () => {
   });
 
   it("never claims adfDuplex without ADF extents", () => {
-    for (const [fp, e] of REGISTRY) {
+    for (const [fp, e] of OVERRIDES_BY_FINGERPRINT) {
       if (recordedDialect(fp).adfDuplex) {
         expect(e.adfExtents, `entry ${fp} (${e.displayName})`).not.toBeNull();
       }
@@ -213,7 +235,7 @@ describe("REGISTRY", () => {
   });
 
   it("declares verifiedWireDpis as an array on every entry", () => {
-    for (const [fp, e] of REGISTRY) {
+    for (const [fp, e] of OVERRIDES_BY_FINGERPRINT) {
       expect(Array.isArray(e.verifiedWireDpis), `entry ${fp} (${e.displayName})`).toBe(true);
     }
   });
@@ -251,14 +273,14 @@ describe("REGISTRY", () => {
       "860a899be9dc4fc27b68f8aed21a49ccfe87733a3974813f0c2ade6810e89dc7": [],
     };
     for (const [fp, want] of Object.entries(expected)) {
-      expect(REGISTRY.get(fp)!.verifiedWireDpis, `fingerprint ${fp}`).toEqual(want);
+      expect(OVERRIDES_BY_FINGERPRINT.get(fp)!.verifiedWireDpis, `fingerprint ${fp}`).toEqual(want);
     }
   });
 });
 
-describe("REGISTRY_ENTRIES model identity", () => {
+describe("MODEL_OVERRIDES model identity", () => {
   it("pins each entry's PIDs and product names", () => {
-    const identities = REGISTRY_ENTRIES.map((e) => [e.displayName, e.pids, e.names]);
+    const identities = MODEL_OVERRIDES.map((e) => [e.displayName, e.pids, e.names]);
     expect(identities).toEqual([
       // ET-3950: PID unknown, resolves by fingerprint.
       ["ET-4950 / ET-3950 / ET-4956 (ESC/I-2 over TLS)", ["11D1"], []],
@@ -278,19 +300,19 @@ describe("REGISTRY_ENTRIES model identity", () => {
   });
 
   it("gives every entry at least one CAPA fingerprint", () => {
-    for (const e of REGISTRY_ENTRIES) {
+    for (const e of MODEL_OVERRIDES) {
       expect(e.capaFingerprints.length, e.displayName).toBeGreaterThan(0);
     }
   });
 
   // A key in two entries would make the lookup order decide the dialect.
   it.each([
-    ["PID", (e: RegistryEntry) => e.pids],
-    ["product name", (e: RegistryEntry) => e.names],
-    ["CAPA fingerprint", (e: RegistryEntry) => e.capaFingerprints],
+    ["PID", (e: ModelOverride) => e.pids],
+    ["product name", (e: ModelOverride) => e.names],
+    ["CAPA fingerprint", (e: ModelOverride) => e.capaFingerprints],
   ] as const)("lists no %s in two entries", (_kind, keysOf) => {
     const owners = new Map<string, string>();
-    for (const e of REGISTRY_ENTRIES) {
+    for (const e of MODEL_OVERRIDES) {
       for (const key of keysOf(e)) {
         expect(owners.get(key), `${key} in ${e.displayName}`).toBeUndefined();
         owners.set(key, e.displayName);
@@ -301,10 +323,10 @@ describe("REGISTRY_ENTRIES model identity", () => {
   // The lookup compares keys exactly, against the canonical PID and the
   // upper-cased reported name, so the stored spelling must be canonical too.
   it("stores PIDs as four upper-case hex digits and names in upper case", () => {
-    for (const pid of REGISTRY_ENTRIES.flatMap((e) => e.pids)) {
+    for (const pid of MODEL_OVERRIDES.flatMap((e) => e.pids)) {
       expect(pid).toMatch(/^[0-9A-F]{4}$/);
     }
-    for (const name of REGISTRY_ENTRIES.flatMap((e) => e.names)) {
+    for (const name of MODEL_OVERRIDES.flatMap((e) => e.names)) {
       expect(name).toBe(name.toUpperCase());
     }
   });
