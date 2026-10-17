@@ -178,7 +178,7 @@ INIT_POLL × dialect.initPollIterations (3 for most dialects; 2 for ET-2750, 8 f
     │
 MODE_SWITCH      ← send FS X (mode switch to ESC/I-2), await 1-byte ACK
     │
-POST_MODE_STAT   ← send STAT, await 64-byte reply
+POST_MODE_STAT   ← send STAT, await 64-byte reply; its errors (and the drain's) are judged
 POST_MODE_STAT_DRAIN  ← drain N bytes if declared (flatbed only)
     │
 PARA             ← send PARA phase-1 header + phase-2 payload, await #parOK
@@ -221,9 +221,9 @@ The IMG loop's termination condition differs by source:
 
 **Source detection.** The push-scan SOAP body does not indicate whether the printer will scan from the ADF or the flatbed glass — the panel does not expose a source selector. Instead, the printer detects its own source (via the ADF paper sensor) and signals the result in the first `@STAT` reply during INIT_POLL cycle 1. A printer whose INFO reply advertises both a flatbed and an ADF scan area (`sourceDetection: "init-poll-status"`, derived for every session; on the recorded models: ET-4950 family, XP-7100, ET-4800, ET-15000, WF-3835) reads that reply's content: an ADF-mode printer queues no status (a zero-length `STATx0000000` reply), and a flatbed-mode printer queues `#ERRADF PE  ` ("ADF paper empty", a 12-byte `STATx000000C` reply). `#ERRADF PE` sets `ctx.source` to flatbed, and anything else (no error, or any other ADF code, which Epson's driver reads as a document in the feeder) to ADF; `ctx.source` governs the PARA blob selection, the IMG loop terminator, and the POSTSCAN branching.
 
-**Status errors.** The same reply's errors are judged the way Epson's driver judges them, by unit: each `#ERR` token is a 4-character unit (`ADF`, `FB`, `TPU`) and a code, and an error on the unit being scanned ends the session with a message naming it (e.g. `the printer reported an error before scanning (ADF PJ)`), while an error on any other unit is logged as a warning and the scan carries on. There is no always-fatal code. On a printer with both sources, a flatbed scan (`ADF PE`) stops on an `FB` error and warns on the rest, other ADF codes included; an ADF scan stops on its ADF code and warns on `FB`, `TPU` and unknown units. A flatbed-only printer stops on `FB` errors; an ADF-only one stops on ADF codes other than `PE`, which it tolerates because the session judges the first status reply while Epson judges the last one before PARA (the DS-575W duplex capture's first status says `ADF PE`, yet the scan goes ahead). Reply-header `#err` / `#nrd` tokens are not part of this rule. Only the status reply is judged: the `#ERR` tokens some printers (FF-680W, DS-575W) put in their `CAPA` and `RESA` replies list error codes, not an error the printer is reporting now.
+**Status errors.** Errors are judged where Epson's driver judges them: on the last `@STAT` reply before PARA, the one POST_MODE_STAT reads after the mode switch (with its drained body), not on the first. Each `#ERR` token is a 4-character unit (`ADF`, `FB`, `TPU`) and a code, and like Epson's parser the session keeps one code per unit, the last the reply gives (`#ERRADF PE  #ERRADF PJ  ` is a jammed ADF). An error on the unit being scanned ends the session before PARA is sent, with a message naming it (e.g. `POST_MODE_STAT_DRAIN: the printer reported an error before scanning (ADF PJ)`); an error on any other unit is logged as a warning, once per process per model and set of codes (repeats at `debug`), and the scan carries on. `ADF PE` on a flatbed scan is a state, not a fault, and is not reported. There is no always-fatal code, and no exemption: an ADF scan, on an ADF-only printer too, stops on `ADF PE` when the feeder is still empty just before PARA, as Epson's does. The first status reply only decides the source; the DS-575W duplex capture's first status says `ADF PE`, which clears by the status before PARA. Every replay fixture's status before PARA is clear for its source (empty on ADF sessions, `ADF PE` alone on flatbed ones). Reply-header `#err` / `#nrd` tokens are not part of this rule. Only the status reply is judged: the `#ERR` tokens some printers (FF-680W, DS-575W) put in their `CAPA` and `RESA` replies list error codes, not an error the printer is reporting now.
 
-A printer that advertises one source is fixed to it (`fixed-flatbed` / `fixed-adf`): its first reply is judged for errors only, and never changes the source. The ET-2750 depends on that: its STAT reply declares `length=0` in the 12-byte ESC/I-2 header but packs a 52-byte filler (`#---#---#---…`) inline in the same 64-byte IS frame. The filler carries no error, so reading the source from it would say ADF on flatbed-only hardware. As a flatbed-only printer it is `fixed-flatbed`, and the graph pins `ctx.source = "flatbed"` at INIT1. Every other flatbed-only model (ET-2950, ET-2810 / XP-3200, ET-8500, ET-7700) takes the same path.
+A printer that advertises one source is fixed to it (`fixed-flatbed` / `fixed-adf`): its first reply is never read, and never changes the source. The ET-2750 depends on that: its STAT reply declares `length=0` in the 12-byte ESC/I-2 header but packs a 52-byte filler (`#---#---#---…`) inline in the same 64-byte IS frame. The filler carries no error, so reading the source from it would say ADF on flatbed-only hardware. As a flatbed-only printer it is `fixed-flatbed`, and the graph pins `ctx.source = "flatbed"` at INIT1. Every other flatbed-only model (ET-2950, ET-2810 / XP-3200, ET-8500, ET-7700) takes the same path.
 
 ### Transport adapters
 
@@ -242,9 +242,9 @@ The WF-3620 ESC/I path uses no transport-shape adapters. It still emits LOCK and
 
 ### Source: ADF vs flatbed
 
-For a printer with both sources (**`sourceDetection: "init-poll-status"`**, derived from INFO: ET-4950 family, XP-7100, ET-4800, ET-15000, WF-3835), the scanner detects the physical source from the content of the first `@STAT` reply in INIT_POLL cycle 1: `#ERRADF PE` → flatbed; anything else → ADF (see **Status errors** above for which errors stop the scan). Every recorded flatbed session's reply is the 12-byte `#ERRADF PE  ` and every ADF session's is empty, so on the fixtures this agrees with the reply's declared length. When the declared length is non-zero, those bytes are drained with a pure-read before the next command is sent — the printer queues them as pending output, and failing to drain them desynchronises the IS framing for all subsequent packets. The tokens are judged from the reply and its drained body together.
+For a printer with both sources (**`sourceDetection: "init-poll-status"`**, derived from INFO: ET-4950 family, XP-7100, ET-4800, ET-15000, WF-3835), the scanner detects the physical source from the content of the first `@STAT` reply in INIT_POLL cycle 1: `#ERRADF PE` → flatbed; anything else → ADF (see **Status errors** above for which errors stop the scan). Every recorded flatbed session's reply is the 12-byte `#ERRADF PE  ` and every ADF session's is empty, so on the fixtures this agrees with the reply's declared length. When the declared length is non-zero, those bytes are drained with a pure-read before the next command is sent — the printer queues them as pending output, and failing to drain them desynchronises the IS framing for all subsequent packets. The tokens are read from the reply and its drained body together, here and on the status before PARA.
 
-A printer with one source (**`fixed-flatbed`** / **`fixed-adf`**) reads the reply for errors only, and `ctx.source` is pinned at INIT1. The ET-2750 relies on that: its STAT reply declares length `0` with a 52-byte filler packed inline in the same 64-byte IS frame, and that filler carries no error, so reading the source from it would misclassify it as ADF.
+A printer with one source (**`fixed-flatbed`** / **`fixed-adf`**) never reads the reply, and `ctx.source` is pinned at INIT1. The ET-2750 relies on that: its STAT reply declares length `0` with a 52-byte filler packed inline in the same 64-byte IS frame, and that filler carries no error, so reading the source from it would misclassify it as ADF.
 
 ADF precedence (the printers with both sources, above): when the ADF feeder has paper loaded, the printer picks ADF regardless of whether a document is also present on the glass. The INIT_POLL STAT reply carries no error in this case. Users who want flatbed must clear the ADF first.
 
@@ -437,9 +437,9 @@ diagnostic block at `info`. The generic dialect is:
 - a poll count of 3 with a flatbed, 12 ADF-only (timing parity with the
   captured driver only);
 - source detection from the first status reply's content, as for every
-  printer: `#ERRADF PE` → flatbed, anything else → ADF. An error on the unit
-  being scanned ends the session, naming it; one on another unit warns.
-  Single-source printers are fixed to their source.
+  printer: `#ERRADF PE` → flatbed, anything else → ADF. On the status before
+  PARA, an error on the unit being scanned ends the session, naming it; one
+  on another unit warns. Single-source printers are fixed to their source.
 
 It has no verified DPIs and no greyscale on the wire (pages convert
 host-side). When the replies leave out something it can't do without (no
