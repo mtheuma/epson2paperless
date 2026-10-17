@@ -6,7 +6,11 @@
 import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
 import { MODEL_OVERRIDES, type Evidence, type ModelOverride } from "./model-overrides.js";
-import { colourSettingsHash, provenanceProblems } from "../test-support/provenance.js";
+import {
+  colourSettingsHash,
+  provenanceProblems,
+  verifiedReadmeModels,
+} from "../test-support/provenance.js";
 
 const README = readFileSync("README.md", "utf8");
 
@@ -57,6 +61,29 @@ describe("colourSettingsHash", () => {
       cmxClass: { jpg: xp7100.cmxClass.pdf, pdf: xp7100.cmxClass.jpg },
     };
     expect(colourSettingsHash(swapped)).not.toBe(colourSettingsHash(xp7100));
+  });
+});
+
+describe("verifiedReadmeModels", () => {
+  // Guards the provenance check against passing vacuously: if the README
+  // table's format drifts so no row parses, every ✅ model goes unchecked.
+  it("reads every ✅ row of the real README, splitting shared rows", () => {
+    const models = verifiedReadmeModels(README);
+    expect(models).toEqual(
+      expect.arrayContaining(["ET-4950", "ET-4956", "ET-2750", "XP-7100", "WF-3620", "XP-620"]),
+    );
+    expect(models).not.toContain("DS-575W"); // 🟡 Experimental
+    // A looser read of the table, any row whose status cell starts with ✅,
+    // finds the same rows: a ✅ row whose format drifted fails here.
+    const rows = README.split(/\r?\n/).filter((line) => /^\|[^|]*\|\s*✅/.test(line));
+    const loose = rows.flatMap((row) =>
+      row
+        .split("|")[1]
+        .replace(/\*/g, "")
+        .split("/")
+        .map((m) => m.trim()),
+    );
+    expect(models).toEqual(loose);
   });
 });
 
