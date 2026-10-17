@@ -4,7 +4,11 @@ import { GAMMA_CLASSES, type GammaClassName } from "./gamma-classes.js";
 import { CMX_CLASSES, type CmxClassName } from "./cmx-classes.js";
 import { composePara } from "../para-composer.js";
 import { makeParaSpec } from "../dialects/dispatch.js";
-import { REGISTRY, type Dialect, type RegistryEntry } from "../dialects/registry.js";
+import {
+  OVERRIDES_BY_FINGERPRINT,
+  type Dialect,
+  type ModelOverride,
+} from "../dialects/model-overrides.js";
 import { recordedDialect } from "../test-support/dialects.js";
 
 // Models that send a mixed pair today, until their reporter-gated colour fix
@@ -16,7 +20,7 @@ const KNOWN_MIXED_PAIRS: Readonly<Record<string, string>> = {
     "Inherits the ET-8500's pair, pinned by own-capture fixtures (#145); fix awaits a compatibility-page scan.",
 };
 
-const knownException = (entry: RegistryEntry): string | undefined =>
+const knownException = (entry: Pick<ModelOverride, "displayName">): string | undefined =>
   Object.keys(KNOWN_MIXED_PAIRS).find((model) => entry.displayName.includes(model));
 
 // The colour pair a composed PARA body carries, read back from its #GMM, #GMT
@@ -52,7 +56,9 @@ function sentPairs(entry: Dialect): { label: string; pair: ColourPair }[] {
   );
 }
 
-const entries = [...REGISTRY.values()].map((e) => recordedDialect(e.capaFingerprints[0]));
+const entries = [...OVERRIDES_BY_FINGERPRINT.values()].map((e) =>
+  recordedDialect(e.capaFingerprints[0]),
+);
 
 describe("checkColourPair", () => {
   it("accepts a neutral pair", () => {
@@ -102,7 +108,7 @@ describe("checkColourPair", () => {
   });
 });
 
-describe("registry colour pairs", () => {
+describe("model override colour pairs", () => {
   it.each(entries.filter((e) => knownException(e) === undefined).map((e) => [e.displayName, e]))(
     "%s sends only valid pairs",
     (_name, entry) => {
@@ -116,7 +122,7 @@ describe("registry colour pairs", () => {
     "known exception %s still sends a mixed pair",
     (model) => {
       const entry = entries.find((e) => knownException(e) === model);
-      expect(entry, `${model} is not in the registry`).toBeDefined();
+      expect(entry, `${model} has no model override`).toBeDefined();
       const invalid = sentPairs(entry!)
         .map(({ label, pair }) => ({ label, verdict: checkColourPair(pair) }))
         .filter(({ verdict }) => !verdict.valid);

@@ -1,54 +1,36 @@
 // src/esci2/derivation.ts
-import { isDeepStrictEqual } from "node:util";
 import type { CapaTokens, InfoTokens } from "./capabilities.js";
-import type { CapabilityFields, RegistryEntry } from "./dialects/registry.js";
+import type { CapabilityFields, SourceDetection } from "./dialects/model-overrides.js";
 import type { ParaProfile } from "./para-composer.js";
 
 /**
  * Capability derivation: dialect fields computed from the printer's own INFO
- * and CAPA replies.
+ * and CAPA replies. Every session takes them from here (capabilityFields),
+ * and no model override carries them. Each field is one rule in RULES.
  *
- * Some of them are live: every session takes them from here
- * (capabilityFields), and no registry entry carries them. The rest are still
- * shadowed: compared with what the registry entry says and reported, without
- * changing what is sent. Once a shadowed field agrees with every fixture
- * model, a later change makes it live and drops it from the registry.
- *
- * Each field is one rule in RULES. A shadowed field also has a row in
- * SHADOWED saying where the entry keeps the value it is compared with.
+ * An entry's null windows still say which sources the model lacks; a test
+ * holds them to `sources` on every fixture and diagnostic.
  */
 export interface DerivedCapabilities {
-  /** PARA carries the optional #QIT segment (live). */
+  /** PARA carries the optional #QIT segment. */
   qit: boolean;
-  /** PARA carries the optional #CCT segment (live). */
+  /** PARA carries the optional #CCT segment. */
   cct: boolean;
-  /** The ADF can scan both sides (live). */
+  /** The ADF can scan both sides. */
   adfDuplex: boolean;
-  /** Which sources the printer has: each one advertises a scan area in INFO. */
-  sources: { flatbed: boolean; adf: boolean };
   /**
-   * How the session learns its source. A printer with both sources reads it
-   * from the init poll's status reply; a single-source printer is fixed to
-   * it. Null when INFO advertises no scan area at all.
+   * Which sources the printer has: each one advertises a scan area in INFO.
+   * Source detection follows from it; the generic dialect also takes its
+   * windows from it.
    */
-  sourceDetection: "init-poll-status" | "fixed-flatbed" | "fixed-adf" | null;
-  /** PARA layout: "adf-crp" for an ADF-only printer whose ADF can crop (live). */
+  sources: { flatbed: boolean; adf: boolean };
+  /** How the session learns its source. */
+  sourceDetection: SourceDetection;
+  /** PARA layout: "adf-crp" for an ADF-only printer whose ADF can crop. */
   paraProfile: ParaProfile;
-  /** Duplex back pages arrive turned 180° (a two-pass ADF re-feeds the sheet). */
+  /** Duplex back pages arrive turned 180°: a two-pass ADF turns the sheet over. */
   duplexBackRotated: boolean;
 }
-
-/** The fields still compared with the registry entry rather than used directly. */
-export type ShadowedField = "sources" | "sourceDetection" | "duplexBackRotated";
-
-/** One differing field, typed by the field it names. */
-export type Disagreement = {
-  [K in ShadowedField]: {
-    field: K;
-    derived: DerivedCapabilities[K];
-    entry: DerivedCapabilities[K];
-  };
-}[ShadowedField];
 
 /**
  * A CAPA list's items: four characters each ("UG10UG18" → UG10, UG18), trimmed
@@ -68,27 +50,16 @@ const RULES: {
   sources: (info) => sourcesOf(info),
   sourceDetection: (info) => {
     const { flatbed, adf } = sourcesOf(info);
-    if (flatbed && adf) return "init-poll-status";
+    if (flatbed && adf) return "pre-para-status";
     if (flatbed) return "fixed-flatbed";
     return adf ? "fixed-adf" : null;
   },
   // "No flatbed" is redundant on every printer seen so far (only ADF-only
   // printers list #ADFCRP), but it is the documented rule.
   paraProfile: (info, capa) => (capa.adfCrop && !sourcesOf(info).flatbed ? "adf-crp" : "standard"),
-  // Single-pass ("1SCN") or no duplex: back pages arrive upright.
-  duplexBackRotated: (info) => info.adfDuplexType === "2SCN",
-};
-
-const SHADOWED: {
-  [K in ShadowedField]: (entry: RegistryEntry) => DerivedCapabilities[K];
-} = {
-  sources: (e) => ({ flatbed: e.fbExtents !== null, adf: e.adfExtents !== null }),
-  // "stat-length" and "stat-content" both read the init poll's status reply.
-  sourceDetection: (e) =>
-    e.sourceDetection === "stat-length" || e.sourceDetection === "stat-content"
-      ? "init-poll-status"
-      : e.sourceDetection,
-  duplexBackRotated: (e) => e.duplexBackRotated,
+  // Single-pass ("1SCN"), no duplex type, or no duplex ADF: back pages
+  // arrive the same way up as the front.
+  duplexBackRotated: (info, capa) => RULES.adfDuplex(info, capa) && info.adfDuplexType === "2SCN",
 };
 
 /** A scan-area segment with no value advertises no source. */
@@ -98,7 +69,6 @@ function sourcesOf(info: InfoTokens): DerivedCapabilities["sources"] {
 }
 
 const FIELD_NAMES = Object.keys(RULES) as (keyof DerivedCapabilities)[];
-const SHADOWED_FIELDS = Object.keys(SHADOWED) as ShadowedField[];
 
 /** Takes the parsed INFO and CAPA replies, so the session's own parse is reused. */
 export function deriveCapabilities(info: InfoTokens, capa: CapaTokens): DerivedCapabilities {
@@ -114,56 +84,58 @@ export function capabilityFields(derived: DerivedCapabilities): CapabilityFields
     adfDuplex: derived.adfDuplex,
     optionalSegments: { qit: derived.qit, cct: derived.cct },
     paraProfile: derived.paraProfile,
+    sourceDetection: derived.sourceDetection,
+    duplexBackRotated: derived.duplexBackRotated,
   };
 }
 
 /**
- * Whether a disagreement is one the entry itself already flags as
- * unconfirmed, so reporting it on every session would only repeat a known
- * open question. Today that is the FF-680W's back-page rotation
- * (duplexBackRotationUnverified), which the rotation cutover settles; duplex
- * scans on such an entry already warn and invite a hardware report.
+ * What the status reply just before PARA means for the scan, as Epson's own
+ * driver judges it: an error on the unit being scanned stops the scan
+ * (`blocking`), and an error on any other unit is only `warnings`. A unit is
+ * an error's location (ADF, FB, TPU, or one no source maps to), so it is
+ * never the unit being scanned unless it is ADF or FB. There is no
+ * always-fatal code: Epson has none.
  */
-export function isExpectedDisagreement(d: Disagreement, entry: RegistryEntry): boolean {
-  return d.field === "duplexBackRotated" && entry.duplexBackRotationUnverified === true;
+export type StatusJudgement = { warnings: string[] } | { blocking: string };
+
+const ADF_PAPER_EMPTY = "ADF PE";
+
+/** An error's unit: its location, e.g. "ADF" from "ADF PJ". */
+const unitOf = (error: string) => error.split(" ")[0];
+
+/** The location a source's errors carry. */
+const UNIT = { flatbed: "FB", adf: "ADF" } as const;
+
+/**
+ * A status reply's errors (parseStatErrors) with one code per unit: the last
+ * one the reply gives that unit, as Epson's driver keeps them.
+ */
+function lastCodePerUnit(errors: string[]): string[] {
+  const byUnit = new Map<string, string>();
+  for (const error of errors) byUnit.set(unitOf(error), error);
+  return [...byUnit.values()];
 }
 
-/** Per-field disagreements between a derivation and a registry entry, in SHADOWED order. */
-export function compareWithEntry(
-  derived: DerivedCapabilities,
-  entry: RegistryEntry,
-): Disagreement[] {
-  const out: Disagreement[] = [];
-  const check = <K extends ShadowedField>(field: K) => {
-    const fromEntry = SHADOWED[field](entry);
-    if (!isDeepStrictEqual(derived[field], fromEntry)) {
-      out.push({ field, derived: derived[field], entry: fromEntry } as Disagreement);
-    }
+/**
+ * The source a printer with both sources scans from, read from a status
+ * reply's errors as Epson's own source detection reads them: the ADF is empty
+ * only when its code is paper empty, which means the flatbed. Any other ADF
+ * code reads as a document loaded, so the ADF is the source (and the status
+ * judged before PARA stops on that code), as it is with no ADF error.
+ */
+export function sourceFromStatusErrors(errors: string[]): "flatbed" | "adf" {
+  return lastCodePerUnit(errors).includes(ADF_PAPER_EMPTY) ? "flatbed" : "adf";
+}
+
+/** Judges the errors of the status reply before PARA for a scan from `source`. */
+export function judgeStatusErrors(errors: string[], source: "flatbed" | "adf"): StatusJudgement {
+  const reported = lastCodePerUnit(errors);
+  const blocking = reported.find((e) => unitOf(e) === UNIT[source]);
+  if (blocking !== undefined) return { blocking };
+  // ADF paper empty on another unit is a state, not a fault: a flatbed scan
+  // never needs the feeder, so it is not worth a warning.
+  return {
+    warnings: reported.filter((e) => e !== ADF_PAPER_EMPTY),
   };
-  SHADOWED_FIELDS.forEach(check);
-  return out;
-}
-
-/**
- * Today's source rule for `stat-length` entries, from the first init-poll
- * STAT reply's declared length. ET-4950 fixtures: length 0 → ADF (printer
- * queued no status); length 12 → flatbed (queued `#ERRADF PE  `). Other
- * lengths default to ADF.
- */
-export function sourceFromStatLength(length: number): "adf" | "flatbed" {
-  return length === 12 ? "flatbed" : "adf";
-}
-
-/**
- * The source a printer with both sources is on, read from the content of the
- * init poll's first status reply: "ADF paper empty" means the flatbed, no
- * error means the ADF. Any other error is one a content-based decision would
- * end the session on, so it is returned for the caller to report.
- */
-export type StatusSourceDecision = { source: "flatbed" | "adf" } | { unexpectedErrors: string[] };
-
-export function sourceFromStatusErrors(errors: string[]): StatusSourceDecision {
-  const unexpected = errors.filter((e) => e !== "ADF PE");
-  if (unexpected.length > 0) return { unexpectedErrors: unexpected };
-  return { source: errors.length > 0 ? "flatbed" : "adf" };
 }

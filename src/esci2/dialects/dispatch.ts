@@ -1,10 +1,10 @@
 import {
-  REGISTRY_ENTRIES,
+  MODEL_OVERRIDES,
   type Dialect,
   type DialectWindow,
-  type EntryWindow,
-  type RegistryEntry,
-} from "./registry.js";
+  type OverrideWindow,
+  type ModelOverride,
+} from "./model-overrides.js";
 import {
   STANDARD_BASE_DPI,
   baseDpiFor,
@@ -14,32 +14,30 @@ import {
 } from "../para-composer.js";
 import { buildDiagnostic, UnsupportedDialectError } from "../diagnostic.js";
 import type { CapaTokens, InfoTokens } from "../capabilities.js";
-import { buildGenericEntry, GenericDialectUnusableError, printerIdentity } from "./generic.js";
+import { buildGenericDialect, GenericDialectUnusableError, printerIdentity } from "./generic.js";
 import { capabilityFields, deriveCapabilities, type DerivedCapabilities } from "../derivation.js";
-import { genericWindowIn, inheritedWindow, type WindowSource } from "../scan-window.js";
+import {
+  fitsScanArea,
+  genericWindowIn,
+  inheritedWindow,
+  ownWindows,
+  type WindowSource,
+} from "../scan-window.js";
 import { createLogger } from "../../logger.js";
 
 const log = createLogger("scanner-esci2");
 
-/** Which key resolved a session's registry entry, or "generic" when none did. */
+/** Which key resolved a session's model override, or "generic" when none did. */
 export type IdentityMatch = "pid" | "name" | "fingerprint" | "generic";
 
-export interface ResolvedEntry {
-  entry: Dialect;
-  /**
-   * The model override as written, before its windows are resolved against
-   * the printer's scan area: what the shadow comparison holds the derivation
-   * to. Undefined for the generic dialect.
-   */
-  override?: RegistryEntry;
+export interface ResolvedDialect {
+  dialect: Dialect;
   matchedBy: IdentityMatch;
-  /** The derivation the dialect was built with, for the caller's shadow comparison. */
-  derived: DerivedCapabilities;
 }
 
 /** What INIT1 knows when it resolves the dialect. */
 export interface Init1Replies {
-  /** INFO and CAPA, parsed once by the caller and shared with the shadow derivation. */
+  /** INFO and CAPA, parsed once by the caller. */
   info: InfoTokens;
   capa: CapaTokens;
   fingerprint: string;
@@ -50,7 +48,7 @@ export interface Init1Replies {
 }
 
 /**
- * Looks up the registry entry by model identity: the INFO product ID, then
+ * Looks up the model override by model identity: the INFO product ID, then
  * the INFO product name, then the CAPA fingerprint, and completes it with the
  * capability fields derived from this printer's own replies. When none matches, the
  * printer gets the generic dialect, built from its own replies, with a
@@ -58,30 +56,31 @@ export interface Init1Replies {
  * UnsupportedDialectError with the diagnostic block only when the generic
  * dialect can't be built either.
  *
- * A PID or name hit whose CAPA fingerprint isn't one of the entry's logs a
- * warning with the diagnostic block and proceeds with that entry: the model
+ * A PID or name hit whose CAPA fingerprint isn't one of the override's logs
+ * a warning with the diagnostic block and proceeds with that override: the model
  * is known, and its CAPA reply may have changed with a firmware update.
  *
  * Called from INIT1_CAPA in the graph state machine. INFO is read before
  * CAPA, so the identity is available on every trigger path, including the
  * host-triggered ones that carry no panel PID.
  */
-export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
+export function resolveDialect(replies: Init1Replies): ResolvedDialect {
   const { info, capa, fingerprint } = replies;
   const derived = deriveCapabilities(info, capa);
-  // prdPid is canonical upper-case hex, and entries store names upper-case
-  // (both pinned by registry.test.ts), so only the reported name needs folding.
+  // prdPid is canonical upper-case hex, and overrides store names upper-case
+  // (both pinned by model-overrides.test.ts), so only the reported name needs folding.
   const { prdPid } = info;
   const prdName = info.prdName?.toUpperCase() ?? null;
-  const byPid = prdPid === null ? undefined : REGISTRY_ENTRIES.find((e) => e.pids.includes(prdPid));
+  const byPid = prdPid === null ? undefined : MODEL_OVERRIDES.find((e) => e.pids.includes(prdPid));
   const byName =
-    prdName === null ? undefined : REGISTRY_ENTRIES.find((e) => e.names.includes(prdName));
-  const byFingerprint = REGISTRY_ENTRIES.find((e) => e.capaFingerprints.includes(fingerprint));
+    prdName === null ? undefined : MODEL_OVERRIDES.find((e) => e.names.includes(prdName));
+  const byFingerprint = MODEL_OVERRIDES.find((e) => e.capaFingerprints.includes(fingerprint));
 
   const byIdentity = byPid ?? byName;
   if (byIdentity !== undefined) {
     const matchedBy = byPid !== undefined ? "pid" : "name";
-    if (!byIdentity.capaFingerprints.includes(fingerprint)) {
+    const fingerprintMatches = byIdentity.capaFingerprints.includes(fingerprint);
+    if (!fingerprintMatches) {
       const reported = matchedBy === "pid" ? `PID ${prdPid}` : `product name ${info.prdName}`;
       log.warn(
         `Printer identified as ${byIdentity.displayName} by its ${reported}, but its CAPA ` +
@@ -91,31 +90,44 @@ export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
           `please file an issue with the diagnostic block below:\n\n${buildDiagnostic(replies)}`,
       );
     }
-    return { ...resolveOverride(byIdentity, replies, derived), matchedBy };
+    const dialect = resolveOverride(byIdentity, replies, derived, fingerprintMatches);
+    return { dialect, matchedBy };
   }
 
   if (byFingerprint !== undefined) {
-    return { ...resolveOverride(byFingerprint, replies, derived), matchedBy: "fingerprint" };
+    const dialect = resolveOverride(byFingerprint, replies, derived, true);
+    return { dialect, matchedBy: "fingerprint" };
   }
-  return { entry: resolveGenericEntry(replies, derived), matchedBy: "generic", derived };
+  return { dialect: resolveGenericDialect(replies, derived), matchedBy: "generic" };
 }
 
 /**
- * Completes an override into the session's dialect. A window it inherits
- * for a source the printer advertises no usable scan area for can't be
- * computed, so that source has none: say so with the diagnostic block now,
- * since a scan from it fails at PARA build (assertSourceSupported).
+ * Completes an override into the session's dialect.
+ *
+ * On a CAPA fingerprint mismatch the printer isn't the one the override was
+ * recorded from, so its windows are checked against the scan areas this
+ * printer reports (fitToScanAreas).
+ *
+ * A source the session can select but has no window for (the override
+ * inherits the generic one, or fell back to it, and the printer advertises
+ * no usable scan area for it) is said so with the diagnostic block now,
+ * since a scan from it fails at PARA build (assertSourceSupported). A source
+ * INFO advertises no area for at all is never selected, so it isn't warned
+ * about, unless INFO advertises no area for either source: then the session
+ * keeps the scanner shell's default, which may be either.
  */
 function resolveOverride(
-  override: RegistryEntry,
+  override: ModelOverride,
   replies: Init1Replies,
   derived: DerivedCapabilities,
-): Pick<ResolvedEntry, "entry" | "override" | "derived"> {
-  const entry = withCapabilities(override, replies.info, derived);
-  const missing = (["flatbed", "adf"] as const).filter(
-    (source) =>
-      (source === "flatbed" ? override.fbExtents : override.adfExtents) === "generic" &&
-      (source === "flatbed" ? entry.fbExtents : entry.adfExtents) === null,
+  fingerprintMatches: boolean,
+): Dialect {
+  const completed = withCapabilities(override, replies.info, derived);
+  const entry = fingerprintMatches ? completed : fitToScanAreas(completed, replies.info);
+  const selectable = (source: WindowSource) =>
+    derived.sourceDetection === null || derived.sources[source];
+  const missing = SOURCES.filter(
+    (source) => windowOf(entry, source) === null && selectable(source),
   );
   if (missing.length > 0) {
     log.warn(
@@ -124,47 +136,88 @@ function resolveOverride(
         `block below:\n\n${buildDiagnostic(replies)}`,
     );
   }
-  return { entry, override, derived };
+  return entry;
+}
+
+const SOURCES: readonly WindowSource[] = ["flatbed", "adf"];
+
+const windowOf = (entry: Dialect, source: WindowSource): DialectWindow | null =>
+  source === "flatbed" ? entry.fbExtents : entry.adfExtents;
+
+/**
+ * The dialect with the generic window, and a warning, in place of each of
+ * its own windows that leaves the printer's scan area, and for each source
+ * it has no window for that the printer advertises a usable area for (the
+ * session's source detection can select it). An inherited window is the
+ * generic one already, and fits by construction. Where INFO advertises no
+ * usable area there is no generic window either: the source is left with
+ * none, which resolveOverride warns about.
+ */
+function fitToScanAreas(entry: Dialect, info: InfoTokens): Dialect {
+  const profile = entry.paraProfile;
+  const misfits = ownWindows(entry).filter(
+    ([source, window]) => !fitsScanArea(info, source, window, profile),
+  );
+  const missing = SOURCES.filter((source) => windowOf(entry, source) === null).map(
+    (source) => [source, null] as const,
+  );
+  const out = { ...entry };
+  for (const [source, window] of [...misfits, ...missing]) {
+    const generic = inheritedWindow(info, source, profile);
+    if (generic !== null) {
+      const why =
+        window === null
+          ? `has no ${source} scan window, but this printer reports a ${source} scan area`
+          : `${source} scan window (${window.w}x${window.h} at ${window.x0},${window.y0}, ` +
+            `${baseDpiFor(profile)} DPI) doesn't fit the scan area this printer reports`;
+      log.warn(`${entry.displayName}: ${why}, so the generic scan window is used instead.`);
+    }
+    if (source === "flatbed") out.fbExtents = generic;
+    else out.adfExtents = generic;
+  }
+  return out;
 }
 
 /**
- * A registry entry completed with the capability fields derived from the
+ * A model override completed with the capability fields derived from the
  * printer's own replies, the same ones the generic dialect is built with.
  *
- * The entry's own windows are pinned at its windowDpi, and the composer
+ * The override's own windows are pinned at its windowDpi, and the composer
  * reads them at the derived profile's reference DPI. When the two differ (a
  * printer whose replies give it the other profile), they are rescaled so
- * they keep their physical size. A window the entry inherits ("generic") is
- * the generic window for this printer's scan area, at that reference DPI
+ * they keep their physical size. A window the override inherits ("generic")
+ * is the generic window for this printer's scan area, at that reference DPI
  * here and at the wire DPI in the PARA (makeParaSpec); null when the
- * printer advertises no area for the source.
+ * printer advertises no area for the source. Provenance stays behind: no
+ * session reads it.
  */
 export function withCapabilities(
-  entry: RegistryEntry,
+  override: ModelOverride,
   info: InfoTokens,
   derived: DerivedCapabilities,
 ): Dialect {
+  const { provenance: _provenance, ...rest } = override;
   const fields = capabilityFields(derived);
   const dpi = baseDpiFor(fields.paraProfile);
-  const scale = dpi / (entry.windowDpi ?? STANDARD_BASE_DPI);
-  const window = (source: WindowSource, e: EntryWindow): DialectWindow | null => {
-    if (e !== "generic") return e === null || scale === 1 ? e : scaleEdges(e, scale);
+  const scale = dpi / (override.windowDpi ?? STANDARD_BASE_DPI);
+  const window = (source: WindowSource, w: OverrideWindow): DialectWindow | null => {
+    if (w !== "generic") return w === null || scale === 1 ? w : scaleEdges(w, scale);
     return inheritedWindow(info, source, fields.paraProfile);
   };
   return {
-    ...entry,
-    fbExtents: window("flatbed", entry.fbExtents),
-    adfExtents: window("adf", entry.adfExtents),
+    ...rest,
+    fbExtents: window("flatbed", override.fbExtents),
+    adfExtents: window("adf", override.adfExtents),
     ...(scale === 1 ? {} : { windowDpi: dpi }),
     ...fields,
   };
 }
 
-function resolveGenericEntry(replies: Init1Replies, derived: DerivedCapabilities): Dialect {
+function resolveGenericDialect(replies: Init1Replies, derived: DerivedCapabilities): Dialect {
   const diagnostic = buildDiagnostic(replies);
   let entry: Dialect;
   try {
-    entry = buildGenericEntry(replies.info, replies.capa, derived);
+    entry = buildGenericDialect(replies.info, replies.capa, derived);
   } catch (err) {
     if (!(err instanceof GenericDialectUnusableError)) throw err;
     throw new UnsupportedDialectError(replies.fingerprint, diagnostic, err.message);
@@ -178,16 +231,15 @@ function resolveGenericEntry(replies: Init1Replies, derived: DerivedCapabilities
 }
 
 /**
- * Pins ctx.source for entries with fixed source detection. Replaces the
- * legacy applyDialectSourceOverride helper.
+ * Pins ctx.source for a single-source printer (fixed source detection).
  *
  * Necessary because scanner shells pre-set a transport-level default before
- * the registry resolves. Fixed-source entries override that default once the
- * CAPA fingerprint is known.
+ * the dialect resolves. A printer whose INFO advertises one source overrides
+ * that default once its replies are read.
  */
 export function applyEntrySourceOverride(
   ctx: { source: "adf" | "flatbed" },
-  entry: RegistryEntry,
+  entry: Pick<Dialect, "sourceDetection">,
 ): void {
   if (entry.sourceDetection === "fixed-flatbed") {
     ctx.source = "flatbed";
@@ -201,10 +253,10 @@ export function applyEntrySourceOverride(
  * window for, and adf-duplex on a simplex-only ADF.
  *
  * Called from buildParaSend after the source axis resolves — NOT at entry
- * resolution. `stat-length` entries don't know their source until
- * INIT_POLL_STAT, and `duplex=true` on a flatbed scan is inert and must stay
- * that way (SCAN_SIDES defaults to "duplex", so flatbed-only models see it on
- * every default host-triggered scan).
+ * resolution. A printer with both sources doesn't know its source until the
+ * status reply before PARA, and `duplex=true` on a flatbed scan is
+ * inert and must stay that way (SCAN_SIDES defaults to "duplex", so
+ * flatbed-only models see it on every default host-triggered scan).
  *
  * Origin-independent: an adf-duplex PARA against a simplex-only ADF is wrong
  * whether the panel or the host asked for it.
@@ -228,7 +280,7 @@ export function assertSourceSupported(entry: Dialect, source: ParaSpec["source"]
 }
 
 /**
- * Pure projection of a registry entry + source/action axes onto a ParaSpec.
+ * Pure projection of a model override + source/action axes onto a ParaSpec.
  * Called at PARA-build time after the source axis has been resolved (with
  * duplex folded in by the call site).
  *

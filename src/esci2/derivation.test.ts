@@ -1,23 +1,21 @@
 import { describe, it, expect } from "vitest";
 import {
   capabilityFields,
-  compareWithEntry,
   deriveCapabilities,
-  isExpectedDisagreement,
-  sourceFromStatLength,
+  judgeStatusErrors,
   sourceFromStatusErrors,
   type DerivedCapabilities,
 } from "./derivation.js";
 import { parseCapaTokens, parseInfoTokens, parseStatErrors } from "./capabilities.js";
-import { REGISTRY, type RegistryEntry } from "./dialects/registry.js";
+import { OVERRIDES_BY_FINGERPRINT, type ModelOverride } from "./dialects/model-overrides.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
 import {
   DIAGNOSTICS,
-  EXPECTED_DISAGREEMENTS,
   REPLAY_FIXTURES,
   bodiesFromDiagnostic,
   readFirstInitPollStatus,
   readInit1Bodies,
+  readPreParaStatus,
 } from "./test-support/capability-bodies.js";
 
 const NO_INFO = Buffer.alloc(0);
@@ -25,7 +23,6 @@ const NO_CAPA = Buffer.alloc(0);
 const derive = (info: Buffer, capa: Buffer) =>
   deriveCapabilities(parseInfoTokens(info), parseCapaTokens(capa));
 const ascii = (s: string) => Buffer.from(s, "ascii");
-const ET4950_FP = "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2";
 
 describe("deriveCapabilities — rules", () => {
   it("QIT and CCT are present exactly when their list carries the value PARA sends", () => {
@@ -57,13 +54,15 @@ describe("deriveCapabilities — rules", () => {
 
   it("capabilityFields puts the live fields in the dialect's shape", () => {
     const derived = derive(
-      ascii("#ADFAREAd850i0001550"),
+      ascii("#ADFAREAd850i0001550#ADFDPLX2SCN"),
       ascii("#ADFDPLX#ADFCRP #QITLISTPREFON  OFF "),
     );
     expect(capabilityFields(derived)).toEqual({
       adfDuplex: true,
       optionalSegments: { qit: true, cct: false },
       paraProfile: "adf-crp",
+      sourceDetection: "fixed-adf",
+      duplexBackRotated: true,
     });
   });
 });
@@ -78,8 +77,8 @@ describe("deriveCapabilities — sources and source detection", () => {
     expect(derive(ascii(ADF), NO_CAPA).sources).toEqual({ flatbed: false, adf: true });
   });
 
-  it("both sources read the init poll's status; one source is fixed to it", () => {
-    expect(derive(ascii(ADF + FB), NO_CAPA).sourceDetection).toBe("init-poll-status");
+  it("both sources read the status before PARA; one source is fixed to it", () => {
+    expect(derive(ascii(ADF + FB), NO_CAPA).sourceDetection).toBe("pre-para-status");
     expect(derive(ascii(FB), NO_CAPA).sourceDetection).toBe("fixed-flatbed");
     expect(derive(ascii(ADF), NO_CAPA).sourceDetection).toBe("fixed-adf");
   });
@@ -113,105 +112,115 @@ describe("deriveCapabilities — PARA profile and back-page rotation", () => {
   });
 
   it("back pages are rotated exactly for a two-pass (2SCN) duplex ADF", () => {
-    expect(derive(ascii("#ADFDPLX2SCN"), NO_CAPA).duplexBackRotated).toBe(true);
-    expect(derive(ascii("#ADFDPLX1SCN"), NO_CAPA).duplexBackRotated).toBe(false);
-    expect(derive(ascii("#ADFAREAd850i0001400"), NO_CAPA).duplexBackRotated).toBe(false);
+    const DUPLEX = ascii("#ADFDPLX");
+    const area = "#ADFAREAd850i0001400";
+    expect(derive(ascii(area + "#ADFDPLX2SCN"), DUPLEX).duplexBackRotated).toBe(true);
+    expect(derive(ascii(area + "#ADFDPLX1SCN"), DUPLEX).duplexBackRotated).toBe(false);
+    expect(derive(ascii(area), DUPLEX).duplexBackRotated).toBe(false);
+  });
+
+  it("no duplex ADF means no rotated back pages, whatever INFO's duplex type says", () => {
+    // CAPA lacks #ADFDPLX, or INFO has no ADF scan area: adfDuplex is false.
+    expect(derive(ascii("#ADFAREAd850i0001400#ADFDPLX2SCN"), NO_CAPA).duplexBackRotated).toBe(
+      false,
+    );
+    expect(derive(ascii("#ADFDPLX2SCN"), ascii("#ADFDPLX")).duplexBackRotated).toBe(false);
   });
 });
 
-describe("sourceFromStatusErrors — content-based source decision", () => {
-  it("ADF paper empty means the flatbed; no error means the ADF", () => {
-    expect(sourceFromStatusErrors(parseStatErrors(ascii("#ERRADF PE  ")))).toEqual({
-      source: "flatbed",
-    });
-    expect(sourceFromStatusErrors(parseStatErrors(Buffer.alloc(0)))).toEqual({ source: "adf" });
+// Synthetic beyond ADF PE: no fixture's status reports any other error.
+// Codes are from Epson's ESC/I-2 error vocabulary; ADF PJ is the jam a
+// reporter's printer sent (#65).
+const errorsOf = (status: string) => parseStatErrors(ascii(status));
+
+describe("sourceFromStatusErrors — a printer with both sources", () => {
+  const detect = (status: string) => sourceFromStatusErrors(errorsOf(status));
+
+  it("no error → the ADF; ADF paper empty → the flatbed", () => {
+    expect(detect("")).toBe("adf");
+    expect(detect("#ERRADF PE  ")).toBe("flatbed");
   });
 
-  it("any other error is reported as one a content-based decision would fail on", () => {
-    // Synthetic: no fixture carries a status error other than ADF PE.
-    expect(sourceFromStatusErrors(parseStatErrors(ascii("#ERRADF JAM #ERRADF PE  ")))).toEqual({
-      unexpectedErrors: ["ADF JAM"],
-    });
+  it("any other ADF code reads as a document loaded → the ADF", () => {
+    expect(detect("#ERRADF PJ  ")).toBe("adf");
+    expect(detect("#ERRFB  LTF #ERRTPU OPN ")).toBe("adf");
+  });
+
+  it("keeps the last code the reply gives the ADF, as Epson's driver does", () => {
+    expect(detect("#ERRADF PE  #ERRADF PJ  ")).toBe("adf");
+    expect(detect("#ERRADF PJ  #ERRADF PE  ")).toBe("flatbed");
   });
 });
 
-describe("compareWithEntry", () => {
-  const entry = REGISTRY.get(ET4950_FP)!;
-  const agreeing: DerivedCapabilities = {
-    qit: true,
-    cct: true,
-    adfDuplex: true,
-    sources: { flatbed: true, adf: true },
-    sourceDetection: "init-poll-status",
-    paraProfile: "standard",
-    duplexBackRotated: true,
+describe("judgeStatusErrors — the status before PARA, against the unit being scanned", () => {
+  const judge = (status: string, source: "flatbed" | "adf") =>
+    judgeStatusErrors(errorsOf(status), source);
+
+  it("no error carries on", () => {
+    expect(judge("", "flatbed")).toEqual({ warnings: [] });
+    expect(judge("", "adf")).toEqual({ warnings: [] });
+  });
+
+  it("flatbed: a flatbed error stops; any other unit's error warns", () => {
+    expect(judge("#ERRFB  LOCK", "flatbed")).toEqual({ blocking: "FB LOCK" });
+    expect(judge("#ERRADF PE  #ERRFB  LOCK", "flatbed")).toEqual({ blocking: "FB LOCK" });
+    expect(judge("#ERRADF PJ  #ERRTPU OPN #ERRZZZZERR ", "flatbed")).toEqual({
+      warnings: ["ADF PJ", "TPU OPN", "ZZZZ ERR"],
+    });
+  });
+
+  it("flatbed: ADF paper empty is a state, not a fault, so it never warns", () => {
+    expect(judge("#ERRADF PE  ", "flatbed")).toEqual({ warnings: [] });
+  });
+
+  it("ADF: every ADF code stops, paper empty included", () => {
+    for (const code of ["PE", "PJ", "OPN", "DFED", "ERR", "BTLO", "ZZZZ"]) {
+      expect(judge(`#ERRADF ${code.padEnd(4)}`, "adf")).toEqual({ blocking: `ADF ${code}` });
+    }
+  });
+
+  it("ADF: flatbed, TPU and unknown-unit errors warn", () => {
+    expect(judge("#ERRFB  LTF #ERRTPU OPN #ERRZZZZPJ  ", "adf")).toEqual({
+      warnings: ["FB LTF", "TPU OPN", "ZZZZ PJ"],
+    });
+  });
+
+  it("keeps one code per unit, the last the reply gives", () => {
+    expect(judge("#ERRADF PE  #ERRADF PJ  ", "adf")).toEqual({ blocking: "ADF PJ" });
+    expect(judge("#ERRADF PJ  #ERRADF PE  ", "adf")).toEqual({ blocking: "ADF PE" });
+    expect(judge("#ERRADF PJ  #ERRADF PE  ", "flatbed")).toEqual({ warnings: [] });
+    expect(judge("#ERRFB  LOCK#ERRFB  LTF ", "flatbed")).toEqual({ blocking: "FB LTF" });
+  });
+});
+
+describe("a printer with both sources: the source, then the errors on it", () => {
+  // One status, the one before PARA, decides the source and is judged on it.
+  const scan = (status: string) => {
+    const source = sourceFromStatusErrors(errorsOf(status));
+    return { source, ...judgeStatusErrors(errorsOf(status), source) };
   };
 
-  it("returns nothing when every field agrees", () => {
-    expect(compareWithEntry(agreeing, entry)).toEqual([]);
+  it("ADF paper empty, then a jam: the ADF is loaded and jammed → stop", () => {
+    expect(scan("#ERRADF PE  #ERRADF PJ  ")).toEqual({ source: "adf", blocking: "ADF PJ" });
   });
 
-  it("returns one disagreement per differing field, naming both values", () => {
-    expect(
-      compareWithEntry(
-        { ...agreeing, sourceDetection: "fixed-adf", duplexBackRotated: false },
-        entry,
-      ),
-    ).toEqual([
-      { field: "sourceDetection", derived: "fixed-adf", entry: "init-poll-status" },
-      { field: "duplexBackRotated", derived: false, entry: true },
-    ]);
-  });
-
-  it("never compares the live fields: the entry has none to compare with", () => {
-    const live = { qit: false, cct: false, adfDuplex: false, paraProfile: "adf-crp" } as const;
-    expect(compareWithEntry({ ...agreeing, ...live }, entry)).toEqual([]);
-  });
-
-  it("compares sources structurally and maps the entry's stat-length to the status read", () => {
-    expect(
-      compareWithEntry(
-        { ...agreeing, sources: { flatbed: true, adf: false }, sourceDetection: "fixed-flatbed" },
-        entry,
-      ),
-    ).toEqual([
-      {
-        field: "sources",
-        derived: { flatbed: true, adf: false },
-        entry: { flatbed: true, adf: true },
-      },
-      { field: "sourceDetection", derived: "fixed-flatbed", entry: "init-poll-status" },
-    ]);
+  it("a jam, then ADF paper empty: the ADF is empty → the flatbed, silently", () => {
+    expect(scan("#ERRADF PJ  #ERRADF PE  ")).toEqual({ source: "flatbed", warnings: [] });
   });
 });
 
-describe("shadow derivation agrees with every replay fixture", () => {
-  it.each(REPLAY_FIXTURES)("$model: $path", ({ model, path }) => {
+/** The sources a model override has a window for, own or inherited. */
+const entrySources = (entry: ModelOverride) => ({
+  flatbed: entry.fbExtents !== null,
+  adf: entry.adfExtents !== null,
+});
+
+describe("derived sources agree with the model override on every replay fixture", () => {
+  it.each(REPLAY_FIXTURES)("$model: $path", ({ path }) => {
     const { info, capa } = readInit1Bodies(path);
-    const entry = REGISTRY.get(computeCapaFingerprint(capa));
+    const entry = OVERRIDES_BY_FINGERPRINT.get(computeCapaFingerprint(capa));
     expect(entry).toBeDefined();
-    expect(compareWithEntry(derive(info, capa), entry!)).toEqual(
-      EXPECTED_DISAGREEMENTS[model] ?? [],
-    );
-  });
-
-  it("every expected disagreement is one its entry flags as unconfirmed", () => {
-    for (const { model, path } of REPLAY_FIXTURES) {
-      const entry = REGISTRY.get(computeCapaFingerprint(readInit1Bodies(path).capa))!;
-      for (const d of EXPECTED_DISAGREEMENTS[model] ?? []) {
-        expect(isExpectedDisagreement(d, entry)).toBe(true);
-      }
-    }
-    // And only those: the same field on an entry that doesn't flag it counts.
-    const et4950 = REGISTRY.get(ET4950_FP)!;
-    expect(
-      isExpectedDisagreement({ field: "duplexBackRotated", derived: false, entry: true }, et4950),
-    ).toBe(false);
-  });
-
-  it("every expected disagreement names a fixture model", () => {
-    const models = new Set(REPLAY_FIXTURES.map((f) => f.model));
-    for (const model of Object.keys(EXPECTED_DISAGREEMENTS)) expect(models).toContain(model);
+    expect(derive(info, capa).sources).toEqual(entrySources(entry!));
   });
 
   it("adf-crp is derived for exactly the FF-680W and DS-575W", () => {
@@ -223,65 +232,184 @@ describe("shadow derivation agrees with every replay fixture", () => {
   });
 });
 
-describe("content-based source decision agrees with the length-based one on every fixture", () => {
-  // Only stat-length entries make a length-based decision; for the rest the
-  // source is fixed and the status content is never consulted.
-  const statLengthFixtures = REPLAY_FIXTURES.filter(({ path }) => {
-    const entry = REGISTRY.get(computeCapaFingerprint(readInit1Bodies(path).capa));
-    return entry?.sourceDetection === "stat-length";
+describe("content-based source decision lands on the recorded source on every fixture", () => {
+  // Only a printer with both sources reads its status; the rest are fixed to
+  // their one source and never consult it.
+  const statusFixtures = REPLAY_FIXTURES.filter(({ path }) => {
+    const { info, capa } = readInit1Bodies(path);
+    return derive(info, capa).sourceDetection === "pre-para-status";
   });
 
-  it("covers flatbed and ADF sessions of every stat-length fixture model", () => {
-    expect(new Set(statLengthFixtures.map((f) => f.model))).toEqual(
-      new Set(["ET-4950 family", "XP-7100", "ET-4800"]),
-    );
+  it("covers flatbed and ADF sessions of every fixture model that reads its status", () => {
+    const models = ["ET-4950 family", "XP-7100", "ET-4800"];
+    expect(new Set(statusFixtures.map((f) => f.model))).toEqual(new Set(models));
+    for (const model of models) {
+      const sources = statusFixtures.filter((f) => f.model === model).map((f) => f.source);
+      expect(new Set(sources), model).toEqual(new Set(["flatbed", "adf"]));
+    }
   });
 
-  it.each(statLengthFixtures)("$model: $path", ({ path, source }) => {
-    const { header, body } = readFirstInitPollStatus(path);
-    const lengthBased = sourceFromStatLength(body?.length ?? 0);
-    const errors = [header, body ?? Buffer.alloc(0)].flatMap((b) => parseStatErrors(b));
-    expect(sourceFromStatusErrors(errors)).toEqual({ source: lengthBased });
-    // Both agree with the source the session was recorded scanning from.
-    expect(lengthBased).toBe(source);
+  it.each(statusFixtures)("$model: $path", ({ path, source }) => {
+    const { header, body } = readPreParaStatus(path);
+    expect(sourceFromStatusErrors(statusErrors(header, body))).toBe(source);
+    // Every recorded flatbed status is the 12-byte "ADF paper empty"; every
+    // recorded ADF status is empty.
+    expect(body?.length ?? 0).toBe(source === "flatbed" ? 12 : 0);
+    // The first status, which once decided the source, says the same: moving
+    // the decision to the status before PARA changed no recorded session.
+    const first = readFirstInitPollStatus(path);
+    expect(sourceFromStatusErrors(statusErrors(first.header, first.body))).toBe(source);
   });
 
-  it("DS-575W: its first statuses say paper-empty, yet it stays fixed to the ADF", () => {
+  it.each(REPLAY_FIXTURES)(
+    "$model: no recorded status before PARA stops or warns: $path",
+    ({ path, source }) => {
+      const { header, body } = readPreParaStatus(path);
+      expect(judgeStatusErrors(statusErrors(header, body), source)).toEqual({ warnings: [] });
+    },
+  );
+
+  it("DS-575W: its first statuses say paper-empty; its status before PARA is clear", () => {
     // The duplex capture reports ADF PE for its first 4 polls and nothing
-    // after; read by content, the first would say flatbed. An ADF-only
-    // printer never consults it.
+    // after. Judged on the first, the ADF scan would stop; Epson's driver
+    // judges the last one before PARA, as the session does. An ADF-only
+    // printer never reads its status for the source, though if it did, the
+    // first status would say the flatbed and the one before PARA the ADF.
     const path = "tools/pcap-extract/captures/ds-575w/adf-duplex-600-mono-jpg.jsonl";
-    const { body } = readFirstInitPollStatus(path);
-    expect(parseStatErrors(body!)).toEqual(["ADF PE"]);
+    const first = readFirstInitPollStatus(path);
+    expect(statusErrors(first.header, first.body)).toEqual(["ADF PE"]);
+    const prePara = readPreParaStatus(path);
+    expect(statusErrors(prePara.header, prePara.body)).toEqual([]);
     const { info, capa } = readInit1Bodies(path);
     expect(derive(info, capa).sourceDetection).toBe("fixed-adf");
   });
 });
 
+/** A status reply's errors: its header frame's inline tokens, then its body's. */
+function statusErrors(header: Buffer, body: Buffer | null): string[] {
+  return [header, body ?? Buffer.alloc(0)].flatMap((b) => parseStatErrors(b));
+}
+
 /**
- * The live fields every recorded model derives: the values its registry
- * entry carried before they were derived. Each one is asserted from that
+ * The live fields every recorded model derives: the values its model
+ * override carried before they were derived. Each one is asserted from that
  * model's own replies: every replay fixture, and every issue diagnostic for
  * the fields its block determines.
  */
-type LiveFields = Pick<DerivedCapabilities, "qit" | "cct" | "adfDuplex" | "paraProfile">;
+type LiveFields = Pick<
+  DerivedCapabilities,
+  "qit" | "cct" | "adfDuplex" | "paraProfile" | "sourceDetection" | "duplexBackRotated"
+>;
+// Source detection: "pre-para-status" was "pre-para-status", and before
+// that the entry's "stat-length".
+const STATUS = "pre-para-status";
 const LIVE_FIELDS: Record<string, Partial<LiveFields>> = {
-  "ET-4950 family": { qit: true, cct: true, adfDuplex: true, paraProfile: "standard" },
-  "ET-2750": { qit: false, cct: false, adfDuplex: false, paraProfile: "standard" },
-  "XP-7100": { qit: true, cct: false, adfDuplex: true, paraProfile: "standard" },
-  "ET-4800": { qit: false, cct: false, adfDuplex: false, paraProfile: "standard" },
-  "ET-7700": { qit: true, cct: false, adfDuplex: false, paraProfile: "standard" },
-  "FF-680W": { qit: false, cct: false, adfDuplex: true, paraProfile: "adf-crp" },
-  "DS-575W": { qit: false, cct: false, adfDuplex: true, paraProfile: "adf-crp" },
+  "ET-4950 family": {
+    qit: true,
+    cct: true,
+    adfDuplex: true,
+    paraProfile: "standard",
+    sourceDetection: STATUS,
+    duplexBackRotated: true, // two-pass ADF (#ADFDPLX2SCN)
+  },
+  "ET-2750": {
+    qit: false,
+    cct: false,
+    adfDuplex: false,
+    paraProfile: "standard",
+    sourceDetection: "fixed-flatbed",
+    duplexBackRotated: false,
+  },
+  "XP-7100": {
+    qit: true,
+    cct: false,
+    adfDuplex: true,
+    paraProfile: "standard",
+    sourceDetection: STATUS,
+    duplexBackRotated: true, // two-pass ADF (#ADFDPLX2SCN)
+  },
+  "ET-4800": {
+    qit: false,
+    cct: false,
+    adfDuplex: false,
+    paraProfile: "standard",
+    sourceDetection: STATUS,
+    duplexBackRotated: false,
+  },
+  "ET-7700": {
+    qit: true,
+    cct: false,
+    adfDuplex: false,
+    paraProfile: "standard",
+    sourceDetection: "fixed-flatbed",
+    duplexBackRotated: false,
+  },
+  "FF-680W": {
+    qit: false,
+    cct: false,
+    adfDuplex: true,
+    paraProfile: "adf-crp",
+    sourceDetection: "fixed-adf",
+    // Single-pass ADF (#ADFDPLX1SCN). The entry used to rotate: the one
+    // value this cutover changes.
+    duplexBackRotated: false,
+  },
+  "DS-575W": {
+    qit: false,
+    cct: false,
+    adfDuplex: true,
+    paraProfile: "adf-crp",
+    sourceDetection: "fixed-adf",
+    duplexBackRotated: false, // single-pass ADF (#ADFDPLX1SCN)
+  },
   // Its block has no CCT line, so its session sends #CCT exactly when its
   // own CAPA lists COL; nothing recorded says which.
-  "ET-2950": { qit: true, adfDuplex: false, paraProfile: "standard" },
-  "ET-15000": { qit: false, cct: false, adfDuplex: false, paraProfile: "standard" },
-  "ET-2810": { qit: false, cct: false, adfDuplex: false, paraProfile: "standard" },
-  "ET-8500": { qit: true, cct: false, adfDuplex: false, paraProfile: "standard" },
-  "WF-3835": { qit: true, cct: false, adfDuplex: false, paraProfile: "standard" },
+  "ET-2950": {
+    qit: true,
+    adfDuplex: false,
+    paraProfile: "standard",
+    sourceDetection: "fixed-flatbed",
+  },
+  "ET-15000": {
+    qit: false,
+    cct: false,
+    adfDuplex: false,
+    paraProfile: "standard",
+    sourceDetection: STATUS,
+  },
+  "ET-2810": {
+    qit: false,
+    cct: false,
+    adfDuplex: false,
+    paraProfile: "standard",
+    sourceDetection: "fixed-flatbed",
+  },
+  "ET-8500": {
+    qit: true,
+    cct: false,
+    adfDuplex: false,
+    paraProfile: "standard",
+    sourceDetection: "fixed-flatbed",
+  },
+  "WF-3835": {
+    qit: true,
+    cct: false,
+    adfDuplex: false,
+    paraProfile: "standard",
+    sourceDetection: STATUS,
+  },
 };
-const LIVE = ["qit", "cct", "adfDuplex", "paraProfile"] as const;
+const LIVE = [
+  "qit",
+  "cct",
+  "adfDuplex",
+  "paraProfile",
+  "sourceDetection",
+  "duplexBackRotated",
+] as const;
+// A diagnostic block doesn't carry INFO's duplex type, so back-page rotation
+// is checked on fixtures only. No diagnostic-only model has a duplex ADF.
+const LIVE_IN_DIAGNOSTICS = LIVE.filter((f) => f !== "duplexBackRotated");
 
 describe("live fields derived for every replay fixture", () => {
   it.each(REPLAY_FIXTURES)("$model: $path", ({ model, path }) => {
@@ -295,7 +423,7 @@ describe("live fields derived for models known only from issue diagnostics", () 
   it.each(DIAGNOSTICS)("$model (#$issue)", ({ model, block }) => {
     const { info, capa, fields } = bodiesFromDiagnostic(block);
     const derived = derive(info, capa);
-    for (const field of LIVE.filter((f) => fields.includes(f))) {
+    for (const field of LIVE_IN_DIAGNOSTICS.filter((f) => fields.includes(f))) {
       expect(LIVE_FIELDS[model][field], field).toBeDefined();
       expect(derived[field], field).toBe(LIVE_FIELDS[model][field]);
     }
@@ -304,18 +432,20 @@ describe("live fields derived for models known only from issue diagnostics", () 
   it("checks every live field of every block except the ET-2950's CCT", () => {
     for (const { model, block } of DIAGNOSTICS) {
       const { fields } = bodiesFromDiagnostic(block);
-      const unchecked = LIVE.filter((f) => !fields.includes(f));
+      const unchecked = LIVE_IN_DIAGNOSTICS.filter((f) => !fields.includes(f));
       expect(unchecked, model).toEqual(model === "ET-2950" ? ["cct"] : []);
     }
   });
 });
 
-describe("shadow derivation agrees with models known only from issue diagnostics", () => {
+describe("derived sources agree with the model override for models known only from issue diagnostics", () => {
   it.each(DIAGNOSTICS)("$model (#$issue)", ({ fp, block }) => {
-    const entry: RegistryEntry | undefined = REGISTRY.get(fp);
+    const entry: ModelOverride | undefined = OVERRIDES_BY_FINGERPRINT.get(fp);
     expect(entry).toBeDefined();
     const { info, capa, fields } = bodiesFromDiagnostic(block);
-    const disagreements = compareWithEntry(derive(info, capa), entry!);
-    expect(disagreements.filter((d) => fields.includes(d.field))).toEqual([]);
+    // A block determines the sources only when it carries both area lines;
+    // every recorded block does.
+    expect(fields).toContain("sources");
+    expect(derive(info, capa).sources).toEqual(entrySources(entry!));
   });
 });

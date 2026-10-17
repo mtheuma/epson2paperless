@@ -6,7 +6,7 @@ import { recordedDialect } from "../test-support/dialects.js";
 const ET2750_FP = "de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b56e7";
 const entry = recordedDialect(ET2750_FP);
 
-describe("ET-2750 registry entry", () => {
+describe("ET-2750 model override", () => {
   it("is flatbed-only (no ADF extents)", () => {
     expect(entry.adfExtents).toBeNull();
   });

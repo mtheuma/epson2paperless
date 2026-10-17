@@ -25,21 +25,16 @@ import {
   parseTokens,
 } from "./commands.js";
 import { ackByte, expectIsType } from "../graph-helpers.js";
-import { supportsWireGrayscale, type Dialect } from "./dialects/registry.js";
+import { supportsWireGrayscale, type Dialect } from "./dialects/model-overrides.js";
 import {
-  lookupRegistryEntry,
+  resolveDialect,
   applyEntrySourceOverride,
   makeParaSpec,
   assertSourceSupported,
-  type ResolvedEntry,
+  type ResolvedDialect,
 } from "./dialects/dispatch.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
-import {
-  compareWithEntry,
-  isExpectedDisagreement,
-  sourceFromStatLength,
-  sourceFromStatusErrors,
-} from "./derivation.js";
+import { judgeStatusErrors, sourceFromStatusErrors } from "./derivation.js";
 import { composePara, baseDpiFor, type ParaSpec } from "./para-composer.js";
 import {
   parseCapaTokens,
@@ -49,7 +44,6 @@ import {
   type InfoTokens,
 } from "./capabilities.js";
 import { advertisedDpiSet, selectWireDpi } from "./resolution.js";
-import { genericWindowDifferences, windowProblems } from "./scan-window.js";
 import { genericParaFields } from "./dialects/generic.js";
 import { createLogger } from "../logger.js";
 
@@ -62,7 +56,7 @@ const log = createLogger("scanner-esci2");
  */
 export interface Esci2Ctx {
   duplex: boolean;
-  source: "adf" | "flatbed"; // detected at INIT_POLL iteration 0
+  source: "adf" | "flatbed"; // decided from the status before PARA (POST_MODE_STAT)
   /** Transport layer in use this session. Probe-driven, not dialect-driven. */
   transport: "tls" | "plain";
   initPollIteration: number;
@@ -91,25 +85,23 @@ export interface Esci2Ctx {
    */
   capaTokens: CapaTokens | undefined;
   /**
-   * The first init-poll STAT reply (header and inline tokens), kept until its
-   * body is drained so the status-content shadow judges both together.
-   * Undefined otherwise.
+   * The mode switch's STAT reply (POST_MODE_STAT), the status before PARA,
+   * kept until its body is drained so the reply's inline tokens and the body
+   * are read together. Undefined otherwise.
    */
-  firstStatusReply?: Buffer;
+  preParaStatusReply?: Buffer;
   /**
    * Set when the init poll stopped early on a non-ACK to FS Y (see
    * INIT_POLL_FS_Y): the cycle it happened on and a preview of the reply.
-   * Cleared once PARA is accepted, so only a failure in the mode switch or
+   * Cleared once PARA is accepted, or when the status before PARA reports
+   * an error that stops the scan, so only a failure in the mode switch or
    * the settings exchange is blamed on it (`nameInitPollEarlyStop`).
    */
   initPollEarlyStop?: { cycle: number; reply: string };
-  /** Resolved dialect post-INIT1 (registry entry or generic, plus its capability fields), drives PARA build + init-poll count + source detection. Undefined until INIT1 completes. */
+  /** Resolved dialect post-INIT1 (model override or generic, plus its capability fields), drives PARA build + init-poll count + source detection. Undefined until INIT1 completes. */
   entry: Dialect | undefined;
-  /**
-   * Set when the session runs the generic dialect (no registry entry
-   * matched): its parsed INFO reply. Undefined otherwise.
-   */
-  genericInfo?: InfoTokens;
+  /** Whether the session runs the generic dialect (no model override matched). */
+  genericDialect: boolean;
   /** Panel-selected output format; drives action-aware dialects' PARA splice. */
   action: "jpg" | "pdf";
   /**
@@ -389,10 +381,10 @@ twoPhaseRead(
     const capaTokens = parseCapaTokens(body);
     ctx.capaTokens = capaTokens;
     let info: InfoTokens;
-    let resolved: ResolvedEntry;
+    let resolved: ResolvedDialect;
     try {
       info = parseInfoTokens(ctx.infoBody);
-      resolved = lookupRegistryEntry({
+      resolved = resolveDialect({
         info,
         capa: capaTokens,
         fingerprint,
@@ -403,7 +395,7 @@ twoPhaseRead(
     } catch (err) {
       return { error: err as Error };
     }
-    ctx.entry = resolved.entry;
+    ctx.entry = resolved.dialect;
     log.debug("Dialect resolved", {
       name: ctx.entry.displayName,
       matchedBy: resolved.matchedBy,
@@ -415,40 +407,10 @@ twoPhaseRead(
       optionalSegments: ctx.entry.optionalSegments,
       adfDuplex: ctx.entry.adfDuplex,
       paraProfile: ctx.entry.paraProfile,
+      sourceDetection: ctx.entry.sourceDetection,
+      duplexBackRotated: ctx.entry.duplexBackRotated,
     });
-    if (resolved.override === undefined) {
-      // Built from the derivation itself, so there is nothing to compare.
-      ctx.genericInfo = info;
-      applyEntrySourceOverride(ctx, ctx.entry);
-      return;
-    }
-    // Shadow derivation: report-only, silent when the printer's own replies
-    // agree with the entry. Nothing sent to the printer depends on it, so a
-    // failure here is logged rather than allowed to end the session.
-    try {
-      const dialect = ctx.entry.displayName;
-      for (const d of compareWithEntry(resolved.derived, resolved.override)) {
-        // A disagreement the entry already flags as unconfirmed is known;
-        // repeating it at info on every scan would read as a new problem.
-        if (isExpectedDisagreement(d, ctx.entry)) {
-          log.debug("Capability derivation disagrees with the dialect entry (known)", {
-            dialect,
-            ...d,
-          });
-        } else {
-          log.info("Capability derivation disagrees with the dialect entry", { dialect, ...d });
-        }
-      }
-      for (const p of windowProblems(info, ctx.entry)) {
-        log.info("Scan window disagrees with the printer's scan area", { dialect, ...p });
-      }
-      // A different paper size, not a disagreement: debug only.
-      for (const d of genericWindowDifferences(info, ctx.entry)) {
-        log.debug("Generic scan window differs from the dialect entry's", { dialect, ...d });
-      }
-    } catch (err) {
-      log.warn("Capability derivation failed (report-only; the scan continues)", err);
-    }
+    ctx.genericDialect = resolved.matchedBy === "generic";
     applyEntrySourceOverride(ctx, ctx.entry);
   },
 );
@@ -482,12 +444,12 @@ twoPhaseRead(
 
 /**
  * statThenDrain — builds three states that encode the "STAT reply →
- * (optional) drain → FIN" sub-flow that recurs in INIT_POLL (inline),
- * POST_MODE (T24), and POSTSCAN×2 (T26).
+ * (optional) drain → FIN" sub-flow that recurs in INIT_POLL and
+ * POSTSCAN×2 (T26). Both drain the status unread.
  *
  *   `${prefix}_STAT`       — decision: parses reply header length and either
  *                            advances to _STAT_DRAIN with a pure-read or jumps
- *                            straight to _FIN. POST_MODE skips the drain when
+ *                            straight to _FIN. INIT_POLL skips the drain when
  *                            length === 0; POSTSCAN always drains (legacy
  *                            scanner sent buildPurereadPacket(header?.length ??
  *                            12) before FIN unconditionally — firmware
@@ -497,14 +459,17 @@ twoPhaseRead(
  *                            we replay back to the printer regardless).
  *   `${prefix}_STAT_DRAIN` — static: 0xa000 → sends FIN, goes to _FIN.
  *   `${prefix}_FIN`        — static: 0xa000 → next (with optional finSend).
+ *                            Not registered when `next` is null: INIT_POLL's
+ *                            FIN state is its own decision (loop-back vs
+ *                            advance).
  *
- * INIT_POLL does not use this helper because its FIN state is a custom decision
- * (loop-back vs advance). POST_MODE and POSTSCAN use it directly.
+ * POST_MODE_STAT doesn't use it: its reply is read (the source and the
+ * errors) and it goes on to PARA, not FIN.
  */
 function statThenDrain(
   g: GraphBuilder<Esci2Ctx>,
   prefix: string,
-  next: string,
+  next: string | null,
   finSend?: SendSpec<Esci2Ctx> | SendSpec<Esci2Ctx>[],
   alwaysDrain = false,
 ): void {
@@ -550,6 +515,7 @@ function statThenDrain(
     ...(alwaysDrain ? { bypassIgnoreFilter: true as const } : {}),
   });
 
+  if (next === null) return;
   g.state(`${prefix}_FIN`, {
     on: { 0xa000: { next, ...(finSend !== undefined ? { send: finSend } : {}) } },
   });
@@ -631,101 +597,13 @@ g.state("UNLOCKING", {
   on: { 0xa101: { next: "DONE" } },
 });
 
-/**
- * How a source-detecting entry reads the first init-poll status reply: once
- * from its header (fromHeader, in INIT_POLL_STAT) and once from the whole
- * reply, its drained body included (fromReply, in whichever state completes
- * it). Every per-mode difference lives here.
- */
-interface StatusSourceRule {
-  fromHeader(ctx: Esci2Ctx, statLength: number): void;
-  fromReply(ctx: Esci2Ctx, state: string, status: Buffer[]): TransitionResult<Esci2Ctx> | undefined;
-}
-
-const STATUS_SOURCE_RULES: Record<"stat-length" | "stat-content", StatusSourceRule> = {
-  // The captured entries' rule: the reply's declared length decides; its
-  // content is only shadowed.
-  "stat-length": {
-    fromHeader: (ctx, statLength) => {
-      ctx.source = sourceFromStatLength(statLength);
-      log.debug("Source detected from first STAT", { statLength, source: ctx.source });
-    },
-    fromReply: (ctx, _state, status) => {
-      reportStatusSourceShadow(ctx, ...status);
-      return undefined;
-    },
-  },
-  // The generic dialect's rule: the reply's error tokens decide, and an
-  // error other than "ADF paper empty" ends the session.
-  "stat-content": {
-    fromHeader: () => {},
-    fromReply: (ctx, state, status) => {
-      const errors = status.flatMap((part) => parseStatErrors(part));
-      const decision = sourceFromStatusErrors(errors);
-      if ("unexpectedErrors" in decision) {
-        return {
-          error: new Error(
-            `${state}: the printer reports ${decision.unexpectedErrors.join(", ")}, so the ` +
-              "scan source can't be told from its status — clear it on the printer and scan again",
-          ),
-        };
-      }
-      ctx.source = decision.source;
-      log.debug("Source detected from the first status reply's content", {
-        errors,
-        source: ctx.source,
-      });
-      return undefined;
-    },
-  },
-};
-
-/** The entry's status-source rule on the first init-poll cycle; undefined otherwise. */
-function firstStatusRule(ctx: Esci2Ctx): StatusSourceRule | undefined {
-  if (ctx.initPollIteration !== 0) return undefined;
-  const detection = ctx.entry!.sourceDetection;
-  return detection === "stat-length" || detection === "stat-content"
-    ? STATUS_SOURCE_RULES[detection]
-    : undefined;
-}
-
-/**
- * Shadow of the content-based source decision: reads the first status
- * reply's error tokens (from the reply itself and its drained body, if any)
- * and reports, at info, where they disagree with the length-based source
- * already in ctx.source, or carry an error a content-based decision would
- * end the session on. Report-only.
- */
-function reportStatusSourceShadow(ctx: Esci2Ctx, ...status: Buffer[]): void {
-  try {
-    const errors = status.flatMap((part) => parseStatErrors(part));
-    const decision = sourceFromStatusErrors(errors);
-    if ("unexpectedErrors" in decision) {
-      log.info("Status reply carries an error a content-based source decision would fail on", {
-        dialect: ctx.entry!.displayName,
-        errors: decision.unexpectedErrors,
-        lengthBased: ctx.source,
-      });
-    } else if (decision.source !== ctx.source) {
-      log.info("Status-content source decision disagrees with the length-based one", {
-        dialect: ctx.entry!.displayName,
-        contentBased: decision.source,
-        lengthBased: ctx.source,
-        errors,
-      });
-    }
-  } catch (err) {
-    log.warn("Status-content source decision failed (report-only; the scan continues)", err);
-  }
-}
-
 // ---------------------------------------------------------------------------
 // INIT_POLL cycle — 3 iterations of FS Y → STAT → (optional drain) → FIN
 // ---------------------------------------------------------------------------
 //
-// Inlined rather than using statThenDrain because INIT_POLL_FIN is a decision
-// state that does the loop-back check on the same 0xa000 packet that completes
-// the FIN exchange, rather than a plain static transition.
+// INIT_POLL_STAT / _STAT_DRAIN come from statThenDrain; INIT_POLL_FIN is its
+// own decision state that does the loop-back check on the same 0xa000 packet
+// that completes the FIN exchange, rather than a plain static transition.
 
 // INIT_POLL_FS_Y: receives 0xa000 (FS Y ACK, payload[0]=0x06); sends STAT.
 //
@@ -790,74 +668,10 @@ export function nameInitPollEarlyStop(ctx: Esci2Ctx, reason: Error): Error {
 }
 
 // INIT_POLL_STAT: decision on STAT reply — drain if length>0, else FIN.
-// On the first iteration (ctx.initPollIteration === 0) also detects source
-// by the reply's length (sourceFromStatLength).
-g.state(
-  "INIT_POLL_STAT",
-  decision<Esci2Ctx>((ctx, packet) => {
-    const typeGuard = expectIsType(packet, 0xa000, "INIT_POLL_STAT");
-    if (typeGuard) return typeGuard;
-    const header = parseEsci2ReplyHeader(packet.payload);
-    if (header === null) {
-      return { error: new Error("INIT_POLL_STAT: unparseable reply header") };
-    }
-    // Source detection — only on the FIRST iteration, and only when the
-    // dialect reads it from the status reply ("stat-length" from its length,
-    // here; "stat-content" from its tokens, once any body is drained).
-    //
-    // ET-2750 uses `sourceDetection: "fixed-flatbed"` because it is
-    // flatbed-only hardware AND its STAT replies declare length=0 even
-    // though the IS frame packs an inline 52-byte filler — applying the
-    // stat-length heuristic would misclassify it as ADF, so skip the
-    // override entirely and trust the `source: "flatbed"` value the
-    // scanner shell pre-set in `initialCtx`.
-    const rule = firstStatusRule(ctx);
-    if (rule) {
-      rule.fromHeader(ctx, header.length);
-      // The reply's own tail is #--- filler unless the printer put tokens
-      // inline, so it is judged too: here when there is no body to drain,
-      // otherwise alongside the body in INIT_POLL_STAT_DRAIN.
-      if (header.length === 0) {
-        const failed = rule.fromReply(ctx, "INIT_POLL_STAT", [packet.payload]);
-        if (failed) return failed;
-      } else {
-        ctx.firstStatusReply = packet.payload;
-      }
-    }
-    if (header.length > 0) {
-      return {
-        next: "INIT_POLL_STAT_DRAIN",
-        send: buildPurereadPacket(header.length),
-      };
-    }
-    return {
-      next: "INIT_POLL_FIN",
-      send: buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
-    };
-  }),
-);
-
 // INIT_POLL_STAT_DRAIN: drains queued status bytes, then sends FIN.
-g.state(
-  "INIT_POLL_STAT_DRAIN",
-  decision<Esci2Ctx>((ctx, packet) => {
-    const typeGuard = expectIsType(packet, 0xa000, "INIT_POLL_STAT_DRAIN");
-    if (typeGuard) return typeGuard;
-    const rule = firstStatusRule(ctx);
-    if (rule) {
-      const failed = rule.fromReply(ctx, "INIT_POLL_STAT_DRAIN", [
-        ctx.firstStatusReply ?? Buffer.alloc(0),
-        packet.payload,
-      ]);
-      ctx.firstStatusReply = undefined;
-      if (failed) return failed;
-    }
-    return {
-      next: "INIT_POLL_FIN",
-      send: buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
-    };
-  }),
-);
+// The init poll's statuses are not read: the source and the errors both come
+// from the status before PARA (POST_MODE_STAT), as Epson's driver reads them.
+statThenDrain(g, "INIT_POLL", null);
 
 // INIT_POLL_FIN: decision on FIN reply — loop or advance to MODE_SWITCH.
 // INIT_POLL_FIN increments initPollIteration; if below the dialect's
@@ -888,8 +702,33 @@ g.state(
 // MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_META states
 // =============================================================================
 
+// Models already warned about, by display name: the warning is once per
+// process per model, so a daemon doesn't repeat it on every scan.
+const warnedDuplexOrientation = new Set<string>();
+
+// Back-page rotation comes from the printer's INFO duplex type. Where no
+// capture or hardware report has confirmed that orientation for this model
+// (none recorded, or one that vouched for the other), say so on the first
+// duplex scan, or a wrong call could never be reported.
+function warnOnUnconfirmedDuplexOrientation(entry: Dialect): void {
+  const evidence = entry.duplexOrientationEvidence;
+  if (evidence?.backRotated === entry.duplexBackRotated) return;
+  if (warnedDuplexOrientation.has(entry.displayName)) return;
+  warnedDuplexOrientation.add(entry.displayName);
+  const choice = entry.duplexBackRotated
+    ? "turned 180° (the printer reports a two-pass ADF)"
+    : "left as delivered (the printer reports no two-pass ADF)";
+  const contrary =
+    evidence === undefined ? "" : ` That contradicts what was confirmed (${evidence.source}).`;
+  log.warn(
+    `${entry.displayName}: which way up duplex back pages arrive hasn't been confirmed ` +
+      `on this model. Back pages are ${choice}.${contrary} If they come out upside down, ` +
+      "please open an issue.",
+  );
+}
+
 // Builds the PARA header + body send pair. Called once per dispatch in
-// POST_MODE_STAT and POST_MODE_STAT_DRAIN; composePara + registry entry
+// POST_MODE_STAT and POST_MODE_STAT_DRAIN; composePara + model override
 // selects the correct blob for the detected hardware.
 function buildParaSend(ctx: Esci2Ctx): Buffer[] {
   const paraSource: ParaSpec["source"] =
@@ -906,16 +745,7 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
         "wire support — scanning in colour and converting to greyscale host-side.",
     );
   }
-  // An unverified back-rotation assumption must be visible in the log on the
-  // scans it affects, or no hardware report can ever correct it (#128 showed
-  // the DS-575W's sibling hardware delivers backs upright).
-  if (paraSource === "adf-duplex" && ctx.entry!.duplexBackRotationUnverified) {
-    log.warn(
-      `${ctx.entry!.displayName}: the duplex back-page rotation compensation is ` +
-        "unconfirmed on this single-pass hardware — if back sides come out " +
-        "upside down, please open an issue.",
-    );
-  }
+  if (paraSource === "adf-duplex") warnOnUnconfirmedDuplexOrientation(ctx.entry!);
 
   // Resolve the target DPI against what the printer actually advertised in
   // CAPA — exact match, else smallest-above + host downsample, else capped
@@ -947,7 +777,7 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
   // report, so this one would only point at the wrong issue.
   if (
     ctx.resolution !== undefined &&
-    ctx.genericInfo === undefined &&
+    !ctx.genericDialect &&
     !ctx.entry!.verifiedWireDpis.includes(sel.wireDpi)
   ) {
     log.warn(
@@ -979,17 +809,10 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
     );
   }
 
-  const spec = makeParaSpec(
-    ctx.entry!,
-    paraSource,
-    ctx.action,
-    sel.wireDpi,
-    ctx.colorMode,
-    quality,
-  );
-  if (ctx.genericInfo !== undefined) {
-    Object.assign(spec, genericParaFields(ctx.entry!));
-  }
+  const spec = {
+    ...makeParaSpec(ctx.entry!, paraSource, ctx.action, sel.wireDpi, ctx.colorMode, quality),
+    ...genericParaFields(ctx.entry!),
+  };
   const paraPayload = composePara(spec);
   return [
     buildPassthruPacket(buildParaHeader(paraPayload.length), 0),
@@ -1008,7 +831,85 @@ g.state("MODE_SWITCH", {
   },
 });
 
-// POST_MODE_STAT: decision on STAT reply.
+// Error sets already warned about, by model display name and the sorted
+// codes: the warning is once per process per model and set, so a daemon
+// doesn't repeat it on every scan while the fault stays put.
+const warnedOtherUnitErrors = new Set<string>();
+
+function warnOnOtherUnitErrors(ctx: Esci2Ctx, warnings: string[]): void {
+  const name = ctx.entry!.displayName;
+  const scanned = ctx.source === "flatbed" ? "flatbed" : "ADF";
+  const message =
+    `${name}: the printer reported ${warnings.join(", ")} before scanning, which is ` +
+    `not on the ${scanned} being scanned — the scan continues.`;
+  const key = `${name}\n${[...warnings].sort().join(", ")}`;
+  if (warnedOtherUnitErrors.has(key)) {
+    log.debug(message);
+    return;
+  }
+  warnedOtherUnitErrors.add(key);
+  log.warn(message);
+}
+
+/**
+ * Reads the status reply just before PARA (the reply itself, then its
+ * drained body, if any) as Epson's driver reads the scanner's state at scan
+ * time: one parse of one reply decides the source, then is judged against
+ * it.
+ *
+ * A printer with both sources (sourceDetection "pre-para-status") takes
+ * its source from the reply (sourceFromStatusErrors): "ADF paper empty"
+ * means the flatbed, anything else the ADF. A single-source printer is fixed
+ * to its source, which the reply never changes. The ET-2750 relies on that:
+ * its STAT replies declare length 0 but pack #--- filler inline, which
+ * carries no error and so would read as ADF on flatbed-only hardware. A
+ * session whose INFO advertises no scan area (sourceDetection null) keeps
+ * the scanner shell's default, the unit its PARA scans.
+ *
+ * The errors are then judged against that source (judgeStatusErrors): an
+ * error on the unit being scanned ends the session before PARA, naming it,
+ * since the scan would not go ahead anyway; an error on any other unit is
+ * logged as a warning and the scan carries on.
+ */
+function settlePreParaStatus(
+  ctx: Esci2Ctx,
+  state: string,
+  status: Buffer[],
+): TransitionResult<Esci2Ctx> | undefined {
+  const errors = status.flatMap((part) => parseStatErrors(part));
+  if (ctx.entry!.sourceDetection === "pre-para-status") {
+    ctx.source = sourceFromStatusErrors(errors);
+    // The declared length rides along for triage on models with no fixture:
+    // on every recorded one, 12 bytes is "ADF paper empty" and 0 is none.
+    log.debug("Source decided from the status before PARA", {
+      errors,
+      statLength: parseEsci2ReplyHeader(status[0])?.length ?? 0,
+      source: ctx.source,
+    });
+  }
+  const judgement = judgeStatusErrors(errors, ctx.source);
+  if ("blocking" in judgement) {
+    // The printer named the cause itself, so an early-stopped init poll
+    // isn't blamed for it (nameInitPollEarlyStop).
+    ctx.initPollEarlyStop = undefined;
+    // ADF paper empty has nothing to clear: the feeder needs the document.
+    const advice =
+      judgement.blocking === "ADF PE"
+        ? "load the document into the ADF and scan again"
+        : "clear it on the printer and scan again";
+    return {
+      error: new Error(
+        `${state}: the printer reported an error before scanning ` +
+          `(${judgement.blocking}) — ${advice}`,
+      ),
+    };
+  }
+  if (judgement.warnings.length > 0) warnOnOtherUnitErrors(ctx, judgement.warnings);
+  return undefined;
+}
+
+// POST_MODE_STAT: decision on STAT reply, the last before PARA, whose
+// content decides the source and is judged for errors (settlePreParaStatus).
 // If length>0 → pure-read drain → POST_MODE_STAT_DRAIN.
 // If length===0 → send PARA header + body → PARA.
 g.state(
@@ -1020,12 +921,18 @@ g.state(
     if (header === null) {
       return { error: new Error("POST_MODE_STAT: unparseable reply header") };
     }
+    // The reply's own tail is #--- filler unless the printer put tokens
+    // inline, so it is read too: here when there is no body to drain,
+    // otherwise alongside the body in POST_MODE_STAT_DRAIN.
     if (header.length > 0) {
+      ctx.preParaStatusReply = packet.payload;
       return {
         next: "POST_MODE_STAT_DRAIN",
         send: buildPurereadPacket(header.length),
       };
     }
+    const failed = settlePreParaStatus(ctx, "POST_MODE_STAT", [packet.payload]);
+    if (failed) return failed;
     return { next: "PARA", send: buildParaSend(ctx) };
   }),
 );
@@ -1037,6 +944,10 @@ g.state(
   decision<Esci2Ctx>((ctx, packet) => {
     const typeGuard = expectIsType(packet, 0xa000, "POST_MODE_STAT_DRAIN");
     if (typeGuard) return typeGuard;
+    const reply = ctx.preParaStatusReply ?? Buffer.alloc(0);
+    ctx.preParaStatusReply = undefined;
+    const failed = settlePreParaStatus(ctx, "POST_MODE_STAT_DRAIN", [reply, packet.payload]);
+    if (failed) return failed;
     return { next: "PARA", send: buildParaSend(ctx) };
   }),
 );
@@ -1073,7 +984,7 @@ g.state(
         ctx.wireDpi !== undefined && !ctx.entry!.verifiedWireDpis.includes(ctx.wireDpi);
       // The generic dialect has no verified DPI at all, so the DPI is no
       // more a suspect than anything else it chose.
-      const hint = ctx.genericInfo
+      const hint = ctx.genericDialect
         ? ` The ${ctx.entry!.displayName} settings were not accepted — please report it ` +
           "with the diagnostic block logged when the session started."
         : !dpiUnverified

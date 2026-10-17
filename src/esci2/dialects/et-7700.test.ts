@@ -6,7 +6,7 @@ import { recordedDialect } from "../test-support/dialects.js";
 const ET7700_FP = "72319314b621fea0aab6cc16f4fd891534cec08f33ce80116a849f6f6e1e58d4";
 const entry = recordedDialect(ET7700_FP);
 
-// The registry entry's static fields are asserted in registry.test.ts alongside
+// The model override's static fields are asserted in model-overrides.test.ts alongside
 // the other dialects. This file covers only what's specific to the ET-7700's
 // composed PARA. The ET-7700 is an A4 EcoTank Photo (flatbed-only, ESC/I-2 over
 // plain TCP), speculative from the issue #145 diagnostic and shaped like the

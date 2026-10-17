@@ -1,8 +1,8 @@
 // src/esci2/test-support/capability-bodies.ts
 //
-// Recovers the INIT1 INFO and CAPA reply bodies, and the first init-poll STAT
-// reply, from a committed ESC/I-2 replay fixture, for tests that check
-// capability derivation against the printers we have recordings of.
+// Recovers the INIT1 INFO and CAPA reply bodies, and the first init-poll and
+// pre-PARA STAT replies, from a committed ESC/I-2 replay fixture, for tests
+// that check capability derivation against the printers we have recordings of.
 //
 // Both fixture formats carry the printer→host byte stream: pcap-extract
 // events as `{ dir: "p>h", hex }`, Frida events as `{ hook: "recv",
@@ -12,7 +12,7 @@
 // split them.
 
 import { readFileSync } from "node:fs";
-import type { DerivedCapabilities, Disagreement } from "../derivation.js";
+import type { DerivedCapabilities } from "../derivation.js";
 
 export interface CapabilityBodies {
   info: Buffer;
@@ -61,17 +61,6 @@ export const REPLAY_FIXTURES: ReadonlyArray<{
     ["DS-575W", "pcap-extract/captures/ds-575w/adf-simplex-400-mono-jpg", "adf"],
   ] as const
 ).map(([model, file, source]) => ({ model, path: `tools/${file}.jsonl`, source }));
-
-/**
- * Shadow disagreements known in advance, by fixture model. Each is a value a
- * cutover is expected to change, not a derivation bug.
- */
-export const EXPECTED_DISAGREEMENTS: Readonly<Record<string, readonly Disagreement[]>> = {
-  // Its INFO reports a single-pass ADF (#ADFDPLX1SCN), yet the entry rotates
-  // back pages: the compensation shipped before single-pass hardware was
-  // understood, and flips when the rotation cutover lands.
-  "FF-680W": [{ field: "duplexBackRotated", derived: false, entry: true }],
-};
 
 const payloadCache = new Map<string, Buffer[]>();
 
@@ -152,6 +141,22 @@ export function readInit1Bodies(path: string): CapabilityBodies {
  */
 export function readFirstInitPollStatus(path: string): { header: Buffer; body: Buffer | null } {
   return firstReply(readPrinterPayloads(path), "STAT", path);
+}
+
+/**
+ * The last STAT reply before the PARA reply: the mode switch's
+ * (POST_MODE_STAT), whose errors a scan is judged on. `body` is null for a
+ * zero-length reply.
+ */
+export function readPreParaStatus(path: string): { header: Buffer; body: Buffer | null } {
+  const payloads = readPrinterPayloads(path);
+  const isReply = (p: Buffer, cmd: string) => p.toString("latin1", 0, 5) === `${cmd}x`;
+  const para = payloads.findIndex((p) => isReply(p, "PARA"));
+  if (para < 0) throw new Error(`readPreParaStatus: no PARA reply in ${path}`);
+  let stat = para - 1;
+  while (stat >= 0 && !isReply(payloads[stat], "STAT")) stat -= 1;
+  if (stat < 0) throw new Error(`readPreParaStatus: no STAT reply before PARA in ${path}`);
+  return firstReply(payloads.slice(stat), "STAT", path);
 }
 
 // Models with no replay fixture: the facts their reporters posted in the

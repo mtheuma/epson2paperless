@@ -634,8 +634,8 @@ describe("loadConfig", () => {
   });
 
   it("rejects ESCI_FORCE_SOURCE with PRINTER_PROTOCOL=esci2-plain", () => {
-    // ESC/I-2 (TLS or plain) does its own source detection via
-    // INIT_POLL_STAT — the legacy ESCI_FORCE_SOURCE lever doesn't apply.
+    // ESC/I-2 (TLS or plain) does its own source detection via the status
+    // before PARA — the legacy ESCI_FORCE_SOURCE lever doesn't apply.
     process.env.PRINTER_IP = "10.0.0.1";
     process.env.PRINTER_PROTOCOL = "esci2-plain";
     process.env.ESCI_FORCE_SOURCE = "flatbed";

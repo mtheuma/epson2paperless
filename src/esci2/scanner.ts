@@ -12,7 +12,7 @@ import { resolveSessionTimestamp } from "../output.js";
 import type { WhitePoint } from "../postprocess/auto-color.js";
 import { esci2Graph, type Esci2Ctx } from "./graph.js";
 import { withEsci2UnlockOnDestroy, withTlsErrorLabels } from "./transport.js";
-import { supportsWireGrayscale } from "./dialects/registry.js";
+import { supportsWireGrayscale } from "./dialects/model-overrides.js";
 import type { PaperlessUploadOptions } from "../paperless-upload.js";
 import {
   DEFAULT_JPEG_QUALITY,
@@ -89,11 +89,11 @@ function validateTempBase(session: ScanSession): void {
 function buildInitialCtx(session: ScanSession, transport: "tls" | "plain"): Esci2Ctx {
   return {
     duplex: session.duplex,
-    // ET-2750 hardware is flatbed-only; pre-set the source so INIT_POLL's
-    // first iteration can still run its source-detect logic, but the
-    // graph's flatbed branch is the only valid outcome under plain TCP.
-    // ET-4950 keeps the legacy "adf" default which the INIT_POLL_STAT
-    // decision overrides per fixture.
+    // A transport-level default until the dialect resolves: a single-source
+    // printer is then pinned to its source (applyEntrySourceOverride), and
+    // one with both sources takes it from the status before PARA
+    // (POST_MODE_STAT). The ET-4950 keeps the legacy "adf" default; the
+    // ET-2750, flatbed-only on plain TCP, starts on the flatbed.
     source: transport === "plain" ? "flatbed" : "adf",
     transport,
     action: session.action,
@@ -101,6 +101,7 @@ function buildInitialCtx(session: ScanSession, transport: "tls" | "plain"): Esci
     // "auto" is a post-processing decision; on the wire it always scans colour.
     colorMode: resolveWireColorMode(session.colorMode),
     initPollIteration: 0,
+    genericDialect: false,
     imgChunkSize: 0,
     pageEndKind: "none",
     pageSide: "front",

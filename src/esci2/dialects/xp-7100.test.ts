@@ -13,12 +13,12 @@ function loadFixture(name: string): Buffer {
   return readFileSync(path.join(FIXTURE_DIR, name));
 }
 
-describe("XP-7100 registry entry", () => {
+describe("XP-7100 model override", () => {
   it("supports flatbed + ADF + duplex (has adfExtents)", () => {
     expect(entry.adfExtents).not.toBeNull();
   });
-  it("uses stat-length source detection", () => {
-    expect(entry.sourceDetection).toBe("stat-length");
+  it("reads its source from the status reply before PARA", () => {
+    expect(entry.sourceDetection).toBe("pre-para-status");
   });
   it("uses 3 init-poll iterations", () => {
     expect(entry.initPollIterations).toBe(3);

@@ -1,7 +1,7 @@
 import { parseCapaTokens, parseInfoTokens } from "./capabilities.js";
 
 /**
- * Thrown when a session lands on a printer no registry entry matches and
+ * Thrown when a session lands on a printer no model override matches and
  * whose replies leave the generic dialect without something it needs (no
  * usable scan area, an unparseable CAPA reply). Carries enough context for
  * the user to file an issue that the maintainer can act on.
@@ -63,6 +63,7 @@ export function buildDiagnostic(args: {
     `Source caps:       flatbed: ${yn(hasFlatbed)}  ADF: ${yn(hasAdf)}  duplex: ${yn(hasDuplex)}`,
     `Scan area (FB):    ${info.fbArea ?? "(absent)"}`,
     `Scan area (ADF):   ${info.adfArea ?? "(absent)"}`,
+    `ADF duplex type:   ${orAbsent(info.adfDuplexType)}`,
     `GMM list:          ${orAbsent(capa.gmmList)}`,
     `CMX list:          ${orAbsent(capa.cmxList)}`,
     `QIT list:          ${orAbsent(capa.qitList)}`,

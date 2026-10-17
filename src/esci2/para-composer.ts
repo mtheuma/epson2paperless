@@ -11,7 +11,7 @@ export interface Extents {
 
 // The "adf-crp" profile drives the #ADFCRP-led PARA shared by the FF-680W and
 // its DS-575W sibling — byte-identical layout apart from resolution, ACQ
-// extents, colour mode, and the gamma/CMX class data (all registry-supplied).
+// extents, colour mode, and the gamma/CMX class data (all override-supplied).
 export type ParaProfile = "standard" | "adf-crp";
 
 export interface ParaSpec {
@@ -28,7 +28,7 @@ export interface ParaSpec {
   /**
    * Scan resolution in DPI. Consumed by BOTH profiles: drives #RSM/#RSS and
    * scales the chosen ACQ extents (all four fields) off each profile's
-   * registry-extent reference DPI — STANDARD_BASE_DPI (300) for the standard
+   * override-window reference DPI — STANDARD_BASE_DPI (300) for the standard
    * profile, ADF_CRP_BASE_DPI (200) for adf-crp. Falls back to that profile's
    * base DPI when unset, reproducing the captured bytes exactly.
    */
@@ -69,7 +69,7 @@ export interface ParaSpec {
   adfCrpDfaLength?: number;
 }
 
-/** Reference DPI the standard profile's registry extents are captured at. */
+/** Reference DPI the standard profile's override windows are captured at. */
 export const STANDARD_BASE_DPI = 300;
 
 const pad3 = (n: number): string => n.toString().padStart(3, "0");
@@ -84,7 +84,7 @@ function renderStandardPrefix(resolution: number, jpegQuality: number): Buffer {
 }
 
 const ADF_CRP_PREFIX_HEAD = "#ADFCRP SKEW";
-// The registry's adfExtents are captured at this DPI; both the RSM/RSS
+// The overrides' adfExtents are captured at this DPI; both the RSM/RSS
 // resolution fields and the ACQ extents scale linearly off it. For the FF-680W
 // only 200 and 300 are wire-verified — see
 // .reference/wireshark-captures/ff-680w/SOURCE-NOTES.md. DS-575W adfExtents are
@@ -92,17 +92,17 @@ const ADF_CRP_PREFIX_HEAD = "#ADFCRP SKEW";
 // linear scaling).
 export const ADF_CRP_BASE_DPI = 200;
 
-/** The registry-extent reference DPI for `profile` — 200 for adf-crp, else 300. */
+/** The override-window reference DPI for `profile` — 200 for adf-crp, else 300. */
 export function baseDpiFor(profile: ParaProfile | undefined): number {
   return profile === "adf-crp" ? ADF_CRP_BASE_DPI : STANDARD_BASE_DPI;
 }
 
 /**
- * Scales registry ACQ extents, pinned at the profile's reference DPI
+ * Scales override ACQ extents, pinned at the profile's reference DPI
  * (baseDpiFor), to the wire `resolution`, exactly as composePara does.
  *
  * standard: scale the EDGES, not the offset and size independently. The
- * registry window can span the source's full advertised area (ET-4950 ADF:
+ * override window can span the source's full advertised area (ET-4950 ADF:
  * 69 + 2481 = 2550 = 8.5in x 300), and rounding x0 and w separately at a
  * half-scale (150 DPI: 34.5 -> 35, 1240.5 -> 1241) lands one pixel past the
  * area's edge, which the firmware answers with #parFAIL (ET-4956,
@@ -252,7 +252,7 @@ function composeStandardPara(spec: ParaSpec): Buffer {
   if (spec.source !== "flatbed") {
     parts.push(Buffer.from("#PAGd000", "ascii"));
   }
-  // 9. ACQ extents (fb or adf, per source). Registry extents are pinned at
+  // 9. ACQ extents (fb or adf, per source). Override windows are pinned at
   // STANDARD_BASE_DPI; scale all four fields (offsets included — e.g. the
   // ET-4950 ADF's x0=69 would drift the crop at any other DPI) to the chosen
   // resolution, by edges (see scaleAcqExtents).

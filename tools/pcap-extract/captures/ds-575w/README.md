@@ -126,10 +126,10 @@ are left untouched, so `extractCapturedParaBody` reads the scan PARA from them.
 ## Init poll
 
 The init-poll loop is kept intact at its captured **12 cycles** in both full-replay
-fixtures (registry `initPollIterations: 12`), mirroring the FF-680W's "match the
+fixtures (model override `initPollIterations: 12`), mirroring the FF-680W's "match the
 driver's count, no trim" approach. The DS-575W driver polls until ready, so the
 count is session-variable — an earlier partial capture showed 8. A future fixture
-would need its poll loop trimmed to 12 (or whatever the registry entry pins).
+would need its poll loop trimmed to 12 (or whatever the model override pins).
 
 CAPA fingerprint: `90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b074`
 
