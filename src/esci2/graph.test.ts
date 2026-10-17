@@ -1714,10 +1714,10 @@ describe("esci2Graph INIT_POLL — source from the status reply's content (model
       const warnings = warn.mock.calls.map((args) => args.join(" "));
       expect(warnings).toHaveLength(2);
       expect(warnings[0]).toMatch(
-        /the printer reported ADF PJ, which does not affect a flatbed scan — the scan continues/,
+        /the printer reported ADF PJ, which is not on the flatbed being scanned — the scan continues/,
       );
       expect(warnings[1]).toMatch(
-        /the printer reported FB LTF, which does not affect an ADF scan — the scan continues/,
+        /the printer reported FB LTF, which is not on the ADF being scanned — the scan continues/,
       );
     } finally {
       warn.mockRestore();
@@ -1782,7 +1782,7 @@ describe("esci2Graph INIT_POLL — source from the status reply's content (model
         expect(outcome).toBe("INIT_POLL_FIN");
         expect(ctx.source).toBe("adf");
         expect(warn.mock.calls.map((args) => args.join(" "))).toEqual([
-          expect.stringMatching(/reported FB LOCK, which does not affect an ADF scan/),
+          expect.stringMatching(/reported FB LOCK, which is not on the ADF being scanned/),
         ]);
       } finally {
         warn.mockRestore();
@@ -1814,7 +1814,7 @@ describe("esci2Graph INIT_POLL — source from the status reply's content (model
         expect(outcome).toBe("INIT_POLL_FIN");
         expect(ctx.source).toBe("flatbed");
         expect(warn.mock.calls.map((args) => args.join(" "))).toEqual([
-          expect.stringMatching(/reported ADF PJ, which does not affect a flatbed scan/),
+          expect.stringMatching(/reported ADF PJ, which is not on the flatbed being scanned/),
         ]);
       } finally {
         warn.mockRestore();

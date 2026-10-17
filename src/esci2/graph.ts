@@ -615,6 +615,9 @@ function judgeFirstStatus(
 ): TransitionResult<Esci2Ctx> | undefined {
   const errors = status.flatMap((part) => parseStatErrors(part));
   const detects = ctx.entry!.sourceDetection === "init-poll-status";
+  // A fixed-source printer is judged against its source. So is one whose
+  // INFO advertises no scan area (sourceDetection null): it keeps the
+  // scanner shell's default, which is the unit its PARA will scan.
   const judgement = judgeStatusErrors(errors, detects ? "detect" : ctx.source);
   if ("blocking" in judgement) {
     return {
@@ -625,10 +628,10 @@ function judgeFirstStatus(
     };
   }
   if (judgement.warnings.length > 0) {
-    const scan = judgement.source === "flatbed" ? "a flatbed scan" : "an ADF scan";
+    const scanned = judgement.source === "flatbed" ? "flatbed" : "ADF";
     log.warn(
-      `Init poll: the printer reported ${judgement.warnings.join(", ")}, which does not ` +
-        `affect ${scan} — the scan continues.`,
+      `Init poll: the printer reported ${judgement.warnings.join(", ")}, which is not ` +
+        `on the ${scanned} being scanned — the scan continues.`,
     );
   }
   if (!detects) return undefined;

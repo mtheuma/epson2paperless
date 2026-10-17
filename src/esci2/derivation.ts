@@ -123,12 +123,13 @@ export function judgeStatusErrors(
 ): StatusJudgement {
   const scanned =
     source === "detect" ? (errors.includes(ADF_PAPER_EMPTY) ? "flatbed" : "adf") : source;
-  // ADF paper empty is no error to report when the ADF may be scanned. On a
-  // printer with both sources it is what says flatbed. On an ADF-only one it
-  // is exempt only because this is the first status reply, while Epson's
-  // driver judges the last one before PARA: the DS-575W duplex capture's
-  // first status says paper empty, yet the scan goes ahead.
-  const reported = source === "flatbed" ? errors : errors.filter((e) => e !== ADF_PAPER_EMPTY);
+  // ADF paper empty is never reported: it is a state, not a fault. On a
+  // printer with both sources it is what says flatbed, and a flatbed scan
+  // never needs the feeder. On an ADF-only one it is exempt only because
+  // this is the first status reply, while Epson's driver judges the last one
+  // before PARA: the DS-575W duplex capture's first status says paper empty,
+  // yet the scan goes ahead.
+  const reported = errors.filter((e) => e !== ADF_PAPER_EMPTY);
   const blocking = reported.filter((e) => unitOf(e) === UNIT[scanned]);
   if (blocking.length > 0) return { blocking };
   return { source: scanned, warnings: reported.filter((e) => unitOf(e) !== UNIT[scanned]) };

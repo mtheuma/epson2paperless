@@ -174,8 +174,8 @@ describe("judgeStatusErrors — a printer fixed to one source", () => {
   it("flatbed: a flatbed error stops; any other unit's error warns", () => {
     expect(judge("", "flatbed")).toEqual({ source: "flatbed", warnings: [] });
     expect(judge("#ERRFB  LOCK", "flatbed")).toEqual({ blocking: ["FB LOCK"] });
-    // A flatbed-only printer has no feeder to be empty, so even paper empty warns.
-    expect(judge("#ERRADF PE  ", "flatbed")).toEqual({ source: "flatbed", warnings: ["ADF PE"] });
+    // Paper empty is a state, not a fault: never worth a warning.
+    expect(judge("#ERRADF PE  ", "flatbed")).toEqual({ source: "flatbed", warnings: [] });
     expect(judge("#ERRADF PJ  #ERRTPU OPN ", "flatbed")).toEqual({
       source: "flatbed",
       warnings: ["ADF PJ", "TPU OPN"],
@@ -239,6 +239,16 @@ describe("content-based source decision lands on the recorded source on every fi
     // Every recorded flatbed status is the 12-byte "ADF paper empty"; every
     // recorded ADF status is empty.
     expect(body?.length ?? 0).toBe(source === "flatbed" ? 12 : 0);
+  });
+
+  it.each(REPLAY_FIXTURES)("$model: no recorded first status stops or warns: $path", ({ path }) => {
+    const { info, capa } = readInit1Bodies(path);
+    const detection = derive(info, capa).sourceDetection;
+    const { header, body } = readFirstInitPollStatus(path);
+    const errors = [header, body ?? Buffer.alloc(0)].flatMap((b) => parseStatErrors(b));
+    const source =
+      detection === "fixed-flatbed" ? "flatbed" : detection === "fixed-adf" ? "adf" : "detect";
+    expect(judgeStatusErrors(errors, source)).toMatchObject({ warnings: [] });
   });
 
   it("DS-575W: its first statuses say paper-empty, yet it stays fixed to the ADF", () => {
