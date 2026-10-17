@@ -394,6 +394,15 @@ describe("on a CAPA fingerprint mismatch, an override's own window must fit the 
     expect(fit[0]).toContain("generic scan window");
   });
 
+  it("a source INFO advertises no area for is left with no window, warned about once", () => {
+    const noFb = Buffer.from(xp7100Info.replace(/#FB AREA[^#]*/, ""), "latin1");
+    const { resolved, warnings } = lookup(noFb, doctored(XP7100.capa));
+    expect(resolved.entry.fbExtents).toBeNull();
+    expect(resolved.entry.adfExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 3300 });
+    expect(warnings.filter((w) => w.includes("doesn't fit"))).toEqual([]);
+    expect(warnings.filter((w) => w.includes("advertises no usable flatbed"))).toHaveLength(1);
+  });
+
   it("a window that still fits is kept, with no window warning", () => {
     const { resolved, warnings } = lookup(XP7100.info, doctored(XP7100.capa));
     expect(resolved.matchedBy).toBe("pid");

@@ -1,7 +1,7 @@
 // src/esci2/scan-window.ts
 import { parseArea, type InfoTokens } from "./capabilities.js";
 import { baseDpiFor, scaleAcqExtents, type Extents, type ParaProfile } from "./para-composer.js";
-import type { DialectWindow } from "./dialects/registry.js";
+import type { Dialect, DialectWindow } from "./dialects/registry.js";
 
 /**
  * Scan windows from the printer's INFO reply, which gives each source's
@@ -64,6 +64,20 @@ export function alignedX0(
   if (align === "LEFT") return 0;
   if (align === "CNTR") return Math.floor((areaWidth - windowWidth) / 2);
   return null;
+}
+
+/**
+ * A dialect's own windows: the ones it doesn't inherit. An inherited window
+ * is the generic one, which fits the area and follows the alignment rule by
+ * construction.
+ */
+export function ownWindows(
+  entry: Pick<Dialect, "fbExtents" | "adfExtents">,
+): [WindowSource, Extents][] {
+  const out: [WindowSource, Extents][] = [];
+  if (entry.fbExtents !== null && !entry.fbExtents.generic) out.push(["flatbed", entry.fbExtents]);
+  if (entry.adfExtents !== null && !entry.adfExtents.generic) out.push(["adf", entry.adfExtents]);
+  return out;
 }
 
 /**

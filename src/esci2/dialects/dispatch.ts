@@ -20,6 +20,7 @@ import {
   fitsScanArea,
   genericWindowIn,
   inheritedWindow,
+  ownWindows,
   type WindowSource,
 } from "../scan-window.js";
 import { createLogger } from "../../logger.js";
@@ -137,27 +138,29 @@ function resolveOverride(
 
 /**
  * The dialect with each of its own windows that leaves the printer's scan
- * area replaced by the generic window for that area. An inherited window is
- * the generic one already, and fits by construction.
+ * area replaced by the generic window for that area, with a warning. An
+ * inherited window is the generic one already, and fits by construction.
+ * Where INFO advertises no usable area there is no generic window either:
+ * the source is left with none, which resolveOverride warns about.
  */
 function keepFittingWindows(entry: Dialect, info: InfoTokens): Dialect {
   const profile = entry.paraProfile;
-  const keepOrReplace = (source: WindowSource, window: DialectWindow | null) => {
-    if (window === null || window.generic !== undefined) return window;
-    if (fitsScanArea(info, source, window, profile)) return window;
-    const { x0, y0, w, h } = window;
-    log.warn(
-      `${entry.displayName}: its ${source} scan window (${w}x${h} at ${x0},${y0}, ` +
-        `${baseDpiFor(profile)} DPI) doesn't fit the scan area this printer reports, so ` +
-        `the generic scan window is used instead.`,
-    );
-    return inheritedWindow(info, source, profile);
-  };
-  return {
-    ...entry,
-    fbExtents: keepOrReplace("flatbed", entry.fbExtents),
-    adfExtents: keepOrReplace("adf", entry.adfExtents),
-  };
+  const out = { ...entry };
+  for (const [source, window] of ownWindows(entry)) {
+    if (fitsScanArea(info, source, window, profile)) continue;
+    const generic = inheritedWindow(info, source, profile);
+    if (generic !== null) {
+      const { x0, y0, w, h } = window;
+      log.warn(
+        `${entry.displayName}: its ${source} scan window (${w}x${h} at ${x0},${y0}, ` +
+          `${baseDpiFor(profile)} DPI) doesn't fit the scan area this printer reports, so ` +
+          `the generic scan window is used instead.`,
+      );
+    }
+    if (source === "flatbed") out.fbExtents = generic;
+    else out.adfExtents = generic;
+  }
+  return out;
 }
 
 /**

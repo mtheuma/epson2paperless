@@ -351,19 +351,13 @@ describe("live fields derived for models known only from issue diagnostics", () 
 });
 
 describe("derived sources agree with the registry entry for models known only from issue diagnostics", () => {
-  // A block determines the sources only when it carries both area lines.
-  const withSources = DIAGNOSTICS.filter(({ block }) =>
-    bodiesFromDiagnostic(block).fields.includes("sources"),
-  );
-
-  it("covers every diagnostic block", () => {
-    expect(withSources).toEqual(DIAGNOSTICS);
-  });
-
-  it.each(withSources)("$model (#$issue)", ({ fp, block }) => {
+  it.each(DIAGNOSTICS)("$model (#$issue)", ({ fp, block }) => {
     const entry: RegistryEntry | undefined = REGISTRY.get(fp);
     expect(entry).toBeDefined();
-    const { info, capa } = bodiesFromDiagnostic(block);
+    const { info, capa, fields } = bodiesFromDiagnostic(block);
+    // A block determines the sources only when it carries both area lines;
+    // every recorded block does.
+    expect(fields).toContain("sources");
     expect(derive(info, capa).sources).toEqual(entrySources(entry!));
   });
 });

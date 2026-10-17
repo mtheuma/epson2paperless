@@ -4,12 +4,13 @@ import {
   alignedX0,
   fitsScanArea,
   genericWindow,
+  ownWindows,
   sourceGeometry,
   toPixels,
   type WindowSource,
 } from "./scan-window.js";
 import { parseCapaTokens, parseInfoTokens } from "./capabilities.js";
-import { REGISTRY, type Dialect } from "./dialects/registry.js";
+import { REGISTRY } from "./dialects/registry.js";
 import { makeParaSpec, withCapabilities } from "./dialects/dispatch.js";
 import { deriveCapabilities } from "./derivation.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
@@ -73,17 +74,6 @@ describe("alignedX0", () => {
     expect(alignedX0("XXXX", 2550, 2481)).toBeNull();
   });
 });
-
-/**
- * An entry's own windows: an inherited one is the generic window, which fits
- * the area and follows the alignment rule by construction.
- */
-function ownWindows(entry: Dialect): [WindowSource, Extents][] {
-  const out: [WindowSource, Extents][] = [];
-  if (entry.fbExtents !== null && !entry.fbExtents.generic) out.push(["flatbed", entry.fbExtents]);
-  if (entry.adfExtents !== null && !entry.adfExtents.generic) out.push(["adf", entry.adfExtents]);
-  return out;
-}
 
 describe("fitsScanArea", () => {
   const et4950Info = info(
