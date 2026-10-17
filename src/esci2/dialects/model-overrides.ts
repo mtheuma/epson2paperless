@@ -129,9 +129,10 @@ export interface Evidence {
 }
 
 /**
- * Colour evidence also records the colour settings it vouched for, as their
- * hash (colourSettingsHash in test-support/provenance.ts). Changing an
- * override's colour bytes leaves its old evidence vouching for the old ones.
+ * Colour evidence also records the colour settings it vouched for: the hash
+ * of the override's colour bytes when it was recorded (colourSettingsHash in
+ * test-support/provenance.ts). Changing those bytes leaves the old evidence
+ * vouching for the old ones.
  */
 export interface ColourEvidence extends Evidence {
   vouchesFor: string;

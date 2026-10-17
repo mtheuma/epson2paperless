@@ -140,6 +140,32 @@ describe("provenance", () => {
       ]);
     });
 
+    it("doesn't count an inheritance as a sibling's own report", () => {
+      const inherited = withOverride("ET-2750", (o) => ({
+        ...o,
+        provenance: {
+          ...o.provenance,
+          siblings: { "XP-4100": [{ kind: "inherited:ET-2750", link: { pr: 142 } }] },
+        },
+      }));
+      expect(provenanceProblems(README, inherited, UNPLACED)).toEqual([
+        "XP-4100: shares the ET-2750 / XP-4100 (ESC/I-2 over plain TCP) override but has no report of its own",
+      ]);
+    });
+
+    it("holds an unplaced model's report to the same rules", () => {
+      expect(
+        provenanceProblems(README, MODEL_OVERRIDES, {
+          ...UNPLACED,
+          "WF-2845": [{ kind: "reporter-report", link: { fixture: "tools/no-such-report.md" } }],
+          "ET-3700": [{ kind: "inherited:ET-2750", link: { issue: 228 } }],
+        }),
+      ).toEqual([
+        "ET-3700: ✅ in the README, but no model override serves it",
+        "WF-2845: its report links a fixture that doesn't exist (tools/no-such-report.md)",
+      ]);
+    });
+
     it("fails for a ✅ model no override serves", () => {
       expect(provenanceProblems(README, MODEL_OVERRIDES, {})).toEqual([
         "ET-3700: ✅ in the README, but no model override serves it",

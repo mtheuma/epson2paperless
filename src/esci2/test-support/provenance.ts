@@ -8,9 +8,7 @@ import { existsSync } from "node:fs";
 import { GAMMA_CLASSES, type GammaClassName } from "../data/gamma-classes.js";
 import { CMX_CLASSES, type CmxClassName } from "../data/cmx-classes.js";
 import type { Evidence, EvidenceKind, ModelOverride } from "../dialects/model-overrides.js";
-import { WF3620_ENTRY } from "../../esci/dialects/wf3620.js";
-import { XP620_ENTRY } from "../../esci/dialects/xp620.js";
-import { ET2550_ENTRY } from "../../esci/dialects/et2550.js";
+import { LEGACY_DIALECT_ENTRIES } from "../../esci/dialects/registry.js";
 
 type ColourSettings = Pick<ModelOverride, "gmm" | "gammaClass" | "cmxClass" | "monoGammaClass">;
 
@@ -19,7 +17,8 @@ type ColourSettings = Pick<ModelOverride, "gmm" | "gammaClass" | "cmxClass" | "m
  * JPG and PDF tone curves and colour matrices, and its mono tone curve. It
  * hashes bytes, not class names, so renaming a class keeps its evidence;
  * changing a byte does not. A colour evidence entry records the hash of the
- * settings it vouched for.
+ * override's settings when it was recorded. The host-side `toneCurve` is not
+ * sent to the printer, so it isn't part of it.
  */
 export function colourSettingsHash(settings: ColourSettings): string {
   const hash = createHash("sha256");
@@ -46,7 +45,8 @@ const COLOUR_KINDS: ReadonlySet<EvidenceKind> = new Set([
   "reporter-report",
 ]);
 
-const LEGACY_MODELS = [WF3620_ENTRY, XP620_ENTRY, ET2550_ENTRY].map((e) => e.name);
+// Legacy dialect names are model names without the hyphen ("wf3620").
+const LEGACY_MODELS = LEGACY_DIALECT_ENTRIES.map((e) => e.name);
 
 /** The README compatibility rows marked ✅, one model name per entry ("A / B" splits). */
 export function verifiedReadmeModels(readme: string): string[] {
@@ -68,9 +68,9 @@ const isInherited = (e: Evidence): boolean => e.kind.startsWith("inherited:");
  * when it all holds:
  *
  * - every ✅ ESC/I-2 model in the README is served by exactly one override:
- *   recorded from it, or a sibling sharing it with a report of its own.
- *   `unplaced` lists ✅ models known to reach some override whose override
- *   isn't recorded, each with its report;
+ *   recorded from it, or a sibling sharing it with a report of its own (any
+ *   kind but an inheritance). `unplaced` lists ✅ models known to reach some
+ *   override whose override isn't recorded, each with such a report;
  * - a ✅ model's override has colour evidence, other than an own capture or
  *   an inherited setting, that vouched for its current colour bytes;
  * - its window and poll-count evidence isn't inherited only;
@@ -93,7 +93,7 @@ export function provenanceProblems(
         o.provenance.models.includes(model) || Object.hasOwn(o.provenance.siblings ?? {}, model),
     );
     if (owners.length === 0) {
-      if ((unplaced[model]?.length ?? 0) === 0) {
+      if (!hasOwnReport(unplaced[model])) {
         problems.push(`${model}: ✅ in the README, but no model override serves it`);
       }
       continue;
@@ -105,32 +105,33 @@ export function provenanceProblems(
     const [owner] = owners;
     verified.add(owner);
     const reports = owner.provenance.siblings?.[model];
-    if (reports !== undefined && reports.length === 0) {
+    if (reports !== undefined && !hasOwnReport(reports)) {
       problems.push(
         `${model}: shares the ${owner.displayName} override but has no report of its own`,
       );
     }
   }
 
+  // Every link, whether or not its model is ✅.
+  const linkProblems = (where: string, evidence: readonly Evidence[]): void => {
+    for (const e of evidence) {
+      if ("fixture" in e.link && !existsSync(e.link.fixture)) {
+        problems.push(`${where} links a fixture that doesn't exist (${e.link.fixture})`);
+      }
+      if (isInherited(e)) {
+        const from = e.kind.slice("inherited:".length);
+        if (!recorded.has(from)) {
+          problems.push(`${where} is inherited from ${from}, which no override records`);
+        }
+      }
+    }
+  };
+
   for (const o of overrides) {
     const { colour, window, pollCount, siblings } = o.provenance;
     const groups = { colour, window, pollCount, ...siblings };
     for (const [group, evidence] of Object.entries(groups)) {
-      for (const e of evidence) {
-        if ("fixture" in e.link && !existsSync(e.link.fixture)) {
-          problems.push(
-            `${o.displayName}: ${group} links a fixture that doesn't exist (${e.link.fixture})`,
-          );
-        }
-        if (isInherited(e)) {
-          const from = e.kind.slice("inherited:".length);
-          if (!recorded.has(from)) {
-            problems.push(
-              `${o.displayName}: ${group} is inherited from ${from}, which no override records`,
-            );
-          }
-        }
-      }
+      linkProblems(`${o.displayName}: ${group}`, evidence);
     }
     if (!verified.has(o)) continue;
     const hash = colourSettingsHash(o);
@@ -145,5 +146,12 @@ export function provenanceProblems(
       }
     }
   }
+  for (const [model, reports] of Object.entries(unplaced)) {
+    linkProblems(`${model}: its report`, reports);
+  }
   return problems;
 }
+
+/** Whether a model has evidence of its own: anything but an inheritance. */
+const hasOwnReport = (evidence: readonly Evidence[] | undefined): boolean =>
+  (evidence ?? []).some((e) => !isInherited(e));
