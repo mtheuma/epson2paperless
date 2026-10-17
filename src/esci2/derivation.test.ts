@@ -3,7 +3,6 @@ import {
   capabilityFields,
   compareWithEntry,
   deriveCapabilities,
-  isExpectedDisagreement,
   sourceFromStatusErrors,
   type DerivedCapabilities,
 } from "./derivation.js";
@@ -12,7 +11,6 @@ import { REGISTRY, type RegistryEntry } from "./dialects/registry.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
 import {
   DIAGNOSTICS,
-  EXPECTED_DISAGREEMENTS,
   REPLAY_FIXTURES,
   bodiesFromDiagnostic,
   readFirstInitPollStatus,
@@ -56,7 +54,7 @@ describe("deriveCapabilities — rules", () => {
 
   it("capabilityFields puts the live fields in the dialect's shape", () => {
     const derived = derive(
-      ascii("#ADFAREAd850i0001550"),
+      ascii("#ADFAREAd850i0001550#ADFDPLX2SCN"),
       ascii("#ADFDPLX#ADFCRP #QITLISTPREFON  OFF "),
     );
     expect(capabilityFields(derived)).toEqual({
@@ -64,6 +62,7 @@ describe("deriveCapabilities — rules", () => {
       optionalSegments: { qit: true, cct: false },
       paraProfile: "adf-crp",
       sourceDetection: "fixed-adf",
+      duplexBackRotated: true,
     });
   });
 });
@@ -113,9 +112,19 @@ describe("deriveCapabilities — PARA profile and back-page rotation", () => {
   });
 
   it("back pages are rotated exactly for a two-pass (2SCN) duplex ADF", () => {
-    expect(derive(ascii("#ADFDPLX2SCN"), NO_CAPA).duplexBackRotated).toBe(true);
-    expect(derive(ascii("#ADFDPLX1SCN"), NO_CAPA).duplexBackRotated).toBe(false);
-    expect(derive(ascii("#ADFAREAd850i0001400"), NO_CAPA).duplexBackRotated).toBe(false);
+    const DUPLEX = ascii("#ADFDPLX");
+    const area = "#ADFAREAd850i0001400";
+    expect(derive(ascii(area + "#ADFDPLX2SCN"), DUPLEX).duplexBackRotated).toBe(true);
+    expect(derive(ascii(area + "#ADFDPLX1SCN"), DUPLEX).duplexBackRotated).toBe(false);
+    expect(derive(ascii(area), DUPLEX).duplexBackRotated).toBe(false);
+  });
+
+  it("no duplex ADF means no rotated back pages, whatever INFO's duplex type says", () => {
+    // CAPA lacks #ADFDPLX, or INFO has no ADF scan area: adfDuplex is false.
+    expect(derive(ascii("#ADFAREAd850i0001400#ADFDPLX2SCN"), NO_CAPA).duplexBackRotated).toBe(
+      false,
+    );
+    expect(derive(ascii("#ADFDPLX2SCN"), ascii("#ADFDPLX")).duplexBackRotated).toBe(false);
   });
 });
 
@@ -153,17 +162,13 @@ describe("compareWithEntry", () => {
 
   it("returns one disagreement per differing field, naming both values", () => {
     expect(
-      compareWithEntry(
-        { ...agreeing, sources: { flatbed: false, adf: true }, duplexBackRotated: false },
-        entry,
-      ),
+      compareWithEntry({ ...agreeing, sources: { flatbed: false, adf: true } }, entry),
     ).toEqual([
       {
         field: "sources",
         derived: { flatbed: false, adf: true },
         entry: { flatbed: true, adf: true },
       },
-      { field: "duplexBackRotated", derived: false, entry: true },
     ]);
   });
 
@@ -174,38 +179,18 @@ describe("compareWithEntry", () => {
       adfDuplex: false,
       paraProfile: "adf-crp",
       sourceDetection: "fixed-adf",
+      duplexBackRotated: false,
     } as const;
     expect(compareWithEntry({ ...agreeing, ...live }, entry)).toEqual([]);
   });
 });
 
 describe("shadow derivation agrees with every replay fixture", () => {
-  it.each(REPLAY_FIXTURES)("$model: $path", ({ model, path }) => {
+  it.each(REPLAY_FIXTURES)("$model: $path", ({ path }) => {
     const { info, capa } = readInit1Bodies(path);
     const entry = REGISTRY.get(computeCapaFingerprint(capa));
     expect(entry).toBeDefined();
-    expect(compareWithEntry(derive(info, capa), entry!)).toEqual(
-      EXPECTED_DISAGREEMENTS[model] ?? [],
-    );
-  });
-
-  it("every expected disagreement is one its entry flags as unconfirmed", () => {
-    for (const { model, path } of REPLAY_FIXTURES) {
-      const entry = REGISTRY.get(computeCapaFingerprint(readInit1Bodies(path).capa))!;
-      for (const d of EXPECTED_DISAGREEMENTS[model] ?? []) {
-        expect(isExpectedDisagreement(d, entry)).toBe(true);
-      }
-    }
-    // And only those: the same field on an entry that doesn't flag it counts.
-    const et4950 = REGISTRY.get(ET4950_FP)!;
-    expect(
-      isExpectedDisagreement({ field: "duplexBackRotated", derived: false, entry: true }, et4950),
-    ).toBe(false);
-  });
-
-  it("every expected disagreement names a fixture model", () => {
-    const models = new Set(REPLAY_FIXTURES.map((f) => f.model));
-    for (const model of Object.keys(EXPECTED_DISAGREEMENTS)) expect(models).toContain(model);
+    expect(compareWithEntry(derive(info, capa), entry!)).toEqual([]);
   });
 
   it("adf-crp is derived for exactly the FF-680W and DS-575W", () => {
@@ -263,7 +248,7 @@ describe("content-based source decision lands on the recorded source on every fi
  */
 type LiveFields = Pick<
   DerivedCapabilities,
-  "qit" | "cct" | "adfDuplex" | "paraProfile" | "sourceDetection"
+  "qit" | "cct" | "adfDuplex" | "paraProfile" | "sourceDetection" | "duplexBackRotated"
 >;
 // Source detection: "init-poll-status" was the entry's "stat-length".
 const STATUS = "init-poll-status";
@@ -274,6 +259,7 @@ const LIVE_FIELDS: Record<string, Partial<LiveFields>> = {
     adfDuplex: true,
     paraProfile: "standard",
     sourceDetection: STATUS,
+    duplexBackRotated: true, // two-pass ADF (#ADFDPLX2SCN)
   },
   "ET-2750": {
     qit: false,
@@ -281,6 +267,7 @@ const LIVE_FIELDS: Record<string, Partial<LiveFields>> = {
     adfDuplex: false,
     paraProfile: "standard",
     sourceDetection: "fixed-flatbed",
+    duplexBackRotated: false,
   },
   "XP-7100": {
     qit: true,
@@ -288,6 +275,7 @@ const LIVE_FIELDS: Record<string, Partial<LiveFields>> = {
     adfDuplex: true,
     paraProfile: "standard",
     sourceDetection: STATUS,
+    duplexBackRotated: true, // two-pass ADF (#ADFDPLX2SCN)
   },
   "ET-4800": {
     qit: false,
@@ -295,6 +283,7 @@ const LIVE_FIELDS: Record<string, Partial<LiveFields>> = {
     adfDuplex: false,
     paraProfile: "standard",
     sourceDetection: STATUS,
+    duplexBackRotated: false,
   },
   "ET-7700": {
     qit: true,
@@ -302,6 +291,7 @@ const LIVE_FIELDS: Record<string, Partial<LiveFields>> = {
     adfDuplex: false,
     paraProfile: "standard",
     sourceDetection: "fixed-flatbed",
+    duplexBackRotated: false,
   },
   "FF-680W": {
     qit: false,
@@ -309,6 +299,9 @@ const LIVE_FIELDS: Record<string, Partial<LiveFields>> = {
     adfDuplex: true,
     paraProfile: "adf-crp",
     sourceDetection: "fixed-adf",
+    // Single-pass ADF (#ADFDPLX1SCN). The entry used to rotate: the one
+    // value this cutover changes.
+    duplexBackRotated: false,
   },
   "DS-575W": {
     qit: false,
@@ -316,6 +309,7 @@ const LIVE_FIELDS: Record<string, Partial<LiveFields>> = {
     adfDuplex: true,
     paraProfile: "adf-crp",
     sourceDetection: "fixed-adf",
+    duplexBackRotated: false, // single-pass ADF (#ADFDPLX1SCN)
   },
   // Its block has no CCT line, so its session sends #CCT exactly when its
   // own CAPA lists COL; nothing recorded says which.
@@ -354,7 +348,17 @@ const LIVE_FIELDS: Record<string, Partial<LiveFields>> = {
     sourceDetection: STATUS,
   },
 };
-const LIVE = ["qit", "cct", "adfDuplex", "paraProfile", "sourceDetection"] as const;
+const LIVE = [
+  "qit",
+  "cct",
+  "adfDuplex",
+  "paraProfile",
+  "sourceDetection",
+  "duplexBackRotated",
+] as const;
+// A diagnostic block doesn't carry INFO's duplex type, so back-page rotation
+// is checked on fixtures only. No diagnostic-only model has a duplex ADF.
+const LIVE_IN_DIAGNOSTICS = LIVE.filter((f) => f !== "duplexBackRotated");
 
 describe("live fields derived for every replay fixture", () => {
   it.each(REPLAY_FIXTURES)("$model: $path", ({ model, path }) => {
@@ -368,7 +372,7 @@ describe("live fields derived for models known only from issue diagnostics", () 
   it.each(DIAGNOSTICS)("$model (#$issue)", ({ model, block }) => {
     const { info, capa, fields } = bodiesFromDiagnostic(block);
     const derived = derive(info, capa);
-    for (const field of LIVE.filter((f) => fields.includes(f))) {
+    for (const field of LIVE_IN_DIAGNOSTICS.filter((f) => fields.includes(f))) {
       expect(LIVE_FIELDS[model][field], field).toBeDefined();
       expect(derived[field], field).toBe(LIVE_FIELDS[model][field]);
     }
@@ -377,7 +381,7 @@ describe("live fields derived for models known only from issue diagnostics", () 
   it("checks every live field of every block except the ET-2950's CCT", () => {
     for (const { model, block } of DIAGNOSTICS) {
       const { fields } = bodiesFromDiagnostic(block);
-      const unchecked = LIVE.filter((f) => !fields.includes(f));
+      const unchecked = LIVE_IN_DIAGNOSTICS.filter((f) => !fields.includes(f));
       expect(unchecked, model).toEqual(model === "ET-2950" ? ["cct"] : []);
     }
   });

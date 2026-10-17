@@ -34,7 +34,7 @@ import {
   type ResolvedEntry,
 } from "./dialects/dispatch.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
-import { compareWithEntry, isExpectedDisagreement, sourceFromStatusErrors } from "./derivation.js";
+import { compareWithEntry, sourceFromStatusErrors } from "./derivation.js";
 import { composePara, baseDpiFor, type ParaSpec } from "./para-composer.js";
 import {
   parseCapaTokens,
@@ -411,6 +411,7 @@ twoPhaseRead(
       adfDuplex: ctx.entry.adfDuplex,
       paraProfile: ctx.entry.paraProfile,
       sourceDetection: ctx.entry.sourceDetection,
+      duplexBackRotated: ctx.entry.duplexBackRotated,
     });
     if (resolved.override === undefined) {
       // Built from the derivation itself, so there is nothing to compare.
@@ -424,16 +425,7 @@ twoPhaseRead(
     try {
       const dialect = ctx.entry.displayName;
       for (const d of compareWithEntry(resolved.derived, resolved.override)) {
-        // A disagreement the entry already flags as unconfirmed is known;
-        // repeating it at info on every scan would read as a new problem.
-        if (isExpectedDisagreement(d, ctx.entry)) {
-          log.debug("Capability derivation disagrees with the dialect entry (known)", {
-            dialect,
-            ...d,
-          });
-        } else {
-          log.info("Capability derivation disagrees with the dialect entry", { dialect, ...d });
-        }
+        log.info("Capability derivation disagrees with the dialect entry", { dialect, ...d });
       }
       for (const p of windowProblems(info, ctx.entry)) {
         log.info("Scan window disagrees with the printer's scan area", { dialect, ...p });
@@ -833,6 +825,31 @@ g.state(
 // MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_META states
 // =============================================================================
 
+// Models already warned about, by display name: the warning is once per
+// process per model, so a daemon doesn't repeat it on every scan.
+const warnedDuplexOrientation = new Set<string>();
+
+// Back-page rotation comes from the printer's INFO duplex type. Where no
+// capture or hardware report has confirmed that orientation for this model
+// (none recorded, or one that vouched for the other), say so on the first
+// duplex scan, or a wrong call could never be reported.
+function warnOnUnconfirmedDuplexOrientation(entry: Dialect): void {
+  const evidence = entry.duplexOrientationEvidence;
+  if (evidence?.backRotated === entry.duplexBackRotated) return;
+  if (warnedDuplexOrientation.has(entry.displayName)) return;
+  warnedDuplexOrientation.add(entry.displayName);
+  const choice = entry.duplexBackRotated
+    ? "turned 180° (the printer reports a two-pass ADF)"
+    : "left as delivered (the printer reports no two-pass ADF)";
+  const contrary =
+    evidence === undefined ? "" : ` That contradicts what was confirmed (${evidence.source}).`;
+  log.warn(
+    `${entry.displayName}: which way up duplex back pages arrive hasn't been confirmed ` +
+      `on this model. Back pages are ${choice}.${contrary} If they come out upside down, ` +
+      "please open an issue.",
+  );
+}
+
 // Builds the PARA header + body send pair. Called once per dispatch in
 // POST_MODE_STAT and POST_MODE_STAT_DRAIN; composePara + registry entry
 // selects the correct blob for the detected hardware.
@@ -851,16 +868,7 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
         "wire support — scanning in colour and converting to greyscale host-side.",
     );
   }
-  // An unverified back-rotation assumption must be visible in the log on the
-  // scans it affects, or no hardware report can ever correct it (#128 showed
-  // the DS-575W's sibling hardware delivers backs upright).
-  if (paraSource === "adf-duplex" && ctx.entry!.duplexBackRotationUnverified) {
-    log.warn(
-      `${ctx.entry!.displayName}: the duplex back-page rotation compensation is ` +
-        "unconfirmed on this single-pass hardware — if back sides come out " +
-        "upside down, please open an issue.",
-    );
-  }
+  if (paraSource === "adf-duplex") warnOnUnconfirmedDuplexOrientation(ctx.entry!);
 
   // Resolve the target DPI against what the printer actually advertised in
   // CAPA — exact match, else smallest-above + host downsample, else capped

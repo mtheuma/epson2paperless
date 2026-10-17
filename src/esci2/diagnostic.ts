@@ -63,6 +63,7 @@ export function buildDiagnostic(args: {
     `Source caps:       flatbed: ${yn(hasFlatbed)}  ADF: ${yn(hasAdf)}  duplex: ${yn(hasDuplex)}`,
     `Scan area (FB):    ${info.fbArea ?? "(absent)"}`,
     `Scan area (ADF):   ${info.adfArea ?? "(absent)"}`,
+    `ADF duplex type:   ${orAbsent(info.adfDuplexType)}`,
     `GMM list:          ${orAbsent(capa.gmmList)}`,
     `CMX list:          ${orAbsent(capa.cmxList)}`,
     `QIT list:          ${orAbsent(capa.qitList)}`,

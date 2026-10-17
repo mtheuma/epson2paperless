@@ -14,7 +14,6 @@ import { parseCapaTokens, parseStatErrors } from "./capabilities.js";
 import { DEFAULT_JPEG_QUALITY } from "../config.js";
 import { setLogLevel } from "../logger.js";
 import {
-  EXPECTED_DISAGREEMENTS,
   REPLAY_FIXTURES,
   readFirstInitPollStatus,
   readInit1Bodies,
@@ -939,6 +938,94 @@ describe("esci2Graph POST_MODE_STAT — duplex capability guard", () => {
   });
 });
 
+describe("esci2Graph POST_MODE_STAT — unconfirmed duplex orientation warning", () => {
+  const statPayload = Buffer.from("STATx0000000" + " ".repeat(52), "ascii");
+  const ORIENTATION_WARNING = "which way up duplex back pages arrive";
+
+  // The warn lines one PARA build logs.
+  function orientationWarnings(overrides: Partial<import("./graph.js").Esci2Ctx>): string[] {
+    const state = esci2Graph.states.POST_MODE_STAT;
+    if (state.kind !== "decision") throw new Error("POST_MODE_STAT not a decision");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const result = state.decide(makeCtx(overrides), { type: 0xa000, payload: statPayload });
+      expect("send" in result).toBe(true);
+      return warn.mock.calls
+        .map((args) => args.join(" "))
+        .filter((line) => line.includes(ORIENTATION_WARNING));
+    } finally {
+      warn.mockRestore();
+    }
+  }
+
+  // An entry with a duplex ADF (the ET-4950's) and no orientation evidence.
+  function unconfirmed(displayName: string): import("./dialects/registry.js").Dialect {
+    const { duplexOrientationEvidence: _evidence, ...rest } = recordedDialect(
+      "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2",
+    );
+    return { ...rest, displayName };
+  }
+
+  it.each([
+    ["ET-4950 family", "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2"],
+    ["XP-7100", "56d26c61896ca417807ac68d37775036fa1e702ee44c0beaa27d8a6ea9fa457e"],
+    ["FF-680W", FF680W_FP],
+    ["DS-575W", "90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b074"],
+  ])("is silent on a duplex scan for the %s, whose orientation is confirmed", (_model, fp) => {
+    const entry = recordedDialect(fp);
+    expect(entry.adfDuplex).toBe(true);
+    expect(orientationWarnings({ entry, source: "adf", duplex: true })).toEqual([]);
+  });
+
+  it("warns on the first duplex scan of a model with no evidence, once per process", () => {
+    const first = orientationWarnings({
+      entry: unconfirmed("Model A"),
+      source: "adf",
+      duplex: true,
+    });
+    expect(first).toHaveLength(1);
+    expect(first[0]).toContain("Model A");
+    // Rotated (two-pass, #ADFDPLX2SCN): the warning says what was done.
+    expect(first[0]).toContain("turned 180°");
+    expect(first[0]).toContain("please open an issue");
+    expect(
+      orientationWarnings({ entry: unconfirmed("Model A"), source: "adf", duplex: true }),
+    ).toEqual([]);
+    // Once per model, not once overall.
+    expect(
+      orientationWarnings({ entry: unconfirmed("Model B"), source: "adf", duplex: true }),
+    ).toHaveLength(1);
+  });
+
+  it("says nothing on a simplex or flatbed scan, and keeps the warning for the first duplex one", () => {
+    const entry = unconfirmed("Model C");
+    expect(orientationWarnings({ entry, source: "adf", duplex: false })).toEqual([]);
+    expect(orientationWarnings({ entry, source: "flatbed", duplex: true })).toEqual([]);
+    expect(orientationWarnings({ entry, source: "adf", duplex: true })).toHaveLength(1);
+  });
+
+  it("warns when the recorded evidence vouched for the other orientation", () => {
+    // As after a firmware update that changes the duplex type INFO reports:
+    // the evidence confirmed back pages left as delivered, the printer now
+    // says two-pass.
+    const entry = {
+      ...recordedDialect("2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2"),
+      displayName: "Model E",
+      duplexOrientationEvidence: { backRotated: false, source: "a checked capture" },
+    };
+    const lines = orientationWarnings({ entry, source: "adf", duplex: true });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("turned 180°");
+    expect(lines[0]).toContain("a checked capture");
+  });
+
+  it("names the as-delivered choice for a single-pass ADF", () => {
+    const entry = { ...unconfirmed("Model D"), duplexBackRotated: false };
+    const [line] = orientationWarnings({ entry, source: "adf", duplex: true });
+    expect(line).toContain("left as delivered");
+  });
+});
+
 describe("esci2Graph INIT_POLL_STAT source detection", () => {
   // Which source the reply's content selects is covered by the
   // "source from the status reply's content" blocks below.
@@ -1488,8 +1575,8 @@ describe("esci2Graph INIT1_CAPA_DATA — shadow derivation", () => {
     lines.filter((args) => args.some((a) => String(a).includes(SHADOW_LINE)));
 
   it.each(REPLAY_FIXTURES)(
-    "logs nothing at info, and only the expected disagreements at debug, for the $model fixture $path",
-    ({ model, path }) => {
+    "logs no shadow line at any level for the $model fixture $path",
+    ({ path }) => {
       const { info, capa } = readInit1Bodies(path);
       setLogLevel("debug");
       let result: ReturnType<typeof resolveDialect>;
@@ -1499,14 +1586,7 @@ describe("esci2Graph INIT1_CAPA_DATA — shadow derivation", () => {
         setLogLevel("info");
       }
       expect(result.ctx.entry).toBeDefined();
-      const atLevel = (level: string) =>
-        shadowLines(result.lines).filter((args) => String(args[1]).includes(`[${level}]`));
-      expect(atLevel("INFO")).toEqual([]);
-      expect(atLevel("DEBUG").map((args) => args[2])).toEqual(
-        (EXPECTED_DISAGREEMENTS[model] ?? []).map((d) =>
-          expect.objectContaining({ field: d.field, derived: d.derived, entry: d.entry }),
-        ),
-      );
+      expect(shadowLines(result.lines)).toEqual([]);
       // Every entry's window fits its scan area and follows the alignment.
       const windowLines = result.lines.filter((args) =>
         args.some((a) => String(a).includes("Scan window disagrees")),
@@ -1709,6 +1789,37 @@ describe("esci2Graph — generic dialect", () => {
     ).toBe(true);
     // Nothing to shadow: the dialect is the derivation.
     expect(infos.some((line) => line.includes("disagrees"))).toBe(false);
+  });
+
+  it("takes back-page rotation from INFO, and warns on its first duplex scan (no evidence)", () => {
+    // The ET-4950's two-pass ADF (#ADFDPLX2SCN), under a PID nothing knows.
+    const et4950 = readInit1Bodies(
+      "tools/frida-capture/captures/2026-04-24T08-58-29-adf-1p-duplex.jsonl",
+    );
+    const info = Buffer.from(
+      et4950.info.toString("latin1").replace("PID 11D1", "PID FFFE"),
+      "latin1",
+    );
+    const capa = Buffer.concat([et4950.capa, Buffer.from("#ZZZZd001", "ascii")]);
+    const { ctx } = resolve(info, capa);
+    expect(ctx.entry!.displayName).toBe("generic ESC/I-2 dialect (PID FFFE)");
+    expect(ctx.entry!.duplexBackRotated).toBe(true);
+    Object.assign(ctx, { source: "adf", duplex: true, resolution: 300 });
+    const state = esci2Graph.states.POST_MODE_STAT;
+    if (state.kind !== "decision") throw new Error("POST_MODE_STAT not a decision");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      state.decide(ctx, {
+        type: 0xa000,
+        payload: Buffer.from("STATx0000000" + " ".repeat(52), "ascii"),
+      });
+      const lines = warn.mock.calls.map((args) => args.join(" "));
+      expect(lines.filter((l) => l.includes("which way up duplex back pages arrive"))).toEqual([
+        expect.stringContaining("generic ESC/I-2 dialect (PID FFFE)"),
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("still resolves a known printer to its own entry", () => {

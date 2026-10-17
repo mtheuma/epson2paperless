@@ -395,8 +395,8 @@ export interface RunScanSessionOpts<Ctx> {
    * Orientation=3 on the JPG path, /Rotate 180 on the PDF path). Reversing-ADF
    * hardware re-feeds the sheet, so back sides arrive physically upside down —
    * true, and the default when the callback is omitted. Single-pass
-   * dual-sensor scanners (DS-575W) deliver back sides upright, so compensating
-   * would invert them — false. Resolved from the ctx at flush time, like
+   * scanners (DS-575W, FF-680W) deliver back sides the same way up as the
+   * front, so compensating would invert them — false. Resolved from the ctx at flush time, like
    * resolveToneCurve, because the dialect is only known mid-scan.
    */
   resolveBackPageRotated?: (ctx: Ctx) => boolean;

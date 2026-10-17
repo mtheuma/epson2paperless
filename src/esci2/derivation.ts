@@ -30,12 +30,12 @@ export interface DerivedCapabilities {
   sourceDetection: SourceDetection;
   /** PARA layout: "adf-crp" for an ADF-only printer whose ADF can crop (live). */
   paraProfile: ParaProfile;
-  /** Duplex back pages arrive turned 180° (a two-pass ADF re-feeds the sheet). */
+  /** Duplex back pages arrive turned 180°: a two-pass ADF turns the sheet over (live). */
   duplexBackRotated: boolean;
 }
 
 /** The fields still compared with the registry entry rather than used directly. */
-export type ShadowedField = "sources" | "duplexBackRotated";
+export type ShadowedField = "sources";
 
 /** One differing field, typed by the field it names. */
 export type Disagreement = {
@@ -71,15 +71,15 @@ const RULES: {
   // "No flatbed" is redundant on every printer seen so far (only ADF-only
   // printers list #ADFCRP), but it is the documented rule.
   paraProfile: (info, capa) => (capa.adfCrop && !sourcesOf(info).flatbed ? "adf-crp" : "standard"),
-  // Single-pass ("1SCN") or no duplex: back pages arrive upright.
-  duplexBackRotated: (info) => info.adfDuplexType === "2SCN",
+  // Single-pass ("1SCN"), no duplex type, or no duplex ADF: back pages
+  // arrive the same way up as the front.
+  duplexBackRotated: (info, capa) => RULES.adfDuplex(info, capa) && info.adfDuplexType === "2SCN",
 };
 
 const SHADOWED: {
   [K in ShadowedField]: (entry: RegistryEntry) => DerivedCapabilities[K];
 } = {
   sources: (e) => ({ flatbed: e.fbExtents !== null, adf: e.adfExtents !== null }),
-  duplexBackRotated: (e) => e.duplexBackRotated,
 };
 
 /** A scan-area segment with no value advertises no source. */
@@ -106,18 +106,8 @@ export function capabilityFields(derived: DerivedCapabilities): CapabilityFields
     optionalSegments: { qit: derived.qit, cct: derived.cct },
     paraProfile: derived.paraProfile,
     sourceDetection: derived.sourceDetection,
+    duplexBackRotated: derived.duplexBackRotated,
   };
-}
-
-/**
- * Whether a disagreement is one the entry itself already flags as
- * unconfirmed, so reporting it on every session would only repeat a known
- * open question. Today that is the FF-680W's back-page rotation
- * (duplexBackRotationUnverified), which the rotation cutover settles; duplex
- * scans on such an entry already warn and invite a hardware report.
- */
-export function isExpectedDisagreement(d: Disagreement, entry: RegistryEntry): boolean {
-  return d.field === "duplexBackRotated" && entry.duplexBackRotationUnverified === true;
 }
 
 /** Per-field disagreements between a derivation and a registry entry, in SHADOWED order. */
@@ -129,7 +119,7 @@ export function compareWithEntry(
   const check = <K extends ShadowedField>(field: K) => {
     const fromEntry = SHADOWED[field](entry);
     if (!isDeepStrictEqual(derived[field], fromEntry)) {
-      out.push({ field, derived: derived[field], entry: fromEntry } as Disagreement);
+      out.push({ field, derived: derived[field], entry: fromEntry });
     }
   };
   SHADOWED_FIELDS.forEach(check);

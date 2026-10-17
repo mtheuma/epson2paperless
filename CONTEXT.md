@@ -36,6 +36,9 @@ _Avoid_: fallback dialect, default printer
 **Escape hatch**:
 A model override of a capability-derived field, for a printer whose replies misstate what it can do. Deliberately not offered until a real printer needs one.
 
+**Duplex-orientation evidence**:
+What confirms which way up a model's duplex back pages arrive: a duplex capture whose orientation has been checked, or a hardware report. A duplex model without it warns on its first duplex scan in a process.
+
 **Scan area**:
 The largest region a source can scan, as the printer advertises it.
 

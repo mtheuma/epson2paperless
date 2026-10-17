@@ -30,6 +30,20 @@ describe("buildDiagnostic", () => {
     expect(diagnostic).toContain("abc123");
   });
 
+  it("shows INFO's ADF duplex type, which back-page rotation is derived from", () => {
+    const duplexTypeLine = (info: string) =>
+      buildDiagnostic({
+        capaBody: Buffer.from("#ADFDPLX", "ascii"),
+        infoBody: Buffer.from(info, "ascii"),
+        transport: "plain",
+        fingerprint: "dplx",
+      })
+        .split("\n")
+        .find((line) => line.startsWith("ADF duplex type:"));
+    expect(duplexTypeLine("#ADFAREAd850i0001400#ADFDPLX2SCN")).toBe("ADF duplex type:   2SCN");
+    expect(duplexTypeLine("#ADFAREAd850i0001400")).toBe("ADF duplex type:   (absent)");
+  });
+
   it("renders the PRD line for each product-field form", () => {
     const prdLine = (info: string) =>
       buildDiagnostic({
