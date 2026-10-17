@@ -450,7 +450,7 @@ describe("on a CAPA fingerprint mismatch, an override's own window must fit the 
     const { resolved, warnings } = lookup(withAdf, doctored(ET2750.capa));
     expect(resolved.matchedBy).not.toBe("generic");
     expect(resolved.dialect.displayName).toMatch(/ET-2750/);
-    // The printer reports both sources, so the first status reply can pick the ADF.
+    // The printer reports both sources, so the status before PARA can pick the ADF.
     expect(resolved.dialect.sourceDetection).toBe("init-poll-status");
     expect(resolved.dialect.adfExtents).toMatchObject({ x0: 0, y0: 0, w: 2481, h: 3506 });
     expect(resolved.dialect.adfExtents?.generic).toBeDefined();

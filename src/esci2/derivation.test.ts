@@ -194,8 +194,7 @@ describe("judgeStatusErrors — the status before PARA, against the unit being s
 });
 
 describe("a printer with both sources: the source, then the errors on it", () => {
-  // The first status decides the source; the status before PARA is judged.
-  // Here both say the same thing, as on every fixture.
+  // One status, the one before PARA, decides the source and is judged on it.
   const scan = (status: string) => {
     const source = sourceFromStatusErrors(errorsOf(status));
     return { source, ...judgeStatusErrors(errorsOf(status), source) };
@@ -251,7 +250,7 @@ describe("content-based source decision lands on the recorded source on every fi
   });
 
   it.each(statusFixtures)("$model: $path", ({ path, source }) => {
-    const { header, body } = readFirstInitPollStatus(path);
+    const { header, body } = readPreParaStatus(path);
     expect(sourceFromStatusErrors(statusErrors(header, body))).toBe(source);
     // Every recorded flatbed status is the 12-byte "ADF paper empty"; every
     // recorded ADF status is empty.
@@ -270,7 +269,8 @@ describe("content-based source decision lands on the recorded source on every fi
     // The duplex capture reports ADF PE for its first 4 polls and nothing
     // after. Judged on the first, the ADF scan would stop; Epson's driver
     // judges the last one before PARA, as the session does. An ADF-only
-    // printer never reads its status for the source.
+    // printer never reads its status for the source, though if it did, the
+    // first status would say the flatbed and the one before PARA the ADF.
     const path = "tools/pcap-extract/captures/ds-575w/adf-duplex-600-mono-jpg.jsonl";
     const first = readFirstInitPollStatus(path);
     expect(statusErrors(first.header, first.body)).toEqual(["ADF PE"]);

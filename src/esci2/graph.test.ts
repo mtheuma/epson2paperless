@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { esci2Graph, ESCI2_TIMEOUT_MS, nameInitPollEarlyStop } from "./graph.js";
+import { esci2Graph, ESCI2_REPLY_SIZE, ESCI2_TIMEOUT_MS, nameInitPollEarlyStop } from "./graph.js";
 import { buildEsci2Command } from "./commands.js";
 import { buildFsX } from "../commands-fs.js";
 import { applyEntrySourceOverride } from "./dialects/dispatch.js";
@@ -14,7 +14,6 @@ import { parseCapaTokens, parseStatErrors } from "./capabilities.js";
 import { DEFAULT_JPEG_QUALITY } from "../config.js";
 import {
   REPLAY_FIXTURES,
-  readFirstInitPollStatus,
   readInit1Bodies,
   readPreParaStatus,
 } from "./test-support/capability-bodies.js";
@@ -248,15 +247,15 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
   });
 
   it("INIT_POLL_STAT_DRAIN advances to INIT_POLL_FIN with a FIN send on 0xa000", () => {
-    // A decision state so the first cycle's body can feed the status decision.
+    // A static state: the init poll's statuses are drained unread.
     const state = esci2Graph.states.INIT_POLL_STAT_DRAIN;
-    expect(state.kind).toBe("decision");
-    if (state.kind !== "decision") return;
-    const ctx = makeCtx({ initPollIteration: 1 });
-    const result = state.decide(ctx, { type: 0xa000, payload: Buffer.from("#ERRADF PE  ") });
-    expect("next" in result && result.next).toBe("INIT_POLL_FIN");
-    expect("send" in result && result.send).toBeDefined();
-    expect("error" in state.decide(ctx, { type: 0xa100, payload: Buffer.alloc(0) })).toBe(true);
+    expect(state.kind).toBe("static");
+    if (state.kind !== "static") return;
+    expect(state.on[0xa000]?.next).toBe("INIT_POLL_FIN");
+    expect(state.on[0xa000]?.send).toEqual(
+      buildPassthruPacket(buildEsci2Command("FIN"), ESCI2_REPLY_SIZE),
+    );
+    expect(state.on[0xa100]).toBeUndefined();
   });
 
   it("INIT_POLL_FIN is a decision state (loop check)", () => {
@@ -945,12 +944,15 @@ describe("esci2Graph POST_MODE_STAT — unconfirmed duplex orientation warning",
   const ORIENTATION_WARNING = "which way up duplex back pages arrive";
 
   // The warn lines one PARA build logs.
-  function orientationWarnings(overrides: Partial<import("./graph.js").Esci2Ctx>): string[] {
+  function orientationWarnings(
+    overrides: Partial<import("./graph.js").Esci2Ctx>,
+    payload = statPayload,
+  ): string[] {
     const state = esci2Graph.states.POST_MODE_STAT;
     if (state.kind !== "decision") throw new Error("POST_MODE_STAT not a decision");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
-      const result = state.decide(makeCtx(overrides), { type: 0xa000, payload: statPayload });
+      const result = state.decide(makeCtx(overrides), { type: 0xa000, payload });
       expect("send" in result).toBe(true);
       return warn.mock.calls
         .map((args) => args.join(" "))
@@ -1002,7 +1004,9 @@ describe("esci2Graph POST_MODE_STAT — unconfirmed duplex orientation warning",
   it("says nothing on a simplex or flatbed scan, and keeps the warning for the first duplex one", () => {
     const entry = unconfirmed("Model C");
     expect(orientationWarnings({ entry, source: "adf", duplex: false })).toEqual([]);
-    expect(orientationWarnings({ entry, source: "flatbed", duplex: true })).toEqual([]);
+    // ADF paper empty, inline: the ET-4950's status says the flatbed.
+    const flatbed = Buffer.from("STATx0000000#ERRADF PE  " + "#---".repeat(10), "ascii");
+    expect(orientationWarnings({ entry, duplex: true }, flatbed)).toEqual([]);
     expect(orientationWarnings({ entry, source: "adf", duplex: true })).toHaveLength(1);
   });
 
@@ -1028,21 +1032,9 @@ describe("esci2Graph POST_MODE_STAT — unconfirmed duplex orientation warning",
   });
 });
 
-describe("esci2Graph INIT_POLL_STAT source detection", () => {
-  // Which source the reply's content selects is covered by the
-  // "source from the status reply's content" blocks below.
-  it("does NOT update source on iteration 1+", () => {
-    const state = esci2Graph.states.INIT_POLL_STAT;
-    expect(state.kind).toBe("decision");
-    if (state.kind !== "decision") return;
-    // Source was set to flatbed on iteration 0; must not change on iteration 1.
-    const ctx = makeCtx({ initPollIteration: 1, source: "flatbed" });
-    // A STAT reply with length=0 on iteration 1 should NOT reset source to adf.
-    const payload = Buffer.from("STATx0000000" + " ".repeat(52), "ascii");
-    state.decide(ctx, { type: 0xa000, payload });
-    expect(ctx.source).toBe("flatbed");
-  });
-
+describe("esci2Graph INIT_POLL_STAT", () => {
+  // The source comes from the status before PARA: see the POST_MODE_STAT
+  // "source from the status before PARA" blocks below.
   it("returns INIT_POLL_FIN transition when header length is 0", () => {
     const state = esci2Graph.states.INIT_POLL_STAT;
     expect(state.kind).toBe("decision");
@@ -1614,151 +1606,164 @@ const statHeader = (length: number) =>
   Buffer.from(`STATx${length.toString(16).toUpperCase().padStart(7, "0")}` + "#---".repeat(13));
 const ET2750_PATH = "tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl";
 
-describe("esci2Graph INIT_POLL — source from the status reply's content (model overrides)", () => {
+describe("esci2Graph POST_MODE_STAT — source from the status before PARA (model overrides)", () => {
+  // Which source each replay fixture's status before PARA lands on is
+  // covered with the judging tests below.
   const ET4950_ENTRY = recordedDialect(
     "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2",
   );
+  const ET2750_ENTRY = recordedDialect(computeCapaFingerprint(readInit1Bodies(ET2750_PATH).capa));
+  const LOAD = "load the document into the ADF and scan again";
+  const CLEAR = "clear it on the printer and scan again";
+  const STOP = (error: string, advice = CLEAR) =>
+    `POST_MODE_STAT_DRAIN: the printer reported an error before scanning (${error}) — ${advice}`;
 
-  // Feeds the first init-poll STAT reply (header, then the drained body when
-  // the header declares one) and returns ctx plus the last state's result:
-  // its next state, or its error message.
-  function firstStatus(
+  // Feeds the mode switch's STAT reply (header, then the drained body when
+  // the header declares one) from a pre-set source, as the scanner shell's
+  // default may be, and returns ctx plus the last state's result: its next
+  // state, or its error message.
+  function statusBeforePara(
     entry: import("./dialects/model-overrides.js").Dialect,
     header: Buffer,
     body: Buffer | null,
+    preset: "adf" | "flatbed" = "adf",
   ): { ctx: import("./graph.js").Esci2Ctx; outcome: string | undefined } {
-    const stat = esci2Graph.states.INIT_POLL_STAT;
-    const drain = esci2Graph.states.INIT_POLL_STAT_DRAIN;
+    const stat = esci2Graph.states.POST_MODE_STAT;
+    const drain = esci2Graph.states.POST_MODE_STAT_DRAIN;
     if (stat.kind !== "decision" || drain.kind !== "decision") {
-      throw new Error("INIT_POLL_STAT / _DRAIN not decisions");
+      throw new Error("POST_MODE_STAT / _DRAIN not decisions");
     }
-    const ctx = makeCtx({ entry, initPollIteration: 0, source: "flatbed" });
+    const ctx = makeCtx({ entry, source: preset });
     applyEntrySourceOverride(ctx, entry);
-    let result = stat.decide(ctx, { type: 0xa000, payload: header });
-    if (body !== null && "next" in result) {
-      expect(result.next).toBe("INIT_POLL_STAT_DRAIN");
-      result = drain.decide(ctx, { type: 0xa000, payload: body });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
+    try {
+      let result = stat.decide(ctx, { type: 0xa000, payload: header });
+      if (body !== null && "next" in result) {
+        expect(result.next).toBe("POST_MODE_STAT_DRAIN");
+        result = drain.decide(ctx, { type: 0xa000, payload: body });
+      }
+      return { ctx, outcome: "error" in result ? result.error.message : result.next };
+    } finally {
+      warn.mockRestore();
+      log.mockRestore();
     }
-    return { ctx, outcome: "error" in result ? result.error.message : result.next };
   }
 
-  it.each(REPLAY_FIXTURES)(
-    "lands on the recorded source for the $model fixture $path",
-    ({ path, source }) => {
-      const entry = recordedDialect(computeCapaFingerprint(readInit1Bodies(path).capa));
-      const { header, body } = readFirstInitPollStatus(path);
-      const { ctx, outcome } = firstStatus(entry, header, body);
-      expect(outcome).toBe("INIT_POLL_FIN");
-      expect(ctx.source).toBe(source);
-    },
-  );
-
-  it("ADF paper empty → flatbed", () => {
-    const { ctx, outcome } = firstStatus(ET4950_ENTRY, statHeader(12), Buffer.from("#ERRADF PE  "));
-    expect(outcome).toBe("INIT_POLL_FIN");
+  it("ADF paper empty → the flatbed, which scans", () => {
+    const { ctx, outcome } = statusBeforePara(
+      ET4950_ENTRY,
+      statHeader(12),
+      Buffer.from("#ERRADF PE  "),
+    );
+    expect(outcome).toBe("PARA");
     expect(ctx.source).toBe("flatbed");
   });
 
   it("no error → ADF, read from the reply itself when there is no body", () => {
-    const { ctx, outcome } = firstStatus(ET4950_ENTRY, statHeader(0), null);
-    expect(outcome).toBe("INIT_POLL_FIN");
+    const { ctx, outcome } = statusBeforePara(ET4950_ENTRY, statHeader(0), null, "flatbed");
+    expect(outcome).toBe("PARA");
     expect(ctx.source).toBe("adf");
     // Tokens inline in a zero-length reply, which has no body.
     const inline = Buffer.from("STATx0000000#ERRADF PE  " + "#---".repeat(10));
-    expect(firstStatus(ET4950_ENTRY, inline, null).ctx.source).toBe("flatbed");
+    expect(statusBeforePara(ET4950_ENTRY, inline, null).ctx.source).toBe("flatbed");
   });
 
   it("decides from the content, not the length: a 12-byte status with no error → ADF", () => {
     // Synthetic: every recorded 12-byte status is "ADF paper empty".
-    const { ctx, outcome } = firstStatus(ET4950_ENTRY, statHeader(12), Buffer.from("#---#---#---"));
-    expect(outcome).toBe("INIT_POLL_FIN");
+    const { ctx, outcome } = statusBeforePara(
+      ET4950_ENTRY,
+      statHeader(12),
+      Buffer.from("#---#---#---"),
+      "flatbed",
+    );
+    expect(outcome).toBe("PARA");
     expect(ctx.source).toBe("adf");
   });
 
   // Synthetic from here: no fixture's status reports an error other than ADF PE.
   it("keeps the last code the reply gives the ADF, the reply's inline tokens first", () => {
-    const loaded = firstStatus(
+    const loaded = statusBeforePara(
       ET4950_ENTRY,
       statHeader(24),
       Buffer.from("#ERRADF PE  #ERRADF PJ  "),
     );
-    expect(loaded.ctx.source).toBe("adf");
-    const empty = firstStatus(
+    expect(loaded).toMatchObject({ ctx: { source: "adf" }, outcome: STOP("ADF PJ") });
+    const empty = statusBeforePara(
       ET4950_ENTRY,
       statHeader(24),
       Buffer.from("#ERRADF PJ  #ERRADF PE  "),
     );
-    expect(empty.ctx.source).toBe("flatbed");
-    const inlineThenBody = firstStatus(
+    expect(empty).toMatchObject({ ctx: { source: "flatbed" }, outcome: "PARA" });
+    const inlineThenBody = statusBeforePara(
       ET4950_ENTRY,
       Buffer.from("STATx000000C#ERRADF PE  " + "#---".repeat(10)),
       Buffer.from("#ERRADF PJ  "),
     );
-    expect(inlineThenBody.ctx.source).toBe("adf");
+    expect(inlineThenBody).toMatchObject({ ctx: { source: "adf" }, outcome: STOP("ADF PJ") });
   });
 
-  it("only decides the source: an error in it neither stops the session nor warns", () => {
-    // The errors are judged on the status before PARA (POST_MODE_STAT).
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    try {
-      const jammed = firstStatus(ET4950_ENTRY, statHeader(12), Buffer.from("#ERRADF PJ  "));
-      expect(jammed.outcome).toBe("INIT_POLL_FIN");
-      expect(jammed.ctx.source).toBe("adf");
-      const locked = firstStatus(
-        ET4950_ENTRY,
-        statHeader(24),
-        Buffer.from("#ERRADF PE  #ERRFB  LOCK"),
-      );
-      expect(locked.outcome).toBe("INIT_POLL_FIN");
-      expect(locked.ctx.source).toBe("flatbed");
-      expect(warn).not.toHaveBeenCalled();
-    } finally {
-      warn.mockRestore();
-    }
+  it("decides the source, then judges the same reply's errors on it", () => {
+    // A jam with no paper empty reads as a loaded ADF, which then stops on
+    // the jam, as Epson's Auto source does.
+    const jammed = statusBeforePara(ET4950_ENTRY, statHeader(12), Buffer.from("#ERRADF PJ  "));
+    expect(jammed).toMatchObject({ ctx: { source: "adf" }, outcome: STOP("ADF PJ") });
+    const locked = statusBeforePara(
+      ET4950_ENTRY,
+      statHeader(24),
+      Buffer.from("#ERRADF PE  #ERRFB  LOCK"),
+    );
+    expect(locked).toMatchObject({ ctx: { source: "flatbed" }, outcome: STOP("FB LOCK") });
   });
 
-  it("ET-2750: fixed to the flatbed, so its filler-packed zero-length status is never read", () => {
+  it("ET-2750: fixed to the flatbed, so its filler-packed zero-length status never says ADF", () => {
     // Its STAT reply declares length 0 but packs filler inline. Read by
     // content it carries no error, which would say ADF; as a flatbed-only
     // printer it never reaches that rule.
-    const entry = recordedDialect(computeCapaFingerprint(readInit1Bodies(ET2750_PATH).capa));
-    const { header, body } = readFirstInitPollStatus(ET2750_PATH);
+    const { header, body } = readPreParaStatus(ET2750_PATH);
     expect(body).toBeNull();
     expect(header.length).toBeGreaterThan(12);
     expect(parseStatErrors(header)).toEqual([]);
-    expect(entry.sourceDetection).toBe("fixed-flatbed");
+    expect(ET2750_ENTRY.sourceDetection).toBe("fixed-flatbed");
     // Even from a pre-set ADF default (the TLS shell's), the session is flatbed.
-    const stat = esci2Graph.states.INIT_POLL_STAT;
-    if (stat.kind !== "decision") throw new Error("INIT_POLL_STAT not a decision");
-    const ctx = makeCtx({ entry, initPollIteration: 0, source: "adf" });
-    applyEntrySourceOverride(ctx, entry);
-    stat.decide(ctx, { type: 0xa000, payload: header });
+    const { ctx, outcome } = statusBeforePara(ET2750_ENTRY, header, null, "adf");
+    expect(outcome).toBe("PARA");
     expect(ctx.source).toBe("flatbed");
   });
 
-  it("a single-source printer's first status never changes its source or stops it", () => {
+  it("a single-source printer's status never changes its source", () => {
     const ff680w = recordedDialect(FF680W_FP);
     expect(ff680w.sourceDetection).toBe("fixed-adf");
-    const adf = firstStatus(ff680w, statHeader(12), Buffer.from("#ERRADF PE  "));
-    expect(adf).toMatchObject({ outcome: "INIT_POLL_FIN", ctx: { source: "adf" } });
-    const et2750 = recordedDialect(computeCapaFingerprint(readInit1Bodies(ET2750_PATH).capa));
-    const flatbed = firstStatus(et2750, statHeader(12), Buffer.from("#ERRFB  OPN "));
-    expect(flatbed).toMatchObject({ outcome: "INIT_POLL_FIN", ctx: { source: "flatbed" } });
+    // ADF paper empty would say the flatbed; the ADF-only printer stops on it.
+    const adf = statusBeforePara(ff680w, statHeader(12), Buffer.from("#ERRADF PE  "), "flatbed");
+    expect(adf).toMatchObject({ ctx: { source: "adf" }, outcome: STOP("ADF PE", LOAD) });
+    const flatbed = statusBeforePara(
+      ET2750_ENTRY,
+      statHeader(12),
+      Buffer.from("#ERRADF PE  "),
+      "adf",
+    );
+    expect(flatbed).toMatchObject({ ctx: { source: "flatbed" }, outcome: "PARA" });
   });
 
-  it("only the first poll cycle is read", () => {
+  it("the init poll's statuses are not read", () => {
     const stat = esci2Graph.states.INIT_POLL_STAT;
-    const drain = esci2Graph.states.INIT_POLL_STAT_DRAIN;
-    if (stat.kind !== "decision" || drain.kind !== "decision") throw new Error("not decisions");
-    const ctx = makeCtx({ entry: ET4950_ENTRY, initPollIteration: 1, source: "adf" });
-    const infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+    if (stat.kind !== "decision") throw new Error("INIT_POLL_STAT not a decision");
+    const log = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
-      stat.decide(ctx, { type: 0xa000, payload: statHeader(12) });
-      drain.decide(ctx, { type: 0xa000, payload: Buffer.from("#ERRADF PE  ") });
-      expect(ctx.source).toBe("adf");
-      expect(infoSpy).not.toHaveBeenCalled();
+      for (const source of ["adf", "flatbed"] as const) {
+        const ctx = makeCtx({ entry: ET4950_ENTRY, initPollIteration: 0, source });
+        // Tokens inline, so the reply has no body to drain.
+        const inline = Buffer.from(
+          `STATx0000000${source === "adf" ? "#ERRADF PE  " : "#---#---#---"}` + "#---".repeat(10),
+        );
+        const result = stat.decide(ctx, { type: 0xa000, payload: inline });
+        expect("next" in result && result.next).toBe("INIT_POLL_FIN");
+        expect(ctx.source).toBe(source);
+      }
+      expect(log).not.toHaveBeenCalled();
     } finally {
-      infoSpy.mockRestore();
+      log.mockRestore();
     }
   });
 });
@@ -1776,7 +1781,12 @@ describe("esci2Graph POST_MODE_STAT — the status before PARA is judged against
     overrides: Partial<import("./graph.js").Esci2Ctx>,
     header: Buffer,
     body: Buffer | null,
-  ): { outcome: string | undefined; warnings: string[]; debugs: string[] } {
+  ): {
+    ctx: import("./graph.js").Esci2Ctx;
+    outcome: string | undefined;
+    warnings: string[];
+    debugs: string[];
+  } {
     const stat = esci2Graph.states.POST_MODE_STAT;
     const drain = esci2Graph.states.POST_MODE_STAT_DRAIN;
     if (stat.kind !== "decision" || drain.kind !== "decision") {
@@ -1796,6 +1806,7 @@ describe("esci2Graph POST_MODE_STAT — the status before PARA is judged against
           .map((args) => args.join(" "))
           .filter((line) => line.includes("before scanning"));
       return {
+        ctx,
         outcome: "error" in result ? result.error.message : result.next,
         warnings: lines(warn),
         debugs: lines(info).filter((line) => line.includes("[DEBUG]")),
@@ -1810,14 +1821,29 @@ describe("esci2Graph POST_MODE_STAT — the status before PARA is judged against
     "clear it on the printer and scan again";
   /** An entry no other test warns for, so the once-per-process warning fires. */
   const model = (displayName: string) => ({ ...ET4950_ENTRY, displayName });
+  /**
+   * The same for a flatbed-only printer (the ET-2750's), fixed to the
+   * flatbed: on a printer with both sources, an ADF error with no paper
+   * empty reads as a loaded ADF, so the flatbed is never scanned.
+   */
+  const flatbedOnly = (displayName: string) => ({
+    ...recordedDialect(computeCapaFingerprint(readInit1Bodies(ET2750_PATH).capa)),
+    displayName,
+  });
 
   it.each(REPLAY_FIXTURES)(
-    "reaches PARA without a warning for the $model fixture $path",
+    "lands on the recorded source and reaches PARA without a warning for the $model fixture $path",
     ({ model: name, path, source }) => {
       const entry = recordedDialect(computeCapaFingerprint(readInit1Bodies(path).capa));
       const { header, body } = readPreParaStatus(path);
       const unique = { ...entry, displayName: `${name} fixture ${path}` };
-      expect(prePara({ entry: unique, source }, header, body)).toMatchObject({
+      // Start from the other source, as the scanner shell's default may be,
+      // so the recorded one has to come from the status (or the fixed source).
+      const preset: "adf" | "flatbed" = source === "adf" ? "flatbed" : "adf";
+      const overrides = { entry: unique, source: preset };
+      applyEntrySourceOverride(overrides, unique);
+      expect(prePara(overrides, header, body)).toMatchObject({
+        ctx: { source },
         outcome: "PARA",
         warnings: [],
       });
@@ -1839,49 +1865,38 @@ describe("esci2Graph POST_MODE_STAT — the status before PARA is judged against
     );
   });
 
-  it("an ADF scan stops on ADF paper empty, on an ADF-only printer too", () => {
-    for (const entry of [ET4950_ENTRY, recordedDialect(FF680W_FP)]) {
-      expect(
-        prePara({ entry, source: "adf" }, statHeader(12), Buffer.from("#ERRADF PE  ")).outcome,
-      ).toBe(
-        "POST_MODE_STAT_DRAIN: the printer reported an error before scanning (ADF PE) — " +
-          "load the document into the ADF and scan again",
-      );
-    }
+  it("an ADF-only printer stops on ADF paper empty", () => {
+    // A printer with both sources takes it to mean the flatbed instead.
+    const entry = recordedDialect(FF680W_FP);
+    expect(prePara({ entry }, statHeader(12), Buffer.from("#ERRADF PE  ")).outcome).toBe(
+      "POST_MODE_STAT_DRAIN: the printer reported an error before scanning (ADF PE) — " +
+        "load the document into the ADF and scan again",
+    );
   });
 
   it("a stop on a reported error is never blamed on an early-stopped init poll", () => {
     const stat = esci2Graph.states.POST_MODE_STAT;
     if (stat.kind !== "decision") throw new Error("POST_MODE_STAT not a decision");
-    const ctx = makeCtx({
-      entry: ET4950_ENTRY,
-      source: "flatbed",
-      initPollEarlyStop: { cycle: 2, reply: "15" },
-    });
-    const inline = Buffer.from("STATx0000000#ERRFB  OPN " + "#---".repeat(10));
+    const ctx = makeCtx({ entry: ET4950_ENTRY, initPollEarlyStop: { cycle: 2, reply: "15" } });
+    // ADF paper empty says the flatbed, which the open cover stops.
+    const inline = Buffer.from("STATx0000000#ERRADF PE  #ERRFB  OPN " + "#---".repeat(7));
     const result = stat.decide(ctx, { type: 0xa000, payload: inline });
     if (!("error" in result)) throw new Error("expected the session to end");
     expect(nameInitPollEarlyStop(ctx, result.error).message).toBe(STOP("POST_MODE_STAT", "FB OPN"));
   });
 
-  it("the source comes from the first status, the errors from the one before PARA", () => {
+  it("the source and its errors both come from the status before PARA, not the first", () => {
     // Synthetic: on every fixture the two agree.
     const poll = esci2Graph.states.INIT_POLL_STAT;
-    const pollDrain = esci2Graph.states.INIT_POLL_STAT_DRAIN;
     const stat = esci2Graph.states.POST_MODE_STAT;
     const drain = esci2Graph.states.POST_MODE_STAT_DRAIN;
-    if (
-      poll.kind !== "decision" ||
-      pollDrain.kind !== "decision" ||
-      stat.kind !== "decision" ||
-      drain.kind !== "decision"
-    ) {
+    if (poll.kind !== "decision" || stat.kind !== "decision" || drain.kind !== "decision") {
       throw new Error("not decisions");
     }
     const session = (first: string, prePara: string) => {
       const ctx = makeCtx({ entry: model(`Model ${first}|${prePara}`), initPollIteration: 0 });
-      poll.decide(ctx, { type: 0xa000, payload: statHeader(first.length) });
-      if (first.length > 0) pollDrain.decide(ctx, { type: 0xa000, payload: Buffer.from(first) });
+      // The first status's tokens inline, so it has no body to drain.
+      poll.decide(ctx, { type: 0xa000, payload: Buffer.from(`STATx0000000${first}`) });
       let result = stat.decide(ctx, { type: 0xa000, payload: statHeader(prePara.length) });
       if (prePara.length > 0 && "next" in result) {
         result = drain.decide(ctx, { type: 0xa000, payload: Buffer.from(prePara) });
@@ -1893,13 +1908,10 @@ describe("esci2Graph POST_MODE_STAT — the status before PARA is judged against
     };
     const info = vi.spyOn(console, "log").mockImplementation(() => {});
     try {
-      // The feeder emptied after the first poll: the ADF scan stops.
-      expect(session("", "#ERRADF PE  ")).toEqual({
-        source: "adf",
-        outcome: expect.stringContaining("(ADF PE)"),
-      });
-      // A paper-empty first poll that clears: still the flatbed, which scans.
-      expect(session("#ERRADF PE  ", "")).toEqual({ source: "flatbed", outcome: "PARA" });
+      // The feeder emptied after the first poll: the flatbed, which scans.
+      expect(session("", "#ERRADF PE  ")).toEqual({ source: "flatbed", outcome: "PARA" });
+      // A paper-empty first poll that clears (paper loaded): the ADF, which scans.
+      expect(session("#ERRADF PE  ", "")).toEqual({ source: "adf", outcome: "PARA" });
     } finally {
       info.mockRestore();
     }
@@ -1927,7 +1939,7 @@ describe("esci2Graph POST_MODE_STAT — the status before PARA is judged against
       STOP("POST_MODE_STAT_DRAIN", "ADF PJ"),
     );
     const flatbed = prePara(
-      { entry: model("Model Last"), source: "flatbed" },
+      { entry: flatbedOnly("Model Last"), source: "flatbed" },
       statHeader(24),
       body,
     );
@@ -1937,7 +1949,7 @@ describe("esci2Graph POST_MODE_STAT — the status before PARA is judged against
 
   it("an error on another unit warns, naming the model, and the scan carries on", () => {
     const flatbed = prePara(
-      { entry: model("Model F"), source: "flatbed" },
+      { entry: flatbedOnly("Model F"), source: "flatbed" },
       statHeader(24),
       Buffer.from("#ERRADF PJ  #ERRTPU OPN "),
     );
@@ -1968,7 +1980,7 @@ describe("esci2Graph POST_MODE_STAT — the status before PARA is judged against
     try {
       const scan = (name: string, body: string) =>
         prePara(
-          { entry: model(name), source: "flatbed" },
+          { entry: flatbedOnly(name), source: "flatbed" },
           statHeader(body.length),
           Buffer.from(body),
         );
@@ -1976,7 +1988,7 @@ describe("esci2Graph POST_MODE_STAT — the status before PARA is judged against
         warnings: [expect.stringContaining("Model R: the printer reported ADF PJ")],
         debugs: [],
       });
-      expect(scan("Model R", "#ERRADF PJ  ")).toEqual({
+      expect(scan("Model R", "#ERRADF PJ  ")).toMatchObject({
         outcome: "PARA",
         warnings: [],
         debugs: [expect.stringContaining("Model R: the printer reported ADF PJ")],
@@ -2082,16 +2094,16 @@ describe("esci2Graph — generic dialect", () => {
     );
   });
 
-  describe("source detection from the status reply's content", () => {
-    function firstStatus(
+  describe("source detection from the status before PARA", () => {
+    function statusBeforePara(
       header: Buffer,
       body: Buffer | null,
       { info, capa } = { info: UNKNOWN_INFO, capa: UNKNOWN_CAPA },
     ) {
       const { ctx, result: resolved } = resolve(info, capa);
       expect("error" in resolved).toBe(false);
-      const stat = esci2Graph.states.INIT_POLL_STAT;
-      const drain = esci2Graph.states.INIT_POLL_STAT_DRAIN;
+      const stat = esci2Graph.states.POST_MODE_STAT;
+      const drain = esci2Graph.states.POST_MODE_STAT_DRAIN;
       if (stat.kind !== "decision" || drain.kind !== "decision") throw new Error("not decisions");
       ctx.source = "adf";
       const statResult = stat.decide(ctx, { type: 0xa000, payload: header });
@@ -2101,14 +2113,14 @@ describe("esci2Graph — generic dialect", () => {
     }
 
     it("ADF paper empty → flatbed", () => {
-      const { ctx, result } = firstStatus(statHeader(12), Buffer.from("#ERRADF PE  "));
-      expect("next" in result && result.next).toBe("INIT_POLL_FIN");
+      const { ctx, result } = statusBeforePara(statHeader(12), Buffer.from("#ERRADF PE  "));
+      expect("next" in result && result.next).toBe("PARA");
       expect(ctx.source).toBe("flatbed");
     });
 
     it("no error → ADF, read from the reply itself when there is no body", () => {
-      const { ctx, result } = firstStatus(statHeader(0), null);
-      expect("next" in result && result.next).toBe("INIT_POLL_FIN");
+      const { ctx, result } = statusBeforePara(statHeader(0), null);
+      expect("next" in result && result.next).toBe("PARA");
       expect(ctx.source).toBe("adf");
     });
 
@@ -2126,32 +2138,25 @@ describe("esci2Graph — generic dialect", () => {
         [true, errorLists(UNKNOWN_INFO, UNKNOWN_CAPA)],
         [false, errorLists(ET4800.info, ET4800.capa)], // a model override, resolved by PID
       ] as const) {
-        const adf = firstStatus(statHeader(0), null, bodies);
+        const adf = statusBeforePara(statHeader(0), null, bodies);
         expect(adf.ctx.genericDialect).toBe(generic);
-        expect("next" in adf.result && adf.result.next).toBe("INIT_POLL_FIN");
+        expect("next" in adf.result && adf.result.next).toBe("PARA");
         expect(adf.ctx.source).toBe("adf");
-        const flatbed = firstStatus(statHeader(12), Buffer.from("#ERRADF PE  "), bodies);
-        expect("next" in flatbed.result && flatbed.result.next).toBe("INIT_POLL_FIN");
+        const flatbed = statusBeforePara(statHeader(12), Buffer.from("#ERRADF PE  "), bodies);
+        expect("next" in flatbed.result && flatbed.result.next).toBe("PARA");
         expect(flatbed.ctx.source).toBe("flatbed");
       }
     });
 
     it("no error in the body → ADF, even when the length would say flatbed", () => {
-      const { ctx } = firstStatus(statHeader(12), Buffer.from("#---#---#---"));
+      const { ctx } = statusBeforePara(statHeader(12), Buffer.from("#---#---#---"));
       expect(ctx.source).toBe("adf");
     });
 
     it("an ADF error other than paper empty → ADF, and it ends the session before PARA", () => {
-      const jam = Buffer.from("#ERRADF PJ  ");
-      const { ctx, result } = firstStatus(statHeader(12), jam);
-      expect("next" in result && result.next).toBe("INIT_POLL_FIN");
+      const { ctx, result } = statusBeforePara(statHeader(12), Buffer.from("#ERRADF PJ  "));
       expect(ctx.source).toBe("adf");
-      const stat = esci2Graph.states.POST_MODE_STAT;
-      const drain = esci2Graph.states.POST_MODE_STAT_DRAIN;
-      if (stat.kind !== "decision" || drain.kind !== "decision") throw new Error("not decisions");
-      stat.decide(ctx, { type: 0xa000, payload: statHeader(12) });
-      const judged = drain.decide(ctx, { type: 0xa000, payload: jam });
-      expect("error" in judged && judged.error.message).toMatch(
+      expect("error" in result && result.error.message).toMatch(
         /^POST_MODE_STAT_DRAIN: the printer reported an error before scanning \(ADF PJ\)/,
       );
     });
@@ -2218,15 +2223,16 @@ describe("esci2Graph — generic dialect", () => {
   it("doesn't add the unverified-DPI warning to an explicit SCAN_RESOLUTION", () => {
     const { ctx } = resolve(UNKNOWN_INFO, UNKNOWN_CAPA);
     ctx.resolution = 300;
-    ctx.source = "flatbed";
     const state = esci2Graph.states.POST_MODE_STAT;
     if (state.kind !== "decision") throw new Error("POST_MODE_STAT not a decision");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
+      // ADF paper empty, inline: a flatbed scan.
       state.decide(ctx, {
         type: 0xa000,
-        payload: Buffer.from("STATx0000000" + " ".repeat(52), "ascii"),
+        payload: Buffer.from("STATx0000000#ERRADF PE  " + "#---".repeat(10), "ascii"),
       });
+      expect(ctx.source).toBe("flatbed");
       expect(warn).not.toHaveBeenCalled();
     } finally {
       warn.mockRestore();
