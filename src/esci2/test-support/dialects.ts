@@ -61,13 +61,14 @@ export function recordedDialect(fingerprint: string): Dialect {
 }
 
 /**
- * The fields a dialect resolved from `entry` carries unchanged, for
+ * The fields a dialect resolved from `override` carries unchanged, for
  * toMatchObject: all but the windows, which a session resolves against the
- * printer's own scan area (an inherited "generic" window becomes extents).
+ * printer's own scan area (an inherited "generic" window becomes extents),
+ * and the provenance, which no session carries.
  */
 export function unresolvedFields(
-  entry: ModelOverride,
-): Omit<ModelOverride, "fbExtents" | "adfExtents"> {
-  const { fbExtents: _fb, adfExtents: _adf, ...rest } = entry;
+  override: ModelOverride,
+): Omit<ModelOverride, "fbExtents" | "adfExtents" | "provenance"> {
+  const { fbExtents: _fb, adfExtents: _adf, provenance: _provenance, ...rest } = override;
   return rest;
 }

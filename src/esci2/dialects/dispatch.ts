@@ -174,14 +174,15 @@ function keepFittingWindows(entry: Dialect, info: InfoTokens): Dialect {
  * they keep their physical size. A window the override inherits ("generic")
  * is the generic window for this printer's scan area, at that reference DPI
  * here and at the wire DPI in the PARA (makeParaSpec); null when the
- * printer advertises no area for the source.
+ * printer advertises no area for the source. Provenance stays behind: no
+ * session reads it.
  */
 export function withCapabilities(
   override: ModelOverride,
   info: InfoTokens,
   derived: DerivedCapabilities,
 ): Dialect {
-  const rest = override;
+  const { provenance: _provenance, ...rest } = override;
   const fields = capabilityFields(derived);
   const dpi = baseDpiFor(fields.paraProfile);
   const scale = dpi / (override.windowDpi ?? STANDARD_BASE_DPI);

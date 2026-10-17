@@ -1,12 +1,16 @@
 // src/esci2/dialects/model-overrides.ts
+//
+// The model overrides: per-model records holding only what a printer's own
+// INFO and CAPA replies can't tell us. Where each value came from is in its
+// provenance; the comments here are for genuine quirks.
 import type { GammaClassName, CmxClassName, Extents, ParaProfile } from "../para-composer.js";
 import type { ToneCurveName } from "../../postprocess/tone-curves.js";
 import type { SourceGeometry } from "../scan-window.js";
 
 export interface ModelOverride {
   /**
-   * Model identity, matched first: the product IDs this entry's models report
-   * in their INFO `#PRD` reply (`PID xxxx`, upper-case hex).
+   * Model identity, matched first: the product IDs this override's models
+   * report in their INFO `#PRD` reply (`PID xxxx`, upper-case hex).
    */
   pids: readonly string[];
   /** Product names, matched second, for models whose INFO `#PRD` carries a name instead of a PID. */
@@ -23,9 +27,9 @@ export interface ModelOverride {
    * The flatbed and ADF scan windows: each the captured paper size,
    * "generic" to inherit the generic window, or null for a source the
    * hardware lacks (no flatbed on ADF-only models, no ADF on flatbed-only
-   * ones). An entry keeps its own window only where the generic one differs
-   * from it on some source at some advertised DPI (scan-window.test.ts holds
-   * the comparison).
+   * ones). An override keeps its own window only where the generic one
+   * differs from it on some source at some advertised DPI
+   * (scan-window.test.ts holds the comparison).
    */
   fbExtents: OverrideWindow;
   adfExtents: OverrideWindow;
@@ -74,12 +78,69 @@ export interface ModelOverride {
    * confirmed, so every explicit SCAN_RESOLUTION warns.
    */
   verifiedWireDpis: number[];
+  /** Where this override's values came from. Never read by a session. */
+  provenance: Provenance;
+}
+
+/**
+ * Where a model override's values came from (CONTEXT.md "Provenance"). No
+ * runtime effect: provenance.test.ts holds it to the README compatibility
+ * table, so a ✅ model can't keep colour bytes nothing vouched for.
+ */
+export interface Provenance {
+  /** The models, by README name, this override was recorded for. */
+  models: readonly string[];
+  /**
+   * Models that share this override with the ones it was recorded for,
+   * having been found to share its CAPA fingerprint, each with a report of
+   * its own.
+   */
+  siblings?: Readonly<Record<string, readonly Evidence[]>>;
+  /** The colour pair and mono gamma (gmm, gammaClass, cmxClass, monoGammaClass). */
+  colour: readonly ColourEvidence[];
+  /** The scan windows (fbExtents, adfExtents, windowDpi). */
+  window: readonly Evidence[];
+  /** initPollIterations. */
+  pollCount: readonly Evidence[];
+}
+
+/**
+ * What a piece of evidence is:
+ * - `epson-capture`: a capture of an Epson driver session;
+ * - `own-capture`: a capture of this service's own traffic. It proves the
+ *   printer accepted the bytes, never that the colours are right;
+ * - `reporter-scan`: a reporter's compatibility-page scan, measured;
+ * - `reporter-report`: a reporter's qualitative "works" or "colours look right";
+ * - `inherited:<model>`: copied from the override recorded for that model.
+ */
+export type EvidenceKind =
+  | "epson-capture"
+  | "own-capture"
+  | "reporter-scan"
+  | "reporter-report"
+  | `inherited:${string}`;
+
+/** Where the evidence is: a GitHub issue or PR, or a fixture in the tree (repo-relative path). */
+export type EvidenceLink = { issue: number } | { pr: number } | { fixture: string };
+
+export interface Evidence {
+  kind: EvidenceKind;
+  link: EvidenceLink;
+}
+
+/**
+ * Colour evidence also records the colour settings it vouched for, as their
+ * hash (colourSettingsHash in test-support/provenance.ts). Changing an
+ * override's colour bytes leaves its old evidence vouching for the old ones.
+ */
+export interface ColourEvidence extends Evidence {
+  vouchesFor: string;
 }
 
 /**
  * The dialect fields a session always takes from the printer's own INFO and
  * CAPA replies (capabilityFields), for a model override and the generic
- * dialect alike. No entry can override them (ADR 0001).
+ * dialect alike. No override can carry them (ADR 0001).
  */
 export interface CapabilityFields {
   /**
@@ -134,8 +195,9 @@ export interface DialectWindow extends Extents {
   generic?: SourceGeometry;
 }
 
-/** What a session runs: its model override (or the generic one) plus the capability fields. */
-export interface Dialect extends Omit<ModelOverride, "fbExtents" | "adfExtents">, CapabilityFields {
+/** What a session runs: its model override (or the generic dialect) plus the capability fields. */
+export interface Dialect
+  extends Omit<ModelOverride, "fbExtents" | "adfExtents" | "provenance">, CapabilityFields {
   /** null when the source has no window: the hardware lacks it, or its scan area isn't usable. */
   fbExtents: DialectWindow | null;
   adfExtents: DialectWindow | null;
@@ -147,13 +209,16 @@ export interface Dialect extends Omit<ModelOverride, "fbExtents" | "adfExtents">
  * scanner shells' finalize resolution both consume it, keeping them aligned
  * with composePara's gate: only the adf-crp composer reads colorMode
  * (composeStandardPara hard-codes #COLC024), so monoGammaClass presence alone
- * is not enough. A standard-profile entry mistakenly given a monoGammaClass
- * therefore still resolves to host-side conversion instead of silently
- * producing colour output under an explicit grayscale setting.
+ * is not enough. A standard-profile override mistakenly given a
+ * monoGammaClass therefore still resolves to host-side conversion instead of
+ * silently producing colour output under an explicit grayscale setting.
  */
 export function supportsWireGrayscale(entry: Dialect | undefined): boolean {
   return entry?.paraProfile === "adf-crp" && entry.monoGammaClass !== undefined;
 }
+
+const FRIDA = "tools/frida-capture/captures";
+const PCAP = "tools/pcap-extract/captures";
 
 export const MODEL_OVERRIDES: readonly ModelOverride[] = [
   // The ET-3950 shares this CAPA fingerprint; its PID is not yet known, so it
@@ -174,22 +239,40 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
     cmxClass: { jpg: null, pdf: null },
     toneCurve: "et4950-family",
-    // 300: Frida-captured replay fixtures drive it end-to-end. The rest:
-    // ET-4956 hardware verification, 2026-09-02 (issue #81 runbook) —
-    // flatbed at 75/150/600/1200 and ADF at 75/150/200/600 all accepted on
-    // the wire with linearly-scaled dimensions and centred registration
-    // marks; 1200 is flatbed-only (the ADF source list caps at 600, and a
-    // 1200 request on the ADF was confirmed to cap to 600).
+    // 300: the replay fixtures. The rest: ET-4956 hardware, 2026-09-02 (#81):
+    // flatbed at 75/150/600/1200, ADF at 75/150/200/600. 1200 is flatbed-only
+    // (the ADF list caps at 600, and a 1200 ADF request caps to 600).
     verifiedWireDpis: [75, 150, 200, 300, 600, 1200],
+    provenance: {
+      models: ["ET-4950", "ET-4956"],
+      siblings: { "ET-3950": [{ kind: "reporter-report", link: { pr: 22 } }] },
+      colour: [
+        {
+          kind: "epson-capture",
+          link: { fixture: `${FRIDA}/2026-04-24T09-05-08-flatbed-1p-jpg.jsonl` },
+          vouchesFor: "30e4b76739d1ec7d",
+        },
+      ],
+      window: [
+        {
+          kind: "epson-capture",
+          link: { fixture: `${FRIDA}/2026-04-24T09-05-08-flatbed-1p-jpg.jsonl` },
+        },
+        {
+          kind: "epson-capture",
+          link: { fixture: `${FRIDA}/2026-04-24T08-56-07-adf-1p-simplex.jsonl` },
+        },
+      ],
+      pollCount: [
+        {
+          kind: "epson-capture",
+          link: { fixture: `${FRIDA}/2026-04-24T09-05-08-flatbed-1p-jpg.jsonl` },
+        },
+      ],
+    },
   },
-  // The XP-4100 (FW 02.42.MB27M6) produces a byte-identical canonicalised
-  // CAPA reply and so shares this fingerprint — flatbed-only hardware like
-  // the ET-2750, live-validated by the reporter in issue #139 (flatbed PDF,
-  // panel and host trigger). Gamma is not advertised in CAPA, so the XP-4100
-  // inherits the ET-2750's captured near-identity curve; measured off the
-  // #139 compatibility-page scan, C0C0C0 returns ~195 against a nominal 192
-  // with no cast, so the inherited curve is faithful on that hardware too.
-  // Its PID is not yet known, so it resolves by fingerprint.
+  // The XP-4100 shares this CAPA fingerprint (flatbed-only, like the
+  // ET-2750); its PID is not yet known, so it resolves by fingerprint.
   {
     pids: ["112A"],
     names: [],
@@ -201,9 +284,33 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     gmm: "UG18",
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
     cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
-    // Committed pcap-extracted replay fixture drives 300 DPI end-to-end.
-    verifiedWireDpis: [300],
+    verifiedWireDpis: [300], // the replay fixture
+    provenance: {
+      models: ["ET-2750"],
+      siblings: { "XP-4100": [{ kind: "reporter-scan", link: { issue: 139 } }] },
+      colour: [
+        {
+          kind: "epson-capture",
+          link: { fixture: `${PCAP}/et-2750/flatbed-single-page-pdf.jsonl` },
+          vouchesFor: "58b3f5eab4e7ab0c",
+        },
+      ],
+      window: [
+        {
+          kind: "epson-capture",
+          link: { fixture: `${PCAP}/et-2750/flatbed-single-page-pdf.jsonl` },
+        },
+      ],
+      pollCount: [
+        {
+          kind: "epson-capture",
+          link: { fixture: `${PCAP}/et-2750/flatbed-single-page-pdf.jsonl` },
+        },
+      ],
+    },
   },
+  // The JPG and PDF settings differ: the driver sent each action its own
+  // tone curve and colour matrix.
   {
     pids: ["1147"],
     names: [],
@@ -219,8 +326,29 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     gmm: "UG18",
     gammaClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
     cmxClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
-    // Committed pcap-extracted replay fixture drives 300 DPI end-to-end.
-    verifiedWireDpis: [300],
+    verifiedWireDpis: [300], // the replay fixtures
+    provenance: {
+      models: ["XP-7100"],
+      colour: [
+        {
+          kind: "epson-capture",
+          link: { fixture: `${PCAP}/xp-7100/jpg-flatbed.jsonl` },
+          vouchesFor: "fde4765190a0f050",
+        },
+        {
+          kind: "epson-capture",
+          link: { fixture: "src/esci2/dialects/xp-7100-fixtures/pdf-single.bin" },
+          vouchesFor: "fde4765190a0f050",
+        },
+      ],
+      window: [
+        { kind: "epson-capture", link: { fixture: `${PCAP}/xp-7100/jpg-flatbed.jsonl` } },
+        { kind: "epson-capture", link: { fixture: `${PCAP}/xp-7100/jpg-adf-simplex.jsonl` } },
+      ],
+      // The driver polled 11-13 times; 3 is the ET-4950 count, run on the
+      // reporter's hardware.
+      pollCount: [{ kind: "reporter-report", link: { issue: 65 } }],
+    },
   },
   {
     pids: ["11D0"],
@@ -233,31 +361,44 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     gmm: "UG10",
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
     cmxClass: { jpg: null, pdf: null },
-    // No replay fixture and no reporter retest (README: 🟡 Experimental,
-    // inferred dialect, issue #92) — seed empty per the verification-posture
-    // rule until a hardware report confirms a wire DPI.
-    verifiedWireDpis: [],
+    verifiedWireDpis: [], // no fixture, no reporter retest (#92)
+    provenance: {
+      models: ["ET-2950"],
+      colour: [{ kind: "inherited:ET-4950", link: { pr: 94 }, vouchesFor: "30e4b76739d1ec7d" }],
+      window: [{ kind: "inherited:ET-4950", link: { pr: 94 } }],
+      pollCount: [{ kind: "inherited:ET-4950", link: { pr: 94 } }],
+    },
   },
   {
     pids: ["1185"],
     names: [],
     capaFingerprints: ["7870a725ab969136d5eb04387bf01d3cc3168aabb3d11cfaca7d59a4169971c2"],
     displayName: "ET-4800 (ESC/I-2 over plain TCP)",
-    initPollIterations: 3, // same as ET-4950 family; fixtures trimmed to 3 cycles
+    initPollIterations: 3,
     fbExtents: "generic",
     adfExtents: "generic",
     gmm: "UG18",
     gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
     cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
-    // Committed pcap-extracted replay fixture drives 300 DPI end-to-end.
-    verifiedWireDpis: [300],
+    verifiedWireDpis: [300], // the replay fixtures
+    provenance: {
+      models: ["ET-4800"],
+      colour: [
+        {
+          kind: "epson-capture",
+          link: { fixture: `${PCAP}/et-4800/flatbed-jpg.jsonl` },
+          vouchesFor: "c879eb3a1bbb0021",
+        },
+      ],
+      window: [
+        { kind: "epson-capture", link: { fixture: `${PCAP}/et-4800/flatbed-jpg.jsonl` } },
+        { kind: "epson-capture", link: { fixture: `${PCAP}/et-4800/adf-jpg.jsonl` } },
+      ],
+      // The driver polled until ready (11-12 times); 3, the ET-4950 count, was
+      // run on the reporter's hardware.
+      pollCount: [{ kind: "reporter-report", link: { issue: 80 } }],
+    },
   },
-  // ET-15000: A3-print / A4-scan EcoTank. Flatbed + ADF simplex (no duplex),
-  // ESC/I-2 over plain TCP. CAPA advertises GMM "UG10UG18" and CMX "UNITUM08"
-  // with QIT/CCT absent — the same segment shape as the ET-4800, which
-  // advertises the same GMM and CMX lists. The gamma/CMX class bytes are
-  // reused from the ET-4800 (closest plain-TCP sibling) pending a hardware
-  // capture of the ET-15000's own PARA; live-validated against a real ET-15000 (PID 116E, FW FB 1.01).
   {
     pids: ["116E"],
     names: [],
@@ -269,14 +410,24 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     gmm: "UG18",
     gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
     cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
-    // Live-validated on real hardware (PID 116E, FW FB 1.01) at 300 DPI.
-    verifiedWireDpis: [300],
+    verifiedWireDpis: [300], // the contributor's hardware run (#106)
+    provenance: {
+      models: ["ET-15000"],
+      colour: [
+        { kind: "inherited:ET-4800", link: { pr: 106 }, vouchesFor: "c879eb3a1bbb0021" },
+        { kind: "reporter-report", link: { pr: 106 }, vouchesFor: "c879eb3a1bbb0021" },
+      ],
+      window: [
+        { kind: "inherited:ET-4800", link: { pr: 106 } },
+        { kind: "reporter-report", link: { pr: 106 } },
+      ],
+      pollCount: [
+        { kind: "inherited:ET-4800", link: { pr: 106 } },
+        { kind: "reporter-report", link: { pr: 106 } },
+      ],
+    },
   },
-  // FF-680W: ADF-only FastFoto scanner. The panel JobNumberIn flow observed
-  // from Epson's Mac software uses plain TCP ESC/I-2, an 8-cycle init poll,
-  // and a 200-DPI ADF PARA dialect with CRP/SKEW/DPLX defaults. The INFO body
-  // has no FB AREA segment, so the session is fixed to the ADF rather than
-  // keeping the flatbed-oriented plain-TCP default.
+  // A long-page window, as the driver sent it: 8.5" x 36" at 200 DPI.
   {
     pids: [],
     names: ["FF-680W"],
@@ -297,28 +448,29 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     gmm: "UG18",
     gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
     cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
-    // Committed pcap-extracted replay fixtures drive 200 and 300 DPI end-to-end.
-    verifiedWireDpis: [200, 300],
+    verifiedWireDpis: [200, 300], // the replay fixtures
+    provenance: {
+      models: ["FF-680W"],
+      colour: [
+        {
+          kind: "epson-capture",
+          link: { fixture: `${PCAP}/ff-680w/adf-simplex-200.jsonl` },
+          vouchesFor: "61b8d0509942f6e8",
+        },
+      ],
+      window: [
+        { kind: "epson-capture", link: { fixture: `${PCAP}/ff-680w/adf-simplex-200.jsonl` } },
+      ],
+      pollCount: [
+        { kind: "epson-capture", link: { fixture: `${PCAP}/ff-680w/adf-simplex-200.jsonl` } },
+      ],
+    },
   },
-  // DS-575W: ADF-only, button-only sheet-fed scanner — a FastFoto/DS-family
-  // sibling of the FF-680W (PID 0169 vs 016B). ESC/I-2 over plain TCP, 12-cycle
-  // init poll, fixed to the ADF (its INFO has no flatbed; its first init-poll
-  // statuses report ADF paper empty, which a status read would take for the
-  // flatbed). Its #ADFCRP PARA is byte-identical in layout to the
-  // FF-680W's, so it reuses the adf-crp profile; the only differences are ADF
-  // extents and the colour axis. Colour scans reuse the FF-680W's RGB gamma
-  // (ff680w-adf) and the ET-2750's CMX (et2750-um08) — both byte-identical in
-  // EliSauder's captures (issue #128). Greyscale scans use the novel 268-byte
-  // ds575w-mono LUT + #COLM008. adfExtents are stored at the 200-DPI reference
-  // (8.5" × 15.5"); wire captures at 400 and 600 DPI confirm linear scaling.
-  //
-  // The #ADFCRP flag bytes (SKEW/DFL1/DPLX) are GUI-driven scan options this
-  // service does not model; the composer pins the FF-680W canonical
-  // (SKEW+[DPLX]+DFL1). The colour capture matches it exactly (strict PARA
-  // oracle in scanner.test.ts); the mono captures used different GUI orderings,
-  // so they are driven to completion functionally with the mono gamma/CMX
-  // pinned directly. End-to-end correctness is confirmed by the contributor
-  // running a branch build against real hardware.
+  // The #ADFCRP flag bytes (SKEW/DFL1/DPLX) are scan options chosen in Epson's
+  // GUI, which this service does not model: the composer pins the FF-680W's
+  // (SKEW+[DPLX]+DFL1). The colour capture sends exactly that; the mono
+  // captures used other GUI orderings, so they replay functionally with only
+  // the mono gamma and CMX pinned. The window is 8.5" x 15.5" at 200 DPI.
   {
     pids: [],
     names: ["DS-575W"],
@@ -336,62 +488,46 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
     cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
     monoGammaClass: "ds575w-mono",
-    // 400 and 600: committed pcap-extracted replay fixtures drive these
-    // end-to-end. 200: not fixture-covered, but README-recorded as the one
-    // DPI actually hardware-verified on this model (compatibility table row:
-    // "only duplex colour PDF @ 200 DPI hardware-verified"); 400/600 are
-    // capture/replay-tested only. All three qualify under the
-    // verification-posture rule.
+    // 400 and 600: the replay fixtures. 200: the one DPI hardware-verified
+    // (README: duplex colour PDF @ 200 DPI).
     verifiedWireDpis: [200, 400, 600],
+    provenance: {
+      models: ["DS-575W"],
+      colour: [
+        {
+          kind: "epson-capture",
+          link: { fixture: `${PCAP}/ds-575w/adf-simplex-600-color-jpg.oracle.jsonl` },
+          vouchesFor: "f33610fd1279afc6",
+        },
+        {
+          kind: "epson-capture",
+          link: { fixture: `${PCAP}/ds-575w/adf-simplex-400-mono-jpg.jsonl` },
+          vouchesFor: "f33610fd1279afc6",
+        },
+        { kind: "reporter-report", link: { issue: 128 }, vouchesFor: "f33610fd1279afc6" },
+      ],
+      window: [
+        {
+          kind: "epson-capture",
+          link: { fixture: `${PCAP}/ds-575w/adf-duplex-600-mono-jpg.jsonl` },
+        },
+      ],
+      pollCount: [
+        {
+          kind: "epson-capture",
+          link: { fixture: `${PCAP}/ds-575w/adf-duplex-600-mono-jpg.jsonl` },
+        },
+      ],
+    },
   },
-  // ET-2810: entry-level A4 EcoTank. Flatbed-only (CAPA reports ADF: N /
-  // duplex: N), ESC/I-2 over plain TCP. CAPA advertises GMM "UG10UG18" and
-  // CMX "UNITUM08" with QIT/CCT absent, and its #FB AREA value "d850i0001170"
-  // is byte-identical to the ET-4800 — i.e. an ET-4800/ET-15000-shaped dialect
-  // that happens to have no ADF. Extents and CMX class are therefore reused
-  // from the ET-4800; gamma is inherited from it too (et4800-stock) rather
-  // than guessed flat, because that is the combination the reporter actually
-  // exercised on hardware (issue #132, PID 118A, FW FB 1.00): they patched
-  // this entry in at runtime and got a valid flatbed PDF out.
+  // The ET-2810 never triggers a scan itself: its button combo is a USB-host
+  // scan and it registers no network destination, so it is host-trigger only.
   //
-  // Gamma is not advertised in CAPA, so the inherited curve was a guess until
-  // the reporter scanned the compatibility test page (#132). Measured off that
-  // scan: the nominal-64 grey patch returns luma 67 — et4800-stock's ~38 black
-  // floor never bites, so no shadow crushing — and paper white returns a clean
-  // 255 with no colour cast. Good enough to ship as-is; a Frida capture would
-  // still pin the exact curve rather than confirm it behaves.
-  //
-  // NOTE: the ET-2810 never triggers a scan on its own — its two-button combo
-  // is a USB-host scan and it registers no network Scan-to-Computer
-  // destination, so no beacon and no push-scan ever arrive. For the ET-2810
-  // this entry is only reachable via a host-initiated scan trigger.
-  //
-  // XP-3200 (Expression Home, flatbed-only): produces a byte-identical
-  // canonicalised CAPA reply and so shares this fingerprint — but presents
-  // over TLS, not plain TCP (the auto-probe's TLS arm wins), making this the
-  // second transport-agnostic entry after the ET-8500. Live-validated on a
-  // borrowed unit (2026-07): host-triggered flatbed PDF of the compatibility
-  // test page, dialect resolved and scan completed unmodified. Measured off
-  // that scan: greys are neutral (max channel spread 10, no cast), the
-  // nominal-64 grey returns ~74 so et4800-stock's black floor never bites,
-  // and geometry is clean (6.2px crosshair residual). Midtones read light
-  // (192 → ~242), but the reference print came from AirPrint on plain paper,
-  // so print-side lightness can't be separated from the curve; the inherited
-  // gamma clears the same no-cast / no-shadow-crush bar the ET-2810 shipped
-  // on.
-  //
-  // Panel flow (XP-3200, beacon PID 11AF): non-functional despite the
-  // registration itself working. The printer beacons 02 06, accepts the
-  // keepalive (v2.0 and forced v3.0 both), and lists the destination on the
-  // panel — but starting a scan fails instantly with "Invalid" while sending
-  // the host NOTHING: no push-scan TCP connection, no unicast UDP probe
-  // (verified with connection-level debug logging on both 2968 listeners,
-  // and inbound TCP to the host confirmed reachable from a third device).
-  // The rejection is decided printer-side, so the NetScanMonitor listing
-  // appears vestigial on this firmware generation; the real panel flow
-  // presumably needs a newer (ScanSmart-era) registration handshake that
-  // only a capture against a real Epson client could reveal. Until then the
-  // XP-3200 is host-trigger only, same operational story as the ET-2810.
+  // The XP-3200 (beacon PID 11AF) shares this CAPA fingerprint but presents
+  // over TLS. Its panel lists the destination, yet starting a scan fails at
+  // once with "Invalid" and sends the host nothing (no push-scan connection,
+  // no unicast probe): the printer rejects it before contacting us, so it is
+  // host-trigger only too.
   {
     pids: ["118A", "11AF"],
     names: [],
@@ -403,28 +539,27 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     gmm: "UG18",
     gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
     cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
-    // Live-validated on real hardware at 300 DPI (issue #132).
-    verifiedWireDpis: [300],
+    verifiedWireDpis: [300], // the reporter's hardware (#132)
+    provenance: {
+      models: ["ET-2810"],
+      siblings: { "XP-3200": [{ kind: "reporter-scan", link: { pr: 149 } }] },
+      colour: [
+        { kind: "inherited:ET-4800", link: { pr: 133 }, vouchesFor: "c879eb3a1bbb0021" },
+        { kind: "reporter-scan", link: { issue: 132 }, vouchesFor: "c879eb3a1bbb0021" },
+      ],
+      window: [
+        { kind: "inherited:ET-4800", link: { pr: 133 } },
+        { kind: "reporter-report", link: { issue: 132 } },
+      ],
+      pollCount: [
+        { kind: "inherited:ET-4800", link: { pr: 133 } },
+        { kind: "reporter-report", link: { issue: 132 } },
+      ],
+    },
   },
-  // ET-8500: A4 EcoTank Photo. Flatbed-only (CAPA reports ADF: N / duplex: N).
-  // Presents over ESC/I-2 on both TLS (issue #120, Peter-Maguire) and plain TCP
-  // (issue #123, anaxci) across reporters — identical CAPA fingerprint either
-  // way, so this one transport-agnostic entry serves both. Source detection and
-  // init poll mirror the ET-2950 (flatbed-only, fixed-flatbed, 3-cycle), but its
-  // PARA-segment shape matches the ET-15000/ET-4800 family: CAPA advertises GMM
-  // "UG10UG18" and CMX "UNITUM08" with QIT present (PREFON OFF) and CCT absent.
-  // Its #FB AREA value "d850i0001170" is byte-identical to the ET-4800/ET-2750,
-  // so the A4 flatbed extents are reused from the ET-4800, and the CMX class
-  // bytes from the ET-4800's matching UNITUM08 variant (et4800-um08).
-  //
-  // The gamma curve is NOT advertised in CAPA, so it can't be pinned from the
-  // diagnostic the way extents/CMX/GMM can. We default it to the near-identity
-  // et4950-stock used by the TLS sibling (ET-4950/ET-2950) rather than the
-  // ET-4800's contrast-boosting curve: for an unknown photo scanner a flat curve
-  // is the lower-risk guess (if wrong it degrades mildly, vs crushing shadows).
-  // Originally speculative from the issue #120 diagnostic (PID 1193, FW FB 2.00);
-  // since confirmed working by the reporter (flatbed JPG + PDF, colours accurate,
-  // nothing washed out). A Frida capture would still pin the gamma/CMX exactly.
+  // Reported over TLS (#120) and over plain TCP (#123) with the same CAPA
+  // fingerprint, so one override serves both transports. Its pair is mixed
+  // (colour-pair.test.ts) until a compatibility-page scan checks the fix.
   {
     pids: ["1193"],
     names: [],
@@ -436,33 +571,30 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     gmm: "UG18",
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
     cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
-    // Confirmed working by the reporter at 300 DPI (issue #120).
-    verifiedWireDpis: [300],
+    verifiedWireDpis: [300], // the reporter's hardware (#120)
+    provenance: {
+      models: ["ET-8500"],
+      colour: [
+        // The tone curve from the ET-4950, the matrix from the ET-4800.
+        { kind: "inherited:ET-4950", link: { pr: 121 }, vouchesFor: "e15913fe2ab564e6" },
+        { kind: "inherited:ET-4800", link: { pr: 121 }, vouchesFor: "e15913fe2ab564e6" },
+        { kind: "reporter-report", link: { issue: 120 }, vouchesFor: "e15913fe2ab564e6" },
+        { kind: "reporter-report", link: { issue: 123 }, vouchesFor: "e15913fe2ab564e6" },
+      ],
+      window: [
+        { kind: "inherited:ET-4800", link: { pr: 121 } },
+        { kind: "reporter-report", link: { issue: 120 } },
+      ],
+      pollCount: [
+        { kind: "inherited:ET-2950", link: { pr: 121 } },
+        { kind: "reporter-report", link: { issue: 120 } },
+      ],
+    },
   },
-  // ET-7700: A4 EcoTank Photo. Flatbed-only (CAPA reports ADF: N / duplex: N),
-  // ESC/I-2 over plain TCP. Speculative from the issue #145 diagnostic
-  // (PID 112B, FW FB 1.31): its reported CAPA shape matches the ET-8500 —
-  // GMM "UG10UG18", CMX "UNITUM08", QIT present (PREFON OFF), CCT absent, and
-  // the #FB AREA value "d850i0001170" byte-identical to the ET-4800/ET-8500 —
-  // so every field is inherited from that sibling: the A4 window of the
-  // ET-4800 family (now the generic window, which equals it at every
-  // advertised DPI), et4800-um08 CMX, and the near-identity et4950-stock gamma
-  // (same photo-scanner rationale as the ET-8500: gamma isn't advertised in
-  // CAPA, and a flat curve degrades mildly if wrong instead of crushing
-  // shadows). The fingerprint still differs from the ET-8500's somewhere in
-  // the full canonicalised segment list, so this is a separate entry rather
-  // than a shared one.
-  //
-  // Hardware-validated by the reporter 2026-08-04 (panel-triggered flatbed
-  // JPG + PDF on :main), with Wireshark captures of both sessions: the
-  // captured PARA is byte-identical to composePara's output (pinned by the
-  // replay fixtures under tools/pcap-extract/captures/et-7700/). Inherited
-  // gamma measured off the reporter's compatibility-test-page scan: the
-  // nominal-64 grey returns 72/69/69 (no shadow crush), grey-patch channel
-  // spreads 3-11 (no cast), paper white 247/243/251 — clears the same bar
-  // the ET-2810 and XP-3200 shipped on. The exact Epson-driver curve remains
-  // unpinned (captures are of our own service), which matters only if a
-  // scan-quality report ever implicates the curve.
+  // Shaped like the ET-8500 (same AREA, GMM, CMX and QIT lists), but its CAPA
+  // fingerprint differs, so it is an override of its own. Its pair is mixed
+  // (colour-pair.test.ts), and its fixtures are own captures: changing the
+  // pair means re-pinning their PARA.
   {
     pids: ["112B"],
     names: [],
@@ -474,37 +606,28 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     gmm: "UG18",
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
     cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
-    // Committed pcap-extracted replay fixtures drive 300 DPI end-to-end (issue #145).
-    verifiedWireDpis: [300],
+    verifiedWireDpis: [300], // the replay fixtures (#145)
+    provenance: {
+      models: ["ET-7700"],
+      colour: [
+        { kind: "inherited:ET-8500", link: { pr: 153 }, vouchesFor: "e15913fe2ab564e6" },
+        {
+          kind: "own-capture",
+          link: { fixture: `${PCAP}/et-7700/flatbed-jpg.jsonl` },
+          vouchesFor: "e15913fe2ab564e6",
+        },
+        { kind: "reporter-scan", link: { issue: 145 }, vouchesFor: "e15913fe2ab564e6" },
+      ],
+      window: [{ kind: "own-capture", link: { fixture: `${PCAP}/et-7700/flatbed-jpg.jsonl` } }],
+      pollCount: [{ kind: "own-capture", link: { fixture: `${PCAP}/et-7700/flatbed-jpg.jsonl` } }],
+    },
   },
-  // WF-3835: A4 WorkForce office AIO (WF-3820/3830 series). Flatbed + ADF
-  // simplex (CAPA reports duplex: N — the series' 35-sheet ADF scans one
-  // side), ESC/I-2 over plain TCP. Speculative from the issue #174 diagnostic
-  // (PID 117A, FW FB 2.03): CAPA advertises GMM "UG10UG18" and CMX "UNITUM08"
-  // with QIT present (PREFON OFF) and CCT absent — an ET-15000-shaped dialect
-  // that additionally carries the optional QIT segment (equivalently, an
-  // ET-8500 with an ADF). Both AREA values are byte-identical to the
-  // ET-4950/ET-4800 family ("d850i0001170" FB, "d850i0001400" ADF), so the
-  // extents are reused from the ET-4800, as is its matching UNITUM08 CMX
-  // class (et4800-um08).
-  //
-  // Gamma is not advertised in CAPA, so it can't be pinned from the
-  // diagnostic, and here the two candidate curves disagree about which
-  // sibling to follow. By segment shape (QIT present, CCT absent) the
-  // nearest entries are the ET-8500 and ET-7700, which run the flat
-  // et4950-stock; by hardware class the WF-3835 is a working-document AIO
-  // like the ET-4800 and ET-15000, which run et4800-stock — as do the
-  // flatbed-only ET-2810 / XP-3200 that inherited it (#132). We follow
-  // hardware class, on the reading that Epson tunes the curve to the
-  // scanner's purpose rather than to which optional segments its firmware
-  // advertises: the ET-8500 and ET-7700 are photo scanners, where the flat
-  // curve was chosen deliberately, and the WF-3835 is not one.
-  //
-  // This is the one field in the entry that is a judgement call rather than
-  // a transcription, so it is what a reporter retest should exercise first:
-  // et4800-stock crushes shadows if it turns out to be the wrong pick, which
-  // a compatibility-test-page scan would show as a lifted black floor.
-  // Awaiting reporter validation on real hardware (#174).
+  // The tone curve is a judgement call. By segment shape (QIT present, CCT
+  // absent) the nearest overrides are the ET-8500 and ET-7700, on the flat
+  // et4950-stock; by hardware class (an office AIO) it is the ET-4800 and
+  // ET-15000, on et4800-stock. It follows hardware class: the flat curve was
+  // chosen for the photo models. If wrong, et4800-stock crushes shadows, which
+  // a compatibility-page scan would show as a lifted black floor.
   {
     pids: ["117A"],
     names: [],
@@ -516,10 +639,25 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     gmm: "UG18",
     gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
     cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
-    // Awaiting reporter validation (#174) — the flatbed evidence isn't
-    // recorded in the tree yet. Flip to [300] in the PR that flips the
-    // README row to ✅.
+    // Flip to [300] in the PR that flips the README row to ✅ (#174).
     verifiedWireDpis: [],
+    provenance: {
+      models: ["WF-3835"],
+      // The reporter ran a field-for-field identical override of their own:
+      // a flatbed PDF, uploaded to Paperless-ngx without errors. ADF untested.
+      colour: [
+        { kind: "inherited:ET-4800", link: { pr: 175 }, vouchesFor: "c879eb3a1bbb0021" },
+        { kind: "reporter-report", link: { issue: 174 }, vouchesFor: "c879eb3a1bbb0021" },
+      ],
+      window: [
+        { kind: "inherited:ET-4800", link: { pr: 175 } },
+        { kind: "reporter-report", link: { issue: 174 } },
+      ],
+      pollCount: [
+        { kind: "inherited:ET-4800", link: { pr: 175 } },
+        { kind: "reporter-report", link: { issue: 174 } },
+      ],
+    },
   },
 ];
 
@@ -532,20 +670,20 @@ export const OVERRIDES_BY_FINGERPRINT: ReadonlyMap<string, ModelOverride> =
   indexByFingerprint(MODEL_OVERRIDES);
 
 /**
- * Builds the fingerprint index, refusing a fingerprint listed by two entries
- * rather than letting the later one silently win.
+ * Builds the fingerprint index, refusing a fingerprint listed by two
+ * overrides rather than letting the later one silently win.
  */
-function indexByFingerprint(entries: readonly ModelOverride[]): Map<string, ModelOverride> {
+function indexByFingerprint(overrides: readonly ModelOverride[]): Map<string, ModelOverride> {
   const index = new Map<string, ModelOverride>();
-  for (const entry of entries) {
-    for (const fp of entry.capaFingerprints) {
+  for (const override of overrides) {
+    for (const fp of override.capaFingerprints) {
       const other = index.get(fp);
       if (other !== undefined) {
         throw new Error(
-          `CAPA fingerprint ${fp} is listed by both ${other.displayName} and ${entry.displayName}`,
+          `CAPA fingerprint ${fp} is listed by both ${other.displayName} and ${override.displayName}`,
         );
       }
-      index.set(fp, entry);
+      index.set(fp, override);
     }
   }
   return index;

@@ -347,8 +347,9 @@ These dialects are resolved by the same model-identity lookup used by the rest o
 
 ## How printer-model differences are handled
 
-Each supported printer family has an entry in `src/esci2/dialects/model-overrides.ts`,
-keyed by model identity. Entries are pure data:
+Each supported printer family has a model override in
+`src/esci2/dialects/model-overrides.ts`, keyed by model identity. Overrides are
+pure data, holding only what the printer's replies can't tell us:
 
 - Identity keys (`pids`, `names`, `capaFingerprints`): the product IDs the
   models report in their INFO `#PRD` reply, the product names reported there
@@ -356,10 +357,10 @@ keyed by model identity. Entries are pure data:
   replies (`src/esci2/capa-fingerprint.ts`). A model whose PID isn't known yet
   (ET-3950, XP-4100) resolves through the fingerprint it shares with a sibling.
 - Dispatch metadata (`initPollIterations`). Source detection is derived from
-  the sources INFO advertises, never carried by the entry.
+  the sources INFO advertises, never carried by the override.
 - Scan extents (`fbExtents`, `adfExtents`) — the captured paper size, pinned at
   `windowDpi` (300 unless set; 200 for the `adf-crp` scanners), or `"generic"`
-  to inherit the generic scan window (see the generic dialect below). An entry
+  to inherit the generic scan window (see the generic dialect below). An override
   keeps its own only where the generic window differs from it at some
   advertised DPI on some source: the ET-2750 (2477×3500), XP-7100 (Letter),
   FF-680W (long page) and DS-575W (the generic window is clipped at 75 DPI,
@@ -370,10 +371,21 @@ keyed by model identity. Entries are pure data:
   inlined verbatim from captured fixtures; never algorithmically generated.
   Each class is tagged neutral or Epson-look (a CMX class by whether its bytes
   are the identity matrix), and `checkColourPair` (`src/esci2/data/colour-pair.ts`)
-  rejects a mixed pair; a test holds every entry to it, ET-8500 and ET-7700
+  rejects a mixed pair; a test holds every override to it, ET-8500 and ET-7700
   excepted until their colour fix.
+- `provenance`: where the colour pair, the scan window and the poll count came
+  from, each a list of evidence (an Epson driver capture, a capture of this
+  service's own traffic, a reporter's measured compatibility-page scan, a
+  reporter's qualitative report, or inheritance from another model), linked to
+  an issue, PR or committed fixture. It has no runtime effect.
+  `src/esci2/dialects/provenance.test.ts` holds it to the README: every ✅
+  model is served by an override (a model sharing another's needs a report of
+  its own); its colour evidence includes a driver capture or reporter
+  scan/report that vouched for its current colour bytes, by hash, so changing
+  the colour fails until new evidence is recorded; and its window and poll
+  count aren't inherited only.
 
-Five fields are never on an entry. Every session, model override or generic
+Five fields are never on an override. Every session, model override or generic
 dialect alike, takes them from the printer's own INFO and CAPA replies
 (`capabilityFields` in `src/esci2/derivation.ts`):
 
@@ -436,8 +448,9 @@ support for a new printer is a data-only change in the normal case: capture its
 wire bytes, extract any novel gamma/CMX class into the data files, and add a
 model override. A novel gamma class also gets a `GAMMA_CLASS_LOOK` tag: neutral
 if it was captured beside an identity matrix (or none), Epson-look if beside the
-model's own matrix. The entry's composed colour pairs must then pass
-`checkColourPair` (`src/esci2/data/colour-pair.test.ts`). Replay tests (`src/esci2/scanner.test.ts` and per-dialect files
+model's own matrix. The override's composed colour pairs must then pass
+`checkColourPair` (`src/esci2/data/colour-pair.test.ts`), and its provenance
+records the capture it came from. Replay tests (`src/esci2/scanner.test.ts` and per-dialect files
 under `src/esci2/dialects/*.test.ts`) pin the composed output byte-for-byte
 against the captured fixture.
 

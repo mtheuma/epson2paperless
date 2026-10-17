@@ -77,7 +77,7 @@ _Avoid_: TLS model
 ## Verification
 
 **Provenance**:
-Where a model override's colour pair, scan window or poll count came from: an Epson driver capture, a capture of the service's own traffic, a reporter's compatibility-page scan, or inheritance from another model. A group can carry more than one.
+Where a model override's colour pair, scan window or poll count came from: an Epson driver capture, a capture of the service's own traffic, a reporter's compatibility-page scan, a reporter's qualitative report, or inheritance from another model. A group can carry more than one. Colour evidence names the colour bytes it vouched for, so it stops counting when they change.
 _Avoid_: source (reserved for flatbed/ADF), origin
 
 **Own capture**:

@@ -20,7 +20,7 @@ const KNOWN_MIXED_PAIRS: Readonly<Record<string, string>> = {
     "Inherits the ET-8500's pair, pinned by own-capture fixtures (#145); fix awaits a compatibility-page scan.",
 };
 
-const knownException = (entry: ModelOverride): string | undefined =>
+const knownException = (entry: Pick<ModelOverride, "displayName">): string | undefined =>
   Object.keys(KNOWN_MIXED_PAIRS).find((model) => entry.displayName.includes(model));
 
 // The colour pair a composed PARA body carries, read back from its #GMM, #GMT
