@@ -24,6 +24,15 @@ The scan PARA is 1000 bytes for duplex (carries the `SKEWDPLXDFL1` token) and
 300 DPI → `#ACQ…i0002550i0010800`. Unlike every other dialect, the FF-680W
 consumes `ctx.resolution`; the others pin resolution in their class data.
 
+## Duplex orientation
+
+`adf-duplex-200.jsonl` is the FF-680W's duplex-orientation evidence. Its image
+data, rendered raw (the `#typIMGA` and `#typIMGB` chunks concatenated as the
+printer sent them, with no rotation applied), gives two readable pages that are
+both upside down: the sheet went in top edge first. The back is not turned
+relative to the front, as expected from a single-pass ADF (INFO
+`#ADFDPLX1SCN`), so back pages are left as delivered.
+
 ## Stream selection
 
 Each pcap contains several `tcp.port==1865` conversations ahead of the real

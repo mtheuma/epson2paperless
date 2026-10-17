@@ -38,23 +38,13 @@ export interface RegistryEntry {
    */
   windowDpi?: number;
   /**
-   * Whether duplex back sides arrive physically rotated 180° and need the
-   * host-side compensation (EXIF Orientation=3 / PDF /Rotate 180). True for
-   * reversing-ADF hardware, which re-feeds the sheet; false for single-pass
-   * dual-sensor scanners, whose back sensor captures the side upright —
-   * confirmed on DS-575W hardware, where the compensation inverted back
-   * pages (issue #128 follow-up). Unreachable (but still stated) for
-   * simplex-ADF and flatbed-only models.
+   * What confirms which way up this model's duplex back pages arrive (the
+   * duplexBackRotated capability): a duplex capture whose orientation has
+   * been checked, or a hardware report. Omitted where neither exists; a
+   * duplex scan on such a model then warns once per process, inviting the
+   * report that would settle it. Unused on models with no duplex ADF.
    */
-  duplexBackRotated: boolean;
-  /**
-   * Set when duplexBackRotated is a shipped assumption with no capture or
-   * hardware confirmation behind it. buildParaSend warn-logs on duplex scans
-   * for such entries, inviting the hardware report the value is waiting for —
-   * without it the suspicion lives only in this file and can never be
-   * falsified from the field.
-   */
-  duplexBackRotationUnverified?: true;
+  duplexOrientationEvidence?: string;
   gmm: string;
   gammaClass: { jpg: GammaClassName; pdf: GammaClassName };
   cmxClass: { jpg: CmxClassName | null; pdf: CmxClassName | null };
@@ -104,6 +94,14 @@ export interface CapabilityFields {
   paraProfile: ParaProfile;
   /** How the session learns its source. */
   sourceDetection: SourceDetection;
+  /**
+   * Whether duplex back pages arrive turned 180° and get the host-side
+   * compensation (EXIF Orientation=3 / PDF /Rotate 180): true for a two-pass
+   * ADF (INFO `#ADFDPLX2SCN`), which turns the sheet over and feeds it
+   * again; false for a single-pass one (`1SCN`), which reads both sides in
+   * one pass, and for no duplex at all.
+   */
+  duplexBackRotated: boolean;
 }
 
 /**
@@ -166,7 +164,8 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3,
     fbExtents: "generic",
     adfExtents: "generic",
-    duplexBackRotated: true, // reversing ADF — backs arrive upside down
+    duplexOrientationEvidence:
+      "ET-4956 hardware (the maintainer's): duplex backs arrive turned 180°, a two-pass ADF",
     gmm: "UG10",
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
     cmxClass: { jpg: null, pdf: null },
@@ -195,7 +194,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 2,
     fbExtents: { x0: 0, y0: 0, w: 2477, h: 3500 },
     adfExtents: null,
-    duplexBackRotated: false, // no ADF
     gmm: "UG18",
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
     cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
@@ -210,7 +208,7 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2550, h: 3300 },
     adfExtents: { x0: 0, y0: 0, w: 2550, h: 3300 },
-    duplexBackRotated: true, // reversing ADF — backs arrive upside down
+    duplexOrientationEvidence: "hardware report: duplex backs arrive turned 180°, a two-pass ADF",
     gmm: "UG18",
     gammaClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
     cmxClass: { jpg: "xp7100-jpg", pdf: "xp7100-pdf" },
@@ -225,7 +223,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
     adfExtents: null,
-    duplexBackRotated: false, // no ADF
     gmm: "UG10",
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
     cmxClass: { jpg: null, pdf: null },
@@ -242,7 +239,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3, // same as ET-4950 family; fixtures trimmed to 3 cycles
     fbExtents: "generic",
     adfExtents: "generic",
-    duplexBackRotated: false, // ADF simplex — no back sides
     gmm: "UG18",
     gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
     cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
@@ -263,7 +259,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
     adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
-    duplexBackRotated: false, // ADF simplex — no back sides
     gmm: "UG18",
     gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
     cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
@@ -284,8 +279,11 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     fbExtents: null, // ADF-only hardware — no flatbed
     adfExtents: { x0: 0, y0: 0, w: 1700, h: 7200 },
     windowDpi: 200,
-    duplexBackRotated: true, // single-pass hardware, but the compensation has shipped unchallenged — flip on a hardware report
-    duplexBackRotationUnverified: true,
+    // Rendered raw, both sides of the duplex fixture read upside down (the
+    // sheet went in top edge first): the back is not turned relative to the
+    // front, as a single-pass ADF reads it.
+    duplexOrientationEvidence:
+      "duplex capture ff-680w/adf-duplex-200, rendered raw: the back arrives the same way up as the front",
     gmm: "UG18",
     gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
     cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
@@ -320,7 +318,8 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     fbExtents: null, // ADF-only hardware — no flatbed
     adfExtents: { x0: 0, y0: 0, w: 1700, h: 3100 },
     windowDpi: 200,
-    duplexBackRotated: false, // single-pass dual sensor — backs arrive upright (hardware-confirmed, #128)
+    duplexOrientationEvidence:
+      "hardware report (#128): backs arrive upright; the 180° compensation inverted them",
     gmm: "UG18",
     gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
     cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
@@ -389,7 +388,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
     adfExtents: null,
-    duplexBackRotated: false, // no ADF
     gmm: "UG18",
     gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
     cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
@@ -423,7 +421,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
     adfExtents: null,
-    duplexBackRotated: false, // no ADF
     gmm: "UG18",
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
     cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
@@ -462,7 +459,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3,
     fbExtents: "generic",
     adfExtents: null,
-    duplexBackRotated: false, // no ADF
     gmm: "UG18",
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
     cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
@@ -505,7 +501,6 @@ export const REGISTRY_ENTRIES: readonly RegistryEntry[] = [
     initPollIterations: 3,
     fbExtents: { x0: 0, y0: 0, w: 2481, h: 3506 },
     adfExtents: { x0: 69, y0: 0, w: 2481, h: 3506 },
-    duplexBackRotated: false, // ADF simplex — no back sides
     gmm: "UG18",
     gammaClass: { jpg: "et4800-stock", pdf: "et4800-stock" },
     cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },

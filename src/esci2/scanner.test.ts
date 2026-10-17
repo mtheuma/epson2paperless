@@ -1502,7 +1502,7 @@ describe("runEsci2ScanOverPlain — FF-680W fixture replay", () => {
     fixtureFile: string;
     duplex: boolean;
     resolution: number;
-  }): Promise<number> {
+  }): Promise<PDFDocument> {
     const fixture = loadFixture(path.join(FIX_DIR, opts.fixtureFile));
     const fake = new FakePlainSocket();
     const sessionPromise = runEsci2ScanOverPlain(
@@ -1545,35 +1545,40 @@ describe("runEsci2ScanOverPlain — FF-680W fixture replay", () => {
     const pdfs = files.filter((f) => f.endsWith(".pdf"));
     expect(pdfs.length).toBe(1);
     expect(pdfs[0]).toMatch(/^scan_\d{4}-\d{2}-\d{2}_\d{6}\.pdf$/);
-    const doc = await PDFDocument.load(readFileSync(path.join(outputDir, pdfs[0])));
-    return doc.getPageCount();
+    return PDFDocument.load(readFileSync(path.join(outputDir, pdfs[0])));
   }
 
-  it("ADF duplex 200 DPI → two PDF pages (front + back)", async () => {
-    const pages = await runOne({
+  it("ADF duplex 200 DPI → two PDF pages (front + back), the back left as delivered", async () => {
+    const doc = await runOne({
       fixtureFile: "adf-duplex-200.jsonl",
       duplex: true,
       resolution: 200,
     });
-    expect(pages).toBe(2);
+    expect(doc.getPageCount()).toBe(2);
+    // Single-pass ADF (INFO #ADFDPLX1SCN): the back arrives the same way up
+    // as the front, so neither page is turned. Rendered raw, this fixture's
+    // two sides both read upside down (the sheet went in top edge first), so
+    // turning the back alone would leave the two pages facing opposite ways.
+    expect(doc.getPage(0).getRotation().angle, "front").toBe(0);
+    expect(doc.getPage(1).getRotation().angle, "back").toBe(0);
   }, 60_000);
 
   it("ADF simplex 200 DPI → one PDF page", async () => {
-    const pages = await runOne({
+    const doc = await runOne({
       fixtureFile: "adf-simplex-200.jsonl",
       duplex: false,
       resolution: 200,
     });
-    expect(pages).toBe(1);
+    expect(doc.getPageCount()).toBe(1);
   }, 60_000);
 
   it("ADF simplex 300 DPI → one PDF page", async () => {
-    const pages = await runOne({
+    const doc = await runOne({
       fixtureFile: "adf-simplex-300.jsonl",
       duplex: false,
       resolution: 300,
     });
-    expect(pages).toBe(1);
+    expect(doc.getPageCount()).toBe(1);
   }, 60_000);
 });
 

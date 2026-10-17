@@ -109,9 +109,6 @@ describe("REGISTRY", () => {
     const e = REGISTRY.get("5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd");
     expect(e).toBeDefined();
     expect(e!.fbExtents).toBeNull(); // ADF-only hardware — no fabricated flatbed extents
-    // Single-pass hardware whose back-rotation value is a shipped assumption:
-    // the marker drives the duplex-scan warn inviting a hardware report.
-    expect(e!.duplexBackRotationUnverified).toBe(true);
     expect(e!.initPollIterations).toBe(8);
     expect(e!.gmm).toBe("UG18");
     expect(e!.gammaClass).toEqual({ jpg: "ff680w-adf", pdf: "ff680w-adf" });
@@ -124,7 +121,6 @@ describe("REGISTRY", () => {
     const e = REGISTRY.get("90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b074");
     expect(e).toBeDefined();
     expect(e!.fbExtents).toBeNull(); // ADF-only hardware — no fabricated flatbed extents
-    expect(e!.duplexBackRotationUnverified).toBeUndefined(); // hardware-confirmed in #128
     expect(e!.initPollIterations).toBe(12);
     expect(e!.gmm).toBe("UG18");
     expect(e!.gammaClass).toEqual({ jpg: "ff680w-adf", pdf: "ff680w-adf" });
@@ -166,37 +162,36 @@ describe("REGISTRY", () => {
 
   it("no entry carries a capability-derived field: sessions take those from the printer", () => {
     for (const e of REGISTRY_ENTRIES) {
-      for (const field of ["adfDuplex", "optionalSegments", "paraProfile"]) {
+      for (const field of [
+        "adfDuplex",
+        "optionalSegments",
+        "paraProfile",
+        "sourceDetection",
+        "duplexBackRotated",
+      ]) {
         expect(e, `${e.displayName}`).not.toHaveProperty(field);
       }
     }
   });
 
-  it("declares duplexBackRotated on every entry, false wherever adfDuplex is false", () => {
+  it("records duplex-orientation evidence for exactly the duplex models that have it", () => {
+    // Each recorded model with a duplex ADF, and whether its derived rotation
+    // has been confirmed (a checked capture or a hardware report).
+    const duplexModels = [...REGISTRY]
+      .filter(([fp]) => recordedDialect(fp).adfDuplex)
+      .map(([, e]) => e.displayName);
+    expect(new Set(duplexModels)).toEqual(
+      new Set([
+        "ET-4950 / ET-3950 / ET-4956 (ESC/I-2 over TLS)",
+        "XP-7100 (ESC/I-2 over plain TCP)",
+        "FF-680W (ESC/I-2 over plain TCP)",
+        "DS-575W (ESC/I-2 over plain TCP)",
+      ]),
+    );
     for (const [fp, e] of REGISTRY) {
-      expect(typeof e.duplexBackRotated, `entry ${fp} (${e.displayName})`).toBe("boolean");
-      // No duplex hardware → no back sides → nothing can be rotated.
-      if (!recordedDialect(fp).adfDuplex) {
-        expect(e.duplexBackRotated, `entry ${fp} (${e.displayName})`).toBe(false);
-      }
-    }
-  });
-
-  it("pins duplexBackRotated per duplex-capable model", () => {
-    const expected: Record<string, boolean> = {
-      // ET-4950 family — reversing ADF, backs arrive upside down
-      "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2": true,
-      // XP-7100 — reversing ADF
-      "56d26c61896ca417807ac68d37775036fa1e702ee44c0beaa27d8a6ea9fa457e": true,
-      // FF-680W — single-pass hardware, but the compensation has shipped
-      // unchallenged; flip on a hardware report
-      "5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd": true,
-      // DS-575W — single-pass dual sensor, backs arrive upright
-      // (hardware-confirmed, #128)
-      "90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b074": false,
-    };
-    for (const [fp, want] of Object.entries(expected)) {
-      expect(REGISTRY.get(fp)!.duplexBackRotated, `fingerprint ${fp}`).toBe(want);
+      const duplex = recordedDialect(fp).adfDuplex;
+      // Evidence is only about duplex back pages: a model without duplex has none to give.
+      expect(e.duplexOrientationEvidence !== undefined, e.displayName).toBe(duplex);
     }
   });
 

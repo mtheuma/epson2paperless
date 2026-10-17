@@ -5,7 +5,7 @@ import { readInit1Bodies } from "./test-support/capability-bodies.js";
 import { DEFAULT_JPEG_QUALITY } from "../config.js";
 
 // The ET-4950 fixture's CAPA, resolved against a registry copy whose entry for
-// it is doctored to disagree on two fields. The mock is scoped to this file,
+// it is doctored to disagree on its sources. The mock is scoped to this file,
 // so no other test sees the doctored entry.
 const ET4950 = readInit1Bodies(
   "tools/frida-capture/captures/2026-04-24T09-05-08-flatbed-1p-jpg.jsonl",
@@ -23,7 +23,6 @@ vi.mock("./dialects/registry.js", async (importOriginal) => {
   const doctored: RegistryEntry = {
     ...original,
     fbExtents: null,
-    duplexBackRotated: false,
   };
   // The session lookup reads REGISTRY_ENTRIES alone, so that is all to doctor.
   return {
@@ -33,7 +32,7 @@ vi.mock("./dialects/registry.js", async (importOriginal) => {
 });
 
 describe("esci2Graph INIT1_CAPA_DATA — shadow derivation disagreement", () => {
-  it("logs one info line per disagreeing field once the dialect resolves", () => {
+  it("logs an info line for the disagreeing field once the dialect resolves", () => {
     const state = esci2Graph.states.INIT1_CAPA_DATA;
     if (state.kind !== "decision") throw new Error("INIT1_CAPA_DATA not a decision");
     const ctx = {
@@ -67,16 +66,13 @@ describe("esci2Graph INIT1_CAPA_DATA — shadow derivation disagreement", () => 
           String(a).includes("Capability derivation disagrees with the dialect entry"),
         ),
       );
-      expect(shadow).toHaveLength(2);
+      expect(shadow).toHaveLength(1);
       expect(shadow[0][2]).toEqual(
         expect.objectContaining({
           field: "sources",
           derived: { flatbed: true, adf: true },
           entry: { flatbed: false, adf: true },
         }),
-      );
-      expect(shadow[1][2]).toEqual(
-        expect.objectContaining({ field: "duplexBackRotated", derived: true, entry: false }),
       );
     } finally {
       infoSpy.mockRestore();

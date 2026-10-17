@@ -131,7 +131,6 @@ export function buildGenericEntry(
     initPollIterations: fbExtents !== null ? POLLS_WITH_FLATBED : POLLS_ADF_ONLY,
     fbExtents,
     adfExtents,
-    duplexBackRotated: derived.duplexBackRotated,
     gmm: pair.gmm,
     gammaClass: { jpg: pair.gamma, pdf: pair.gamma },
     cmxClass: { jpg: pair.cmx, pdf: pair.cmx },

@@ -12,7 +12,7 @@
 // split them.
 
 import { readFileSync } from "node:fs";
-import type { DerivedCapabilities, Disagreement } from "../derivation.js";
+import type { DerivedCapabilities } from "../derivation.js";
 
 export interface CapabilityBodies {
   info: Buffer;
@@ -61,17 +61,6 @@ export const REPLAY_FIXTURES: ReadonlyArray<{
     ["DS-575W", "pcap-extract/captures/ds-575w/adf-simplex-400-mono-jpg", "adf"],
   ] as const
 ).map(([model, file, source]) => ({ model, path: `tools/${file}.jsonl`, source }));
-
-/**
- * Shadow disagreements known in advance, by fixture model. Each is a value a
- * cutover is expected to change, not a derivation bug.
- */
-export const EXPECTED_DISAGREEMENTS: Readonly<Record<string, readonly Disagreement[]>> = {
-  // Its INFO reports a single-pass ADF (#ADFDPLX1SCN), yet the entry rotates
-  // back pages: the compensation shipped before single-pass hardware was
-  // understood, and flips when the rotation cutover lands.
-  "FF-680W": [{ field: "duplexBackRotated", derived: false, entry: true }],
-};
 
 const payloadCache = new Map<string, Buffer[]>();
 
