@@ -359,8 +359,20 @@ describe("an override that inherits the generic window", () => {
     ]);
   });
 
-  it("has no window where INFO advertises no area: warns with the diagnostic, then refuses a scan from it", () => {
+  it("has no window where INFO advertises no area, and no warning: the source is never selected", () => {
     const { resolved, warnings } = lookup(NARROW_FB_ONLY, ET4950.capa);
+    expect(resolved.dialect.sourceDetection).toBe("fixed-flatbed");
+    expect(resolved.dialect.adfExtents).toBeNull();
+    expect(warnings).toEqual([]);
+    expect(() => assertSourceSupported(resolved.dialect, "adf-simplex")).toThrow(
+      /has no ADF scan window/,
+    );
+  });
+
+  it("has no window where INFO advertises an unusable area: warns with the diagnostic, then refuses a scan from it", () => {
+    const badAdf = Buffer.concat([NARROW_FB_ONLY, Buffer.from("#ADFAREAd850", "ascii")]);
+    const { resolved, warnings } = lookup(badAdf, ET4950.capa);
+    expect(resolved.dialect.sourceDetection).toBe("init-poll-status");
     expect(resolved.dialect.adfExtents).toBeNull();
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("advertises no usable adf scan area");
@@ -408,13 +420,55 @@ describe("on a CAPA fingerprint mismatch, an override's own window must fit the 
     expect(fit[0]).toContain("generic scan window");
   });
 
-  it("a source INFO advertises no area for is left with no window, warned about once", () => {
+  it("a source INFO advertises no area for is left with no window, and no warning: it is never selected", () => {
     const noFb = Buffer.from(xp7100Info.replace(/#FB AREA[^#]*/, ""), "latin1");
     const { resolved, warnings } = lookup(noFb, doctored(XP7100.capa));
+    expect(resolved.dialect.sourceDetection).toBe("fixed-adf");
     expect(resolved.dialect.fbExtents).toBeNull();
     expect(resolved.dialect.adfExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 3300 });
     expect(warnings.filter((w) => w.includes("doesn't fit"))).toEqual([]);
+    expect(warnings.filter((w) => w.includes("advertises no usable"))).toEqual([]);
+  });
+
+  it("a source advertised with an area that isn't usable is left with no window, warned about once", () => {
+    const badFb = Buffer.from(xp7100Info.replace(/#FB AREAd\d{3}/, "#FB AREAd000"), "latin1");
+    const { resolved, warnings } = lookup(badFb, doctored(XP7100.capa));
+    expect(resolved.dialect.sourceDetection).toBe("init-poll-status");
+    expect(resolved.dialect.fbExtents).toBeNull();
     expect(warnings.filter((w) => w.includes("advertises no usable flatbed"))).toHaveLength(1);
+  });
+
+  // The ET-2750 is flatbed-only: its override records no ADF window.
+  const ET2750 = readInit1Bodies(
+    "tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl",
+  );
+  const et2750Info = ET2750.info.toString("latin1");
+
+  it("a source the override has none of but INFO advertises gets the generic window, with a warning", () => {
+    expect(et2750Info).not.toContain("#ADFAREA");
+    const withAdf = Buffer.from(et2750Info + "#ADFAREAd850i0001400", "latin1");
+    const { resolved, warnings } = lookup(withAdf, doctored(ET2750.capa));
+    expect(resolved.matchedBy).not.toBe("generic");
+    expect(resolved.dialect.displayName).toMatch(/ET-2750/);
+    // The printer reports both sources, so the first status reply can pick the ADF.
+    expect(resolved.dialect.sourceDetection).toBe("init-poll-status");
+    expect(resolved.dialect.adfExtents).toMatchObject({ x0: 0, y0: 0, w: 2481, h: 3506 });
+    expect(resolved.dialect.adfExtents?.generic).toBeDefined();
+    expect(() => assertSourceSupported(resolved.dialect, "adf-simplex")).not.toThrow();
+    // Its own flatbed window still fits and is kept.
+    expect(resolved.dialect.fbExtents).toEqual({ x0: 0, y0: 0, w: 2477, h: 3500 });
+    const generic = warnings.filter((w) => w.includes("generic scan window"));
+    expect(generic).toHaveLength(1);
+    expect(generic[0]).toContain("ET-2750");
+    expect(generic[0]).toContain("adf");
+    expect(warnings.filter((w) => w.includes("advertises no usable"))).toEqual([]);
+  });
+
+  it("a source the override has none of, advertised with an unusable area, is warned about", () => {
+    const badAdf = Buffer.from(et2750Info + "#ADFAREAd850", "latin1");
+    const { resolved, warnings } = lookup(badAdf, doctored(ET2750.capa));
+    expect(resolved.dialect.adfExtents).toBeNull();
+    expect(warnings.filter((w) => w.includes("advertises no usable adf"))).toHaveLength(1);
   });
 
   it("a window that still fits is kept, with no window warning", () => {

@@ -20,7 +20,6 @@ import {
   fitsScanArea,
   genericWindowIn,
   inheritedWindow,
-  ownWindows,
   type WindowSource,
 } from "../scan-window.js";
 import { createLogger } from "../../logger.js";
@@ -105,14 +104,16 @@ export function resolveDialect(replies: Init1Replies): ResolvedDialect {
  * Completes an override into the session's dialect.
  *
  * On a CAPA fingerprint mismatch the printer isn't the one the override was
- * recorded from, so each window of its own is kept only while it still fits
- * the scan area this printer reports; otherwise the source gets the generic
- * window, with a warning.
+ * recorded from, so its windows are checked against the scan areas this
+ * printer reports (fitToScanAreas).
  *
- * A source left with no window (the override inherits the generic one, or
- * fell back to it, and the printer advertises no usable scan area for it)
- * is said so with the diagnostic block now, since a scan from it fails at
- * PARA build (assertSourceSupported).
+ * A source the session can select but has no window for (the override
+ * inherits the generic one, or fell back to it, and the printer advertises
+ * no usable scan area for it) is said so with the diagnostic block now,
+ * since a scan from it fails at PARA build (assertSourceSupported). A source
+ * INFO advertises no area for at all is never selected, so it isn't warned
+ * about, unless INFO advertises no area for either source: then the session
+ * keeps the scanner shell's default, which may be either.
  */
 function resolveOverride(
   override: ModelOverride,
@@ -121,11 +122,11 @@ function resolveOverride(
   fingerprintMatches: boolean,
 ): Dialect {
   const completed = withCapabilities(override, replies.info, derived);
-  const entry = fingerprintMatches ? completed : keepFittingWindows(completed, replies.info);
-  const missing = (["flatbed", "adf"] as const).filter(
-    (source) =>
-      (source === "flatbed" ? override.fbExtents : override.adfExtents) !== null &&
-      (source === "flatbed" ? entry.fbExtents : entry.adfExtents) === null,
+  const entry = fingerprintMatches ? completed : fitToScanAreas(completed, replies.info);
+  const selectable = (source: WindowSource) =>
+    derived.sourceDetection === null || derived.sources[source];
+  const missing = SOURCES.filter(
+    (source) => windowOf(entry, source) === null && selectable(source),
   );
   if (missing.length > 0) {
     log.warn(
@@ -137,26 +138,35 @@ function resolveOverride(
   return entry;
 }
 
+const SOURCES: readonly WindowSource[] = ["flatbed", "adf"];
+
+const windowOf = (entry: Dialect, source: WindowSource): DialectWindow | null =>
+  source === "flatbed" ? entry.fbExtents : entry.adfExtents;
+
 /**
- * The dialect with each of its own windows that leaves the printer's scan
- * area replaced by the generic window for that area, with a warning. An
- * inherited window is the generic one already, and fits by construction.
- * Where INFO advertises no usable area there is no generic window either:
- * the source is left with none, which resolveOverride warns about.
+ * The dialect with the generic window, and a warning, in place of each of
+ * its own windows that leaves the printer's scan area, and for each source
+ * it has no window for that the printer advertises a usable area for (the
+ * session's source detection can select it). An inherited window is the
+ * generic one already, and fits by construction. Where INFO advertises no
+ * usable area there is no generic window either: the source is left with
+ * none, which resolveOverride warns about.
  */
-function keepFittingWindows(entry: Dialect, info: InfoTokens): Dialect {
+function fitToScanAreas(entry: Dialect, info: InfoTokens): Dialect {
   const profile = entry.paraProfile;
   const out = { ...entry };
-  for (const [source, window] of ownWindows(entry)) {
-    if (fitsScanArea(info, source, window, profile)) continue;
+  for (const source of SOURCES) {
+    const window = windowOf(entry, source);
+    if (window?.generic !== undefined) continue;
+    if (window !== null && fitsScanArea(info, source, window, profile)) continue;
     const generic = inheritedWindow(info, source, profile);
     if (generic !== null) {
-      const { x0, y0, w, h } = window;
-      log.warn(
-        `${entry.displayName}: its ${source} scan window (${w}x${h} at ${x0},${y0}, ` +
-          `${baseDpiFor(profile)} DPI) doesn't fit the scan area this printer reports, so ` +
-          `the generic scan window is used instead.`,
-      );
+      const why =
+        window === null
+          ? `has no ${source} scan window, but this printer reports a ${source} scan area`
+          : `${source} scan window (${window.w}x${window.h} at ${window.x0},${window.y0}, ` +
+            `${baseDpiFor(profile)} DPI) doesn't fit the scan area this printer reports`;
+      log.warn(`${entry.displayName}: ${why}, so the generic scan window is used instead.`);
     }
     if (source === "flatbed") out.fbExtents = generic;
     else out.adfExtents = generic;

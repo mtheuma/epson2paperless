@@ -140,10 +140,13 @@ export function buildGenericDialect(
 }
 
 /**
- * The PARA field the generic dialect takes from the printer rather than from
- * a capture: in crop mode, the #DFA length is the ADF area's height, which is
- * the value the FF-680W and DS-575W captures carry there. (Its window is a
- * generic one, which makeParaSpec already computes at the wire DPI.)
+ * The PARA field a generic ADF window takes from the printer rather than
+ * from a capture: in crop mode, the #DFA length is the ADF area's height,
+ * which is the value the FF-680W and DS-575W captures carry there. Empty
+ * unless the ADF window is the generic one (the generic dialect's, or an
+ * override's inherited or fallen-back one), so a window of an override's
+ * own keeps the #DFA length it was recorded with. (makeParaSpec already
+ * computes the generic window itself at the wire DPI.)
  */
 export function genericParaFields(entry: Dialect): Pick<ParaSpec, "adfCrpDfaLength"> {
   const area = entry.adfExtents?.generic?.area;

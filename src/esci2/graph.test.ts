@@ -641,6 +641,7 @@ function makeCtx(
     resolution: 200,
     colorMode: "color",
     initPollIteration: 0,
+    genericDialect: false,
     imgChunkSize: 0,
     pageEndKind: "none",
     pageSide: "front",
@@ -1709,6 +1710,52 @@ describe("esci2Graph INIT_POLL — source from the status reply's content (model
     expect(ctx.source).toBe("flatbed");
   });
 
+  describe("a single-source printer's first status reply is judged for errors only", () => {
+    const FF680W_ENTRY = recordedDialect(
+      "5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd",
+    );
+    const ET2750_PATH = "tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl";
+    const ET2750_ENTRY = recordedDialect(computeCapaFingerprint(readInit1Bodies(ET2750_PATH).capa));
+
+    it("fixed ADF: an ADF JAM ends the session, in the body or inline", () => {
+      // Synthetic: no fixture's status reports an error other than ADF PE.
+      expect(FF680W_ENTRY.sourceDetection).toBe("fixed-adf");
+      const { outcome } = firstStatus(FF680W_ENTRY, statHeader(12), Buffer.from("#ERRADF JAM "));
+      expect(outcome).toBe(
+        "INIT_POLL_STAT_DRAIN: the printer reported an error before scanning (ADF JAM) — " +
+          "clear it on the printer and scan again",
+      );
+      const inline = Buffer.from("STATx0000000#ERRADF JAM " + "#---".repeat(10));
+      expect(firstStatus(FF680W_ENTRY, inline, null).outcome).toMatch(
+        /^INIT_POLL_STAT: the printer reported an error before scanning \(ADF JAM\)/,
+      );
+    });
+
+    it("fixed ADF: ADF paper empty carries on, and the source stays the ADF", () => {
+      const { ctx, outcome } = firstStatus(
+        FF680W_ENTRY,
+        statHeader(12),
+        Buffer.from("#ERRADF PE  "),
+      );
+      expect(outcome).toBe("INIT_POLL_FIN");
+      expect(ctx.source).toBe("adf");
+    });
+
+    it("fixed flatbed: the ET-2750's zero-length reply with inline filler carries on", () => {
+      const { header, body } = readFirstInitPollStatus(ET2750_PATH);
+      expect(ET2750_ENTRY.sourceDetection).toBe("fixed-flatbed");
+      expect(body).toBeNull();
+      const { ctx, outcome } = firstStatus(ET2750_ENTRY, header, body);
+      expect(outcome).toBe("INIT_POLL_FIN");
+      expect(ctx.source).toBe("flatbed");
+    });
+
+    it("fixed flatbed: any other error ends the session", () => {
+      const { outcome } = firstStatus(ET2750_ENTRY, statHeader(12), Buffer.from("#ERRFB  OPN "));
+      expect(outcome).toMatch(/^INIT_POLL_STAT_DRAIN: .*reported an error .*\(FB OPN\)/);
+    });
+  });
+
   it("only the first poll cycle is judged", () => {
     const stat = esci2Graph.states.INIT_POLL_STAT;
     const drain = esci2Graph.states.INIT_POLL_STAT_DRAIN;
@@ -1762,7 +1809,7 @@ describe("esci2Graph — generic dialect", () => {
     expect("error" in result).toBe(false);
     expect(ctx.entry!.displayName).toBe("generic ESC/I-2 dialect (PID FFFF)");
     expect(ctx.entry!.sourceDetection).toBe("init-poll-status");
-    expect(ctx.genericInfo).toBeDefined();
+    expect(ctx.genericDialect).toBe(true);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("PID FFFF not recognised — generic ESC/I-2 dialect");
     expect(
@@ -1806,7 +1853,7 @@ describe("esci2Graph — generic dialect", () => {
     expect(ctx.entry).toMatchObject(
       unresolvedFields(OVERRIDES_BY_FINGERPRINT.get(computeCapaFingerprint(ET4800.capa))!),
     );
-    expect(ctx.genericInfo).toBeUndefined();
+    expect(ctx.genericDialect).toBe(false);
   });
 
   it("fails fast with the diagnostic when INFO advertises no scan area", () => {
@@ -1863,7 +1910,7 @@ describe("esci2Graph — generic dialect", () => {
         [false, errorLists(ET4800.info, ET4800.capa)], // a model override, resolved by PID
       ] as const) {
         const adf = firstStatus(statHeader(0), null, bodies);
-        expect(adf.ctx.genericInfo !== undefined).toBe(generic);
+        expect(adf.ctx.genericDialect).toBe(generic);
         expect("next" in adf.result && adf.result.next).toBe("INIT_POLL_FIN");
         expect(adf.ctx.source).toBe("adf");
         const flatbed = firstStatus(statHeader(12), Buffer.from("#ERRADF PE  "), bodies);
@@ -1910,6 +1957,37 @@ describe("esci2Graph — generic dialect", () => {
     expect(body).toContain("#ACQi0000000i0000000i0000637i0001162");
     // The #DFA length is the printer's own ADF area height.
     expect(body).toContain("#DFAi0000000i0001550");
+  });
+
+  it("an override's crop-mode ADF window that falls back to the generic one takes its #DFA length too", () => {
+    // An FF-680W reporting a 14-inch ADF area and no long-paper maximum, with
+    // a CAPA its override wasn't recorded with: its 36-inch window doesn't
+    // fit, so the session gets the generic window, the full ADF area.
+    const ff680w = readInit1Bodies("tools/pcap-extract/captures/ff-680w/adf-simplex-200.jsonl");
+    const text = ff680w.info.toString("latin1");
+    expect(text).toContain("#ADFAREAd850i0001550");
+    const info = Buffer.from(
+      text.replace("#ADFAREAd850i0001550", "#ADFAREAd850i0001400").replace(/#ADFAMAX[^#]*/, ""),
+      "latin1",
+    );
+    const capa = Buffer.concat([ff680w.capa, Buffer.from("#ZZZZd001", "ascii")]);
+    const { ctx } = resolve(info, capa);
+    expect(ctx.entry!.displayName).toMatch(/FF-680W/);
+    expect(ctx.entry!.paraProfile).toBe("adf-crp");
+    expect(ctx.entry!.adfExtents?.generic).toBeDefined();
+    const state = esci2Graph.states.POST_MODE_STAT;
+    if (state.kind !== "decision") throw new Error("POST_MODE_STAT not a decision");
+    ctx.resolution = 200;
+    const result = state.decide(ctx, {
+      type: 0xa000,
+      payload: Buffer.from("STATx0000000" + " ".repeat(52), "ascii"),
+    });
+    if (!("send" in result)) throw new Error("expected a send from POST_MODE_STAT");
+    const body = parseIsPacket((result.send as Buffer[])[1])!
+      .payload.subarray(8)
+      .toString("latin1");
+    expect(body).toContain("#ACQi0000000i0000000i0001700i0002800");
+    expect(body).toContain("#DFAi0000000i0001400");
   });
 
   it("doesn't add the unverified-DPI warning to an explicit SCAN_RESOLUTION", () => {
