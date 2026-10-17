@@ -416,7 +416,7 @@ diagnostic block at `info`. The generic dialect is:
   captured driver only);
 - source detection from the first status reply's content, as for every
   printer: `#ERRADF PE` → flatbed, no error → ADF. Any other error ends the
-  session (a model override logs it and goes by the reply's length).
+  session, naming the error.
   Single-source printers are fixed to their source.
 
 It has no verified DPIs and no greyscale on the wire (pages convert
