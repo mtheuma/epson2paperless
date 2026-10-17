@@ -1709,6 +1709,52 @@ describe("esci2Graph INIT_POLL — source from the status reply's content (model
     expect(ctx.source).toBe("flatbed");
   });
 
+  describe("a single-source printer's first status reply is judged for errors only", () => {
+    const FF680W_ENTRY = recordedDialect(
+      "5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd",
+    );
+    const ET2750_PATH = "tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl";
+    const ET2750_ENTRY = recordedDialect(computeCapaFingerprint(readInit1Bodies(ET2750_PATH).capa));
+
+    it("fixed ADF: an ADF JAM ends the session, in the body or inline", () => {
+      // Synthetic: no fixture's status reports an error other than ADF PE.
+      expect(FF680W_ENTRY.sourceDetection).toBe("fixed-adf");
+      const { outcome } = firstStatus(FF680W_ENTRY, statHeader(12), Buffer.from("#ERRADF JAM "));
+      expect(outcome).toBe(
+        "INIT_POLL_STAT_DRAIN: the printer reported an error before scanning (ADF JAM) — " +
+          "clear it on the printer and scan again",
+      );
+      const inline = Buffer.from("STATx0000000#ERRADF JAM " + "#---".repeat(10));
+      expect(firstStatus(FF680W_ENTRY, inline, null).outcome).toMatch(
+        /^INIT_POLL_STAT: the printer reported an error before scanning \(ADF JAM\)/,
+      );
+    });
+
+    it("fixed ADF: ADF paper empty carries on, and the source stays the ADF", () => {
+      const { ctx, outcome } = firstStatus(
+        FF680W_ENTRY,
+        statHeader(12),
+        Buffer.from("#ERRADF PE  "),
+      );
+      expect(outcome).toBe("INIT_POLL_FIN");
+      expect(ctx.source).toBe("adf");
+    });
+
+    it("fixed flatbed: the ET-2750's zero-length reply with inline filler carries on", () => {
+      const { header, body } = readFirstInitPollStatus(ET2750_PATH);
+      expect(ET2750_ENTRY.sourceDetection).toBe("fixed-flatbed");
+      expect(body).toBeNull();
+      const { ctx, outcome } = firstStatus(ET2750_ENTRY, header, body);
+      expect(outcome).toBe("INIT_POLL_FIN");
+      expect(ctx.source).toBe("flatbed");
+    });
+
+    it("fixed flatbed: any other error ends the session", () => {
+      const { outcome } = firstStatus(ET2750_ENTRY, statHeader(12), Buffer.from("#ERRFB  OPN "));
+      expect(outcome).toMatch(/^INIT_POLL_STAT_DRAIN: .*reported an error .*\(FB OPN\)/);
+    });
+  });
+
   it("only the first poll cycle is judged", () => {
     const stat = esci2Graph.states.INIT_POLL_STAT;
     const drain = esci2Graph.states.INIT_POLL_STAT_DRAIN;

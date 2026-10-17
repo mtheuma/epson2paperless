@@ -595,46 +595,46 @@ g.state("UNLOCKING", {
   on: { 0xa101: { next: "DONE" } },
 });
 
-/**
- * Whether this cycle's status reply decides the source: the first cycle's,
- * on a printer with both sources.
- */
+/** Whether this cycle's status reply is judged: the first cycle's (judgeFirstStatus). */
 function readsFirstStatus(ctx: Esci2Ctx): boolean {
-  return ctx.initPollIteration === 0 && ctx.entry!.sourceDetection === "init-poll-status";
+  return ctx.initPollIteration === 0;
 }
 
 /**
- * Sets ctx.source from the content of the init poll's first status reply
- * (the reply itself, then its drained body, if any): "ADF paper empty" means
- * the flatbed, no error means the ADF. Any other error ends the session,
- * naming it: the printer reported it before scanning, so the source can't
- * be told and the scan would not go ahead anyway.
+ * Judges the content of the init poll's first status reply (the reply
+ * itself, then its drained body, if any). Any error other than "ADF paper
+ * empty" ends the session, naming it: the printer reported it before
+ * scanning, so the scan would not go ahead anyway. On a printer with both
+ * sources (sourceDetection "init-poll-status") the reply also sets
+ * ctx.source: "ADF paper empty" means the flatbed, no error means the ADF. A
+ * single-source printer is fixed to its source, which the reply never
+ * changes.
  */
-function sourceFromFirstStatus(
+function judgeFirstStatus(
   ctx: Esci2Ctx,
   state: string,
   status: Buffer[],
 ): TransitionResult<Esci2Ctx> | undefined {
   const errors = status.flatMap((part) => parseStatErrors(part));
   const decision = sourceFromStatusErrors(errors);
-  const statLength = parseEsci2ReplyHeader(status[0])?.length ?? 0;
-  if ("source" in decision) {
-    ctx.source = decision.source;
-    // The declared length rides along for triage on models with no fixture:
-    // on every recorded one, 12 bytes is "ADF paper empty" and 0 is none.
-    log.debug("Source detected from the first status reply's content", {
-      errors,
-      statLength,
-      source: ctx.source,
-    });
-    return undefined;
+  if ("unexpectedErrors" in decision) {
+    return {
+      error: new Error(
+        `${state}: the printer reported an error before scanning ` +
+          `(${decision.unexpectedErrors.join(", ")}) — clear it on the printer and scan again`,
+      ),
+    };
   }
-  return {
-    error: new Error(
-      `${state}: the printer reported an error before scanning ` +
-        `(${decision.unexpectedErrors.join(", ")}) — clear it on the printer and scan again`,
-    ),
-  };
+  if (ctx.entry!.sourceDetection !== "init-poll-status") return undefined;
+  ctx.source = decision.source;
+  // The declared length rides along for triage on models with no fixture:
+  // on every recorded one, 12 bytes is "ADF paper empty" and 0 is none.
+  log.debug("Source detected from the first status reply's content", {
+    errors,
+    statLength: parseEsci2ReplyHeader(status[0])?.length ?? 0,
+    source: ctx.source,
+  });
+  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -708,8 +708,8 @@ export function nameInitPollEarlyStop(ctx: Esci2Ctx, reason: Error): Error {
 }
 
 // INIT_POLL_STAT: decision on STAT reply — drain if length>0, else FIN.
-// On the first iteration (ctx.initPollIteration === 0) also detects the
-// source from the reply's content (sourceFromFirstStatus).
+// On the first iteration (ctx.initPollIteration === 0) also judges the
+// reply's content (judgeFirstStatus).
 g.state(
   "INIT_POLL_STAT",
   decision<Esci2Ctx>((ctx, packet) => {
@@ -719,20 +719,21 @@ g.state(
     if (header === null) {
       return { error: new Error("INIT_POLL_STAT: unparseable reply header") };
     }
-    // Source detection: only on the FIRST iteration, and only on a printer
-    // with both sources (sourceDetection "init-poll-status"), from the
-    // reply's content once any body is drained.
+    // The FIRST iteration's reply is judged from its content once any body
+    // is drained (judgeFirstStatus): an error other than "ADF paper empty"
+    // ends the session, and on a printer with both sources it decides the
+    // source.
     //
-    // A single-source printer is fixed to it and never reads the reply. The
-    // ET-2750 relies on that: its STAT replies declare length=0 but pack a
-    // 52-byte #--- filler inline, which carries no error and so would read
-    // as ADF on flatbed-only hardware.
+    // A single-source printer is fixed to its source, which the reply never
+    // changes. The ET-2750 relies on that: its STAT replies declare length=0
+    // but pack a 52-byte #--- filler inline, which carries no error and so
+    // would read as ADF on flatbed-only hardware.
     if (readsFirstStatus(ctx)) {
       // The reply's own tail is #--- filler unless the printer put tokens
       // inline, so it is judged too: here when there is no body to drain,
       // otherwise alongside the body in INIT_POLL_STAT_DRAIN.
       if (header.length === 0) {
-        const failed = sourceFromFirstStatus(ctx, "INIT_POLL_STAT", [packet.payload]);
+        const failed = judgeFirstStatus(ctx, "INIT_POLL_STAT", [packet.payload]);
         if (failed) return failed;
       } else {
         ctx.firstStatusReply = packet.payload;
@@ -758,7 +759,7 @@ g.state(
     const typeGuard = expectIsType(packet, 0xa000, "INIT_POLL_STAT_DRAIN");
     if (typeGuard) return typeGuard;
     if (readsFirstStatus(ctx)) {
-      const failed = sourceFromFirstStatus(ctx, "INIT_POLL_STAT_DRAIN", [
+      const failed = judgeFirstStatus(ctx, "INIT_POLL_STAT_DRAIN", [
         ctx.firstStatusReply ?? Buffer.alloc(0),
         packet.payload,
       ]);
