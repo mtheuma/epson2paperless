@@ -43,6 +43,7 @@ describe("esci2Graph INIT1_CAPA_DATA — no runtime comparison with the override
       resolution: undefined,
       colorMode: "color",
       initPollIteration: 0,
+      genericDialect: false,
       imgChunkSize: 0,
       pageEndKind: "none",
       pageSide: "front",

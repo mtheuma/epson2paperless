@@ -99,11 +99,8 @@ export interface Esci2Ctx {
   initPollEarlyStop?: { cycle: number; reply: string };
   /** Resolved dialect post-INIT1 (model override or generic, plus its capability fields), drives PARA build + init-poll count + source detection. Undefined until INIT1 completes. */
   entry: Dialect | undefined;
-  /**
-   * Set when the session runs the generic dialect (no model override
-   * matched): its parsed INFO reply. Undefined otherwise.
-   */
-  genericInfo?: InfoTokens;
+  /** Whether the session runs the generic dialect (no model override matched). */
+  genericDialect: boolean;
   /** Panel-selected output format; drives action-aware dialects' PARA splice. */
   action: "jpg" | "pdf";
   /**
@@ -412,7 +409,7 @@ twoPhaseRead(
       sourceDetection: ctx.entry.sourceDetection,
       duplexBackRotated: ctx.entry.duplexBackRotated,
     });
-    if (resolved.matchedBy === "generic") ctx.genericInfo = info;
+    ctx.genericDialect = resolved.matchedBy === "generic";
     applyEntrySourceOverride(ctx, ctx.entry);
   },
 );
@@ -877,7 +874,7 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
   // report, so this one would only point at the wrong issue.
   if (
     ctx.resolution !== undefined &&
-    ctx.genericInfo === undefined &&
+    !ctx.genericDialect &&
     !ctx.entry!.verifiedWireDpis.includes(sel.wireDpi)
   ) {
     log.warn(
@@ -909,17 +906,10 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
     );
   }
 
-  const spec = makeParaSpec(
-    ctx.entry!,
-    paraSource,
-    ctx.action,
-    sel.wireDpi,
-    ctx.colorMode,
-    quality,
-  );
-  if (ctx.genericInfo !== undefined) {
-    Object.assign(spec, genericParaFields(ctx.entry!));
-  }
+  const spec = {
+    ...makeParaSpec(ctx.entry!, paraSource, ctx.action, sel.wireDpi, ctx.colorMode, quality),
+    ...genericParaFields(ctx.entry!),
+  };
   const paraPayload = composePara(spec);
   return [
     buildPassthruPacket(buildParaHeader(paraPayload.length), 0),
@@ -1003,7 +993,7 @@ g.state(
         ctx.wireDpi !== undefined && !ctx.entry!.verifiedWireDpis.includes(ctx.wireDpi);
       // The generic dialect has no verified DPI at all, so the DPI is no
       // more a suspect than anything else it chose.
-      const hint = ctx.genericInfo
+      const hint = ctx.genericDialect
         ? ` The ${ctx.entry!.displayName} settings were not accepted — please report it ` +
           "with the diagnostic block logged when the session started."
         : !dpiUnverified

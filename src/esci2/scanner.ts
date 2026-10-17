@@ -101,6 +101,7 @@ function buildInitialCtx(session: ScanSession, transport: "tls" | "plain"): Esci
     // "auto" is a post-processing decision; on the wire it always scans colour.
     colorMode: resolveWireColorMode(session.colorMode),
     initPollIteration: 0,
+    genericDialect: false,
     imgChunkSize: 0,
     pageEndKind: "none",
     pageSide: "front",

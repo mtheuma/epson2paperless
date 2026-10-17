@@ -641,6 +641,7 @@ function makeCtx(
     resolution: 200,
     colorMode: "color",
     initPollIteration: 0,
+    genericDialect: false,
     imgChunkSize: 0,
     pageEndKind: "none",
     pageSide: "front",
@@ -1808,7 +1809,7 @@ describe("esci2Graph — generic dialect", () => {
     expect("error" in result).toBe(false);
     expect(ctx.entry!.displayName).toBe("generic ESC/I-2 dialect (PID FFFF)");
     expect(ctx.entry!.sourceDetection).toBe("init-poll-status");
-    expect(ctx.genericInfo).toBeDefined();
+    expect(ctx.genericDialect).toBe(true);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain("PID FFFF not recognised — generic ESC/I-2 dialect");
     expect(
@@ -1852,7 +1853,7 @@ describe("esci2Graph — generic dialect", () => {
     expect(ctx.entry).toMatchObject(
       unresolvedFields(OVERRIDES_BY_FINGERPRINT.get(computeCapaFingerprint(ET4800.capa))!),
     );
-    expect(ctx.genericInfo).toBeUndefined();
+    expect(ctx.genericDialect).toBe(false);
   });
 
   it("fails fast with the diagnostic when INFO advertises no scan area", () => {
@@ -1909,7 +1910,7 @@ describe("esci2Graph — generic dialect", () => {
         [false, errorLists(ET4800.info, ET4800.capa)], // a model override, resolved by PID
       ] as const) {
         const adf = firstStatus(statHeader(0), null, bodies);
-        expect(adf.ctx.genericInfo !== undefined).toBe(generic);
+        expect(adf.ctx.genericDialect).toBe(generic);
         expect("next" in adf.result && adf.result.next).toBe("INIT_POLL_FIN");
         expect(adf.ctx.source).toBe("adf");
         const flatbed = firstStatus(statHeader(12), Buffer.from("#ERRADF PE  "), bodies);
@@ -1956,6 +1957,37 @@ describe("esci2Graph — generic dialect", () => {
     expect(body).toContain("#ACQi0000000i0000000i0000637i0001162");
     // The #DFA length is the printer's own ADF area height.
     expect(body).toContain("#DFAi0000000i0001550");
+  });
+
+  it("an override's crop-mode ADF window that falls back to the generic one takes its #DFA length too", () => {
+    // An FF-680W reporting a 14-inch ADF area and no long-paper maximum, with
+    // a CAPA its override wasn't recorded with: its 36-inch window doesn't
+    // fit, so the session gets the generic window, the full ADF area.
+    const ff680w = readInit1Bodies("tools/pcap-extract/captures/ff-680w/adf-simplex-200.jsonl");
+    const text = ff680w.info.toString("latin1");
+    expect(text).toContain("#ADFAREAd850i0001550");
+    const info = Buffer.from(
+      text.replace("#ADFAREAd850i0001550", "#ADFAREAd850i0001400").replace(/#ADFAMAX[^#]*/, ""),
+      "latin1",
+    );
+    const capa = Buffer.concat([ff680w.capa, Buffer.from("#ZZZZd001", "ascii")]);
+    const { ctx } = resolve(info, capa);
+    expect(ctx.entry!.displayName).toMatch(/FF-680W/);
+    expect(ctx.entry!.paraProfile).toBe("adf-crp");
+    expect(ctx.entry!.adfExtents?.generic).toBeDefined();
+    const state = esci2Graph.states.POST_MODE_STAT;
+    if (state.kind !== "decision") throw new Error("POST_MODE_STAT not a decision");
+    ctx.resolution = 200;
+    const result = state.decide(ctx, {
+      type: 0xa000,
+      payload: Buffer.from("STATx0000000" + " ".repeat(52), "ascii"),
+    });
+    if (!("send" in result)) throw new Error("expected a send from POST_MODE_STAT");
+    const body = parseIsPacket((result.send as Buffer[])[1])!
+      .payload.subarray(8)
+      .toString("latin1");
+    expect(body).toContain("#ACQi0000000i0000000i0001700i0002800");
+    expect(body).toContain("#DFAi0000000i0001400");
   });
 
   it("doesn't add the unverified-DPI warning to an explicit SCAN_RESOLUTION", () => {
