@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import {
   capabilityFields,
   deriveCapabilities,
-  sourceFromStatusErrors,
+  judgeStatusErrors,
   type DerivedCapabilities,
 } from "./derivation.js";
 import { parseCapaTokens, parseInfoTokens, parseStatErrors } from "./capabilities.js";
@@ -126,18 +126,68 @@ describe("deriveCapabilities — PARA profile and back-page rotation", () => {
   });
 });
 
-describe("sourceFromStatusErrors — content-based source decision", () => {
-  it("ADF paper empty means the flatbed; no error means the ADF", () => {
-    expect(sourceFromStatusErrors(parseStatErrors(ascii("#ERRADF PE  ")))).toEqual({
-      source: "flatbed",
-    });
-    expect(sourceFromStatusErrors(parseStatErrors(Buffer.alloc(0)))).toEqual({ source: "adf" });
+describe("judgeStatusErrors — a printer with both sources", () => {
+  // Synthetic beyond ADF PE: no fixture's status reports any other error.
+  // Codes are from Epson's ESC/I-2 error vocabulary; ADF PJ is the jam a
+  // reporter's printer sent (#65).
+  const judge = (status: string) => judgeStatusErrors(parseStatErrors(ascii(status)), "detect");
+
+  it("no error → the ADF; ADF paper empty → the flatbed", () => {
+    expect(judge("")).toEqual({ source: "adf", warnings: [] });
+    expect(judge("#ERRADF PE  ")).toEqual({ source: "flatbed", warnings: [] });
   });
 
-  it("any other error leaves the source undecided, and is returned", () => {
-    // Synthetic: no fixture carries a status error other than ADF PE.
-    expect(sourceFromStatusErrors(parseStatErrors(ascii("#ERRADF JAM #ERRADF PE  ")))).toEqual({
-      unexpectedErrors: ["ADF JAM"],
+  it("ADF paper empty with a flatbed error stops: the flatbed is the unit being scanned", () => {
+    expect(judge("#ERRADF PE  #ERRFB  LOCK")).toEqual({ blocking: ["FB LOCK"] });
+  });
+
+  it("ADF paper empty with another ADF code → the flatbed, warning on that code", () => {
+    expect(judge("#ERRADF PE  #ERRADF PJ  ")).toEqual({ source: "flatbed", warnings: ["ADF PJ"] });
+    expect(judge("#ERRADF PJ  #ERRADF PE  ")).toEqual({ source: "flatbed", warnings: ["ADF PJ"] });
+  });
+
+  it("ADF paper empty with a TPU or unknown-unit error → the flatbed, warning", () => {
+    expect(judge("#ERRADF PE  #ERRTPU OPN #ERRZZZZERR ")).toEqual({
+      source: "flatbed",
+      warnings: ["TPU OPN", "ZZZZ ERR"],
+    });
+  });
+
+  it("an ADF code other than paper empty stops: the ADF is the unit being scanned", () => {
+    for (const code of ["PJ", "OPN", "DFED", "ERR", "BTLO", "ZZZZ"]) {
+      expect(judge(`#ERRADF ${code.padEnd(4)}`)).toEqual({ blocking: [`ADF ${code}`] });
+    }
+  });
+
+  it("no ADF error → the ADF, warning on flatbed, TPU and unknown-unit errors", () => {
+    expect(judge("#ERRFB  LTF #ERRTPU OPN #ERRZZZZPJ  ")).toEqual({
+      source: "adf",
+      warnings: ["FB LTF", "TPU OPN", "ZZZZ PJ"],
+    });
+  });
+});
+
+describe("judgeStatusErrors — a printer fixed to one source", () => {
+  const judge = (status: string, source: "flatbed" | "adf") =>
+    judgeStatusErrors(parseStatErrors(ascii(status)), source);
+
+  it("flatbed: a flatbed error stops; any other unit's error warns", () => {
+    expect(judge("", "flatbed")).toEqual({ source: "flatbed", warnings: [] });
+    expect(judge("#ERRFB  LOCK", "flatbed")).toEqual({ blocking: ["FB LOCK"] });
+    // A flatbed-only printer has no feeder to be empty, so even paper empty warns.
+    expect(judge("#ERRADF PE  ", "flatbed")).toEqual({ source: "flatbed", warnings: ["ADF PE"] });
+    expect(judge("#ERRADF PJ  #ERRTPU OPN ", "flatbed")).toEqual({
+      source: "flatbed",
+      warnings: ["ADF PJ", "TPU OPN"],
+    });
+  });
+
+  it("ADF: paper empty carries on; any other ADF code stops; other units warn", () => {
+    expect(judge("#ERRADF PE  ", "adf")).toEqual({ source: "adf", warnings: [] });
+    expect(judge("#ERRADF PJ  ", "adf")).toEqual({ blocking: ["ADF PJ"] });
+    expect(judge("#ERRADF PE  #ERRFB  LOCK#ERRTPU OPN ", "adf")).toEqual({
+      source: "adf",
+      warnings: ["FB LOCK", "TPU OPN"],
     });
   });
 });
@@ -185,7 +235,7 @@ describe("content-based source decision lands on the recorded source on every fi
   it.each(statusFixtures)("$model: $path", ({ path, source }) => {
     const { header, body } = readFirstInitPollStatus(path);
     const errors = [header, body ?? Buffer.alloc(0)].flatMap((b) => parseStatErrors(b));
-    expect(sourceFromStatusErrors(errors)).toEqual({ source });
+    expect(judgeStatusErrors(errors, "detect")).toEqual({ source, warnings: [] });
     // Every recorded flatbed status is the 12-byte "ADF paper empty"; every
     // recorded ADF status is empty.
     expect(body?.length ?? 0).toBe(source === "flatbed" ? 12 : 0);

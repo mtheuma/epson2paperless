@@ -90,15 +90,46 @@ export function capabilityFields(derived: DerivedCapabilities): CapabilityFields
 }
 
 /**
- * The source a printer with both sources is on, read from the content of the
- * init poll's first status reply: "ADF paper empty" means the flatbed, no
- * error means the ADF. Any other error leaves the source undecided, so it is
- * returned for the caller to end the session with.
+ * What the init poll's first status reply means for the scan, as Epson's own
+ * driver judges it: an error on the unit being scanned stops the scan
+ * (`blocking`), and an error on any other unit is only `warnings`. A unit is
+ * an error's location (ADF, FB, TPU, or one no source maps to), so it is
+ * never the unit being scanned unless it is ADF or FB. There is no
+ * always-fatal code: Epson has none.
  */
-export type StatusSourceDecision = { source: "flatbed" | "adf" } | { unexpectedErrors: string[] };
+export type StatusJudgement =
+  | { source: "flatbed" | "adf"; warnings: string[] }
+  | { blocking: string[] };
 
-export function sourceFromStatusErrors(errors: string[]): StatusSourceDecision {
-  const unexpected = errors.filter((e) => e !== "ADF PE");
-  if (unexpected.length > 0) return { unexpectedErrors: unexpected };
-  return { source: errors.length > 0 ? "flatbed" : "adf" };
+const ADF_PAPER_EMPTY = "ADF PE";
+
+/** An error's unit: its location, e.g. "ADF" from "ADF PJ". */
+const unitOf = (error: string) => error.split(" ")[0];
+
+/** The location a source's errors carry. */
+const UNIT = { flatbed: "FB", adf: "ADF" } as const;
+
+/**
+ * Judges a status reply's errors (parseStatErrors) for a session whose source
+ * is `source`, or "detect" on a printer with both sources. There the ADF is
+ * empty only when it reports paper empty, which means the flatbed. Epson's
+ * own source detection reads any other ADF code as a document loaded, so
+ * the ADF is the source (and that error stops it), as it is with no ADF
+ * error.
+ */
+export function judgeStatusErrors(
+  errors: string[],
+  source: "detect" | "flatbed" | "adf",
+): StatusJudgement {
+  const scanned =
+    source === "detect" ? (errors.includes(ADF_PAPER_EMPTY) ? "flatbed" : "adf") : source;
+  // ADF paper empty is no error to report when the ADF may be scanned. On a
+  // printer with both sources it is what says flatbed. On an ADF-only one it
+  // is exempt only because this is the first status reply, while Epson's
+  // driver judges the last one before PARA: the DS-575W duplex capture's
+  // first status says paper empty, yet the scan goes ahead.
+  const reported = source === "flatbed" ? errors : errors.filter((e) => e !== ADF_PAPER_EMPTY);
+  const blocking = reported.filter((e) => unitOf(e) === UNIT[scanned]);
+  if (blocking.length > 0) return { blocking };
+  return { source: scanned, warnings: reported.filter((e) => unitOf(e) !== UNIT[scanned]) };
 }

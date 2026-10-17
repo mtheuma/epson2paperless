@@ -171,7 +171,7 @@ export interface CapabilityFields {
 /**
  * How a session learns its source, from the sources INFO advertises. A
  * printer with both reads it from the content of the init poll's first
- * status reply ("ADF paper empty" means the flatbed, no error the ADF); a
+ * status reply ("ADF paper empty" means the flatbed, anything else the ADF); a
  * single-source printer is fixed to it, which the reply never changes. Null
  * when INFO advertises no scan area at all: the session keeps the scanner
  * shell's default source.

@@ -1667,27 +1667,61 @@ describe("esci2Graph INIT_POLL — source from the status reply's content (model
     expect(ctx.source).toBe("adf");
   });
 
-  it("any other error ends the session, naming the error the printer reported", () => {
-    // Synthetic: no fixture's status reports an error other than ADF PE.
-    const { outcome } = firstStatus(ET4950_ENTRY, statHeader(12), Buffer.from("#ERRADF JAM "));
-    expect(outcome).toBe(
-      "INIT_POLL_STAT_DRAIN: the printer reported an error before scanning (ADF JAM) — " +
-        "clear it on the printer and scan again",
-    );
+  // Synthetic from here: no fixture's status reports an error other than ADF PE.
+  const STOP = (state: string, error: string) =>
+    `${state}: the printer reported an error before scanning (${error}) — ` +
+    "clear it on the printer and scan again";
+
+  it("an ADF error other than paper empty ends the session: the ADF is being scanned", () => {
+    const { outcome } = firstStatus(ET4950_ENTRY, statHeader(12), Buffer.from("#ERRADF PJ  "));
+    expect(outcome).toBe(STOP("INIT_POLL_STAT_DRAIN", "ADF PJ"));
     // Tokens inline in a zero-length reply, which has no body.
-    const inline = Buffer.from("STATx0000000#ERRADF JAM " + "#---".repeat(10));
-    expect(firstStatus(ET4950_ENTRY, inline, null).outcome).toMatch(
-      /^INIT_POLL_STAT: the printer reported an error before scanning \(ADF JAM\)/,
+    const inline = Buffer.from("STATx0000000#ERRADF PJ  " + "#---".repeat(10));
+    expect(firstStatus(ET4950_ENTRY, inline, null).outcome).toBe(STOP("INIT_POLL_STAT", "ADF PJ"));
+  });
+
+  it("ADF paper empty with a flatbed error ends the session: the flatbed is being scanned", () => {
+    const { outcome } = firstStatus(
+      ET4950_ENTRY,
+      statHeader(24),
+      Buffer.from("#ERRADF PE  #ERRFB  LOCK"),
+    );
+    expect(outcome).toBe(STOP("INIT_POLL_STAT_DRAIN", "FB LOCK"));
+  });
+
+  it("judges the reply's inline tokens along with the body", () => {
+    // Synthetic: no fixture carries tokens in the STAT reply header.
+    const header = Buffer.from("STATx0000018#ERRFB  OPN " + "#---".repeat(10));
+    const body = Buffer.from("#ERRADF PE  #ERRADF PJ  ");
+    expect(firstStatus(ET4950_ENTRY, header, body).outcome).toBe(
+      STOP("INIT_POLL_STAT_DRAIN", "FB OPN"),
     );
   });
 
-  it("names every other error, judging the reply's inline tokens along with the body", () => {
-    // Synthetic: no fixture carries tokens in the STAT reply header.
-    const header = Buffer.from("STATx0000018#ERRADF JAM " + "#---".repeat(10));
-    const body = Buffer.from("#ERRADF PE  #ERRFB  OPN ");
-    expect(firstStatus(ET4950_ENTRY, header, body).outcome).toMatch(
-      /reported an error before scanning \(ADF JAM, FB OPN\)/,
-    );
+  it("an error on the unit not being scanned is logged as a warning, and the scan carries on", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const flatbed = firstStatus(
+        ET4950_ENTRY,
+        statHeader(24),
+        Buffer.from("#ERRADF PE  #ERRADF PJ  "),
+      );
+      expect(flatbed.outcome).toBe("INIT_POLL_FIN");
+      expect(flatbed.ctx.source).toBe("flatbed");
+      const adf = firstStatus(ET4950_ENTRY, statHeader(12), Buffer.from("#ERRFB  LTF "));
+      expect(adf.outcome).toBe("INIT_POLL_FIN");
+      expect(adf.ctx.source).toBe("adf");
+      const warnings = warn.mock.calls.map((args) => args.join(" "));
+      expect(warnings).toHaveLength(2);
+      expect(warnings[0]).toMatch(
+        /the printer reported ADF PJ, which does not affect a flatbed scan — the scan continues/,
+      );
+      expect(warnings[1]).toMatch(
+        /the printer reported FB LTF, which does not affect an ADF scan — the scan continues/,
+      );
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("ET-2750: fixed to the flatbed, so its filler-packed zero-length status is never read", () => {
@@ -1717,17 +1751,13 @@ describe("esci2Graph INIT_POLL — source from the status reply's content (model
     const ET2750_PATH = "tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl";
     const ET2750_ENTRY = recordedDialect(computeCapaFingerprint(readInit1Bodies(ET2750_PATH).capa));
 
-    it("fixed ADF: an ADF JAM ends the session, in the body or inline", () => {
-      // Synthetic: no fixture's status reports an error other than ADF PE.
+    it("fixed ADF: an ADF error other than paper empty ends the session, in the body or inline", () => {
       expect(FF680W_ENTRY.sourceDetection).toBe("fixed-adf");
-      const { outcome } = firstStatus(FF680W_ENTRY, statHeader(12), Buffer.from("#ERRADF JAM "));
-      expect(outcome).toBe(
-        "INIT_POLL_STAT_DRAIN: the printer reported an error before scanning (ADF JAM) — " +
-          "clear it on the printer and scan again",
-      );
-      const inline = Buffer.from("STATx0000000#ERRADF JAM " + "#---".repeat(10));
-      expect(firstStatus(FF680W_ENTRY, inline, null).outcome).toMatch(
-        /^INIT_POLL_STAT: the printer reported an error before scanning \(ADF JAM\)/,
+      const { outcome } = firstStatus(FF680W_ENTRY, statHeader(12), Buffer.from("#ERRADF PJ  "));
+      expect(outcome).toBe(STOP("INIT_POLL_STAT_DRAIN", "ADF PJ"));
+      const inline = Buffer.from("STATx0000000#ERRADF PJ  " + "#---".repeat(10));
+      expect(firstStatus(FF680W_ENTRY, inline, null).outcome).toBe(
+        STOP("INIT_POLL_STAT", "ADF PJ"),
       );
     });
 
@@ -1741,6 +1771,24 @@ describe("esci2Graph INIT_POLL — source from the status reply's content (model
       expect(ctx.source).toBe("adf");
     });
 
+    it("fixed ADF: a flatbed error warns, and the scan carries on", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const { ctx, outcome } = firstStatus(
+          FF680W_ENTRY,
+          statHeader(12),
+          Buffer.from("#ERRFB  LOCK"),
+        );
+        expect(outcome).toBe("INIT_POLL_FIN");
+        expect(ctx.source).toBe("adf");
+        expect(warn.mock.calls.map((args) => args.join(" "))).toEqual([
+          expect.stringMatching(/reported FB LOCK, which does not affect an ADF scan/),
+        ]);
+      } finally {
+        warn.mockRestore();
+      }
+    });
+
     it("fixed flatbed: the ET-2750's zero-length reply with inline filler carries on", () => {
       const { header, body } = readFirstInitPollStatus(ET2750_PATH);
       expect(ET2750_ENTRY.sourceDetection).toBe("fixed-flatbed");
@@ -1750,9 +1798,27 @@ describe("esci2Graph INIT_POLL — source from the status reply's content (model
       expect(ctx.source).toBe("flatbed");
     });
 
-    it("fixed flatbed: any other error ends the session", () => {
+    it("fixed flatbed: a flatbed error ends the session", () => {
       const { outcome } = firstStatus(ET2750_ENTRY, statHeader(12), Buffer.from("#ERRFB  OPN "));
-      expect(outcome).toMatch(/^INIT_POLL_STAT_DRAIN: .*reported an error .*\(FB OPN\)/);
+      expect(outcome).toBe(STOP("INIT_POLL_STAT_DRAIN", "FB OPN"));
+    });
+
+    it("fixed flatbed: an ADF error warns, and the scan carries on", () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      try {
+        const { ctx, outcome } = firstStatus(
+          ET2750_ENTRY,
+          statHeader(12),
+          Buffer.from("#ERRADF PJ  "),
+        );
+        expect(outcome).toBe("INIT_POLL_FIN");
+        expect(ctx.source).toBe("flatbed");
+        expect(warn.mock.calls.map((args) => args.join(" "))).toEqual([
+          expect.stringMatching(/reported ADF PJ, which does not affect a flatbed scan/),
+        ]);
+      } finally {
+        warn.mockRestore();
+      }
     });
   });
 
@@ -1924,10 +1990,10 @@ describe("esci2Graph — generic dialect", () => {
       expect(ctx.source).toBe("adf");
     });
 
-    it("any other error ends the session", () => {
-      const { result } = firstStatus(statHeader(12), Buffer.from("#ERRADF JAM "));
+    it("an ADF error other than paper empty ends the session", () => {
+      const { result } = firstStatus(statHeader(12), Buffer.from("#ERRADF PJ  "));
       expect("error" in result && result.error.message).toMatch(
-        /the printer reported an error before scanning \(ADF JAM\)/,
+        /the printer reported an error before scanning \(ADF PJ\)/,
       );
     });
   });
