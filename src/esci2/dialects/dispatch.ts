@@ -16,7 +16,12 @@ import { buildDiagnostic, UnsupportedDialectError } from "../diagnostic.js";
 import type { CapaTokens, InfoTokens } from "../capabilities.js";
 import { buildGenericEntry, GenericDialectUnusableError, printerIdentity } from "./generic.js";
 import { capabilityFields, deriveCapabilities, type DerivedCapabilities } from "../derivation.js";
-import { genericWindowIn, inheritedWindow, type WindowSource } from "../scan-window.js";
+import {
+  fitsScanArea,
+  genericWindowIn,
+  inheritedWindow,
+  type WindowSource,
+} from "../scan-window.js";
 import { createLogger } from "../../logger.js";
 
 const log = createLogger("scanner-esci2");
@@ -81,7 +86,8 @@ export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
   const byIdentity = byPid ?? byName;
   if (byIdentity !== undefined) {
     const matchedBy = byPid !== undefined ? "pid" : "name";
-    if (!byIdentity.capaFingerprints.includes(fingerprint)) {
+    const fingerprintMatches = byIdentity.capaFingerprints.includes(fingerprint);
+    if (!fingerprintMatches) {
       const reported = matchedBy === "pid" ? `PID ${prdPid}` : `product name ${info.prdName}`;
       log.warn(
         `Printer identified as ${byIdentity.displayName} by its ${reported}, but its CAPA ` +
@@ -91,30 +97,39 @@ export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
           `please file an issue with the diagnostic block below:\n\n${buildDiagnostic(replies)}`,
       );
     }
-    return { ...resolveOverride(byIdentity, replies, derived), matchedBy };
+    return { ...resolveOverride(byIdentity, replies, derived, fingerprintMatches), matchedBy };
   }
 
   if (byFingerprint !== undefined) {
-    return { ...resolveOverride(byFingerprint, replies, derived), matchedBy: "fingerprint" };
+    return { ...resolveOverride(byFingerprint, replies, derived, true), matchedBy: "fingerprint" };
   }
   return { entry: resolveGenericEntry(replies, derived), matchedBy: "generic", derived };
 }
 
 /**
- * Completes an override into the session's dialect. A window it inherits
- * for a source the printer advertises no usable scan area for can't be
- * computed, so that source has none: say so with the diagnostic block now,
- * since a scan from it fails at PARA build (assertSourceSupported).
+ * Completes an override into the session's dialect.
+ *
+ * On a CAPA fingerprint mismatch the printer isn't the one the override was
+ * recorded from, so each window of its own is kept only while it still fits
+ * the scan area this printer reports; otherwise the source gets the generic
+ * window, with a warning.
+ *
+ * A source left with no window (the override inherits the generic one, or
+ * fell back to it, and the printer advertises no usable scan area for it)
+ * is said so with the diagnostic block now, since a scan from it fails at
+ * PARA build (assertSourceSupported).
  */
 function resolveOverride(
   override: RegistryEntry,
   replies: Init1Replies,
   derived: DerivedCapabilities,
+  fingerprintMatches: boolean,
 ): Pick<ResolvedEntry, "entry" | "override" | "derived"> {
-  const entry = withCapabilities(override, replies.info, derived);
+  const completed = withCapabilities(override, replies.info, derived);
+  const entry = fingerprintMatches ? completed : keepFittingWindows(completed, replies.info);
   const missing = (["flatbed", "adf"] as const).filter(
     (source) =>
-      (source === "flatbed" ? override.fbExtents : override.adfExtents) === "generic" &&
+      (source === "flatbed" ? override.fbExtents : override.adfExtents) !== null &&
       (source === "flatbed" ? entry.fbExtents : entry.adfExtents) === null,
   );
   if (missing.length > 0) {
@@ -125,6 +140,31 @@ function resolveOverride(
     );
   }
   return { entry, override, derived };
+}
+
+/**
+ * The dialect with each of its own windows that leaves the printer's scan
+ * area replaced by the generic window for that area. An inherited window is
+ * the generic one already, and fits by construction.
+ */
+function keepFittingWindows(entry: Dialect, info: InfoTokens): Dialect {
+  const profile = entry.paraProfile;
+  const keepOrReplace = (source: WindowSource, window: DialectWindow | null) => {
+    if (window === null || window.generic !== undefined) return window;
+    if (fitsScanArea(info, source, window, profile)) return window;
+    const { x0, y0, w, h } = window;
+    log.warn(
+      `${entry.displayName}: its ${source} scan window (${w}x${h} at ${x0},${y0}, ` +
+        `${baseDpiFor(profile)} DPI) doesn't fit the scan area this printer reports, so ` +
+        `the generic scan window is used instead.`,
+    );
+    return inheritedWindow(info, source, profile);
+  };
+  return {
+    ...entry,
+    fbExtents: keepOrReplace("flatbed", entry.fbExtents),
+    adfExtents: keepOrReplace("adf", entry.adfExtents),
+  };
 }
 
 /**

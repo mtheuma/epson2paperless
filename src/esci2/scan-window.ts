@@ -67,6 +67,30 @@ export function alignedX0(
   return null;
 }
 
+/**
+ * Whether `window`, at the profile's reference DPI, lies inside the scan
+ * area INFO advertises for `source` (its long-paper maximum, for crop mode,
+ * which stops at the end of the paper). False when INFO advertises no area
+ * for the source: there is nothing for the window to fit in.
+ */
+export function fitsScanArea(
+  info: InfoTokens,
+  source: WindowSource,
+  window: Extents,
+  profile: ParaProfile,
+): boolean {
+  const geometry = sourceGeometry(info, source);
+  if (geometry === null) return false;
+  const dpi = baseDpiFor(profile);
+  const bound = profile === "adf-crp" ? geometry.maxArea : geometry.area;
+  return (
+    window.x0 >= 0 &&
+    window.y0 >= 0 &&
+    window.x0 + window.w <= toPixels(bound.width, dpi) &&
+    window.y0 + window.h <= toPixels(bound.height, dpi)
+  );
+}
+
 export type WindowProblem =
   | { source: WindowSource; problem: "outside-scan-area"; window: Extents; maxArea: Extents }
   | { source: WindowSource; problem: "x0-misaligned"; window: Extents; expectedX0: number };
