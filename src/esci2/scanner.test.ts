@@ -209,8 +209,8 @@ async function driveScannerToPara(args: {
     fake.feed(buildIsPacket(0xa000, Buffer.alloc(0)));
     await waitImmediate();
     // Length 12 is the flatbed fixtures' "#ERRADF PE  " status; any other
-    // length gets token-free filler (the length rule reads it as ADF, and so
-    // does its content). Either way the status-content shadow stays silent.
+    // length gets token-free filler, which carries no error: the content
+    // rule reads it as ADF.
     const body =
       firstStatLength === 12
         ? Buffer.from("#ERRADF PE  ", "ascii")

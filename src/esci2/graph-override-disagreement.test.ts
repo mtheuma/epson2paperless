@@ -5,8 +5,8 @@ import { readInit1Bodies } from "./test-support/capability-bodies.js";
 import { DEFAULT_JPEG_QUALITY } from "../config.js";
 
 // The ET-4950 fixture's CAPA, resolved against a registry copy whose entry for
-// it is doctored to disagree on its sources. The mock is scoped to this file,
-// so no other test sees the doctored entry.
+// it is doctored to disagree with INFO on its sources (no flatbed window).
+// The mock is scoped to this file, so no other test sees the doctored entry.
 const ET4950 = readInit1Bodies(
   "tools/frida-capture/captures/2026-04-24T09-05-08-flatbed-1p-jpg.jsonl",
 );
@@ -31,8 +31,8 @@ vi.mock("./dialects/registry.js", async (importOriginal) => {
   };
 });
 
-describe("esci2Graph INIT1_CAPA_DATA — shadow derivation disagreement", () => {
-  it("logs an info line for the disagreeing field once the dialect resolves", () => {
+describe("esci2Graph INIT1_CAPA_DATA — no runtime comparison with the override", () => {
+  it("an override that disagrees with INFO on its sources logs nothing at info", () => {
     const state = esci2Graph.states.INIT1_CAPA_DATA;
     if (state.kind !== "decision") throw new Error("INIT1_CAPA_DATA not a decision");
     const ctx = {
@@ -61,19 +61,11 @@ describe("esci2Graph INIT1_CAPA_DATA — shadow derivation disagreement", () => 
     try {
       const result = state.decide(ctx, { type: 0xa000, payload: ET4950.capa });
       expect("error" in result).toBe(false);
-      const shadow = infoSpy.mock.calls.filter((args) =>
-        args.some((a) =>
-          String(a).includes("Capability derivation disagrees with the dialect entry"),
-        ),
-      );
-      expect(shadow).toHaveLength(1);
-      expect(shadow[0][2]).toEqual(
-        expect.objectContaining({
-          field: "sources",
-          derived: { flatbed: true, adf: true },
-          entry: { flatbed: false, adf: true },
-        }),
-      );
+      const { entry } = ctx as Esci2Ctx;
+      expect(entry?.fbExtents).toBeNull();
+      // Detection follows INFO, which advertises both sources.
+      expect(entry?.sourceDetection).toBe("init-poll-status");
+      expect(infoSpy.mock.calls).toEqual([]);
     } finally {
       infoSpy.mockRestore();
     }

@@ -10,7 +10,7 @@ import { REGISTRY, type RegistryEntry } from "./registry.js";
 import { UnsupportedDialectError } from "../diagnostic.js";
 import { computeCapaFingerprint } from "../capa-fingerprint.js";
 import { parseCapaTokens, parseInfoTokens } from "../capabilities.js";
-import { compareWithEntry, deriveCapabilities } from "../derivation.js";
+import { deriveCapabilities } from "../derivation.js";
 import { composePara } from "../para-composer.js";
 import { parseParaSegments } from "../test-support/para-parse.js";
 import { REPLAY_FIXTURES, readInit1Bodies } from "../test-support/capability-bodies.js";
@@ -268,15 +268,25 @@ describe("an override's capability fields follow the printer's own replies", () 
     const text = FF680W.capa.toString("latin1");
     expect(text).toContain("#ADFCRP");
     const capa = Buffer.from(text.replace(/#ADFCRP[^#]*/, ""), "latin1");
-    const { resolved } = lookup(FF680W.info, capa);
+    const { resolved, warnings } = lookup(FF680W.info, capa);
     expect(resolved.matchedBy).toBe("name");
     expect(resolved.entry.paraProfile).toBe("standard");
     // Its window (1700 x 7200 at 200 DPI, 8.5 x 36 in) keeps its physical
-    // size at the standard profile's 300 DPI reference, and on the wire.
-    expect(resolved.entry.adfExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 10800 });
+    // size at the standard profile's 300 DPI reference...
+    const rescaled = withCapabilities(
+      REGISTRY.get(FF680W_FP)!,
+      parseInfoTokens(FF680W.info),
+      deriveCapabilities(parseInfoTokens(FF680W.info), parseCapaTokens(capa)),
+    );
+    expect(rescaled.adfExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 10800 });
+    // ...where it no longer fits: only crop mode scans past the 15.5-inch
+    // ADF area. The changed CAPA is a fingerprint mismatch, so the session
+    // gets the generic window (A4, centred) instead, with a warning.
+    expect(resolved.entry.adfExtents).toMatchObject({ x0: 34, y0: 0, w: 2481, h: 3506 });
+    expect(warnings.filter((w) => w.includes("adf scan window"))).toHaveLength(1);
     const para = composePara(makeParaSpec(resolved.entry, "adf-simplex", "jpg", 300));
     const acq = parseParaSegments(para).find((s) => s.code === "ACQ");
-    expect(acq?.values).toEqual([0, 0, 2550, 10800]);
+    expect(acq?.values).toEqual([34, 0, 2481, 3506]);
   });
 
   it("keeps a crop-mode scanner's window as recorded when its profile matches", () => {
@@ -295,17 +305,6 @@ describe("an override's capability fields follow the printer's own replies", () 
     const { resolved } = lookup(noAdf, ET4950.capa);
     expect(resolved.matchedBy).toBe("pid");
     expect(resolved.entry.sourceDetection).toBe("fixed-flatbed");
-  });
-
-  it("returns the derivation the dialect was completed with", () => {
-    const { resolved } = lookup(ET4950.info, ET4950.capa);
-    expect(resolved.derived).toEqual(
-      deriveCapabilities(parseInfoTokens(ET4950.info), parseCapaTokens(ET4950.capa)),
-    );
-    expect(resolved.entry.optionalSegments).toEqual({
-      qit: resolved.derived.qit,
-      cct: resolved.derived.cct,
-    });
   });
 });
 
@@ -358,16 +357,6 @@ describe("an override that inherits the generic window", () => {
     expect(() => assertSourceSupported(resolved.entry, "flatbed")).not.toThrow();
   });
 
-  it("is still a source the override claims, so the shadow comparison reports the missing area", () => {
-    const { resolved } = lookup(NARROW_FB_ONLY, ET4950.capa);
-    expect(resolved.override).toBe(REGISTRY.get(ET4950_FP));
-    expect(compareWithEntry(resolved.derived, resolved.override!)).toContainEqual({
-      field: "sources",
-      derived: { flatbed: true, adf: false },
-      entry: { flatbed: true, adf: true },
-    });
-  });
-
   it("is replaced as a whole: a dialect given its own window sends that one", () => {
     const dialect = recordedDialect(ET4950_FP);
     expect(dialect.fbExtents?.generic).toBeDefined();
@@ -376,6 +365,56 @@ describe("an override that inherits the generic window", () => {
     expect(parseParaSegments(para).find((s) => s.code === "ACQ")?.values).toEqual([
       0, 0, 2000, 2000,
     ]);
+  });
+});
+
+describe("on a CAPA fingerprint mismatch, an override's own window must fit the scan area", () => {
+  // The XP-7100 keeps its own window: US Letter, 2550 x 3300 at 300 DPI, on
+  // both sources. This INFO narrows its flatbed to 8 inches (2400 pixels).
+  const xp7100Info = XP7100.info.toString("latin1");
+  const NARROW_FB = Buffer.from(xp7100Info.replace(/#FB AREAd\d{3}/, "#FB AREAd800"), "latin1");
+
+  it("a window that no longer fits is replaced by the generic one, with a warning", () => {
+    expect(xp7100Info).toMatch(/#FB AREAd850/);
+    const { resolved, warnings } = lookup(NARROW_FB, doctored(XP7100.capa));
+    expect(resolved.matchedBy).toBe("pid");
+    // The generic window: A4 at 300 DPI, clipped to the 2400-pixel width.
+    expect(resolved.entry.fbExtents).toMatchObject({ x0: 0, y0: 0, w: 2400, h: 3506 });
+    expect(resolved.entry.fbExtents?.generic).toBeDefined();
+    const para = composePara(makeParaSpec(resolved.entry, "flatbed", "jpg", 600));
+    expect(parseParaSegments(para).find((s) => s.code === "ACQ")?.values).toEqual([
+      0, 0, 4800, 7012,
+    ]);
+    // The ADF area is unchanged, so its window still fits and is kept.
+    expect(resolved.entry.adfExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 3300 });
+    const fit = warnings.filter((w) => w.includes("doesn't fit"));
+    expect(fit).toHaveLength(1);
+    expect(fit[0]).toContain("XP-7100");
+    expect(fit[0]).toContain("flatbed");
+    expect(fit[0]).toContain("generic scan window");
+  });
+
+  it("a source INFO advertises no area for is left with no window, warned about once", () => {
+    const noFb = Buffer.from(xp7100Info.replace(/#FB AREA[^#]*/, ""), "latin1");
+    const { resolved, warnings } = lookup(noFb, doctored(XP7100.capa));
+    expect(resolved.entry.fbExtents).toBeNull();
+    expect(resolved.entry.adfExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 3300 });
+    expect(warnings.filter((w) => w.includes("doesn't fit"))).toEqual([]);
+    expect(warnings.filter((w) => w.includes("advertises no usable flatbed"))).toHaveLength(1);
+  });
+
+  it("a window that still fits is kept, with no window warning", () => {
+    const { resolved, warnings } = lookup(XP7100.info, doctored(XP7100.capa));
+    expect(resolved.matchedBy).toBe("pid");
+    expect(resolved.entry.fbExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 3300 });
+    expect(resolved.entry.adfExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 3300 });
+    expect(warnings.filter((w) => w.includes("doesn't fit"))).toEqual([]);
+  });
+
+  it("is not checked when the fingerprint matches: the recorded window is sent", () => {
+    const { resolved, warnings } = lookup(NARROW_FB, XP7100.capa);
+    expect(resolved.entry.fbExtents).toEqual({ x0: 0, y0: 0, w: 2550, h: 3300 });
+    expect(warnings).toEqual([]);
   });
 });
 
