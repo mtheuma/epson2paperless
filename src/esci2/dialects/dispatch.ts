@@ -20,6 +20,7 @@ import {
   fitsScanArea,
   genericWindowIn,
   inheritedWindow,
+  ownWindows,
   type WindowSource,
 } from "../scan-window.js";
 import { createLogger } from "../../logger.js";
@@ -154,11 +155,14 @@ const windowOf = (entry: Dialect, source: WindowSource): DialectWindow | null =>
  */
 function fitToScanAreas(entry: Dialect, info: InfoTokens): Dialect {
   const profile = entry.paraProfile;
+  const misfits = ownWindows(entry).filter(
+    ([source, window]) => !fitsScanArea(info, source, window, profile),
+  );
+  const missing = SOURCES.filter((source) => windowOf(entry, source) === null).map(
+    (source) => [source, null] as const,
+  );
   const out = { ...entry };
-  for (const source of SOURCES) {
-    const window = windowOf(entry, source);
-    if (window?.generic !== undefined) continue;
-    if (window !== null && fitsScanArea(info, source, window, profile)) continue;
+  for (const [source, window] of [...misfits, ...missing]) {
     const generic = inheritedWindow(info, source, profile);
     if (generic !== null) {
       const why =

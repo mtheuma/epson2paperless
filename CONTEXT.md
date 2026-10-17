@@ -51,7 +51,7 @@ Where the page is scanned from: flatbed, ADF simplex or ADF duplex.
 _Avoid_: input, feeder (for the flatbed)
 
 **Init poll**:
-The status cycles at the start of an ESC/I-2 session, before the mode switch. On a printer with both a flatbed and an ADF, the first status reply also decides the source: "ADF paper empty" means flatbed, anything else means ADF. On every printer, an error in it on the unit being scanned ends the session, and one on another unit only warns. The poll count is an upper bound, not a requirement.
+The status cycles at the start of an ESC/I-2 session, before the mode switch. On a printer with both a flatbed and an ADF, the first status reply also decides the source: "ADF paper empty" means flatbed, anything else means ADF. Its errors are not judged: that happens on the status reply after the mode switch, the last before PARA, as in Epson's driver. There an error on the unit being scanned ends the session, and one on another unit only warns. The poll count is an upper bound, not a requirement.
 _Avoid_: warm-up loop, readiness wait
 
 ## Colour
@@ -77,7 +77,7 @@ _Avoid_: TLS model
 ## Verification
 
 **Provenance**:
-Where a model override's colour pair, scan window or poll count came from: an Epson driver capture, a capture of the service's own traffic, a reporter's compatibility-page scan, a reporter's qualitative report, or inheritance from another model. A group can carry more than one. Colour evidence names the colour bytes it vouched for, so it stops counting when they change.
+Where a model override's colour pair, scan window or poll count came from: an Epson driver capture, a capture of the service's own traffic, a measured compatibility-page scan on that model's hardware (a reporter's, or the maintainer's on borrowed hardware), a reporter's qualitative report, or inheritance from another model. A group can carry more than one. Colour evidence names the colour bytes it vouched for, so it stops counting when they change.
 _Avoid_: source (reserved for flatbed/ADF), origin
 
 **Own capture**:

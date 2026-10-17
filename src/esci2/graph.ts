@@ -34,7 +34,7 @@ import {
   type ResolvedDialect,
 } from "./dialects/dispatch.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
-import { judgeStatusErrors } from "./derivation.js";
+import { judgeStatusErrors, sourceFromStatusErrors } from "./derivation.js";
 import { composePara, baseDpiFor, type ParaSpec } from "./para-composer.js";
 import {
   parseCapaTokens,
@@ -85,15 +85,17 @@ export interface Esci2Ctx {
    */
   capaTokens: CapaTokens | undefined;
   /**
-   * The first init-poll STAT reply (header and inline tokens), kept until its
-   * body is drained so the source is judged from both together.
-   * Undefined otherwise.
+   * A STAT reply whose content is read (header and inline tokens: the first
+   * init poll's, for the source, or the mode switch's, for errors), kept
+   * until its body is drained so both are read together. Undefined
+   * otherwise.
    */
-  firstStatusReply?: Buffer;
+  pendingStatusReply?: Buffer;
   /**
    * Set when the init poll stopped early on a non-ACK to FS Y (see
    * INIT_POLL_FS_Y): the cycle it happened on and a preview of the reply.
-   * Cleared once PARA is accepted, so only a failure in the mode switch or
+   * Cleared once PARA is accepted, or when the status before PARA reports
+   * an error that stops the scan, so only a failure in the mode switch or
    * the settings exchange is blamed on it (`nameInitPollEarlyStop`).
    */
   initPollEarlyStop?: { cycle: number; reply: string };
@@ -592,50 +594,26 @@ g.state("UNLOCKING", {
   on: { 0xa101: { next: "DONE" } },
 });
 
-/** Whether this cycle's status reply is judged: the first cycle's (judgeFirstStatus). */
-function readsFirstStatus(ctx: Esci2Ctx): boolean {
-  return ctx.initPollIteration === 0;
+/**
+ * Whether this cycle's status reply sets the source: the first cycle's, on a
+ * printer with both sources (sourceDetection "init-poll-status"). A
+ * single-source printer is fixed to its source, which the reply never
+ * changes. Errors are not judged here but on the status before PARA
+ * (judgePreParaStatus), as Epson's driver judges them.
+ */
+function readsSourceFromStatus(ctx: Esci2Ctx): boolean {
+  return ctx.initPollIteration === 0 && ctx.entry!.sourceDetection === "init-poll-status";
 }
 
 /**
- * Judges the content of the init poll's first status reply (the reply
- * itself, then its drained body, if any), as Epson's driver does
- * (judgeStatusErrors): an error on the unit being scanned ends the session,
- * naming it, since the scan would not go ahead anyway; an error on any other
- * unit is logged as a warning and the scan carries on. On a printer with
- * both sources (sourceDetection "init-poll-status") the reply also sets
- * ctx.source: "ADF paper empty" means the flatbed, anything else the ADF. A
- * single-source printer is fixed to its source, which the reply never
- * changes.
+ * Sets ctx.source from the init poll's first status reply (the reply itself,
+ * then its drained body, if any), as Epson's own source detection reads it
+ * (sourceFromStatusErrors): "ADF paper empty" means the flatbed, anything
+ * else the ADF.
  */
-function judgeFirstStatus(
-  ctx: Esci2Ctx,
-  state: string,
-  status: Buffer[],
-): TransitionResult<Esci2Ctx> | undefined {
+function detectSourceFromStatus(ctx: Esci2Ctx, status: Buffer[]): void {
   const errors = status.flatMap((part) => parseStatErrors(part));
-  const detects = ctx.entry!.sourceDetection === "init-poll-status";
-  // A fixed-source printer is judged against its source. So is one whose
-  // INFO advertises no scan area (sourceDetection null): it keeps the
-  // scanner shell's default, which is the unit its PARA will scan.
-  const judgement = judgeStatusErrors(errors, detects ? "detect" : ctx.source);
-  if ("blocking" in judgement) {
-    return {
-      error: new Error(
-        `${state}: the printer reported an error before scanning ` +
-          `(${judgement.blocking.join(", ")}) — clear it on the printer and scan again`,
-      ),
-    };
-  }
-  if (judgement.warnings.length > 0) {
-    const scanned = judgement.source === "flatbed" ? "flatbed" : "ADF";
-    log.warn(
-      `Init poll: the printer reported ${judgement.warnings.join(", ")}, which is not ` +
-        `on the ${scanned} being scanned — the scan continues.`,
-    );
-  }
-  if (!detects) return undefined;
-  ctx.source = judgement.source;
+  ctx.source = sourceFromStatusErrors(errors);
   // The declared length rides along for triage on models with no fixture:
   // on every recorded one, 12 bytes is "ADF paper empty" and 0 is none.
   log.debug("Source detected from the first status reply's content", {
@@ -643,7 +621,6 @@ function judgeFirstStatus(
     statLength: parseEsci2ReplyHeader(status[0])?.length ?? 0,
     source: ctx.source,
   });
-  return undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -717,8 +694,8 @@ export function nameInitPollEarlyStop(ctx: Esci2Ctx, reason: Error): Error {
 }
 
 // INIT_POLL_STAT: decision on STAT reply — drain if length>0, else FIN.
-// On the first iteration (ctx.initPollIteration === 0) also judges the
-// reply's content (judgeFirstStatus).
+// On the first iteration of a printer with both sources, also reads the
+// source from the reply's content (detectSourceFromStatus).
 g.state(
   "INIT_POLL_STAT",
   decision<Esci2Ctx>((ctx, packet) => {
@@ -728,25 +705,20 @@ g.state(
     if (header === null) {
       return { error: new Error("INIT_POLL_STAT: unparseable reply header") };
     }
-    // The FIRST iteration's reply is judged from its content once any body
-    // is drained (judgeFirstStatus): an error on the unit being scanned
-    // ends the session, one on another unit warns, and on a printer with both
-    // sources it decides the source.
+    // The FIRST iteration's reply decides the source from its content once
+    // any body is drained (detectSourceFromStatus). Its errors are judged
+    // later, on the status before PARA.
     //
     // A single-source printer is fixed to its source, which the reply never
     // changes. The ET-2750 relies on that: its STAT replies declare length=0
     // but pack a 52-byte #--- filler inline, which carries no error and so
     // would read as ADF on flatbed-only hardware.
-    if (readsFirstStatus(ctx)) {
+    if (readsSourceFromStatus(ctx)) {
       // The reply's own tail is #--- filler unless the printer put tokens
-      // inline, so it is judged too: here when there is no body to drain,
+      // inline, so it is read too: here when there is no body to drain,
       // otherwise alongside the body in INIT_POLL_STAT_DRAIN.
-      if (header.length === 0) {
-        const failed = judgeFirstStatus(ctx, "INIT_POLL_STAT", [packet.payload]);
-        if (failed) return failed;
-      } else {
-        ctx.firstStatusReply = packet.payload;
-      }
+      if (header.length === 0) detectSourceFromStatus(ctx, [packet.payload]);
+      else ctx.pendingStatusReply = packet.payload;
     }
     if (header.length > 0) {
       return {
@@ -767,13 +739,9 @@ g.state(
   decision<Esci2Ctx>((ctx, packet) => {
     const typeGuard = expectIsType(packet, 0xa000, "INIT_POLL_STAT_DRAIN");
     if (typeGuard) return typeGuard;
-    if (readsFirstStatus(ctx)) {
-      const failed = judgeFirstStatus(ctx, "INIT_POLL_STAT_DRAIN", [
-        ctx.firstStatusReply ?? Buffer.alloc(0),
-        packet.payload,
-      ]);
-      ctx.firstStatusReply = undefined;
-      if (failed) return failed;
+    if (readsSourceFromStatus(ctx)) {
+      detectSourceFromStatus(ctx, [ctx.pendingStatusReply ?? Buffer.alloc(0), packet.payload]);
+      ctx.pendingStatusReply = undefined;
     }
     return {
       next: "INIT_POLL_FIN",
@@ -940,7 +908,66 @@ g.state("MODE_SWITCH", {
   },
 });
 
-// POST_MODE_STAT: decision on STAT reply.
+// Error sets already warned about, by model display name and the sorted
+// codes: the warning is once per process per model and set, so a daemon
+// doesn't repeat it on every scan while the fault stays put.
+const warnedOtherUnitErrors = new Set<string>();
+
+function warnOnOtherUnitErrors(ctx: Esci2Ctx, warnings: string[]): void {
+  const name = ctx.entry!.displayName;
+  const scanned = ctx.source === "flatbed" ? "flatbed" : "ADF";
+  const message =
+    `${name}: the printer reported ${warnings.join(", ")} before scanning, which is ` +
+    `not on the ${scanned} being scanned — the scan continues.`;
+  const key = `${name}\n${[...warnings].sort().join(", ")}`;
+  if (warnedOtherUnitErrors.has(key)) {
+    log.debug(message);
+    return;
+  }
+  warnedOtherUnitErrors.add(key);
+  log.warn(message);
+}
+
+/**
+ * Judges the content of the status reply just before PARA (the reply
+ * itself, then its drained body, if any) against the unit being scanned, as
+ * Epson's driver does (judgeStatusErrors): an error on that unit ends the
+ * session before PARA, naming it, since the scan would not go ahead anyway;
+ * an error on any other unit is logged as a warning and the scan carries
+ * on. A session whose INFO advertises no scan area (sourceDetection null)
+ * is judged against the scanner shell's default, the unit its PARA scans.
+ */
+function judgePreParaStatus(
+  ctx: Esci2Ctx,
+  state: string,
+  status: Buffer[],
+): TransitionResult<Esci2Ctx> | undefined {
+  const judgement = judgeStatusErrors(
+    status.flatMap((part) => parseStatErrors(part)),
+    ctx.source,
+  );
+  if ("blocking" in judgement) {
+    // The printer named the cause itself, so an early-stopped init poll
+    // isn't blamed for it (nameInitPollEarlyStop).
+    ctx.initPollEarlyStop = undefined;
+    // ADF paper empty has nothing to clear: the feeder needs the document.
+    const advice =
+      judgement.blocking === "ADF PE"
+        ? "load the document into the ADF and scan again"
+        : "clear it on the printer and scan again";
+    return {
+      error: new Error(
+        `${state}: the printer reported an error before scanning ` +
+          `(${judgement.blocking}) — ${advice}`,
+      ),
+    };
+  }
+  if (judgement.warnings.length > 0) warnOnOtherUnitErrors(ctx, judgement.warnings);
+  return undefined;
+}
+
+// POST_MODE_STAT: decision on STAT reply, the last before PARA, whose
+// content is judged for errors (judgePreParaStatus).
 // If length>0 → pure-read drain → POST_MODE_STAT_DRAIN.
 // If length===0 → send PARA header + body → PARA.
 g.state(
@@ -952,12 +979,17 @@ g.state(
     if (header === null) {
       return { error: new Error("POST_MODE_STAT: unparseable reply header") };
     }
+    // As in the init poll, the reply's own tail is judged too: here when
+    // there is no body to drain, otherwise alongside the body.
     if (header.length > 0) {
+      ctx.pendingStatusReply = packet.payload;
       return {
         next: "POST_MODE_STAT_DRAIN",
         send: buildPurereadPacket(header.length),
       };
     }
+    const failed = judgePreParaStatus(ctx, "POST_MODE_STAT", [packet.payload]);
+    if (failed) return failed;
     return { next: "PARA", send: buildParaSend(ctx) };
   }),
 );
@@ -969,6 +1001,10 @@ g.state(
   decision<Esci2Ctx>((ctx, packet) => {
     const typeGuard = expectIsType(packet, 0xa000, "POST_MODE_STAT_DRAIN");
     if (typeGuard) return typeGuard;
+    const reply = ctx.pendingStatusReply ?? Buffer.alloc(0);
+    ctx.pendingStatusReply = undefined;
+    const failed = judgePreParaStatus(ctx, "POST_MODE_STAT_DRAIN", [reply, packet.payload]);
+    if (failed) return failed;
     return { next: "PARA", send: buildParaSend(ctx) };
   }),
 );

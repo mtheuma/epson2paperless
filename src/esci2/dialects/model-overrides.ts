@@ -109,7 +109,8 @@ export interface Provenance {
  * - `epson-capture`: a capture of an Epson driver session;
  * - `own-capture`: a capture of this service's own traffic. It proves the
  *   printer accepted the bytes, never that the colours are right;
- * - `reporter-scan`: a reporter's compatibility-page scan, measured;
+ * - `reporter-scan`: a measured compatibility-page scan on that model's
+ *   hardware (a reporter's, or the maintainer's on borrowed hardware);
  * - `reporter-report`: a reporter's qualitative "works" or "colours look right";
  * - `inherited:<model>`: copied from the override recorded for that model.
  */

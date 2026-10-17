@@ -90,16 +90,14 @@ export function capabilityFields(derived: DerivedCapabilities): CapabilityFields
 }
 
 /**
- * What the init poll's first status reply means for the scan, as Epson's own
+ * What the status reply just before PARA means for the scan, as Epson's own
  * driver judges it: an error on the unit being scanned stops the scan
  * (`blocking`), and an error on any other unit is only `warnings`. A unit is
  * an error's location (ADF, FB, TPU, or one no source maps to), so it is
  * never the unit being scanned unless it is ADF or FB. There is no
  * always-fatal code: Epson has none.
  */
-export type StatusJudgement =
-  | { source: "flatbed" | "adf"; warnings: string[] }
-  | { blocking: string[] };
+export type StatusJudgement = { warnings: string[] } | { blocking: string };
 
 const ADF_PAPER_EMPTY = "ADF PE";
 
@@ -110,27 +108,34 @@ const unitOf = (error: string) => error.split(" ")[0];
 const UNIT = { flatbed: "FB", adf: "ADF" } as const;
 
 /**
- * Judges a status reply's errors (parseStatErrors) for a session whose source
- * is `source`, or "detect" on a printer with both sources. There the ADF is
- * empty only when it reports paper empty, which means the flatbed. Epson's
- * own source detection reads any other ADF code as a document loaded, so
- * the ADF is the source (and that error stops it), as it is with no ADF
- * error.
+ * A status reply's errors (parseStatErrors) with one code per unit: the last
+ * one the reply gives that unit, as Epson's driver keeps them.
  */
-export function judgeStatusErrors(
-  errors: string[],
-  source: "detect" | "flatbed" | "adf",
-): StatusJudgement {
-  const scanned =
-    source === "detect" ? (errors.includes(ADF_PAPER_EMPTY) ? "flatbed" : "adf") : source;
-  // ADF paper empty is never reported: it is a state, not a fault. On a
-  // printer with both sources it is what says flatbed, and a flatbed scan
-  // never needs the feeder. On an ADF-only one it is exempt only because
-  // this is the first status reply, while Epson's driver judges the last one
-  // before PARA: the DS-575W duplex capture's first status says paper empty,
-  // yet the scan goes ahead.
-  const reported = errors.filter((e) => e !== ADF_PAPER_EMPTY);
-  const blocking = reported.filter((e) => unitOf(e) === UNIT[scanned]);
-  if (blocking.length > 0) return { blocking };
-  return { source: scanned, warnings: reported.filter((e) => unitOf(e) !== UNIT[scanned]) };
+function lastCodePerUnit(errors: string[]): string[] {
+  const byUnit = new Map<string, string>();
+  for (const error of errors) byUnit.set(unitOf(error), error);
+  return [...byUnit.values()];
+}
+
+/**
+ * The source a printer with both sources scans from, read from a status
+ * reply's errors as Epson's own source detection reads them: the ADF is empty
+ * only when its code is paper empty, which means the flatbed. Any other ADF
+ * code reads as a document loaded, so the ADF is the source (and the status
+ * judged before PARA stops on that code), as it is with no ADF error.
+ */
+export function sourceFromStatusErrors(errors: string[]): "flatbed" | "adf" {
+  return lastCodePerUnit(errors).includes(ADF_PAPER_EMPTY) ? "flatbed" : "adf";
+}
+
+/** Judges the errors of the status reply before PARA for a scan from `source`. */
+export function judgeStatusErrors(errors: string[], source: "flatbed" | "adf"): StatusJudgement {
+  const reported = lastCodePerUnit(errors);
+  const blocking = reported.find((e) => unitOf(e) === UNIT[source]);
+  if (blocking !== undefined) return { blocking };
+  // ADF paper empty on another unit is a state, not a fault: a flatbed scan
+  // never needs the feeder, so it is not worth a warning.
+  return {
+    warnings: reported.filter((e) => e !== ADF_PAPER_EMPTY),
+  };
 }
