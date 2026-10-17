@@ -34,12 +34,7 @@ import {
   type ResolvedEntry,
 } from "./dialects/dispatch.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
-import {
-  compareWithEntry,
-  isExpectedDisagreement,
-  sourceFromStatLength,
-  sourceFromStatusErrors,
-} from "./derivation.js";
+import { compareWithEntry, isExpectedDisagreement, sourceFromStatusErrors } from "./derivation.js";
 import { composePara, baseDpiFor, type ParaSpec } from "./para-composer.js";
 import {
   parseCapaTokens,
@@ -643,11 +638,9 @@ function readsFirstStatus(ctx: Esci2Ctx): boolean {
 /**
  * Sets ctx.source from the content of the init poll's first status reply
  * (the reply itself, then its drained body, if any): "ADF paper empty" means
- * the flatbed, no error means the ADF.
- *
- * On any other error the generic dialect ends the session, while a model
- * override logs it and takes the source from the reply's declared length
- * (sourceFromStatLength), so the scan carries on.
+ * the flatbed, no error means the ADF. Any other error ends the session,
+ * naming it: the printer reported it before scanning, so the source can't
+ * be told and the scan would not go ahead anyway.
  */
 function sourceFromFirstStatus(
   ctx: Esci2Ctx,
@@ -668,22 +661,12 @@ function sourceFromFirstStatus(
     });
     return undefined;
   }
-  // genericInfo is set exactly when the session runs the generic dialect.
-  if (ctx.genericInfo !== undefined) {
-    return {
-      error: new Error(
-        `${state}: the printer reports ${decision.unexpectedErrors.join(", ")}, so the ` +
-          "scan source can't be told from its status — clear it on the printer and scan again",
-      ),
-    };
-  }
-  ctx.source = sourceFromStatLength(statLength);
-  log.info('Status reply carries an error other than "ADF paper empty"', {
-    dialect: ctx.entry!.displayName,
-    errors: decision.unexpectedErrors,
-    source: ctx.source,
-  });
-  return undefined;
+  return {
+    error: new Error(
+      `${state}: the printer reported an error before scanning ` +
+        `(${decision.unexpectedErrors.join(", ")}) — clear it on the printer and scan again`,
+    ),
+  };
 }
 
 // ---------------------------------------------------------------------------

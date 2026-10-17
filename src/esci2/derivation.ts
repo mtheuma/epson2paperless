@@ -137,21 +137,10 @@ export function compareWithEntry(
 }
 
 /**
- * The source from the first init-poll STAT reply's declared length, for a
- * model override whose status carries an error other than "ADF paper empty"
- * (sourceFromFirstStatus in graph.ts). ET-4950 fixtures: length 0 → ADF
- * (printer queued no status); length 12 → flatbed (queued `#ERRADF PE  `).
- * Other lengths default to ADF.
- */
-export function sourceFromStatLength(length: number): "adf" | "flatbed" {
-  return length === 12 ? "flatbed" : "adf";
-}
-
-/**
  * The source a printer with both sources is on, read from the content of the
  * init poll's first status reply: "ADF paper empty" means the flatbed, no
  * error means the ADF. Any other error leaves the source undecided, so it is
- * returned for the caller to handle.
+ * returned for the caller to end the session with.
  */
 export type StatusSourceDecision = { source: "flatbed" | "adf" } | { unexpectedErrors: string[] };
 

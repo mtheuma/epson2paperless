@@ -4,7 +4,6 @@ import {
   compareWithEntry,
   deriveCapabilities,
   isExpectedDisagreement,
-  sourceFromStatLength,
   sourceFromStatusErrors,
   type DerivedCapabilities,
 } from "./derivation.js";
@@ -128,7 +127,7 @@ describe("sourceFromStatusErrors — content-based source decision", () => {
     expect(sourceFromStatusErrors(parseStatErrors(Buffer.alloc(0)))).toEqual({ source: "adf" });
   });
 
-  it("any other error is reported as one a content-based decision would fail on", () => {
+  it("any other error leaves the source undecided, and is returned", () => {
     // Synthetic: no fixture carries a status error other than ADF PE.
     expect(sourceFromStatusErrors(parseStatErrors(ascii("#ERRADF JAM #ERRADF PE  ")))).toEqual({
       unexpectedErrors: ["ADF JAM"],
@@ -218,7 +217,7 @@ describe("shadow derivation agrees with every replay fixture", () => {
   });
 });
 
-describe("content-based source decision agrees with the length-based one on every fixture", () => {
+describe("content-based source decision lands on the recorded source on every fixture", () => {
   // Only a printer with both sources reads its status; the rest are fixed to
   // their one source and never consult it.
   const statusFixtures = REPLAY_FIXTURES.filter(({ path }) => {
@@ -237,11 +236,11 @@ describe("content-based source decision agrees with the length-based one on ever
 
   it.each(statusFixtures)("$model: $path", ({ path, source }) => {
     const { header, body } = readFirstInitPollStatus(path);
-    const lengthBased = sourceFromStatLength(body?.length ?? 0);
     const errors = [header, body ?? Buffer.alloc(0)].flatMap((b) => parseStatErrors(b));
-    expect(sourceFromStatusErrors(errors)).toEqual({ source: lengthBased });
-    // Both agree with the source the session was recorded scanning from.
-    expect(lengthBased).toBe(source);
+    expect(sourceFromStatusErrors(errors)).toEqual({ source });
+    // Every recorded flatbed status is the 12-byte "ADF paper empty"; every
+    // recorded ADF status is empty.
+    expect(body?.length ?? 0).toBe(source === "flatbed" ? 12 : 0);
   });
 
   it("DS-575W: its first statuses say paper-empty, yet it stays fixed to the ADF", () => {
