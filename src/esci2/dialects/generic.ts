@@ -9,7 +9,7 @@ import {
 } from "../derivation.js";
 import type { ParaProfile, ParaSpec } from "../para-composer.js";
 import { inheritedWindow, type WindowSource } from "../scan-window.js";
-import type { Dialect, DialectWindow } from "./registry.js";
+import type { Dialect, DialectWindow } from "./model-overrides.js";
 
 /**
  * The generic dialect: what an ESC/I-2 printer with no model override is
@@ -96,7 +96,7 @@ export function printerIdentity(info: InfoTokens): string {
  * when it lists no JPG format, when INFO advertises no usable scan area, or
  * when the colour pair can't be formed.
  */
-export function buildGenericEntry(
+export function buildGenericDialect(
   info: InfoTokens,
   capa: CapaTokens,
   derived: DerivedCapabilities = deriveCapabilities(info, capa),

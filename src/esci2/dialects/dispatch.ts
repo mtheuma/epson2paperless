@@ -1,10 +1,10 @@
 import {
-  REGISTRY_ENTRIES,
+  MODEL_OVERRIDES,
   type Dialect,
   type DialectWindow,
-  type EntryWindow,
-  type RegistryEntry,
-} from "./registry.js";
+  type OverrideWindow,
+  type ModelOverride,
+} from "./model-overrides.js";
 import {
   STANDARD_BASE_DPI,
   baseDpiFor,
@@ -14,7 +14,7 @@ import {
 } from "../para-composer.js";
 import { buildDiagnostic, UnsupportedDialectError } from "../diagnostic.js";
 import type { CapaTokens, InfoTokens } from "../capabilities.js";
-import { buildGenericEntry, GenericDialectUnusableError, printerIdentity } from "./generic.js";
+import { buildGenericDialect, GenericDialectUnusableError, printerIdentity } from "./generic.js";
 import { capabilityFields, deriveCapabilities, type DerivedCapabilities } from "../derivation.js";
 import {
   fitsScanArea,
@@ -27,11 +27,11 @@ import { createLogger } from "../../logger.js";
 
 const log = createLogger("scanner-esci2");
 
-/** Which key resolved a session's registry entry, or "generic" when none did. */
+/** Which key resolved a session's model override, or "generic" when none did. */
 export type IdentityMatch = "pid" | "name" | "fingerprint" | "generic";
 
-export interface ResolvedEntry {
-  entry: Dialect;
+export interface ResolvedDialect {
+  dialect: Dialect;
   matchedBy: IdentityMatch;
 }
 
@@ -48,7 +48,7 @@ export interface Init1Replies {
 }
 
 /**
- * Looks up the registry entry by model identity: the INFO product ID, then
+ * Looks up the model override by model identity: the INFO product ID, then
  * the INFO product name, then the CAPA fingerprint, and completes it with the
  * capability fields derived from this printer's own replies. When none matches, the
  * printer gets the generic dialect, built from its own replies, with a
@@ -56,25 +56,25 @@ export interface Init1Replies {
  * UnsupportedDialectError with the diagnostic block only when the generic
  * dialect can't be built either.
  *
- * A PID or name hit whose CAPA fingerprint isn't one of the entry's logs a
- * warning with the diagnostic block and proceeds with that entry: the model
+ * A PID or name hit whose CAPA fingerprint isn't one of the override's logs
+ * a warning with the diagnostic block and proceeds with that override: the model
  * is known, and its CAPA reply may have changed with a firmware update.
  *
  * Called from INIT1_CAPA in the graph state machine. INFO is read before
  * CAPA, so the identity is available on every trigger path, including the
  * host-triggered ones that carry no panel PID.
  */
-export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
+export function resolveDialect(replies: Init1Replies): ResolvedDialect {
   const { info, capa, fingerprint } = replies;
   const derived = deriveCapabilities(info, capa);
-  // prdPid is canonical upper-case hex, and entries store names upper-case
-  // (both pinned by registry.test.ts), so only the reported name needs folding.
+  // prdPid is canonical upper-case hex, and overrides store names upper-case
+  // (both pinned by model-overrides.test.ts), so only the reported name needs folding.
   const { prdPid } = info;
   const prdName = info.prdName?.toUpperCase() ?? null;
-  const byPid = prdPid === null ? undefined : REGISTRY_ENTRIES.find((e) => e.pids.includes(prdPid));
+  const byPid = prdPid === null ? undefined : MODEL_OVERRIDES.find((e) => e.pids.includes(prdPid));
   const byName =
-    prdName === null ? undefined : REGISTRY_ENTRIES.find((e) => e.names.includes(prdName));
-  const byFingerprint = REGISTRY_ENTRIES.find((e) => e.capaFingerprints.includes(fingerprint));
+    prdName === null ? undefined : MODEL_OVERRIDES.find((e) => e.names.includes(prdName));
+  const byFingerprint = MODEL_OVERRIDES.find((e) => e.capaFingerprints.includes(fingerprint));
 
   const byIdentity = byPid ?? byName;
   if (byIdentity !== undefined) {
@@ -90,14 +90,15 @@ export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
           `please file an issue with the diagnostic block below:\n\n${buildDiagnostic(replies)}`,
       );
     }
-    return { entry: resolveOverride(byIdentity, replies, derived, fingerprintMatches), matchedBy };
+    const dialect = resolveOverride(byIdentity, replies, derived, fingerprintMatches);
+    return { dialect, matchedBy };
   }
 
   if (byFingerprint !== undefined) {
-    const entry = resolveOverride(byFingerprint, replies, derived, true);
-    return { entry, matchedBy: "fingerprint" };
+    const dialect = resolveOverride(byFingerprint, replies, derived, true);
+    return { dialect, matchedBy: "fingerprint" };
   }
-  return { entry: resolveGenericEntry(replies, derived), matchedBy: "generic" };
+  return { dialect: resolveGenericDialect(replies, derived), matchedBy: "generic" };
 }
 
 /**
@@ -114,7 +115,7 @@ export function lookupRegistryEntry(replies: Init1Replies): ResolvedEntry {
  * PARA build (assertSourceSupported).
  */
 function resolveOverride(
-  override: RegistryEntry,
+  override: ModelOverride,
   replies: Init1Replies,
   derived: DerivedCapabilities,
   fingerprintMatches: boolean,
@@ -164,43 +165,45 @@ function keepFittingWindows(entry: Dialect, info: InfoTokens): Dialect {
 }
 
 /**
- * A registry entry completed with the capability fields derived from the
+ * A model override completed with the capability fields derived from the
  * printer's own replies, the same ones the generic dialect is built with.
  *
- * The entry's own windows are pinned at its windowDpi, and the composer
+ * The override's own windows are pinned at its windowDpi, and the composer
  * reads them at the derived profile's reference DPI. When the two differ (a
  * printer whose replies give it the other profile), they are rescaled so
- * they keep their physical size. A window the entry inherits ("generic") is
- * the generic window for this printer's scan area, at that reference DPI
+ * they keep their physical size. A window the override inherits ("generic")
+ * is the generic window for this printer's scan area, at that reference DPI
  * here and at the wire DPI in the PARA (makeParaSpec); null when the
- * printer advertises no area for the source.
+ * printer advertises no area for the source. Provenance stays behind: no
+ * session reads it.
  */
 export function withCapabilities(
-  entry: RegistryEntry,
+  override: ModelOverride,
   info: InfoTokens,
   derived: DerivedCapabilities,
 ): Dialect {
+  const { provenance: _provenance, ...rest } = override;
   const fields = capabilityFields(derived);
   const dpi = baseDpiFor(fields.paraProfile);
-  const scale = dpi / (entry.windowDpi ?? STANDARD_BASE_DPI);
-  const window = (source: WindowSource, e: EntryWindow): DialectWindow | null => {
-    if (e !== "generic") return e === null || scale === 1 ? e : scaleEdges(e, scale);
+  const scale = dpi / (override.windowDpi ?? STANDARD_BASE_DPI);
+  const window = (source: WindowSource, w: OverrideWindow): DialectWindow | null => {
+    if (w !== "generic") return w === null || scale === 1 ? w : scaleEdges(w, scale);
     return inheritedWindow(info, source, fields.paraProfile);
   };
   return {
-    ...entry,
-    fbExtents: window("flatbed", entry.fbExtents),
-    adfExtents: window("adf", entry.adfExtents),
+    ...rest,
+    fbExtents: window("flatbed", override.fbExtents),
+    adfExtents: window("adf", override.adfExtents),
     ...(scale === 1 ? {} : { windowDpi: dpi }),
     ...fields,
   };
 }
 
-function resolveGenericEntry(replies: Init1Replies, derived: DerivedCapabilities): Dialect {
+function resolveGenericDialect(replies: Init1Replies, derived: DerivedCapabilities): Dialect {
   const diagnostic = buildDiagnostic(replies);
   let entry: Dialect;
   try {
-    entry = buildGenericEntry(replies.info, replies.capa, derived);
+    entry = buildGenericDialect(replies.info, replies.capa, derived);
   } catch (err) {
     if (!(err instanceof GenericDialectUnusableError)) throw err;
     throw new UnsupportedDialectError(replies.fingerprint, diagnostic, err.message);
@@ -263,7 +266,7 @@ export function assertSourceSupported(entry: Dialect, source: ParaSpec["source"]
 }
 
 /**
- * Pure projection of a registry entry + source/action axes onto a ParaSpec.
+ * Pure projection of a model override + source/action axes onto a ParaSpec.
  * Called at PARA-build time after the source axis has been resolved (with
  * duplex folded in by the call site).
  *

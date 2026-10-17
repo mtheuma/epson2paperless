@@ -3,7 +3,7 @@ import { esci2Graph, ESCI2_TIMEOUT_MS, nameInitPollEarlyStop } from "./graph.js"
 import { buildEsci2Command } from "./commands.js";
 import { buildFsX } from "../commands-fs.js";
 import { applyEntrySourceOverride } from "./dialects/dispatch.js";
-import { REGISTRY } from "./dialects/registry.js";
+import { OVERRIDES_BY_FINGERPRINT } from "./dialects/model-overrides.js";
 import {
   IS_HEADER_SIZE,
   buildPassthruPacket,
@@ -285,7 +285,7 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
     }
   });
 
-  it("INIT_POLL_FIN loops on the ET-2750 registry entry while initPollIteration < 2", () => {
+  it("INIT_POLL_FIN loops on the ET-2750 model override while initPollIteration < 2", () => {
     const state = esci2Graph.states.INIT_POLL_FIN;
     expect(state.kind).toBe("decision");
     if (state.kind !== "decision") return;
@@ -300,7 +300,7 @@ describe("esci2Graph T23 INIT_POLL cycle", () => {
     expect(ctx.initPollIteration).toBe(1);
   });
 
-  it("INIT_POLL_FIN advances to MODE_SWITCH on the ET-2750 registry entry after 2 iterations", () => {
+  it("INIT_POLL_FIN advances to MODE_SWITCH on the ET-2750 model override after 2 iterations", () => {
     const state = esci2Graph.states.INIT_POLL_FIN;
     expect(state.kind).toBe("decision");
     if (state.kind !== "decision") return;
@@ -958,7 +958,7 @@ describe("esci2Graph POST_MODE_STAT — unconfirmed duplex orientation warning",
   }
 
   // An entry with a duplex ADF (the ET-4950's) and no orientation evidence.
-  function unconfirmed(displayName: string): import("./dialects/registry.js").Dialect {
+  function unconfirmed(displayName: string): import("./dialects/model-overrides.js").Dialect {
     const { duplexOrientationEvidence: _evidence, ...rest } = recordedDialect(
       "2fb08fc1bde6d17291b2ffb702dbc6b7de88899c9215d0e3267e7c51409df3e2",
     );
@@ -1595,7 +1595,7 @@ describe("esci2Graph INIT1_CAPA_DATA — model identity", () => {
       const result = state.decide(ctx, { type: 0xa000, payload: changed });
       expect("error" in result).toBe(false);
       expect(ctx.entry).toMatchObject(
-        unresolvedFields(REGISTRY.get(computeCapaFingerprint(capa))!),
+        unresolvedFields(OVERRIDES_BY_FINGERPRINT.get(computeCapaFingerprint(capa))!),
       );
       const warnings = warn.mock.calls.map((args) => args.join(" "));
       expect(warnings).toHaveLength(1);
@@ -1615,7 +1615,7 @@ describe("esci2Graph INIT_POLL — source from the status reply's content (model
   // the header declares one) and returns ctx plus the last state's result:
   // its next state, or its error message.
   function firstStatus(
-    entry: import("./dialects/registry.js").Dialect,
+    entry: import("./dialects/model-overrides.js").Dialect,
     header: Buffer,
     body: Buffer | null,
   ): { ctx: import("./graph.js").Esci2Ctx; outcome: string | undefined } {
@@ -1804,7 +1804,7 @@ describe("esci2Graph — generic dialect", () => {
   it("still resolves a known printer to its own entry", () => {
     const { ctx } = resolve(ET4800.info, ET4800.capa);
     expect(ctx.entry).toMatchObject(
-      unresolvedFields(REGISTRY.get(computeCapaFingerprint(ET4800.capa))!),
+      unresolvedFields(OVERRIDES_BY_FINGERPRINT.get(computeCapaFingerprint(ET4800.capa))!),
     );
     expect(ctx.genericInfo).toBeUndefined();
   });

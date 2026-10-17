@@ -1,33 +1,33 @@
 import { describe, it, expect, vi } from "vitest";
 import { esci2Graph, type Esci2Ctx } from "./graph.js";
-import type { RegistryEntry } from "./dialects/registry.js";
+import type { ModelOverride } from "./dialects/model-overrides.js";
 import { readInit1Bodies } from "./test-support/capability-bodies.js";
 import { DEFAULT_JPEG_QUALITY } from "../config.js";
 
-// The ET-4950 fixture's CAPA, resolved against a registry copy whose entry for
+// The ET-4950 fixture's CAPA, resolved against a copy of the overrides whose entry for
 // it is doctored to disagree with INFO on its sources (no flatbed window).
 // The mock is scoped to this file, so no other test sees the doctored entry.
 const ET4950 = readInit1Bodies(
   "tools/frida-capture/captures/2026-04-24T09-05-08-flatbed-1p-jpg.jsonl",
 );
 
-vi.mock("./dialects/registry.js", async (importOriginal) => {
+vi.mock("./dialects/model-overrides.js", async (importOriginal) => {
   // vi.mock is hoisted above the imports, so the factory loads what it needs.
-  const real = await importOriginal<typeof import("./dialects/registry.js")>();
+  const real = await importOriginal<typeof import("./dialects/model-overrides.js")>();
   const { readInit1Bodies } = await import("./test-support/capability-bodies.js");
   const { computeCapaFingerprint } = await import("./capa-fingerprint.js");
   const fp = computeCapaFingerprint(
     readInit1Bodies("tools/frida-capture/captures/2026-04-24T09-05-08-flatbed-1p-jpg.jsonl").capa,
   );
-  const original = real.REGISTRY.get(fp)!;
-  const doctored: RegistryEntry = {
+  const original = real.OVERRIDES_BY_FINGERPRINT.get(fp)!;
+  const doctored: ModelOverride = {
     ...original,
     fbExtents: null,
   };
-  // The session lookup reads REGISTRY_ENTRIES alone, so that is all to doctor.
+  // The session lookup reads MODEL_OVERRIDES alone, so that is all to doctor.
   return {
     ...real,
-    REGISTRY_ENTRIES: real.REGISTRY_ENTRIES.map((e) => (e === original ? doctored : e)),
+    MODEL_OVERRIDES: real.MODEL_OVERRIDES.map((e) => (e === original ? doctored : e)),
   };
 });
 

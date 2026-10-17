@@ -25,13 +25,13 @@ import {
   parseTokens,
 } from "./commands.js";
 import { ackByte, expectIsType } from "../graph-helpers.js";
-import { supportsWireGrayscale, type Dialect } from "./dialects/registry.js";
+import { supportsWireGrayscale, type Dialect } from "./dialects/model-overrides.js";
 import {
-  lookupRegistryEntry,
+  resolveDialect,
   applyEntrySourceOverride,
   makeParaSpec,
   assertSourceSupported,
-  type ResolvedEntry,
+  type ResolvedDialect,
 } from "./dialects/dispatch.js";
 import { computeCapaFingerprint } from "./capa-fingerprint.js";
 import { sourceFromStatusErrors } from "./derivation.js";
@@ -97,10 +97,10 @@ export interface Esci2Ctx {
    * the settings exchange is blamed on it (`nameInitPollEarlyStop`).
    */
   initPollEarlyStop?: { cycle: number; reply: string };
-  /** Resolved dialect post-INIT1 (registry entry or generic, plus its capability fields), drives PARA build + init-poll count + source detection. Undefined until INIT1 completes. */
+  /** Resolved dialect post-INIT1 (model override or generic, plus its capability fields), drives PARA build + init-poll count + source detection. Undefined until INIT1 completes. */
   entry: Dialect | undefined;
   /**
-   * Set when the session runs the generic dialect (no registry entry
+   * Set when the session runs the generic dialect (no model override
    * matched): its parsed INFO reply. Undefined otherwise.
    */
   genericInfo?: InfoTokens;
@@ -383,10 +383,10 @@ twoPhaseRead(
     const capaTokens = parseCapaTokens(body);
     ctx.capaTokens = capaTokens;
     let info: InfoTokens;
-    let resolved: ResolvedEntry;
+    let resolved: ResolvedDialect;
     try {
       info = parseInfoTokens(ctx.infoBody);
-      resolved = lookupRegistryEntry({
+      resolved = resolveDialect({
         info,
         capa: capaTokens,
         fingerprint,
@@ -397,7 +397,7 @@ twoPhaseRead(
     } catch (err) {
       return { error: err as Error };
     }
-    ctx.entry = resolved.entry;
+    ctx.entry = resolved.dialect;
     log.debug("Dialect resolved", {
       name: ctx.entry.displayName,
       matchedBy: resolved.matchedBy,
@@ -827,7 +827,7 @@ function warnOnUnconfirmedDuplexOrientation(entry: Dialect): void {
 }
 
 // Builds the PARA header + body send pair. Called once per dispatch in
-// POST_MODE_STAT and POST_MODE_STAT_DRAIN; composePara + registry entry
+// POST_MODE_STAT and POST_MODE_STAT_DRAIN; composePara + model override
 // selects the correct blob for the detected hardware.
 function buildParaSend(ctx: Esci2Ctx): Buffer[] {
   const paraSource: ParaSpec["source"] =

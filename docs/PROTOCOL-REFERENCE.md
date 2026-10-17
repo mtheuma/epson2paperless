@@ -12,7 +12,7 @@ Printer (unicast)    →  Service (TCP port 2968)          Push-scan trigger
 Service              →  Printer (TCP port 1865)          Scan session
 ```
 
-Each channel is independent enough to be developed and tested separately. Inside the scan session, the same `IS` framing wraps either ESC/I-2 commands (most current models — over TLS for some, plain TCP for the rest) or legacy ESC/I commands (WF-3620 family, XP-620 and ET-2550, plain TCP). The authoritative per-model list lives in `src/esci2/dialects/registry.ts` (ESC/I-2), `src/esci/dialects/` (legacy ESC/I), and the [README compatibility table](../README.md#compatible-printers); this document names models only where a specific model illustrates a wire-level difference.
+Each channel is independent enough to be developed and tested separately. Inside the scan session, the same `IS` framing wraps either ESC/I-2 commands (most current models — over TLS for some, plain TCP for the rest) or legacy ESC/I commands (WF-3620 family, XP-620 and ET-2550, plain TCP). The authoritative per-model list lives in `src/esci2/dialects/model-overrides.ts` (ESC/I-2), `src/esci/dialects/` (legacy ESC/I), and the [README compatibility table](../README.md#compatible-printers); this document names models only where a specific model illustrates a wire-level difference.
 
 ### Discovery and keepalive (UDP multicast)
 
@@ -55,7 +55,7 @@ Three transport variants ride on TCP port 1865, decided per scan session by `src
 | `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750, XP-7100, ET-4800, FF-680W, DS-575W |
 | `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family, XP-620, ET-2550             |
 
-The Hardware column is illustrative, not exhaustive — the full model list lives in the [README compatibility table](../README.md#compatible-printers) and the dialect registries. The variant is also a per-session transport decision, not a dialect property: ESC/I-2 dialect entries are keyed by model identity, and some are transport-agnostic — the ET-8500 has been reported over both TLS and plain TCP, and the ET-2810 (plain TCP) and XP-3200 (TLS) share one fingerprint and one registry entry.
+The Hardware column is illustrative, not exhaustive — the full model list lives in the [README compatibility table](../README.md#compatible-printers) and the dialect registries. The variant is also a per-session transport decision, not a dialect property: ESC/I-2 dialect entries are keyed by model identity, and some are transport-agnostic — the ET-8500 has been reported over both TLS and plain TCP, and the ET-2810 (plain TCP) and XP-3200 (TLS) share one fingerprint and one model override.
 
 The rest of this section walks the **canonical `esci2-tls` path** in depth, since it's the most mechanically complex (TLS on top, both command generations layered inside) and the foundation that the other two variants peel back from. The plain-TCP ESC/I-2 differences live in [ESC/I-2 over plain TCP](#esci-2-over-plain-tcp), and the legacy ESC/I family in [ESC/I variant](#esci-variant-wf-3620). Both are sibling sections, not appendices.
 
@@ -121,7 +121,7 @@ The command bytes are either:
 
 **PARA is sent in two passthru packets**, not one. The first packet carries the 12-byte `PARAx<hex-len>` header with `reply_size=0`. The second carries the raw parameter bytes with `reply_size=64`. The printer acks the first packet with an empty `0xa000` reply, then responds to the second with a 64-byte `PARAx0000000#parOK…` reply if the parameters were accepted (or `#parNG…` if not). This two-phase structure was discovered from the Frida capture: the Windows driver never batches the two sends into a single passthru.
 
-ESC/I-2 command builders are in `src/esci2/commands.ts`. The legacy 2-byte initialization commands (`buildFsY`, `buildFsX`, `buildFsZ`) live in `src/commands-fs.ts` and are shared with the WF-3620 ESC/I path (which uses `buildFsY` for the `DIAGNOSE_PROTOCOL` probe). `buildEsci2Command` builds the generic 12-byte ESC/I-2 header. `buildParaHeader` builds the PARA passthru header; the PARA body is assembled by `composePara` driven by the registry entry and runtime axes (see [How printer-model differences are handled](#how-printer-model-differences-are-handled)). Reply parsing is done by `parseEsci2ReplyHeader` (extracts the 12-byte reply header's `cmd` and `length` fields) and `parseTokens` (splits the `#KEY value` token stream from reply bodies).
+ESC/I-2 command builders are in `src/esci2/commands.ts`. The legacy 2-byte initialization commands (`buildFsY`, `buildFsX`, `buildFsZ`) live in `src/commands-fs.ts` and are shared with the WF-3620 ESC/I path (which uses `buildFsY` for the `DIAGNOSE_PROTOCOL` probe). `buildEsci2Command` builds the generic 12-byte ESC/I-2 header. `buildParaHeader` builds the PARA passthru header; the PARA body is assembled by `composePara` driven by the model override and runtime axes (see [How printer-model differences are handled](#how-printer-model-differences-are-handled)). Reply parsing is done by `parseEsci2ReplyHeader` (extracts the 12-byte reply header's `cmd` and `length` fields) and `parseTokens` (splits the `#KEY value` token stream from reply bodies).
 
 The SANE `epsonds` backend provides a useful cross-reference: its passthru framing — IS header layout, `0x000C` data offset, 8-byte data header with `cmd_size` / `reply_size` — is byte-identical to what the ET-4950 expects. However, `epsonds` targets older scanners that do not require the legacy ESC/I initialization loop before ESC/I-2 commands. The ET-4950's firmware requires a legacy preamble (`FS Y` / `FS Z`, then repeated `FS Y → STAT → FIN` polling, then `FS X`) before the scan-parameter and image-transfer half of the session will be accepted.
 
@@ -129,7 +129,7 @@ The SANE `epsonds` backend provides a useful cross-reference: its passthru frami
 
 During the pre-mode-switch init sequence, the driver performs two capability discovery cycles. The first follows the initial `FS Y` ACK and sends `INFO → CAPA → FIN`; the second follows the `FS Z` ACK and sends `INFO → CAPA → RESA → FIN`. (The `@` prefix in the Frida capture naming convention is not a wire prefix — the actual command bytes on the wire are `INFOx0000000` and `CAPAx0000000` in the ESC/I-2 format.) These cycles appear in the Frida captures with consistent counts across all scan scenarios (2 × INFO, 2 × CAPA, 1 × RESA), which suggests they are mandatory initialization steps rather than optional feature queries.
 
-The INFO and CAPA replies declare the scanner's capabilities (supported resolutions, colour modes, document sources, and similar parameters). In a host-initiated pull-scan flow, the way the vendor driver's own UI works, these values would populate a scan dialog. In the push-scan flow implemented here, INFO's product ID (or product name) resolves the printer's registry entry, with a fingerprint hashed from CAPA as the fallback key (see [How printer-model differences are handled](#how-printer-model-differences-are-handled)). Most of the PARA payload is **not** dynamically constructed from the advertised capabilities: colour handling (gamma / CMX classes, `gmm`) is assembled by `composePara` from the resolved entry's pinned data, byte-transcribed from that model's capture. This is a deliberate simplification: every supported printer's colour parameters are fixed in firmware for what this project needs, so negotiating them would only restate what the captures already pin, at the cost of more reverse-engineering work and no change to the end result. Resolution and JPEG quality are the exception — CAPA's `#RSMLIST` / `#RSSLIST` / `#ADFRSMSLIST` / `#FB RSMSLIST` / `#JPGRANG` segments are parsed and drive `SCAN_RESOLUTION` / `JPEG_QUALITY` selection at PARA build time (see [Scan resolution and JPEG quality](#scan-resolution-and-jpeg-quality)), because a single fixed DPI doesn't serve every use case the way a fixed colour curve does.
+The INFO and CAPA replies declare the scanner's capabilities (supported resolutions, colour modes, document sources, and similar parameters). In a host-initiated pull-scan flow, the way the vendor driver's own UI works, these values would populate a scan dialog. In the push-scan flow implemented here, INFO's product ID (or product name) resolves the printer's model override, with a fingerprint hashed from CAPA as the fallback key (see [How printer-model differences are handled](#how-printer-model-differences-are-handled)). Most of the PARA payload is **not** dynamically constructed from the advertised capabilities: colour handling (gamma / CMX classes, `gmm`) is assembled by `composePara` from the resolved entry's pinned data, byte-transcribed from that model's capture. This is a deliberate simplification: every supported printer's colour parameters are fixed in firmware for what this project needs, so negotiating them would only restate what the captures already pin, at the cost of more reverse-engineering work and no change to the end result. Resolution and JPEG quality are the exception — CAPA's `#RSMLIST` / `#RSSLIST` / `#ADFRSMSLIST` / `#FB RSMSLIST` / `#JPGRANG` segments are parsed and drive `SCAN_RESOLUTION` / `JPEG_QUALITY` selection at PARA build time (see [Scan resolution and JPEG quality](#scan-resolution-and-jpeg-quality)), because a single fixed DPI doesn't serve every use case the way a fixed colour curve does.
 
 ---
 
@@ -246,7 +246,7 @@ A printer with one source (**`fixed-flatbed`** / **`fixed-adf`**) never reads th
 
 ADF precedence (the printers with both sources, above): when the ADF feeder has paper loaded, the printer picks ADF regardless of whether a document is also present on the glass. The INIT_POLL STAT reply carries no error in this case. Users who want flatbed must clear the ADF first.
 
-The composed PARA length depends on the dialect (which gamma / CMX classes and optional segments it carries) and the source axis. Actual `composePara` output per registry entry:
+The composed PARA length depends on the dialect (which gamma / CMX classes and optional segments it carries) and the source axis. Actual `composePara` output per model override:
 
 | Dialect                     | Transport     | Flatbed | ADF simplex | ADF duplex |
 | --------------------------- | ------------- | ------- | ----------- | ---------- |
@@ -271,7 +271,7 @@ The DS-575W is the FF-680W's ADF-only sibling and reuses the same `adf-crp` PARA
 
 (ET-2950, ET-2750, ET-2810 / XP-3200, ET-8500 and ET-7700 are flatbed-only hardware; ET-4800 is flatbed + ADF simplex — its `composePara` can emit a 948 B `#ADFDPLX` body, but the simplex-only panel never requests duplex, so that row is `—`. ET-15000 reuses the ET-4800's class data and shares its PARA shape; only the flatbed body is hardware-verified, with the ADF row pending a capture. The WF-3835 is flatbed + ADF simplex — its CAPA reports `duplex: N` — and its entry is speculative from the issue #174 diagnostic, pending hardware validation.)
 
-PARA bodies are assembled at run time by `composePara` (`src/esci2/para-composer.ts`) from the resolved registry entry (`src/esci2/dialects/registry.ts`) plus the source / action axes — see [How printer-model differences are handled](#how-printer-model-differences-are-handled). The per-dialect byte data lives in `src/esci2/data/gamma-classes.ts` and `cmx-classes.ts`, each class byte-transcribed verbatim from that model's capture; none of it is hardcoded in `src/esci2/commands.ts` (that file holds only the command / header builders). Dialects differ by more than length: gamma constant (`#GMMUG10` for the ET-4950 family and ET-2950; `#GMMUG18` for every other entry), optional-segment presence (`#QITOFF` / `#CCTCOL`, sent when the printer's CAPA lists them), and a model-specific inline `#CMXUM08` ICC-matrix block — so no dialect's body can be derived by editing another's.
+PARA bodies are assembled at run time by `composePara` (`src/esci2/para-composer.ts`) from the resolved model override (`src/esci2/dialects/model-overrides.ts`) plus the source / action axes — see [How printer-model differences are handled](#how-printer-model-differences-are-handled). The per-dialect byte data lives in `src/esci2/data/gamma-classes.ts` and `cmx-classes.ts`, each class byte-transcribed verbatim from that model's capture; none of it is hardcoded in `src/esci2/commands.ts` (that file holds only the command / header builders). Dialects differ by more than length: gamma constant (`#GMMUG10` for the ET-4950 family and ET-2950; `#GMMUG18` for every other entry), optional-segment presence (`#QITOFF` / `#CCTCOL`, sent when the printer's CAPA lists them), and a model-specific inline `#CMXUM08` ICC-matrix block — so no dialect's body can be derived by editing another's.
 
 Within a dialect, the per-source variants differ in three places: the source token (`#FB ` / `#ADF` / `#ADFDPLX`), the `#PAG` page-count token (present for ADF, omitted for flatbed), and the `#ACQ` x-start offset (`0000069` for ADF, `0000000` for flatbed). The remainder — the three RGB gamma tables (`#GMTRED` / `#GMTGRN` / `#GMTBLU`), CMX colour-correction matrix, and 1 MB buffer-size token — is byte-identical across sources within a dialect. (Scan-area extents and the `#RSM` / `#RSS` resolution fields scale with `SCAN_RESOLUTION` for every dialect — see [Scan resolution and JPEG quality](#scan-resolution-and-jpeg-quality) — so at the default DPI they're byte-identical across sources too, but that's a resolution-axis property, not a per-source one.) The FF-680W and DS-575W (`adf-crp` profile) are the exception to this per-source structure: their sides axis is the presence of a `DPLX` token inside the `#ADFCRP…DFL1` prefix rather than a distinct source token. The DS-575W additionally varies its `#COL` code and gamma LUT with `SCAN_COLOR_MODE`.
 
@@ -291,7 +291,7 @@ The panel's Action selection is the second character of `PushScanIDIn`: `1` = JP
 
 The values are distinct panel options, not combinable bit flags. `3` is not JPG + PDF: the ET-3700 sends it for its "Attach as email" action. The service has no email path, so `computeActionFromId` decodes `3` (and any other value) as `unknown` and the scan is refused. The panel's action list comes from the printer firmware, not the destination, so models can offer actions the service never handles.
 
-A key protocol finding for the ESC/I-2 path: **the printer always streams JPEG-encoded image data regardless of the panel's Action setting.** PDF is composed host-side with pdf-lib after all pages have been received, so the printer is never told "PDF". The scan-parameter (PARA) bytes are action-invariant for most dialects (ET-4950 family, ET-2750, ET-4800) — the same capture replays for both `action='jpg'` and `action='pdf'`, and the ADF replay tests assert this by reusing one Frida JPG capture across both runs. **XP-7100 is the exception:** its registry entry carries per-action gamma / CMX classes, so it emits different PARA bytes for JPG vs PDF even though the image stream is identical JPEG either way. (The committed JPG and PDF flatbed captures are separate Frida sessions and so differ slightly in capture-time polling cadence, but the protocol structure is the same.)
+A key protocol finding for the ESC/I-2 path: **the printer always streams JPEG-encoded image data regardless of the panel's Action setting.** PDF is composed host-side with pdf-lib after all pages have been received, so the printer is never told "PDF". The scan-parameter (PARA) bytes are action-invariant for most dialects (ET-4950 family, ET-2750, ET-4800) — the same capture replays for both `action='jpg'` and `action='pdf'`, and the ADF replay tests assert this by reusing one Frida JPG capture across both runs. **XP-7100 is the exception:** its model override carries per-action gamma / CMX classes, so it emits different PARA bytes for JPG vs PDF even though the image stream is identical JPEG either way. (The committed JPG and PDF flatbed captures are separate Frida sessions and so differ slightly in capture-time polling cadence, but the protocol structure is the same.)
 
 The ESC/I path (WF-3620) is different: the firmware locks the scan resolution to the panel's format choice (600 DPI for JPG, 300 DPI for PDF), so the wire bytes do differ between the two — see [ESC/I variant (WF-3620)](#esci-variant-wf-3620) below. Composition still happens host-side via pdf-lib in PDF mode, but the underlying pixel stream is captured at the lower resolution.
 
@@ -334,7 +334,7 @@ Only `esci2` (TLS) results are cached for the daemon's lifetime. The plain-TCP a
 
 ## ESC/I-2 over plain TCP
 
-Most dialects added since the ET-4950 speak its ESC/I-2 vocabulary **without the TLS layer** — the `esci2-plain` rows in the [PARA table above](#source-adf-vs-flatbed); the registry (`src/esci2/dialects/registry.ts`) holds the full dialect set across all transports. The hardware shapes vary from flatbed-only (ET-2750, ET-7700) through flatbed + ADF (XP-7100, ET-4800) to ADF-only sheet-fed (FF-680W, DS-575W — the FF-680W takes sides/format/resolution from config, not the panel). The wire is plain TCP on port 1865; the IS framing, command names, PARA structure, IMG pull loop, and async-event mechanics are otherwise identical to the TLS path. The scanner shell (`runEsci2ScanOverPlain` in `src/esci2/scanner.ts`) shares the protocol graph (`src/esci2/graph.ts`) with the TLS path — the only differences are at the socket factory (`net.connect` instead of `tls.connect`, no cert pinning, no TLS-error label adapter) and the per-dialect decisions the graph reads from the resolved registry entry.
+Most dialects added since the ET-4950 speak its ESC/I-2 vocabulary **without the TLS layer** — the `esci2-plain` rows in the [PARA table above](#source-adf-vs-flatbed); the model overrides (`src/esci2/dialects/model-overrides.ts`) holds the full dialect set across all transports. The hardware shapes vary from flatbed-only (ET-2750, ET-7700) through flatbed + ADF (XP-7100, ET-4800) to ADF-only sheet-fed (FF-680W, DS-575W — the FF-680W takes sides/format/resolution from config, not the panel). The wire is plain TCP on port 1865; the IS framing, command names, PARA structure, IMG pull loop, and async-event mechanics are otherwise identical to the TLS path. The scanner shell (`runEsci2ScanOverPlain` in `src/esci2/scanner.ts`) shares the protocol graph (`src/esci2/graph.ts`) with the TLS path — the only differences are at the socket factory (`net.connect` instead of `tls.connect`, no cert pinning, no TLS-error label adapter) and the per-dialect decisions the graph reads from the resolved model override.
 
 Wire differences from the ET-4950 (decoded from the pcap captures under `tools/pcap-extract/captures/`):
 
@@ -347,8 +347,9 @@ These dialects are resolved by the same model-identity lookup used by the rest o
 
 ## How printer-model differences are handled
 
-Each supported printer family has an entry in `src/esci2/dialects/registry.ts`,
-keyed by model identity. Entries are pure data:
+Each supported printer family has a model override in
+`src/esci2/dialects/model-overrides.ts`, keyed by model identity. Overrides are
+pure data, holding only what the printer's replies can't tell us:
 
 - Identity keys (`pids`, `names`, `capaFingerprints`): the product IDs the
   models report in their INFO `#PRD` reply, the product names reported there
@@ -356,10 +357,10 @@ keyed by model identity. Entries are pure data:
   replies (`src/esci2/capa-fingerprint.ts`). A model whose PID isn't known yet
   (ET-3950, XP-4100) resolves through the fingerprint it shares with a sibling.
 - Dispatch metadata (`initPollIterations`). Source detection is derived from
-  the sources INFO advertises, never carried by the entry.
+  the sources INFO advertises, never carried by the override.
 - Scan extents (`fbExtents`, `adfExtents`) — the captured paper size, pinned at
   `windowDpi` (300 unless set; 200 for the `adf-crp` scanners), or `"generic"`
-  to inherit the generic scan window (see the generic dialect below). An entry
+  to inherit the generic scan window (see the generic dialect below). An override
   keeps its own only where the generic window differs from it at some
   advertised DPI on some source: the ET-2750 (2477×3500), XP-7100 (Letter),
   FF-680W (long page) and DS-575W (the generic window is clipped at 75 DPI,
@@ -370,10 +371,21 @@ keyed by model identity. Entries are pure data:
   inlined verbatim from captured fixtures; never algorithmically generated.
   Each class is tagged neutral or Epson-look (a CMX class by whether its bytes
   are the identity matrix), and `checkColourPair` (`src/esci2/data/colour-pair.ts`)
-  rejects a mixed pair; a test holds every entry to it, ET-8500 and ET-7700
+  rejects a mixed pair; a test holds every override to it, ET-8500 and ET-7700
   excepted until their colour fix.
+- `provenance`: where the colour pair, the scan window and the poll count came
+  from, each a list of evidence (an Epson driver capture, a capture of this
+  service's own traffic, a reporter's measured compatibility-page scan, a
+  reporter's qualitative report, or inheritance from another model), linked to
+  an issue, PR or committed fixture. It has no runtime effect.
+  `src/esci2/dialects/provenance.test.ts` holds it to the README: every ✅
+  model is served by an override (a model sharing another's needs a report of
+  its own); its colour evidence includes a driver capture or reporter
+  scan/report that vouched for its current colour bytes, by hash, so changing
+  the colour fails until new evidence is recorded; and its window and poll
+  count aren't inherited only.
 
-Five fields are never on an entry. Every session, registry entry or generic
+Five fields are never on an override. Every session, model override or generic
 dialect alike, takes them from the printer's own INFO and CAPA replies
 (`capabilityFields` in `src/esci2/derivation.ts`):
 
@@ -390,7 +402,7 @@ dialect alike, takes them from the printer's own INFO and CAPA replies
   delivered (see [Sides: 1-sided vs 2-sided](#sides-1-sided-vs-2-sided)).
 
 At INIT1_CAPA the graph computes the fingerprint, looks up the entry via
-`lookupRegistryEntry` (product ID, then product name, then CAPA fingerprint),
+`resolveDialect` (product ID, then product name, then CAPA fingerprint),
 and stores it on the session context. INFO is read before CAPA, so the identity
 is available on every trigger path, host-triggered scans included. A product
 ID or name hit whose fingerprint isn't one of the entry's (as after a firmware
@@ -434,10 +446,11 @@ usable scan area, a CAPA reply that can't be parsed, no `JPG` format, no
 block. Adding
 support for a new printer is a data-only change in the normal case: capture its
 wire bytes, extract any novel gamma/CMX class into the data files, and add a
-registry entry. A novel gamma class also gets a `GAMMA_CLASS_LOOK` tag: neutral
+model override. A novel gamma class also gets a `GAMMA_CLASS_LOOK` tag: neutral
 if it was captured beside an identity matrix (or none), Epson-look if beside the
-model's own matrix. The entry's composed colour pairs must then pass
-`checkColourPair` (`src/esci2/data/colour-pair.test.ts`). Replay tests (`src/esci2/scanner.test.ts` and per-dialect files
+model's own matrix. The override's composed colour pairs must then pass
+`checkColourPair` (`src/esci2/data/colour-pair.test.ts`), and its provenance
+records the capture it came from. Replay tests (`src/esci2/scanner.test.ts` and per-dialect files
 under `src/esci2/dialects/*.test.ts`) pin the composed output byte-for-byte
 against the captured fixture.
 
@@ -527,9 +540,9 @@ back to a single-element set: the PARA profile's pinned default (300 DPI for the
 standard profile, 200 DPI for `adf-crp`) — so an unrecognised target still goes
 through full selection semantics instead of being silently discarded.
 
-### Extent scaling from the registry reference DPI
+### Extent scaling from the override reference DPI
 
-A registry entry's own `fbExtents` / `adfExtents` are pinned at a fixed reference
+A model override's own `fbExtents` / `adfExtents` are pinned at a fixed reference
 DPI per PARA profile (an inherited `"generic"` window isn't scaled: it is computed
 at the wire DPI): `STANDARD_BASE_DPI` (300) for the standard profile, `ADF_CRP_BASE_DPI`
 (200) for `adf-crp` (FF-680W / DS-575W). `composePara` scales both the `#RSM` /
@@ -544,7 +557,7 @@ at the wire DPI): `STANDARD_BASE_DPI` (300) for the standard profile, `ADF_CRP_B
   rounding at 150 DPI (`35 + 1241 = 1276`) lands one pixel past the 1275-px
   edge, which the firmware rejects with `#parFAIL` (ET-4956, hardware-verified).
 - **`adf-crp` profile** scales only width/height; `x0`/`y0` pass through
-  unscaled. Every `adf-crp` registry entry's origin is `0,0` today, so this is
+  unscaled. Every `adf-crp` model override's origin is `0,0` today, so this is
   currently unobservable on the wire, but it is a genuine divergence from the
   standard profile's rule rather than an oversight the two profiles happen to
   share.
@@ -561,7 +574,7 @@ segment — `JPEG_QUALITY` there was, and remains, host-encode only.
 
 ### `verifiedWireDpis` and the explicit-only warning
 
-Each ESC/I-2 registry entry carries `verifiedWireDpis: number[]` — DPIs backed by
+Each ESC/I-2 model override carries `verifiedWireDpis: number[]` — DPIs backed by
 either a committed replay fixture or a documented hardware report (a README
 compatibility row or a linked issue). When an **explicit** `SCAN_RESOLUTION`
 resolves (via `selectWireDpi`) to a wire DPI outside that list, `buildParaSend`

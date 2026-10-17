@@ -7,6 +7,9 @@ import type { LegacyDialectEntry } from "./entry.js";
 // not by hand-editing BY_PID.
 const PID_ENTRIES: LegacyDialectEntry[] = [WF3620_ENTRY, XP620_ENTRY, ET2550_ENTRY];
 
+/** Every legacy dialect, for tests that need to tell legacy models from ESC/I-2 ones. */
+export const LEGACY_DIALECT_ENTRIES: readonly LegacyDialectEntry[] = PID_ENTRIES;
+
 const BY_PID: Record<string, LegacyDialectEntry> = {};
 for (const entry of PID_ENTRIES) {
   BY_PID[entry.productName] = entry;

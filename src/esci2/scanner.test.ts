@@ -101,8 +101,8 @@ const RESA_BODY_PACKET = buildIsPacket(0xa000, Buffer.alloc(164, 0x2d));
 
 // Real ET-4950 INIT1 bodies, extracted from the committed Frida fixture.
 // Synthetic filler (Buffer.alloc(336, 0x2d)) would fingerprint to a value not
-// in the registry and abort every helper-driven test at INIT1 CAPA. Loading the
-// real body keeps these tests resolving to the ET-4950 family registry entry.
+// in the model overrides and abort every helper-driven test at INIT1 CAPA. Loading the
+// real body keeps these tests resolving to the ET-4950 family model override.
 const ET4950_INIT1 = readInit1Bodies(
   "tools/frida-capture/captures/2026-04-24T09-05-08-flatbed-1p-jpg.jsonl",
 );
@@ -1363,7 +1363,7 @@ describe("runEsci2ScanOverPlain — ET-4800 fixture replay", () => {
     // Byte-equivalence shield: the scanner's PARA wire bytes must match the
     // captured Wireshark session. Without this, driveFixture replays the
     // printer's responses regardless of what PARA the scanner emitted, so a
-    // composer/registry/class-data regression would not fail this test.
+    // composer/override/class-data regression would not fail this test.
     // Mirrors the ET-2750 and XP-7100 replays.
     const capturedPara = extractCapturedParaBody(fixture);
     const scannerPara = extractScannerParaWrite(fake);
@@ -1434,7 +1434,7 @@ describe("runEsci2ScanOverPlain — ET-7700 fixture replay", () => {
   // Fixtures capture epson2paperless itself (the PR #153 speculative dialect)
   // scanning the reporter's ET-7700 — see the fixture dir README. The PARA
   // shield therefore pins that the composer still emits the hardware-validated
-  // bytes, and the recipe cross-check ties them to the registry entry.
+  // bytes, and the recipe cross-check ties them to the model override.
   async function runOne(opts: { fixtureFile: string; action: "jpg" | "pdf" }) {
     const fixture = loadFixture(path.join(FIX_DIR, opts.fixtureFile));
     const fake = new FakePlainSocket();

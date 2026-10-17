@@ -14,7 +14,7 @@ provided by the issue [#145](https://github.com/mtheuma/epson2paperless/issues/1
 reporter and record **epson2paperless itself** (the `:main` image carrying the
 speculative dialect from PR #153) scanning via a panel trigger — not Epson's
 driver. The captured PARA is byte-identical to `composePara`'s output for the
-registry entry in both sessions, which is what the replay test's
+model override in both sessions, which is what the replay test's
 byte-equivalence shield pins. Because the captures are of our own service,
 no init-handshake trimming is needed: the sessions replay verbatim.
 

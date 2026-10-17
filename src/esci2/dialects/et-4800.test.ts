@@ -6,8 +6,8 @@ import { recordedDialect } from "../test-support/dialects.js";
 const ET4800_FP = "7870a725ab969136d5eb04387bf01d3cc3168aabb3d11cfaca7d59a4169971c2";
 const entry = recordedDialect(ET4800_FP);
 
-// The registry entry's static fields (source detection, gmm, classes, extents,
-// optional segments) are asserted in registry.test.ts alongside the other
+// The model override's static fields (source detection, gmm, classes, extents,
+// optional segments) are asserted in model-overrides.test.ts alongside the other
 // dialects. This file covers only what's specific to ET-4800's composed PARA.
 
 describe("ET-4800 composed PARA size", () => {

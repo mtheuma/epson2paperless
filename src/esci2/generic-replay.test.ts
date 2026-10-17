@@ -7,21 +7,21 @@ import { FakePlainSocket } from "./test-support/fake-plain-socket.js";
 import { loadFixture, driveFixture, extractScannerParaWrite } from "./test-support/replay.js";
 import { readInit1Bodies } from "./test-support/capability-bodies.js";
 import { parseCapaTokens, parseInfoTokens } from "./capabilities.js";
-import { buildGenericEntry, genericParaFields } from "./dialects/generic.js";
+import { buildGenericDialect, genericParaFields } from "./dialects/generic.js";
 import { makeParaSpec } from "./dialects/dispatch.js";
 import { composePara, baseDpiFor } from "./para-composer.js";
 import { advertisedDpiSet, selectWireDpi } from "./resolution.js";
 
-// Replays real printer streams through the generic dialect: the registry is
-// emptied for this file, so no fixture model resolves its own entry. The
+// Replays real printer streams through the generic dialect: the model overrides are
+// emptied for this file, so no fixture model resolves its own override. The
 // printer side is canned, so this proves the session runs the generic
 // dialect through the settings exchange and on to completion, not that a
 // printer would accept its PARA. Only fixtures whose recorded poll count
 // matches the generic one (3 with a flatbed, 12 ADF-only) can replay: the
 // ET-2750 (2) and FF-680W (8) can't.
-vi.mock("./dialects/registry.js", async (importOriginal) => {
-  const real = await importOriginal<typeof import("./dialects/registry.js")>();
-  return { ...real, REGISTRY_ENTRIES: [] };
+vi.mock("./dialects/model-overrides.js", async (importOriginal) => {
+  const real = await importOriginal<typeof import("./dialects/model-overrides.js")>();
+  return { ...real, MODEL_OVERRIDES: [] };
 });
 
 const FIXTURES = [
@@ -79,7 +79,7 @@ describe("generic dialect — fixture replay with every override ignored", () =>
       const bodies = readInit1Bodies(fixturePath);
       const info = parseInfoTokens(bodies.info);
       const capa = parseCapaTokens(bodies.capa);
-      const entry = buildGenericEntry(info, capa);
+      const entry = buildGenericDialect(info, capa);
       const dpi = selectWireDpi(
         baseDpiFor(entry.paraProfile),
         advertisedDpiSet(capa, source),
