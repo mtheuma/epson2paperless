@@ -44,7 +44,7 @@ What you get:
 | **XP-7100**           | ✅&nbsp;Verified     |                                                                                                                               |
 | Other Epson models    | 🧪&nbsp;Untested     | Try it; the log says whether it uses the generic dialect. Older ESC/I models try the WF-3620 settings                         |
 
-✅ **Verified**: every capability the hardware has is confirmed working on real hardware by someone.
+✅ **Verified**: every capability the hardware has is confirmed working on real hardware by someone. Any caveat in the Notes says what is still unconfirmed.
 
 🟡 **Experimental**: something is still untested; the Notes say what.
 
