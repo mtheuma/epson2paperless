@@ -570,6 +570,24 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
     }
   });
 
+  it("IMG_META reads its header block as the status before PARA does, naming the stop", () => {
+    const state = esci2Graph.states.IMG_META;
+    if (state.kind !== "decision") throw new Error("IMG_META not a decision");
+    const outcome = (tokens: string) => {
+      const payload = Buffer.from(`IMG x0000020${tokens}`.padEnd(64, "#---").slice(0, 64));
+      const result = state.decide(makeCtx(), { type: 0xa000, payload });
+      return "error" in result ? result.error.message : result.next;
+    };
+    // A jammed ADF mid-scan.
+    expect(outcome("#errADF PJ  ")).toBe(
+      "IMG_META: the printer reported an error (ADF PJ) — clear it on the printer and scan again",
+    );
+    expect(outcome("#nrdRSVD")).toMatch(
+      /^IMG_META: the scanner is in use by another client \(RSVD\)/,
+    );
+    expect(outcome("#pst#typIMGF")).toBe("IMG_DATA");
+  });
+
   it("IMG_META sets ctx fields and advances to IMG_DATA", () => {
     const state = esci2Graph.states.IMG_META;
     expect(state.kind).toBe("decision");
@@ -1716,10 +1734,10 @@ describe("esci2Graph POST_MODE_STAT — source from the status before PARA (mode
     expect(locked).toMatchObject({ ctx: { source: "flatbed" }, outcome: STOP("FB LOCK") });
   });
 
-  it("ET-2750: fixed to the flatbed, so its filler-packed zero-length status never says ADF", () => {
-    // Its STAT reply declares length 0 but packs filler inline. Read by
-    // content it carries no error, which would say ADF; as a flatbed-only
-    // printer it never reaches that rule.
+  it("ET-2750: fixed to the flatbed, so its zero-length status never says ADF", () => {
+    // Its STAT reply declares length 0: the header and its filler-padded
+    // header block. Read by content it carries no error, which would say
+    // ADF; as a flatbed-only printer it never reaches that rule.
     const { header, body } = readPreParaStatus(ET2750_PATH);
     expect(body).toBeNull();
     expect(header.length).toBeGreaterThan(12);
@@ -1999,6 +2017,75 @@ describe("esci2Graph POST_MODE_STAT — the status before PARA is judged against
     } finally {
       setLogLevel(previous);
     }
+  });
+
+  // Synthetic: no fixture's reply-header block carries #nrd or #err.
+  describe("the reply-header block", () => {
+    /** A 64-byte STAT reply declaring `length` body bytes, `tokens` in its header block. */
+    const statWith = (length: number, tokens: string) =>
+      Buffer.from(
+        (
+          `STATx${length.toString(16).toUpperCase().padStart(7, "0")}${tokens}` + "#---".repeat(13)
+        ).slice(0, 64),
+        "ascii",
+      );
+    const RESERVED =
+      "POST_MODE_STAT: the scanner is in use by another client (RSVD) — " +
+      "wait for it to finish and scan again";
+    const AUTH =
+      "POST_MODE_STAT: the printer requires user authentication (AFEN), which this " +
+      "service does not support — turn it off on the printer and scan again";
+    const HEADER_ERROR = (error: string) =>
+      `POST_MODE_STAT: the printer reported an error (${error}) — clear it on the printer and scan again`;
+
+    it.each([
+      ["#nrdRSVD", RESERVED],
+      ["#nrdAFEN", AUTH],
+      ["#errADF PJ  ", HEADER_ERROR("ADF PJ")],
+      ["#errFB  LOCK", HEADER_ERROR("FB LOCK")],
+      // Whatever the unit: in the header block even ADF paper empty stops.
+      [
+        "#errADF PE  ",
+        "POST_MODE_STAT: the printer reported an error (ADF PE) — " +
+          "load the document into the ADF and scan again",
+      ],
+    ])("%s stops the session before PARA, naming it", (tokens, message) => {
+      const entry = model(`Model header ${tokens}`);
+      // Read from the reply itself, before any body is drained.
+      expect(prePara({ entry }, statWith(12, tokens), Buffer.from("#ERRADF PE  ")).outcome).toBe(
+        message,
+      );
+      expect(prePara({ entry }, statWith(0, tokens), null).outcome).toBe(message);
+    });
+
+    it("stops on the header even where the status alone would scan, on every source", () => {
+      // A clear status on a flatbed-only, an ADF-only and a both-sources printer.
+      for (const entry of [
+        flatbedOnly("Model HF"),
+        recordedDialect(FF680W_FP),
+        model("Model HB"),
+      ]) {
+        const overrides = { entry, source: "adf" as const };
+        applyEntrySourceOverride(overrides, entry);
+        expect(prePara(overrides, statWith(0, "#nrdRSVD"), null).outcome).toBe(RESERVED);
+      }
+    });
+
+    it("a header stop is never blamed on an early-stopped init poll", () => {
+      const stat = esci2Graph.states.POST_MODE_STAT;
+      if (stat.kind !== "decision") throw new Error("POST_MODE_STAT not a decision");
+      const ctx = makeCtx({ entry: ET4950_ENTRY, initPollEarlyStop: { cycle: 2, reply: "15" } });
+      const result = stat.decide(ctx, { type: 0xa000, payload: statWith(0, "#errADF PJ  ") });
+      if (!("error" in result)) throw new Error("expected the session to end");
+      expect(nameInitPollEarlyStop(ctx, result.error).message).toBe(HEADER_ERROR("ADF PJ"));
+    });
+
+    it("busy and warming up are not acted on here", () => {
+      for (const tokens of ["#nrdBUSY", "#nrdWUP "]) {
+        const entry = model(`Model header ${tokens}`);
+        expect(prePara({ entry }, statWith(0, tokens), null).outcome).toBe("PARA");
+      }
+    });
   });
 });
 

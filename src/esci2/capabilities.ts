@@ -1,4 +1,5 @@
 import { splitHashSegments } from "./segments.js";
+import { unitAndCode } from "./commands.js";
 import { extractPid } from "../printer-ids.js";
 
 /**
@@ -193,7 +194,7 @@ export function parseCapaTokens(body: Buffer): CapaTokens {
 export function parseStatErrors(body: Buffer): string[] {
   return splitHashSegments(body)
     .filter((seg) => seg.startsWith("#ERR"))
-    .map((seg) => `${seg.slice(4, 8).trim()} ${seg.slice(8).trim()}`.trim())
+    .map((seg) => unitAndCode(seg.slice(4)))
     .filter((err) => err.length > 0); // a bare #ERR names no error
 }
 

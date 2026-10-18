@@ -22,7 +22,7 @@ import {
   buildEsci2Command,
   buildParaHeader,
   parseEsci2ReplyHeader,
-  parseTokens,
+  type Esci2ReplyHeader,
 } from "./commands.js";
 import { ackByte, expectIsType } from "../graph-helpers.js";
 import { supportsWireGrayscale, type Dialect } from "./dialects/model-overrides.js";
@@ -860,8 +860,8 @@ function warnOnOtherUnitErrors(ctx: Esci2Ctx, warnings: string[]): void {
  * its source from the reply (sourceFromStatusErrors): "ADF paper empty"
  * means the flatbed, anything else the ADF. A single-source printer is fixed
  * to its source, which the reply never changes. The ET-2750 relies on that:
- * its STAT replies declare length 0 but pack #--- filler inline, which
- * carries no error and so would read as ADF on flatbed-only hardware. A
+ * having no ADF, its status reply is the 12-byte header and #--- filler,
+ * which carries no error and so would read as ADF on flatbed-only hardware. A
  * session whose INFO advertises no scan area (sourceDetection null) keeps
  * the scanner shell's default, the unit its PARA scans.
  *
@@ -891,15 +891,10 @@ function settlePreParaStatus(
     // The printer named the cause itself, so an early-stopped init poll
     // isn't blamed for it (nameInitPollEarlyStop).
     ctx.initPollEarlyStop = undefined;
-    // ADF paper empty has nothing to clear: the feeder needs the document.
-    const advice =
-      judgement.blocking === "ADF PE"
-        ? "load the document into the ADF and scan again"
-        : "clear it on the printer and scan again";
     return {
       error: new Error(
         `${state}: the printer reported an error before scanning ` +
-          `(${judgement.blocking}) — ${advice}`,
+          `(${judgement.blocking}) — ${errorAdvice(judgement.blocking)}`,
       ),
     };
   }
@@ -907,8 +902,48 @@ function settlePreParaStatus(
   return undefined;
 }
 
-// POST_MODE_STAT: decision on STAT reply, the last before PARA, whose
-// content decides the source and is judged for errors (settlePreParaStatus).
+/** What to do about a printer error, by its unit and code ("ADF PJ"). */
+function errorAdvice(error: string): string {
+  // ADF paper empty has nothing to clear: the feeder needs the document.
+  return error === "ADF PE"
+    ? "load the document into the ADF and scan again"
+    : "clear it on the printer and scan again";
+}
+
+/**
+ * Ends the session when a reply's header block says the scan can't go
+ * ahead, naming why: the scanner is reserved by another client (`#nrd`
+ * RSVD), it requires user authentication (`#nrd` AFEN), or it reports a
+ * header-level error (`#err`), whatever the unit. Busy and warming up
+ * (`#nrd` BUSY / WUP) are not acted on here, nor is any other `#nrd` code.
+ */
+function stopOnReplyHeader(
+  ctx: Esci2Ctx,
+  state: string,
+  header: Esci2ReplyHeader,
+): TransitionResult<Esci2Ctx> | undefined {
+  let reason: string;
+  if (header.notReady === "RSVD") {
+    reason =
+      "the scanner is in use by another client (RSVD) — wait for it to finish and scan again";
+  } else if (header.notReady === "AFEN") {
+    reason =
+      "the printer requires user authentication (AFEN), which this service does not " +
+      "support — turn it off on the printer and scan again";
+  } else if (header.error !== null) {
+    reason = `the printer reported an error (${header.error || "#err"}) — ${errorAdvice(header.error)}`;
+  } else {
+    return undefined;
+  }
+  // The printer named the cause itself, so an early-stopped init poll
+  // isn't blamed for it (nameInitPollEarlyStop).
+  ctx.initPollEarlyStop = undefined;
+  return { error: new Error(`${state}: ${reason}`) };
+}
+
+// POST_MODE_STAT: decision on STAT reply, the last before PARA. Its header
+// block is read first (stopOnReplyHeader); its content then decides the
+// source and is judged for errors (settlePreParaStatus).
 // If length>0 → pure-read drain → POST_MODE_STAT_DRAIN.
 // If length===0 → send PARA header + body → PARA.
 g.state(
@@ -920,9 +955,11 @@ g.state(
     if (header === null) {
       return { error: new Error("POST_MODE_STAT: unparseable reply header") };
     }
-    // The reply's own tail is #--- filler unless the printer put tokens
-    // inline, so it is read too: here when there is no body to drain,
-    // otherwise alongside the body in POST_MODE_STAT_DRAIN.
+    const stopped = stopOnReplyHeader(ctx, "POST_MODE_STAT", header);
+    if (stopped) return stopped;
+    // The reply's header block is #--- filler unless the printer put status
+    // tokens inline, so it is read for them too: here when there is no body
+    // to drain, otherwise alongside the body in POST_MODE_STAT_DRAIN.
     if (header.length > 0) {
       ctx.preParaStatusReply = packet.payload;
       return {
@@ -966,7 +1003,7 @@ g.state(
     if (header === null || header.cmd !== "PARA") {
       return { error: new Error("PARA: unparseable reply header") };
     }
-    const par = parseTokens(payload.subarray(12)).get("par")?.trim();
+    const par = header.tokens.get("par")?.trim();
     if (par !== "OK") {
       // The hint is only warranted when the wire DPI actually in use is one
       // we haven't verified works on this model — that's the real suspect
@@ -1011,7 +1048,8 @@ g.state("TRDT", {
 });
 
 // IMG_META: decision on IMG reply header.
-// - Parses header; errors on unparseable or #ERR* token.
+// - Parses header; errors on unparseable, on what the header block reports
+//   (stopOnReplyHeader), or on a status-style #ERR token.
 // - Updates ctx.imgChunkSize, ctx.pageSide, ctx.pageEndKind.
 // - Zero-length chunk with page-end: dispatches page-end without going through IMG_DATA.
 // - Zero-length chunk with no page-end: zero-retry path (up to MAX_ZERO_IMG_RETRIES).
@@ -1033,13 +1071,12 @@ g.state(
     if (!header) {
       return { error: new Error("IMG_META: unparseable reply header") };
     }
-    const tokens = parseTokens(packet.payload.subarray(12));
-    for (const key of tokens.keys()) {
-      if (key.startsWith("ERR") || key.startsWith("err")) {
-        return {
-          error: new Error(`IMG_META: printer error token #${key}${tokens.get(key) ?? ""}`),
-        };
-      }
+    const stopped = stopOnReplyHeader(ctx, "IMG_META", header);
+    if (stopped) return stopped;
+    const tokens = header.tokens;
+    // A status-style #ERR token in an image reply ends the scan too.
+    if (tokens.has("ERR")) {
+      return { error: new Error(`IMG_META: printer error token #ERR${tokens.get("ERR")}`) };
     }
     ctx.imgChunkSize = header.length;
     ctx.pageSide = tokens.get("typ") === "IMGB" ? "back" : "front";

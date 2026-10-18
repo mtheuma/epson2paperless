@@ -54,6 +54,10 @@ _Avoid_: input, feeder (for the flatbed)
 The status cycles at the start of an ESC/I-2 session, before the mode switch. Their replies are not read: the source and the errors both come from the status reply after the mode switch, the last before PARA, which is the scanner's state at scan time. There, on a printer with both a flatbed and an ADF, "ADF paper empty" means flatbed and anything else means ADF; then an error on the unit being scanned ends the session, and one on another unit only warns. The poll count is an upper bound, not a requirement.
 _Avoid_: warm-up loop, readiness wait
 
+**Reply-header block**:
+The 52 bytes after the 12-byte header in every 64-byte ESC/I-2 reply, `#---` filler where the printer has nothing to put. Its `#nrd` says the scanner is not ready (busy, warming up, reserved by another client, user authentication required) and its `#err` is a header-level error; reserved, authentication and any `#err` stop the session, on the status before PARA and on image replies alike.
+_Avoid_: filler (for the whole block), ET-2750 quirk
+
 ## Colour
 
 **Colour pair**:
