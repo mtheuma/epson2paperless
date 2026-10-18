@@ -670,7 +670,7 @@ export function nameInitPollEarlyStop(ctx: Esci2Ctx, reason: Error): Error {
 // INIT_POLL_STAT: decision on STAT reply — drain if length>0, else FIN.
 // INIT_POLL_STAT_DRAIN: drains queued status bytes, then sends FIN.
 // The init poll's statuses are not read: the source and the errors both come
-// from the status before PARA (POST_MODE_STAT), as Epson's driver reads them.
+// from the status before PARA (POST_MODE_STAT), the scanner's state at scan time.
 statThenDrain(g, "INIT_POLL", null);
 
 // INIT_POLL_FIN: decision on FIN reply — loop or advance to MODE_SWITCH.
@@ -853,9 +853,8 @@ function warnOnOtherUnitErrors(ctx: Esci2Ctx, warnings: string[]): void {
 
 /**
  * Reads the status reply just before PARA (the reply itself, then its
- * drained body, if any) as Epson's driver reads the scanner's state at scan
- * time: one parse of one reply decides the source, then is judged against
- * it.
+ * drained body, if any) as the scanner's state at scan time: one parse of
+ * one reply decides the source, then is judged against it.
  *
  * A printer with both sources (sourceDetection "pre-para-status") takes
  * its source from the reply (sourceFromStatusErrors): "ADF paper empty"

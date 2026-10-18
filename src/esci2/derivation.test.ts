@@ -146,7 +146,7 @@ describe("sourceFromStatusErrors — a printer with both sources", () => {
     expect(detect("#ERRFB  LTF #ERRTPU OPN ")).toBe("adf");
   });
 
-  it("keeps the last code the reply gives the ADF, as Epson's driver does", () => {
+  it("keeps the last code the reply gives the ADF", () => {
     expect(detect("#ERRADF PE  #ERRADF PJ  ")).toBe("adf");
     expect(detect("#ERRADF PJ  #ERRADF PE  ")).toBe("flatbed");
   });
@@ -271,8 +271,8 @@ describe("content-based source decision lands on the recorded source on every fi
 
   it("DS-575W: its first statuses say paper-empty; its status before PARA is clear", () => {
     // The duplex capture reports ADF PE for its first 4 polls and nothing
-    // after. Judged on the first, the ADF scan would stop; Epson's driver
-    // judges the last one before PARA, as the session does. An ADF-only
+    // after. Judged on the first, the ADF scan would stop; the session
+    // judges the last one before PARA, which is clear. An ADF-only
     // printer never reads its status for the source, though if it did, the
     // first status would say the flatbed and the one before PARA the ADF.
     const path = "tools/pcap-extract/captures/ds-575w/adf-duplex-600-mono-jpg.jsonl";
@@ -300,7 +300,7 @@ type LiveFields = Pick<
   DerivedCapabilities,
   "qit" | "cct" | "adfDuplex" | "paraProfile" | "sourceDetection" | "duplexBackRotated"
 >;
-// Source detection: "pre-para-status" was "pre-para-status", and before
+// Source detection: "pre-para-status" was "init-poll-status", and before
 // that the entry's "stat-length".
 const STATUS = "pre-para-status";
 const LIVE_FIELDS: Record<string, Partial<LiveFields>> = {

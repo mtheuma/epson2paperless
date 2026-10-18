@@ -1705,7 +1705,7 @@ describe("esci2Graph POST_MODE_STAT — source from the status before PARA (mode
 
   it("decides the source, then judges the same reply's errors on it", () => {
     // A jam with no paper empty reads as a loaded ADF, which then stops on
-    // the jam, as Epson's Auto source does.
+    // the jam: the scan never falls back to the flatbed.
     const jammed = statusBeforePara(ET4950_ENTRY, statHeader(12), Buffer.from("#ERRADF PJ  "));
     expect(jammed).toMatchObject({ ctx: { source: "adf" }, outcome: STOP("ADF PJ") });
     const locked = statusBeforePara(

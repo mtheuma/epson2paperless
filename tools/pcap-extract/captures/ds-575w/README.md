@@ -103,8 +103,8 @@ mid-session and lacked the connection setup / CAPA exchange; the re-capture
 
 `driveFixture` feeds every printer→host event to the scanner regardless of what
 the scanner emits, so a committed replay fixture's printer→host IS-packet sequence
-must match the scanner's command sequence exactly. Epson's driver runs the same
-three extras as the FF-680W between the LOCK and the init-poll loop — an `EXI*`
+must match the scanner's command sequence exactly. The captured sessions run the
+same three extras as the FF-680W between the LOCK and the init-poll loop — an `EXI*`
 capability query, an extra `STAT` after `FS Z`, and a 12-byte `#D&T` date/time
 PARA — which our shared `esci2Graph` never emits. The committed fixtures have the
 printer→host IS packets these elicit removed (`trim-init-handshake.ts`, role-driven

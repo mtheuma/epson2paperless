@@ -42,9 +42,9 @@ export const ET_FSW_BLOCK = Buffer.from(
 );
 
 /** 38-byte payload of the IS-0x2200 packet sent after `FS G` replies.
- *  Derived by the driver from that reply (chunk size and count, each +1 for the
- *  per-chunk status byte), but pinned here: only one geometry was captured, so
- *  a derivation cannot be validated. Same compromise as XP_STREAM_CONFIG. */
+ *  Its values follow from that reply (chunk size and count, each +1 for the
+ *  per-chunk status byte), but are pinned here: only one geometry was
+ *  captured, so a derivation cannot be validated. Same compromise as XP_STREAM_CONFIG. */
 export const ET_STREAM_CONFIG = Buffer.from(
   "0000001e00000000000001b6000000000000ef11000000010000ef1106000000010000956b06",
   "hex",
