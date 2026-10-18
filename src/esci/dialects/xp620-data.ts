@@ -32,13 +32,18 @@ export const XP_GAMMA_B = Buffer.from(
 // The 64-byte parameter block sent as the passthru command immediately after
 // `FS W`'s own ack. Fixed for XP-620 (300 DPI flatbed, 2481x3507px) — unlike
 // WF-3620 this is not computed per-mode, so the bytes are pinned verbatim.
+// Byte 28 (0x22) is the scanlines per transfer block: 34 × 2481 px × 3 bytes
+// is the 253062-byte block the FS G reply reports.
 export const XP_FSW_BLOCK = Buffer.from(
   "2c0100002c0100000000000000000000b1090000b30d000013080000220400000100000000000000000100000000000000000000000000000000000000000000",
   "hex",
 );
 
 // The 38-byte payload of the IS-0x2200 packet sent immediately after `FS G`'s
-// reply. Fixed for XP-620 (format-independent in the capture).
+// reply. Fixed for XP-620 (format-independent in the capture). It restates
+// that reply's block layout (see `buildStreamConfigPayload`): 103 full blocks
+// of 253062 bytes, each +1 for its status byte, then a last block of 37215
+// bytes (+1) and the 0x06 terminator.
 export const XP_STREAM_CONFIG = Buffer.from(
   "0000001e0000000000000067000000000003dc87000000010003dc8706000000010000916006",
   "hex",

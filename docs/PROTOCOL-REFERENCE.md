@@ -600,9 +600,11 @@ at a different DPI.
 
 The legacy path (WF-3620 family, XP-620, ET-2550) has no resolution arm on the
 wire at all: the cross-product of DPI × format × dialect was never captured
-across the board, and the stream-config trailer's derivation from resolution is
-unknown, so the wire bytes are always the dialect's fixed values regardless of
-`SCAN_RESOLUTION`. `LegacyDialectEntry.deliveredDpi` pins what each dialect
+across the board. The resolution-dependent values (the `FS W` block's lines per
+block and the stream config's block sizes) follow from the geometry, as
+described in [Block layout](#block-layout-fs-w-fs-g-and-the-stream-config), but
+each dialect only knows the values for its fixed captured geometries, so the
+wire bytes are the same regardless of `SCAN_RESOLUTION`. `LegacyDialectEntry.deliveredDpi` pins what each dialect
 actually delivers: 600 DPI for WF-3620 JPG / 300 for WF-3620 PDF (the firmware
 locks resolution to the panel's format choice — see
 [Action: JPG / PDF / Preview](#action-jpg--pdf--preview)); a flat 300 DPI for
@@ -692,6 +694,37 @@ The ESC/I state machine lives in `src/esci/scanner.ts`. Per-page raw
 pixel buffers are accumulated in memory (~104 MB at 600 DPI A4), encoded
 to JPEG via sharp, and handed off to `output-tail.ts`'s shared post-scan
 pipeline.
+
+### Block layout: FS W, FS G and the stream config
+
+The printer streams a page as a run of fixed-size blocks plus one shorter
+last block. Three messages describe that layout, and their fields agree on
+every legacy capture:
+
+- **`FS W` byte 28: lines per block.** The number of scanlines in each full
+  block. WF-3620: 4 at 600 DPI (JPG), 8 at 300 DPI (PDF); ET-2550: 8;
+  XP-620: 34 (`0x22`). Lines per block × width × 3 bytes is the block size.
+- **The 14-byte `FS G` reply** (`parseFsGReply`, little-endian): bytes 0–1 a
+  status word; bytes 2–5 `chunkSize`, the full block's byte count (zero
+  means not ready yet, see [Multi-page termination](#multi-page-termination));
+  bytes 6–9 `blockCount`, the number of full blocks; bytes 10–13
+  `lastBlockBytes`, the byte count of the lines left over. So
+  `blockCount × chunkSize + lastBlockBytes` is the page's raw size: WF-3620 JPG
+  is 1750 blocks of 4 lines plus a last block of 2 (7002 lines), PDF 437 of 8
+  plus 5 (3501). Each block then arrives as one IS-`0xa200` chunk with one
+  trailing status byte, so a page is `blockCount + 1` chunks.
+- **The 38-byte IS-`0x2200` stream config** the host sends after the `FS G`
+  reply (`buildStreamConfigPayload`, big-endian) restates that layout: the
+  block count (bytes 8–11), the block size + 1 for its status byte (bytes
+  16–19 and again at 24–27, followed by a `0x06` terminator at byte 28), and
+  the last block's byte count + 1 (bytes 33–36) followed by the `0x06`
+  terminator at byte 37. The remaining fields are constant: the sub-payload
+  length 30 (bytes 0–3) and `1` at bytes 20–23 and 29–32.
+
+The WF-3620 takes the block count and block size for its stream config from
+the `FS G` reply, but its lines per block and last block's byte count are
+per-format constants for its fixed A4 geometry. The XP-620 and ET-2550 send
+their captured `FS W` block and stream config verbatim (see below).
 
 ### Per-model dialects (LegacyDialectEntry)
 
