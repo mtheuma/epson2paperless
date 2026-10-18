@@ -112,13 +112,20 @@ export interface Provenance {
  * - `reporter-scan`: a measured compatibility-page scan on that model's
  *   hardware (a reporter's, or the maintainer's on borrowed hardware);
  * - `reporter-report`: a reporter's qualitative "works" or "colours look right";
- * - `inherited:<model>`: copied from the override recorded for that model.
+ * - `inherited:<model>`: copied from the override recorded for that model;
+ * - `provisional`: colour only. An inherited setting expected to match on
+ *   this model but not yet confirmed on its hardware. It sits next to the
+ *   `inherited:<model>` entry and links the capture the inherited bytes came
+ *   from. It satisfies the ✅ colour check, but a ✅ model whose colour rests
+ *   on it alone is listed as provisional and carries a README caveat, until
+ *   a reporter scan or a capture supersedes it.
  */
 export type EvidenceKind =
   | "epson-capture"
   | "own-capture"
   | "reporter-scan"
   | "reporter-report"
+  | "provisional"
   | `inherited:${string}`;
 
 /** Where the evidence is: a GitHub issue or PR, or a fixture in the tree (repo-relative path). */
