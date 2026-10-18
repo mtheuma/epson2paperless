@@ -1,8 +1,7 @@
 # ET-2550 replay fixture
 
-JSONL fixture for the legacy ESC/I replay tests, generated from a gitignored
-Wireshark capture in `.reference/wireshark-captures/et-2550/` via
-`npm run pcap:extract`. Contributed for issue #166.
+JSONL fixture for the legacy ESC/I replay tests, generated from a
+Wireshark capture kept outside the repo, via `npm run pcap:extract`. Contributed for issue #166.
 
 Wired into the `src/esci/scanner.test.ts` replay matrix as two cases (JPG and
 PDF), both shielded by the byte-for-byte host-transcript assertion.
@@ -41,7 +40,7 @@ and never reaches the wire.
 
 ```
 "/path/to/editcap" -r \
-  .reference/wireshark-captures/et-2550/et2550-flatbed-jpg_v6.pcapng \
+  /path/to/captures/et-2550/et2550-flatbed-jpg_v6.pcapng \
   /tmp/et2550-scan1.pcapng 1-29712
 
 TSHARK_PATH="/path/to/tshark" npm run pcap:extract -- \

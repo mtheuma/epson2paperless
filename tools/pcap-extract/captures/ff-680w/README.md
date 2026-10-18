@@ -78,6 +78,5 @@ summary record — expected and harmless; replay is byte-exact regardless.
 
 CAPA fingerprint: `5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd`
 
-Source `.pcap` files (plus the `analyze-para.ts` / `trim-init-handshake.ts`
-generation helpers and `SOURCE-NOTES.md`) are gitignored under
-`.reference/wireshark-captures/ff-680w/`.
+The source `.pcap` files (plus the `analyze-para.ts` / `trim-init-handshake.ts`
+generation helpers and `SOURCE-NOTES.md`) are kept outside the repo.

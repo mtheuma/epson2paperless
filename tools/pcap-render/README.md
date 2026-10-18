@@ -39,17 +39,17 @@ TSHARK_PATH="/c/Program Files/Wireshark/tshark.exe" \
 ```bash
 # 1-page flatbed PDF
 npm run pcap:render -- \
-  .reference/wireshark-captures/wf-3620/flatbed-single-page-pdf.pcap \
+  /path/to/captures/wf-3620/flatbed-single-page-pdf.pcap \
   flatbed pdf /tmp/render-out
 
 # 1-sheet duplex JPEG (2 pages, page_02 has EXIF Orientation=3)
 npm run pcap:render -- \
-  .reference/wireshark-captures/wf-3620/adf-2-page-jpeg.pcap \
+  /path/to/captures/wf-3620/adf-2-page-jpeg.pcap \
   adf-duplex jpg /tmp/render-out
 
 # 2-sheet duplex PDF (4 pages, pages 2+4 rotated 180°)
 npm run pcap:render -- \
-  .reference/wireshark-captures/wf-3620/adf-4-page-duplex-pdf.pcap \
+  /path/to/captures/wf-3620/adf-4-page-duplex-pdf.pcap \
   adf-duplex pdf /tmp/render-out
 ```
 

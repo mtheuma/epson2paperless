@@ -1,8 +1,8 @@
 # ET-7700 replay fixtures
 
 JSONL fixtures used by `src/esci2/scanner.test.ts`'s
-`runEsci2ScanOverPlain` replay test. Generated from gitignored Wireshark
-captures in `.reference/wireshark-captures/et-7700/` via `npm run pcap:extract`.
+`runEsci2ScanOverPlain` replay test. Generated from Wireshark captures kept
+outside the repo, via `npm run pcap:extract`.
 
 | Fixture             | Source pcap               | Scenario                       |
 | ------------------- | ------------------------- | ------------------------------ |
@@ -29,7 +29,7 @@ isolation is required:
 
 ```
 TSHARK_PATH="/path/to/tshark" npm run pcap:extract -- \
-  .reference/wireshark-captures/et-7700/epson-capture-jpeg.pcap \
+  /path/to/captures/et-7700/epson-capture-jpeg.pcap \
   10.0.30.63 10.0.30.162 1865 \
   tools/pcap-extract/captures/et-7700/flatbed-jpg.jsonl
 ```

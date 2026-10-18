@@ -95,7 +95,7 @@ scan reuses the already-open connection), so its real session is the sole stream
 `tcp.stream 0`. See the shared dual-stream note in `../et-4800/README.md`.
 
 The **first** attachment on the issue (`scan.pcapng`, kept as
-`ds575w-scan-INCOMPLETE-mid-session.pcapng` under `.reference/`) was started
+`ds575w-scan-INCOMPLETE-mid-session.pcapng`, outside the repo) was started
 mid-session and lacked the connection setup / CAPA exchange; the re-capture
 (`ds575w-startup+scan.pcapng`) fixed that for the duplex fixture.
 
@@ -145,4 +145,4 @@ colour oracle is tiny because it keeps only host→printer events.)
 Source `.pcap` files (plus the `analyze-init.ts` / `dump-para.ts` /
 `trim-init-handshake.ts` / `count-poll.ts` / `para-head.ts` / `extract-classes.ts`
 / `validate-*.ts` generation + validation helpers and `SOURCE-NOTES.md`) are
-gitignored under `.reference/wireshark-captures/ds-575w/`.
+kept outside the repo.

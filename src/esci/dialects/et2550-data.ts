@@ -2,8 +2,7 @@
 //
 // AUTO-GENERATED-LITERAL data module. Bytes captured verbatim from
 // tools/pcap-extract/captures/et-2550/flatbed.jsonl (host "h>p" IS-0x2000
-// passthru frames), sourced from the issue #166 reporter capture at
-// .reference/wireshark-captures/et-2550/et2550-flatbed-jpg_v6.pcapng.
+// passthru frames), sourced from the issue #166 reporter capture.
 //
 // Do not hand-edit — the replay test pins these byte-for-byte.
 

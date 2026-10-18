@@ -12,8 +12,8 @@ describe("esci-legacy gamma LUTs", () => {
   it("each LUT matches its captured bytes (sha256-pinned)", () => {
     // If a LUT looks like it has a typo, it isn't — these are the firmware's
     // intentional perturbations and the printer accepts them verbatim.
-    // Re-derive from .reference/wireshark-captures/wf-3620/flatbed-single-page-jpeg.pcap
-    // before changing.
+    // Re-derive from the WF-3620 flatbed-single-page-jpeg capture before
+    // changing (tools/pcap-extract/captures/wf-3620/).
     const r = createHash("sha256").update(GAMMA_LUT_R).digest("hex");
     const g = createHash("sha256").update(GAMMA_LUT_G).digest("hex");
     const b = createHash("sha256").update(GAMMA_LUT_B).digest("hex");
@@ -191,7 +191,7 @@ describe("linesPerBlock", () => {
 import { parseFsGReply } from "./commands.js";
 
 describe("esci-legacy FS G reply parser", () => {
-  // Reproduced from .reference/wireshark-captures/wf-3620/flatbed-single-page-jpeg.pcap
+  // Reproduced from the WF-3620 flatbed-single-page-jpeg capture
   // (frame 209, printer→host, 14 bytes).
   const REPLY_HEX = "021250e80000d606000028740000";
 

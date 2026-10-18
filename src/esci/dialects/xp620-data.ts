@@ -2,8 +2,7 @@
 //
 // AUTO-GENERATED-LITERAL data module. Bytes captured verbatim from
 // tools/pcap-extract/captures/xp-620/flatbed.jsonl (host "h>p" IS-0x2000
-// passthru frames), cross-checked against the source pcap at
-// .reference/wireshark-captures/xp-620/jpeg-flatbed.pcapng.
+// passthru frames), cross-checked against the source pcap.
 //
 // byte-transcribed verbatim from the XP-620 flatbed capture; do not
 // hand-edit — the replay test pins it.
