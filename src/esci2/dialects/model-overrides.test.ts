@@ -97,15 +97,15 @@ describe("OVERRIDES_BY_FINGERPRINT", () => {
     expect(e!.adfExtents).toBeNull();
   });
 
-  it("includes ET-7700 entry (flatbed-only; ET-8500-shaped, speculative from #145)", () => {
+  it("includes ET-7700 entry (flatbed-only; XP-7100 gamma + identity CMX, a neutral pair)", () => {
     const e = OVERRIDES_BY_FINGERPRINT.get(
       "72319314b621fea0aab6cc16f4fd891534cec08f33ce80116a849f6f6e1e58d4",
     );
     expect(e).toBeDefined();
     expect(e!.initPollIterations).toBe(3);
     expect(e!.gmm).toBe("UG18");
-    expect(e!.gammaClass).toEqual({ jpg: "et4950-stock", pdf: "et4950-stock" });
-    expect(e!.cmxClass).toEqual({ jpg: "et4800-um08", pdf: "et4800-um08" });
+    expect(e!.gammaClass).toEqual({ jpg: "xp7100-pdf", pdf: "xp7100-pdf" });
+    expect(e!.cmxClass).toEqual({ jpg: "identity-um08", pdf: "identity-um08" });
     expect(e!.fbExtents).toBe("generic");
     expect(e!.adfExtents).toBeNull();
   });

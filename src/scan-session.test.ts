@@ -1,6 +1,6 @@
 // src/scan-session.test.ts
 
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
@@ -1814,5 +1814,219 @@ describe("runScanSession (engine pump)", () => {
     expect(stagedSendObserved.some((b) => b.equals(Buffer.from([0xde, 0xad])))).toBe(false);
 
     fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+});
+
+describe("runScanSession — delayed sends and the wait deadline", () => {
+  const BUSY = buildIsPacket(0xa000, Buffer.from([0x01]));
+  const READY = buildIsPacket(0xa000, Buffer.from([0x00]));
+  const QUERY = Buffer.from([0x51]);
+
+  /**
+   * POLL answers a busy reply by re-sending QUERY after 100ms, as part of a
+   * wait; a ready reply moves on to `ready`.
+   */
+  function pollGraph(timeoutMs: number, ready: string) {
+    const g = createGraph<Record<string, never>>("POLL", timeoutMs);
+    g.state(
+      "POLL",
+      decision((_ctx, packet) =>
+        packet.payload[0] === 0x01
+          ? { next: "POLL", send: QUERY, delayMs: 100, wait: "the printer is busy" }
+          : { next: ready },
+      ),
+    );
+    if (ready !== "DONE") g.state(ready, { on: { 0xa000: { next: "DONE" } } });
+    return g.build();
+  }
+
+  function run(graph: ReturnType<typeof pollGraph>, transport: FakeTransport, timeoutMs?: number) {
+    let settled = false;
+    const promise = runScanSession({
+      graph,
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
+    }).finally(() => {
+      settled = true;
+    });
+    return { promise, isSettled: () => settled };
+  }
+
+  /** Answers every QUERY with `reply()`, as a printer would. */
+  function answerQueries(transport: FakeTransport, reply: () => Buffer): void {
+    const write = transport.write.bind(transport);
+    transport.write = (buf: Buffer) => {
+      const result = write(buf);
+      if (buf.equals(QUERY)) transport.emit("data", reply());
+      return result;
+    };
+  }
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("writes a decision's send only once its delay has passed", async () => {
+    const transport = new FakeTransport();
+    const { promise } = run(pollGraph(1_000, "DONE"), transport);
+    await vi.advanceTimersByTimeAsync(0);
+
+    transport.emit("data", BUSY);
+    await vi.advanceTimersByTimeAsync(99);
+    expect(transport.written).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(transport.written).toEqual([QUERY]);
+
+    transport.emit("data", READY);
+    expect((await promise).ok).toBe(true);
+  });
+
+  it("holds a packet that arrives during the delay for the next state", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("FIRST", 1_000);
+    g.state(
+      "FIRST",
+      decision(() => ({ next: "SECOND", send: QUERY, delayMs: 100 })),
+    );
+    // A second packet reaching FIRST would loop it back into another delay.
+    g.state("SECOND", { on: { 0xa000: { next: "DONE" } } });
+    const { promise, isSettled } = run(g.build(), transport);
+    await vi.advanceTimersByTimeAsync(0);
+
+    transport.emit("data", Buffer.concat([READY, READY]));
+    await vi.advanceTimersByTimeAsync(50);
+    expect(isSettled()).toBe(false);
+    await vi.advanceTimersByTimeAsync(50);
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    expect(transport.written).toEqual([QUERY]);
+  });
+
+  it("does not run the rolling timeout during the delay", async () => {
+    const transport = new FakeTransport();
+    // No wait, so no deadline: only the rolling timeout is in play.
+    const g = createGraph<Record<string, never>>("POLL", 200);
+    g.state(
+      "POLL",
+      decision(() => ({ next: "POLL", send: QUERY, delayMs: 500 })),
+    );
+    const { promise, isSettled } = run(g.build(), transport);
+    await vi.advanceTimersByTimeAsync(0);
+
+    transport.emit("data", BUSY);
+    await vi.advanceTimersByTimeAsync(500);
+    expect(isSettled()).toBe(false);
+    expect(transport.written).toEqual([QUERY]);
+    // Re-armed on entering the state: the reply to the re-sent query is due.
+    await vi.advanceTimersByTimeAsync(200);
+    const result = await promise;
+    expect(!result.ok && result.reason.message).toMatch(/^Timeout in state POLL — no response/);
+  });
+
+  it("stops a printer that stays busy once the run's timeout has passed since the first busy reply", async () => {
+    const transport = new FakeTransport();
+    answerQueries(transport, () => BUSY);
+    // The rolling timeout restarts on every reply, so only the deadline can end this.
+    const { promise, isSettled } = run(pollGraph(60_000, "DONE"), transport, 1_000);
+    await vi.advanceTimersByTimeAsync(0);
+
+    transport.emit("data", BUSY);
+    await vi.advanceTimersByTimeAsync(999);
+    expect(isSettled()).toBe(false);
+    expect(transport.written.length).toBe(9);
+    await vi.advanceTimersByTimeAsync(1);
+    const result = await promise;
+    expect(!result.ok && result.reason.message).toBe(
+      "Timeout in state POLL — still waiting after 1000ms: the printer is busy",
+    );
+    // Nothing is sent once the session has stopped.
+    const sent = transport.written.length;
+    await vi.advanceTimersByTimeAsync(500);
+    expect(transport.written.length).toBe(sent);
+  });
+
+  it("names the latest reason for the wait", async () => {
+    const transport = new FakeTransport();
+    let replies = 0;
+    answerQueries(transport, () =>
+      buildIsPacket(0xa000, Buffer.from([++replies > 3 ? 0x02 : 0x01])),
+    );
+    const g = createGraph<Record<string, never>>("POLL", 1_000);
+    g.state(
+      "POLL",
+      decision((_ctx, packet) => ({
+        next: "POLL",
+        send: QUERY,
+        delayMs: 100,
+        wait: packet.payload[0] === 0x01 ? "busy" : "warming up",
+      })),
+    );
+    const { promise } = run(g.build(), transport);
+    await vi.advanceTimersByTimeAsync(0);
+    transport.emit("data", BUSY);
+    await vi.advanceTimersByTimeAsync(1_000);
+    const result = await promise;
+    expect(!result.ok && result.reason.message).toBe(
+      "Timeout in state POLL — still waiting after 1000ms: warming up",
+    );
+  });
+
+  it("ends the wait, and its deadline, on the first transition without one", async () => {
+    const transport = new FakeTransport();
+    let replies = 0;
+    answerQueries(transport, () => (++replies < 3 ? BUSY : READY));
+    const { promise, isSettled } = run(pollGraph(1_000, "NEXT"), transport);
+    await vi.advanceTimersByTimeAsync(0);
+
+    transport.emit("data", BUSY);
+    // Ready at 300ms; NEXT's own rolling timeout runs until 1300ms.
+    await vi.advanceTimersByTimeAsync(1_200);
+    expect(isSettled()).toBe(false);
+    transport.emit("data", READY);
+    expect((await promise).ok).toBe(true);
+  });
+
+  it("drops the delayed send when the session ends during the delay", async () => {
+    const transport = new FakeTransport();
+    const { promise } = run(pollGraph(1_000, "DONE"), transport);
+    await vi.advanceTimersByTimeAsync(0);
+
+    transport.emit("data", BUSY);
+    await vi.advanceTimersByTimeAsync(50);
+    transport.emit("close");
+    const result = await promise;
+    expect(!result.ok && result.reason.message).toMatch(
+      /^Transport closed unexpectedly in state POLL/,
+    );
+    await vi.advanceTimersByTimeAsync(100);
+    expect(transport.written).toEqual([]);
+  });
+
+  it("passes the deadline through the graph's failure annotator", async () => {
+    const transport = new FakeTransport();
+    answerQueries(transport, () => BUSY);
+    const g = createGraph<Record<string, never>>("POLL", 300);
+    g.state(
+      "POLL",
+      decision(() => ({ next: "POLL", send: QUERY, delayMs: 100, wait: "busy" })),
+    );
+    g.describeProtocolFailure((_ctx, reason) => new Error(`${reason.message} [annotated]`));
+    const { promise } = run(g.build(), transport);
+    await vi.advanceTimersByTimeAsync(0);
+    transport.emit("data", BUSY);
+    await vi.advanceTimersByTimeAsync(300);
+    const result = await promise;
+    expect(!result.ok && result.reason.message).toBe(
+      "Timeout in state POLL — still waiting after 300ms: busy [annotated]",
+    );
   });
 });

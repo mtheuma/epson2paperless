@@ -5,7 +5,12 @@
 
 import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
-import { MODEL_OVERRIDES, type Evidence, type ModelOverride } from "./model-overrides.js";
+import {
+  MODEL_OVERRIDES,
+  type ColourEvidence,
+  type Evidence,
+  type ModelOverride,
+} from "./model-overrides.js";
 import {
   colourSettingsHash,
   provenanceProblems,
@@ -30,6 +35,8 @@ function withOverride(model: string, change: (o: ModelOverride) => ModelOverride
   if (at < 0) throw new Error(`no override records ${model}`);
   return MODEL_OVERRIDES.map((o, i) => (i === at ? change(o) : o));
 }
+
+const ET4800_CAPTURE = "tools/pcap-extract/captures/et-4800/flatbed-jpg.jsonl";
 
 const overrideFor = (model: string): ModelOverride =>
   MODEL_OVERRIDES.find((o) => o.provenance.models.includes(model))!;
@@ -138,21 +145,18 @@ describe("provenance", () => {
     });
 
     it("is never satisfied by an own capture or an inherited setting", () => {
-      // The ET-7700's colour without its reporter's compatibility-page scan.
-      const unscanned = withOverride("ET-7700", (o) => ({
-        ...o,
-        provenance: {
-          ...o.provenance,
-          colour: o.provenance.colour.filter((e) => e.kind !== "reporter-scan"),
-        },
-      }));
-      expect(overrideFor("ET-7700").provenance.colour.map((e) => e.kind)).toEqual([
-        "inherited:ET-8500",
-        "own-capture",
-        "reporter-scan",
-      ]);
+      // The ET-4800's colour resting only on a capture of this service's own
+      // traffic and an inherited setting, both vouching for its current bytes.
+      const unscanned = withOverride("ET-4800", (o) => {
+        const vouchesFor = colourSettingsHash(o);
+        const colour: ColourEvidence[] = [
+          { kind: "own-capture", link: { fixture: ET4800_CAPTURE }, vouchesFor },
+          { kind: "inherited:ET-4950", link: { pr: 121 }, vouchesFor },
+        ];
+        return { ...o, provenance: { ...o.provenance, colour } };
+      });
       expect(provenanceProblems(README, unscanned, UNPLACED)).toEqual([
-        expect.stringMatching(/^ET-7700 .*: no colour evidence vouches/),
+        expect.stringMatching(/^ET-4800 .*: no colour evidence vouches/),
       ]);
     });
   });
@@ -199,12 +203,12 @@ describe("provenance", () => {
       // Adding a model here, or removing one, is a deliberate change: each
       // listed model carries the README caveat until a scan or capture
       // supersedes its provisional evidence.
-      expect(provisionalColourModels(README, MODEL_OVERRIDES)).toEqual(["ET-8500"]);
+      expect(provisionalColourModels(README, MODEL_OVERRIDES)).toEqual(["ET-7700", "ET-8500"]);
     });
 
     it("satisfies the ✅ colour check, and is reported as provisional", () => {
       const overrides = provisionalEt4800();
-      expect(provisionalColourModels(README, overrides)).toEqual(["ET-4800", "ET-8500"]);
+      expect(provisionalColourModels(README, overrides)).toEqual(["ET-4800", "ET-7700", "ET-8500"]);
       expect(provenanceProblems(withCaveat(README, "ET-4800"), overrides, UNPLACED)).toEqual([]);
     });
 
@@ -224,7 +228,7 @@ describe("provenance", () => {
         } as const;
         return { ...o, provenance: { ...o.provenance, colour: [...o.provenance.colour, scan] } };
       });
-      expect(provisionalColourModels(README, scanned)).toEqual(["ET-8500"]);
+      expect(provisionalColourModels(README, scanned)).toEqual(["ET-7700", "ET-8500"]);
       expect(provenanceProblems(README, scanned, UNPLACED)).toEqual([]);
     });
 
@@ -283,7 +287,7 @@ describe("provenance", () => {
       const changed = provisionalEt4800().map((o) =>
         o.provenance.models.includes("ET-4800") ? { ...o, gmm: "UG10" } : o,
       );
-      expect(provisionalColourModels(README, changed)).toEqual(["ET-8500"]);
+      expect(provisionalColourModels(README, changed)).toEqual(["ET-7700", "ET-8500"]);
       expect(provenanceProblems(README, changed, UNPLACED)).toEqual([
         expect.stringMatching(/^ET-4800 .*: no colour evidence vouches for its current colour/),
       ]);
