@@ -235,7 +235,7 @@ Each setting's **Scope** column shows which printers it affects: `All`, `Panel` 
 | `DIAGNOSE_PROTOCOL`        | Legacy ESC/I | `false`  | Compatibility-report aid. On a legacy `ESC @` non-ACK, sends one extra `FS Y` probe and aborts with annotated `[diagnose]` log lines. Leave off in normal use.                                                                                   |
 | `NETSCAN_VERSION`          | All          | `auto`   | Compatibility-triage aid. Forces the discovery keepalive wire format (`2.0` / `3.0`); `auto` follows the scanner's announcement (`3.0` when it asks for `Ver`), else its PID (`3.0` for the FF-680W and DS-575W). Leave on `auto` in normal use. |
 | `SHUTDOWN_TIMEOUT_MS`      | All          | `120000` | ms to wait for an in-flight scan, or a panel press still being answered, to finish on `SIGINT`/`SIGTERM` before forcing shutdown. Must cover a full multi-page ADF scan; Docker's `stop_grace_period` must exceed it.                            |
-| `ESCI2_TIMEOUT_MS`         | ESC/I-2      | `60000`  | ms to wait for each printer reply during an ESC/I-2 scan before aborting. Raise it if a slow Wi-Fi printer times out while warming up.                                                                                                           |
+| `ESCI2_TIMEOUT_MS`         | ESC/I-2      | `60000`  | ms to wait for each printer reply during an ESC/I-2 scan, and for a busy or warming-up printer to get ready, before aborting. Raise it if a slow Wi-Fi printer times out while warming up.                                                       |
 
 </details>
 

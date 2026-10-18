@@ -55,7 +55,7 @@ The status cycles at the start of an ESC/I-2 session, before the mode switch. Th
 _Avoid_: warm-up loop, readiness wait
 
 **Reply-header block**:
-The 52 bytes after the 12-byte header in every 64-byte ESC/I-2 reply, `#---` filler where the printer has nothing to put. Its `#nrd` says the scanner is not ready (busy, warming up, reserved by another client, user authentication required) and its `#err` is a header-level error; reserved, authentication and any `#err` stop the session, on the status before PARA and on image replies alike.
+The 52 bytes after the 12-byte header in every 64-byte ESC/I-2 reply, `#---` filler where the printer has nothing to put. Its `#nrd` says the scanner is not ready (busy, warming up, reserved by another client, user authentication required) and its `#err` is a header-level error; reserved, authentication and any `#err` stop the session, on the status before PARA and on image replies alike. Busy or warming up on the status before PARA is waited out: the status is asked for again until the printer is ready, within the session timeout.
 _Avoid_: filler (for the whole block), ET-2750 quirk
 
 ## Colour

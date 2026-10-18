@@ -91,6 +91,12 @@ export interface Esci2Ctx {
    */
   preParaStatusReply?: Buffer;
   /**
+   * The `#nrd` code (BUSY / WUP) of the latest status before PARA while the
+   * printer is busy or warming up, so the wait is logged once per code and
+   * POST_MODE_STAT_DRAIN knows to ask again. Undefined once it is ready.
+   */
+  notReady?: "BUSY" | "WUP";
+  /**
    * Set when the init poll stopped early on a non-ACK to FS Y (see
    * INIT_POLL_FS_Y): the cycle it happened on and a preview of the reply.
    * Cleared once PARA is accepted, or when the status before PARA reports
@@ -652,11 +658,14 @@ g.state(
  * (e.g. a panel cancel) or a transport failure does not. Returns the reason
  * unchanged when the poll ran its full count, or once PARA was accepted. The
  * named error keeps the original's stack frames, since the logger prints the
- * stack but not `cause`.
+ * stack but not `cause`. Nor does a failure while the printer reports it is
+ * busy or warming up.
  */
 export function nameInitPollEarlyStop(ctx: Esci2Ctx, reason: Error): Error {
   const stop = ctx.initPollEarlyStop;
-  if (stop === undefined) return reason;
+  // A session that fails while the printer says it is busy or warming up
+  // already has its cause, which the wait's own error names.
+  if (stop === undefined || ctx.notReady !== undefined) return reason;
   const message =
     `${reason.message} — likely cause: the init poll stopped early after the printer ` +
     `answered FS Y on cycle ${stop.cycle} with a non-ACK (${stop.reply}).`;
@@ -915,7 +924,8 @@ function errorAdvice(error: string): string {
  * ahead, naming why: the scanner is reserved by another client (`#nrd`
  * RSVD), it requires user authentication (`#nrd` AFEN), or it reports a
  * header-level error (`#err`), whatever the unit. Busy and warming up
- * (`#nrd` BUSY / WUP) are not acted on here, nor is any other `#nrd` code.
+ * (`#nrd` BUSY / WUP) are not acted on here (POST_MODE_STAT waits them out,
+ * waitWhileNotReady), nor is any other `#nrd` code.
  */
 function stopOnReplyHeader(
   ctx: Esci2Ctx,
@@ -941,9 +951,47 @@ function stopOnReplyHeader(
   return { error: new Error(`${state}: ${reason}`) };
 }
 
+/** How long to wait before asking a busy or warming-up printer for its status again. */
+const NOT_READY_RETRY_MS = 100;
+
+const NOT_READY_WAIT = {
+  BUSY: "the printer reports it is busy (BUSY)",
+  WUP: "the printer reports it is warming up (WUP)",
+} as const;
+
+/**
+ * Records whether the status before PARA says the printer is busy or
+ * warming up (`#nrd` BUSY / WUP), returning the wait's description if so.
+ * Logs at debug when a wait starts or its code changes, not on every retry.
+ */
+function waitWhileNotReady(ctx: Esci2Ctx, header: Esci2ReplyHeader): string | undefined {
+  const code =
+    header.notReady === "BUSY" || header.notReady === "WUP" ? header.notReady : undefined;
+  if (code !== undefined && code !== ctx.notReady) {
+    log.debug(
+      `Printer not ready (${code}): asking for its status again every ${NOT_READY_RETRY_MS} ms until it is`,
+    );
+  }
+  ctx.notReady = code;
+  return code === undefined ? undefined : NOT_READY_WAIT[code];
+}
+
+/** Asks for the status again after the retry interval, as part of the wait. */
+function askAgainWhenReady(ctx: Esci2Ctx): TransitionResult<Esci2Ctx> {
+  return {
+    next: "POST_MODE_STAT",
+    send: buildPassthruPacket(buildEsci2Command("STAT"), ESCI2_REPLY_SIZE),
+    delayMs: NOT_READY_RETRY_MS,
+    wait: NOT_READY_WAIT[ctx.notReady!],
+  };
+}
+
 // POST_MODE_STAT: decision on STAT reply, the last before PARA. Its header
-// block is read first (stopOnReplyHeader); its content then decides the
-// source and is judged for errors (settlePreParaStatus).
+// block is read first: stopOnReplyHeader ends the session, and a busy or
+// warming-up printer is asked again until it is ready (waitWhileNotReady),
+// the session's timeout from the first such reply at most. The status of a
+// ready printer then decides the source and is judged for errors
+// (settlePreParaStatus).
 // If length>0 → pure-read drain → POST_MODE_STAT_DRAIN.
 // If length===0 → send PARA header + body → PARA.
 g.state(
@@ -957,16 +1005,20 @@ g.state(
     }
     const stopped = stopOnReplyHeader(ctx, "POST_MODE_STAT", header);
     if (stopped) return stopped;
+    const wait = waitWhileNotReady(ctx, header);
     // The reply's header block is #--- filler unless the printer put status
     // tokens inline, so it is read for them too: here when there is no body
-    // to drain, otherwise alongside the body in POST_MODE_STAT_DRAIN.
+    // to drain, otherwise alongside the body in POST_MODE_STAT_DRAIN. A
+    // not-ready reply's body is drained too, but not read, so not kept.
     if (header.length > 0) {
-      ctx.preParaStatusReply = packet.payload;
+      if (wait === undefined) ctx.preParaStatusReply = packet.payload;
       return {
         next: "POST_MODE_STAT_DRAIN",
         send: buildPurereadPacket(header.length),
+        ...(wait !== undefined ? { wait } : {}),
       };
     }
+    if (wait !== undefined) return askAgainWhenReady(ctx);
     const failed = settlePreParaStatus(ctx, "POST_MODE_STAT", [packet.payload]);
     if (failed) return failed;
     return { next: "PARA", send: buildParaSend(ctx) };
@@ -982,6 +1034,7 @@ g.state(
     if (typeGuard) return typeGuard;
     const reply = ctx.preParaStatusReply ?? Buffer.alloc(0);
     ctx.preParaStatusReply = undefined;
+    if (ctx.notReady !== undefined) return askAgainWhenReady(ctx);
     const failed = settlePreParaStatus(ctx, "POST_MODE_STAT_DRAIN", [reply, packet.payload]);
     if (failed) return failed;
     return { next: "PARA", send: buildParaSend(ctx) };
