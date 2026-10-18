@@ -13,8 +13,10 @@ import type { LegacyDialectEntry } from "./entry.js";
 export const XP620_ENTRY: LegacyDialectEntry = {
   name: "xp620",
   productName: "PID 08C8",
+  // Its setup reads identity and status itself (ESC I, ESC i, FS I, FS F) and
+  // hands straight to gamma, so it never reaches the states that read the
+  // ADF flag or select a source.
   sourcePolicy: "fixed-flatbed",
-  supportedSources: ["flatbed"],
   raster: () => XP_RASTER,
   gamma: { r: XP_GAMMA_R, g: XP_GAMMA_G, b: XP_GAMMA_B },
   fswBlock: () => XP_FSW_BLOCK, // fixed; format-independent
