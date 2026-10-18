@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { describe, it, expect, vi } from "vitest";
 import {
   buildPushScanResponse,
+  isV3Request,
   parsePushScanRequest,
   createPushScanServer,
   parseCapabilityIns,
@@ -69,6 +70,36 @@ describe("buildPushScanResponse", () => {
     const response = buildPushScanResponse("1", { protocolVersion: "3.00" });
     expect(response).toContain("x-protocol-version : 3.00\r\n");
     expect(response).not.toContain("x-protocol-version : 2.00");
+  });
+});
+
+describe("isV3Request", () => {
+  it.each([
+    ["3.00", true],
+    ["3.0", true],
+    ["3", true],
+    ["2.00", false],
+    ["1.00", false],
+    ["30.0", false],
+    ["", false],
+  ])("%j → %s", (version, expected) => {
+    expect(isV3Request(version)).toBe(expected);
+  });
+});
+
+describe("parsePushScanRequest protocol version", () => {
+  const soap = `<s:Body><p:PushScan><PushScanIDIn>01</PushScanIDIn></p:PushScan></s:Body>`;
+
+  it.each([
+    ["x-protocol-version : 3.00", "3.00"],
+    ["X-Protocol-Version: 3.00", "3.00"],
+    ["x-uid : 4", "2.00"],
+    // An empty value must not borrow the next header's text.
+    ["x-protocol-version :\r\nx-uid : 3", "2.00"],
+  ])("%j → %s", (headers, expected) => {
+    expect(
+      parsePushScanRequest(soap, `POST /PushScan HTTP/1.0\r\n${headers}`).protocolVersion,
+    ).toBe(expected);
   });
 });
 
@@ -617,6 +648,57 @@ describe("createPushScanServer", () => {
     client.destroy();
     server.close();
   });
+
+  // Job control and the trigger defaults key on the request's version, so the
+  // hook and the callback both have to see it.
+  it.each([
+    ["3.00", "x-protocol-version: 3.00\r\n"],
+    ["2.00", ""],
+  ])(
+    "hands the request's protocol version (%s) to the hook and the callback",
+    async (expected, versionHeader) => {
+      const seen: string[] = [];
+      let fired!: () => void;
+      const callbackFired = new Promise<void>((r) => (fired = r));
+      const server = createPushScanServer(
+        0,
+        (info) => {
+          seen.push(`callback ${info.protocolVersion}`);
+          fired();
+        },
+        {
+          beforeResponse: ({ info }) => {
+            seen.push(`hook ${info.protocolVersion}`);
+          },
+        },
+      );
+      await new Promise<void>((r) => {
+        if (server.listening) r();
+        else server.once("listening", () => r());
+      });
+      const port = (server.address() as AddressInfo).port;
+
+      const body = buildSoapBody("01", "PID 016B", "C0A80A08");
+      const request =
+        `POST /PushScan HTTP/1.0\r\n` +
+        `Content-Length: ${Buffer.byteLength(body, "utf-8")}\r\n` +
+        versionHeader +
+        `\r\n` +
+        body;
+
+      const client = net.createConnection(port, "127.0.0.1");
+      await new Promise<void>((r) => client.once("connect", () => r()));
+      const responsePromise = readFullHttpResponse(client);
+      client.write(request);
+      await responsePromise;
+      await callbackFired;
+
+      expect(seen).toEqual([`hook ${expected}`, `callback ${expected}`]);
+
+      client.destroy();
+      server.close();
+    },
+  );
 
   it("falls back to x-uid : 1 when request has no x-uid header", async () => {
     const server = createPushScanServer(0, () => {});

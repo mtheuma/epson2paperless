@@ -5,10 +5,11 @@ import { getLocalIpForTarget, normalizeIPv4, type PrinterTarget } from "./networ
 
 const log = createLogger("keepalive");
 
-// Announced PIDs (uppercased "PID XXXX") that use the NetScanMonitor v3.0
-// keepalive wire format. These are the button-only DS-family scanners — the
-// FF-680W (016B) and its DS-575W sibling (0169). Everything else defaults to
-// v2.0. `NETSCAN_VERSION` still overrides this per the config docs.
+// Announced PIDs (uppercased "PID XXXX") that get the NetScanMonitor v3.0
+// keepalive wire format when their beacon carries no usable tag list. These are
+// the button-only DS-family scanners — the FF-680W (016B) and its DS-575W
+// sibling (0169). A beacon's tag list, when present, decides instead (see
+// chooseKeepaliveFormat); `NETSCAN_VERSION` overrides both.
 const V3_KEEPALIVE_PRODUCTS = new Set([PID_FF680W, PID_DS575W]);
 
 export interface KeepaliveOptions {
@@ -20,6 +21,19 @@ export interface KeepaliveOptions {
   /** Epson NetScanMonitor protocol version. Omitted keeps the v2 wire format. */
   version?: "2.0" | "3.0";
   group?: number;
+}
+
+/** Keepalive fields this service can answer, keyed by the tag a beacon requests. */
+const KEEPALIVE_TAGS = ["Ver", "ClientName", "IPAddress", "EventPort", "Group"] as const;
+type KeepaliveTag = (typeof KEEPALIVE_TAGS)[number];
+
+function isKeepaliveTag(tag: string): tag is KeepaliveTag {
+  return (KEEPALIVE_TAGS as readonly string[]).includes(tag);
+}
+
+/** The field list each wire format sends when no beacon tag list applies. */
+function defaultTags(version: "2.0" | "3.0"): readonly KeepaliveTag[] {
+  return version === "3.0" ? KEEPALIVE_TAGS : ["ClientName", "IPAddress", "EventPort"];
 }
 
 /**
@@ -37,16 +51,24 @@ export interface KeepaliveOptions {
  *   Offset 14-15: language       — 2-char ASCII (e.g. "en")
  *   Offset 16-19: str_len        — string data length (big-endian uint32, excludes null terminator)
  *   Offset 20+:   key-value string + null terminator
+ *
+ * The key-value string answers `tags` in the given order, one `(Tag=value)`
+ * per known tag; unknown and repeated tags are left out. Without `tags`, `opts.version`
+ * picks the fixed v2 or v3 field list.
  */
-export function buildKeepalivePacket(opts: KeepaliveOptions, seq: number): Buffer {
-  const version = opts.version ?? "2.0";
-  const fields = [
-    ...(version === "3.0" ? ["(Ver=3.0)"] : []),
-    `(ClientName=${opts.clientName})`,
-    `(IPAddress=${opts.ipAddress})`,
-    `(EventPort=${opts.eventPort})`,
-    ...(version === "3.0" ? [`(Group=${opts.group ?? 0})`] : []),
-  ];
+export function buildKeepalivePacket(
+  opts: KeepaliveOptions,
+  seq: number,
+  tags: readonly string[] = defaultTags(opts.version ?? "2.0"),
+): Buffer {
+  const values: Record<KeepaliveTag, string> = {
+    Ver: "3.0",
+    ClientName: opts.clientName,
+    IPAddress: opts.ipAddress,
+    EventPort: String(opts.eventPort),
+    Group: String(opts.group ?? 0),
+  };
+  const fields = [...new Set(tags)].filter(isKeepaliveTag).map((tag) => `(${tag}=${values[tag]})`);
   const kvString = `${fields.join(",")}\0`;
 
   const stringBytes = Buffer.from(kvString, "ascii");
@@ -74,23 +96,117 @@ export function buildKeepalivePacket(opts: KeepaliveOptions, seq: number): Buffe
   return packet;
 }
 
+export interface PrinterAnnouncement {
+  /** Sequence number (byte 11) the keepalive must echo. */
+  seq: number;
+  /** Canonical `PID XXXX` token, or null when the announcement carries none. */
+  productName: string | null;
+  /**
+   * The keepalive fields the printer asks for, in the order it lists them
+   * (e.g. `["ClientName", "IPAddress", "EventPort"]`), unknown tags included,
+   * or null when the announcement carries no tag list naming a field this
+   * service can answer.
+   */
+  requestedTags: string[] | null;
+}
+
+// A tag-list record: comma-separated field names, nothing else. The PID record
+// ("PID 016B") never matches, because of its space.
+const TAG_LIST_SHAPE = /^[A-Za-z][A-Za-z0-9]*(?:,[A-Za-z][A-Za-z0-9]*)*$/;
+
+/**
+ * Reads the requested tag list from an announcement's body. After the 20-byte
+ * header comes the service string (length in bytes 16-19, NUL-terminated),
+ * then records of one length byte + text + NUL, ended by a zero length byte.
+ * The tag list is the first record shaped like a comma-separated list of
+ * field names that names at least one field this service can answer. Any
+ * framing inconsistency, or no such record, yields null, so the caller falls
+ * back to the PID-based choice rather than to a guessed list.
+ */
+function parseRequestedTags(data: Buffer): string[] | null {
+  if (data.length < 20) return null;
+  let offset = 20 + data.readUInt32BE(16);
+  if (offset >= data.length || data[offset] !== 0x00) return null;
+  offset++;
+  while (offset < data.length && data[offset] !== 0x00) {
+    const start = offset + 1;
+    const end = start + data[offset];
+    if (end >= data.length || data[end] !== 0x00) return null;
+    const text = data.toString("latin1", start, end);
+    if (TAG_LIST_SHAPE.test(text)) {
+      const tags = text.split(",");
+      if (tags.some(isKeepaliveTag)) return tags;
+    }
+    offset = end + 1;
+  }
+  return null;
+}
+
 /**
  * Parses a printer announcement packet (broadcast by the printer to 239.255.255.253:2968).
  *
  * The announcement uses command type 02 06. Byte 11 carries the sequence number
  * that must be echoed in our keepalive response.
  *
- * Returns `{ seq }` if the packet looks like a valid announcement, or `null` if it
+ * Returns the announcement if the packet looks like a valid one, or `null` if it
  * doesn't match (so callers can ignore unrelated multicast traffic).
  */
-export function parsePrinterAnnouncement(
-  data: Buffer,
-): { seq: number; productName: string | null } | null {
+export function parsePrinterAnnouncement(data: Buffer): PrinterAnnouncement | null {
   if (data.length < 12) return null;
   if (data[0] !== 0x02 || data[1] !== 0x06 || data[2] !== 0x00 || data[3] !== 0x00) {
     return null;
   }
-  return { seq: data[11], productName: extractPid(data.toString("latin1")) };
+  return {
+    seq: data[11],
+    productName: extractPid(data.toString("latin1")),
+    requestedTags: parseRequestedTags(data),
+  };
+}
+
+interface KeepaliveFormat {
+  version: "2.0" | "3.0";
+  /** The fields to answer, in wire order. */
+  tags: readonly string[];
+  /** What decided the format, for the INFO log line. */
+  basis: string;
+}
+
+/**
+ * Picks the keepalive reply for one announcement, in priority order:
+ *   1. a forced version (`NETSCAN_VERSION`) sends that version's fixed field list;
+ *   2. a beacon tag list is answered tag by tag, in its order, and the reply is
+ *      v3 exactly when `Ver` is requested. Unknown tags are skipped (debug log);
+ *   3. otherwise the announced PID decides (v3 for V3_KEEPALIVE_PRODUCTS).
+ */
+function chooseKeepaliveFormat(
+  forced: "2.0" | "3.0" | undefined,
+  announcement: PrinterAnnouncement,
+): KeepaliveFormat {
+  if (forced) {
+    return { version: forced, tags: defaultTags(forced), basis: "forced by NETSCAN_VERSION" };
+  }
+  const requested = announcement.requestedTags;
+  if (requested) {
+    const known = requested.filter(isKeepaliveTag);
+    const unknown = requested.filter((tag) => !isKeepaliveTag(tag));
+    if (unknown.length > 0) {
+      log.debug(
+        `Announcement requests keepalive tag(s) this service doesn't know — skipping: ${unknown.join(", ")}`,
+      );
+    }
+    return {
+      version: known.includes("Ver") ? "3.0" : "2.0",
+      tags: known,
+      basis: `answering requested tags ${known.join(",")}`,
+    };
+  }
+  const version =
+    announcement.productName && V3_KEEPALIVE_PRODUCTS.has(announcement.productName) ? "3.0" : "2.0";
+  return {
+    version,
+    tags: defaultTags(version),
+    basis: "no usable tag list, chosen by announced PID",
+  };
 }
 
 export interface KeepaliveResponderOptions {
@@ -232,23 +348,14 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
             }, dedupWindowMs);
             seenSeqs.set(dedupKey, expiry);
 
-            // Packet bytes are identical across all N packets in the burst —
-            // build once and reuse.
-            const keepalive: Omit<KeepaliveOptions, "ipAddress"> = {
-              ...opts.keepalive,
-              version:
-                opts.keepalive.version ??
-                (announcement.productName && V3_KEEPALIVE_PRODUCTS.has(announcement.productName)
-                  ? "3.0"
-                  : "2.0"),
-            };
+            const format = chooseKeepaliveFormat(opts.keepalive.version, announcement);
 
             // Surface the announced PID and the chosen keepalive version at INFO —
             // compatibility reports for unrecognised models hinge on both.
             log.info(
               `Printer announcement received from ${rinfo.address} — seq=${seqHex}, ` +
                 `product=${announcement.productName ?? "<not reported>"}; ` +
-                `sending burst of ${opts.burstCount} (keepalive v${keepalive.version})`,
+                `sending burst of ${opts.burstCount} (keepalive v${format.version}, ${format.basis})`,
             );
             const localIp = await (async () => {
               try {
@@ -271,18 +378,19 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
               }
             })();
             if (localIp === null) return;
+            // Packet bytes are identical across all N packets in the burst —
+            // build once and reuse.
             const packet = buildKeepalivePacket(
-              { ...keepalive, ipAddress: localIp },
+              { ...opts.keepalive, ipAddress: localIp },
               announcement.seq,
+              format.tags,
             );
 
-            // Source-port policy. The FF-680W's reference (Mac) driver sends its
-            // keepalive from an ephemeral source port — verified in the capture —
-            // so v3 announcements egress via the dedicated unbound `sender`. The
-            // already-verified v2 fleet keeps sending from the bound multicast
-            // socket (port 2968) exactly as before this device was added, so a
-            // wire detail those printers were validated against doesn't change.
-            const useEphemeralSender = keepalive.version === "3.0";
+            // Source-port policy. v3 keepalives go out from an ephemeral source
+            // port (as the FF-680W capture shows), via the dedicated unbound
+            // `sender`. v2 keepalives keep sending from the bound multicast
+            // socket (port 2968), the source port the v2 fleet was validated against.
+            const useEphemeralSender = format.version === "3.0";
 
             for (let i = 0; i < opts.burstCount; i++) {
               const burstIndex = i + 1;

@@ -2,10 +2,10 @@ import sharp from "sharp";
 import { readJpegOrientation, setJpegOrientation, setJfifDensity } from "../exif.js";
 import { scaledDimensions, type Downsample } from "./downsample.js";
 
-// SCAN_COLOR_MODE=auto: the scan itself always runs in colour (the DS-575W's
-// own "Auto" does the same — Epson's software decides colour vs greyscale
-// after capture), and pages with no meaningful colour content are re-encoded
-// as single-channel greyscale JPEGs here.
+// SCAN_COLOR_MODE=auto: the scan itself always runs in colour (the printer is
+// never asked for greyscale; colour vs greyscale is decided per page after
+// capture), and pages with no meaningful colour content are re-encoded as
+// single-channel greyscale JPEGs here.
 //
 // Classification measures per-pixel chroma (max(R,G,B) - min(R,G,B)) on a
 // downsampled copy. Downsampling first is load-bearing: single-pixel colour

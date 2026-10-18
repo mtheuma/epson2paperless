@@ -22,11 +22,11 @@ A client registers itself as a scan destination by:
 
 1. Joining the multicast group `239.255.255.253` via `IP_ADD_MEMBERSHIP` on a UDP socket bound to port 2968.
 2. Listening for `02 06` announcement packets.
-3. Sending a burst of three unicast `02 07` keepalive packets back to the printer's IP on port 2968, spaced 500 ms apart. Each packet must echo the announcement's sequence number in byte 11. The packet also carries the destination's display name, IP address, TCP event port, and a destination ID.
+3. Sending a burst of three unicast `02 07` keepalive packets back to the printer's IP on port 2968, spaced 500 ms apart. Each packet must echo the announcement's sequence number in byte 11. The packet also carries the destination's display name, IP address, TCP event port, and a destination ID. The announcement ends with a tag list naming the fields it wants back, and the keepalive answers those tags in that order: `ClientName,IPAddress,EventPort` on the ET-4950 (NetScanMonitor v2), `Ver,ClientName,IPAddress,EventPort,Group` on the FF-680W (v3, which also sends from an ephemeral source port). A request for `Ver` selects v3; tags the service doesn't know are skipped. An announcement with no tag list falls back to the announced PID (v3 for the FF-680W and DS-575W), and `NETSCAN_VERSION` forces either format.
 
 The printer only accepts keepalives during the ~60-second window after broadcasting an announcement. Outside that window it responds with ICMP Port Unreachable. A client that sends unsolicited keepalives — or keepalives with the wrong sequence number — is silently ignored and will not appear in the printer's destination list.
 
-Implemented in `src/keepalive.ts`. `parsePrinterAnnouncement` extracts the sequence byte from incoming `02 06` packets; `buildKeepalivePacket` assembles the `02 07` response; `createKeepaliveResponder` manages the socket lifecycle, multicast membership, and the per-announcement burst with deduplication (the printer broadcasts each beacon three times per announcement with the same sequence number, so the responder suppresses duplicate-sequence firings within a 30-second window to avoid sending nine keepalives per announcement instead of three).
+Implemented in `src/keepalive.ts`. `parsePrinterAnnouncement` extracts the sequence byte, PID and requested tag list from incoming `02 06` packets; `buildKeepalivePacket` assembles the `02 07` response; `createKeepaliveResponder` manages the socket lifecycle, multicast membership, and the per-announcement burst with deduplication (the printer broadcasts each beacon three times per announcement with the same sequence number, so the responder suppresses duplicate-sequence firings within a 30-second window to avoid sending nine keepalives per announcement instead of three).
 
 The discovery protocol was fully decoded from Wireshark captures. The critical insight was that byte 11 is a _sequence echo_, not a static "number of key-value pairs" field as the packet structure might suggest — this was confirmed by observing multiple consecutive beacon cycles with different sequence values but the same number of key-value pairs in the keepalive payload. An earlier implementation that hardcoded a fixed byte-11 value of `0x03` was silently ignored by the printer; the service never appeared in its destination list until the sequence-echo behavior was identified and fixed.
 
@@ -95,7 +95,7 @@ The packet type field determines the semantics of the payload. The ESC/I-2 path 
 
 The legacy ESC/I path (WF-3620) reuses `0x8000`, `0xa000`, `0xa100`/`0xa101`, and `0x2000`/`0x2100`/`0x2101` with the same meaning, plus two extra types: `0x2200` (host → printer stream config) and `0xa200` (printer → host unsolicited image-stream chunks). It does not use `0x9000` async events.
 
-`0x9000` async events carry a single dispatch byte in the payload: `0x01` = ScanStart, `0x02` = Disconnect, `0x03` = ScanCancel, `0x04` = Stop, `0x80` = Timeout, `0xa0` = ServerError. A `0x9000`/`0xa0` (ServerError) means the printer rejected the last command and has torn down the session — there is no recovery path. This type-code map was established by Ghidra decompilation of `CISProtocolStream::DidReceiveAsyncEvent` in `ES2Command.dll`.
+`0x9000` async events carry a single dispatch byte in the payload: `0x01` = ScanStart, `0x02` = Disconnect, `0x03` = ScanCancel, `0x04` = Stop, `0x80` = Timeout, `0xa0` = ServerError. A `0x9000`/`0xa0` (ServerError) means the printer rejected the last command and has torn down the session — there is no recovery path.
 
 IS parsing and construction are in `src/protocol.ts`. `parseIsPacket` reads exactly one IS packet from a `Buffer` (returning `null` if the buffer is too short for the declared payload — the scanner buffers incoming data and re-attempts parsing after each new TCP segment). `buildPassthruPacket` and `buildPurereadPacket` construct the two flavors of `0x2000` passthru; `buildLockPacket` and `buildUnlockPacket` construct the `0x2100` / `0x2101` control packets.
 
@@ -220,9 +220,9 @@ The IMG loop's termination condition differs by source:
 
 **POSTSCAN drain.** After ADF scans the printer queues a final `#ERRADF PE` (ADF Paper End) status message in its output buffer. If this message is not consumed before the session closes, the printer's internal state machine does not advance cleanly, and the panel displays "Scanning Error" on subsequent scans. The two POSTSCAN cycles (`FS Y → STAT → pure-read(declared length) → FIN`, twice) drain this queued status. The drain consumes the length declared by the STAT reply — 12 bytes (`#ERRADF PE  `) on every captured ADF post-scan, but the implementation reads the declared length verbatim rather than hardcoding 12. The structure mirrors the `INIT_POLL_STAT_DRAIN` mechanism: the printer uses the IS payload-length field as a general signal that the host should issue a drain read before continuing. Flatbed scans do not produce an ADF status message and skip these two POSTSCAN cycles entirely, going directly from `FIN_AFTER_IMG` to `UNLOCKING`.
 
-**Source detection.** The push-scan SOAP body does not indicate whether the printer will scan from the ADF or the flatbed glass — the panel does not expose a source selector. Instead, the printer detects its own source (via the ADF paper sensor) and signals the result in its `@STAT` replies. The session reads the last one before PARA, the one POST_MODE_STAT reads after the mode switch (with its drained body), for both the source and the errors, as Epson's Auto source reads the scanner's state at scan time; the init poll's replies are drained unread. A printer whose INFO reply advertises both a flatbed and an ADF scan area (`sourceDetection: "pre-para-status"`, derived for every session; on the recorded models: ET-4950 family, XP-7100, ET-4800, ET-15000, WF-3835) reads that reply's content: an ADF-mode printer queues no status (a zero-length `STATx0000000` reply), and a flatbed-mode printer queues `#ERRADF PE  ` ("ADF paper empty", a 12-byte `STATx000000C` reply). `#ERRADF PE` sets `ctx.source` to flatbed, and anything else (no error, or any other ADF code, which Epson's driver reads as a document in the feeder) to ADF; the same reply's errors are then judged against that source (below). `ctx.source` governs the PARA blob selection, the IMG loop terminator, and the POSTSCAN branching; nothing reads it before POST_MODE_STAT. On every replay fixture the first status and the one before PARA give the same source; only the DS-575W duplex capture differs between them, and it is ADF-only.
+**Source detection.** The push-scan SOAP body does not indicate whether the printer will scan from the ADF or the flatbed glass — the panel does not expose a source selector. Instead, the printer detects its own source (via the ADF paper sensor) and signals the result in its `@STAT` replies. The session reads the last one before PARA, the one POST_MODE_STAT reads after the mode switch (with its drained body), for both the source and the errors, since it is the scanner's state at scan time; the init poll's replies are drained unread. A printer whose INFO reply advertises both a flatbed and an ADF scan area (`sourceDetection: "pre-para-status"`, derived for every session; on the recorded models: ET-4950 family, XP-7100, ET-4800, ET-15000, WF-3835) reads that reply's content: an ADF-mode printer queues no status (a zero-length `STATx0000000` reply), and a flatbed-mode printer queues `#ERRADF PE  ` ("ADF paper empty", a 12-byte `STATx000000C` reply). `#ERRADF PE` sets `ctx.source` to flatbed, and anything else (no error, or any other ADF code, which reads as a document in the feeder) to ADF; the same reply's errors are then judged against that source (below). `ctx.source` governs the PARA blob selection, the IMG loop terminator, and the POSTSCAN branching; nothing reads it before POST_MODE_STAT. On every replay fixture the first status and the one before PARA give the same source; only the DS-575W duplex capture differs between them, and it is ADF-only.
 
-**Status errors.** Errors are judged where Epson's driver judges them: on the last `@STAT` reply before PARA, the same reply that decided the source, from one parse of it. Each `#ERR` token is a 4-character unit (`ADF`, `FB`, `TPU`) and a code, and like Epson's parser the session keeps one code per unit, the last the reply gives (`#ERRADF PE  #ERRADF PJ  ` is a jammed ADF). An error on the unit being scanned ends the session before PARA is sent, with a message naming it (e.g. `POST_MODE_STAT_DRAIN: the printer reported an error before scanning (ADF PJ)`); an error on any other unit is logged as a warning, once per process per model and set of codes (repeats at `debug`), and the scan carries on. `ADF PE` on a flatbed scan is a state, not a fault, and is not reported. There is no always-fatal code, and no exemption: an ADF-only printer stops on `ADF PE` when the feeder is still empty just before PARA, as Epson's does. On a printer with both sources an empty feeder cannot stop the scan: `ADF PE` makes the flatbed the source, and the glass is scanned. The DS-575W duplex capture's first status says `ADF PE`, which clears by the status before PARA. Every replay fixture's status before PARA is clear for its source (empty on ADF sessions, `ADF PE` alone on flatbed ones). Reply-header `#err` / `#nrd` tokens are not part of this rule. Only the status reply is judged: the `#ERR` tokens some printers (FF-680W, DS-575W) put in their `CAPA` and `RESA` replies list error codes, not an error the printer is reporting now.
+**Status errors.** Errors are judged on the last `@STAT` reply before PARA, the same reply that decided the source, from one parse of it. Each `#ERR` token is a 4-character unit (`ADF`, `FB`, `TPU`) and a code, and the session keeps one code per unit, the last the reply gives (`#ERRADF PE  #ERRADF PJ  ` is a jammed ADF). An error on the unit being scanned ends the session before PARA is sent, with a message naming it (e.g. `POST_MODE_STAT_DRAIN: the printer reported an error before scanning (ADF PJ)`); an error on any other unit is logged as a warning, once per process per model and set of codes (repeats at `debug`), and the scan carries on. `ADF PE` on a flatbed scan is a state, not a fault, and is not reported. There is no always-fatal code, and no exemption: an ADF-only printer stops on `ADF PE` when the feeder is still empty just before PARA. On a printer with both sources an empty feeder cannot stop the scan: `ADF PE` makes the flatbed the source, and the glass is scanned. The DS-575W duplex capture's first status says `ADF PE`, which clears by the status before PARA. Every replay fixture's status before PARA is clear for its source (empty on ADF sessions, `ADF PE` alone on flatbed ones). Reply-header `#err` / `#nrd` tokens are not part of this rule. Only the status reply is judged: the `#ERR` tokens some printers (FF-680W, DS-575W) put in their `CAPA` and `RESA` replies list error codes, not an error the printer is reporting now.
 
 A printer that advertises one source is fixed to it (`fixed-flatbed` / `fixed-adf`): its status before PARA is judged against that source and never changes it. The ET-2750 depends on that: its STAT reply declares `length=0` in the 12-byte ESC/I-2 header but packs a 52-byte filler (`#---#---#---…`) inline in the same 64-byte IS frame. The filler carries no error, so reading the source from it would say ADF on flatbed-only hardware. As a flatbed-only printer it is `fixed-flatbed`, and the graph pins `ctx.source = "flatbed"` at INIT1. Every other flatbed-only model (ET-2950, ET-2810 / XP-3200, ET-8500, ET-7700) takes the same path.
 
@@ -270,7 +270,7 @@ The composed PARA length depends on the dialect (which gamma / CMX classes and o
 
 The FF-680W is ADF-only — its source is fixed to ADF (it has no flatbed). It reports no panel selection either (it sends a `JobNumberIn` trigger with no Sides/Action), so its sides, output format, and resolution come from `SCAN_SIDES` / `SCAN_FORMAT` / `SCAN_RESOLUTION` rather than the panel. PARA byte-length is DPI-independent (the `#RSM`/`#RSS`/`#ACQ` fields are fixed-width); the values, not the lengths, scale with `SCAN_RESOLUTION`.
 
-The DS-575W is the FF-680W's ADF-only sibling and reuses the same `adf-crp` PARA layout — the sizes above are its **colour** bodies. It adds a colour-mode axis: `SCAN_COLOR_MODE=grayscale` swaps the 804-byte RGB gamma triplet for a 268-byte mono LUT and `#COLC024` for `#COLM008`, giving 460 B (simplex) / 464 B (duplex) greyscale bodies. (`SCAN_COLOR_MODE=auto` never reaches the wire — it composes the colour body and decides colour vs greyscale per page in host-side post-processing, mirroring what Epson's own software does for the DS-575W's "Auto" setting.) The `#ADFCRP` flag bytes (skew / double-feed / duplex) are GUI-only scan options this service doesn't model; the composer pins the FF-680W canonical for them.
+The DS-575W is the FF-680W's ADF-only sibling and reuses the same `adf-crp` PARA layout — the sizes above are its **colour** bodies. It adds a colour-mode axis: `SCAN_COLOR_MODE=grayscale` swaps the 804-byte RGB gamma triplet for a 268-byte mono LUT and `#COLC024` for `#COLM008`, giving 460 B (simplex) / 464 B (duplex) greyscale bodies. (`SCAN_COLOR_MODE=auto` never reaches the wire — it composes the colour body and decides colour vs greyscale per page in host-side post-processing.) The `#ADFCRP` flag bytes (skew / double-feed / duplex) are GUI-only scan options this service doesn't model; the composer pins the FF-680W canonical for them.
 
 (ET-2950, ET-2750, ET-2810 / XP-3200, ET-8500 and ET-7700 are flatbed-only hardware; ET-4800 is flatbed + ADF simplex — its `composePara` can emit a 948 B `#ADFDPLX` body, but the simplex-only panel never requests duplex, so that row is `—`. ET-15000 reuses the ET-4800's class data and shares its PARA shape; only the flatbed body is hardware-verified, with the ADF row pending a capture. The WF-3835 is flatbed + ADF simplex — its CAPA reports `duplex: N` — and its entry is speculative from the issue #174 diagnostic, pending hardware validation.)
 
@@ -520,8 +520,8 @@ cap, so `advertisedDpiSet` falls back to using the source list directly as the
 allowed set — the one case where it is enumerable rather than a ceiling.
 
 This distinction is capture-proven, not theoretical: the FF-680W and DS-575W both
-advertise `#ADFRSMSLISTd300d600` (300 and 600 only), yet Epson's own driver has
-been captured scanning them at 200 DPI (FF-680W) and 400 DPI (DS-575W) —
+advertise `#ADFRSMSLISTd300d600` (300 and 600 only), yet they have been
+captured scanning at 200 DPI (FF-680W) and 400 DPI (DS-575W) —
 neither of which appears in that list. Reading `adfRsmsList` as the allowed-set
 would reject both DPIs outright. Reading its maximum (600) as a ceiling on
 `rsmList ∩ rssList` instead reproduces the captured behaviour while still
@@ -602,9 +602,11 @@ at a different DPI.
 
 The legacy path (WF-3620 family, XP-620, ET-2550) has no resolution arm on the
 wire at all: the cross-product of DPI × format × dialect was never captured
-across the board, and the stream-config trailer's derivation from resolution is
-unknown, so the wire bytes are always the dialect's fixed values regardless of
-`SCAN_RESOLUTION`. `LegacyDialectEntry.deliveredDpi` pins what each dialect
+across the board. The resolution-dependent values (the `FS W` block's lines per
+block and the stream config's block sizes) follow from the geometry, as
+described in [Block layout](#block-layout-fs-w-fs-g-and-the-stream-config), but
+each dialect only knows the values for its fixed captured geometries, so the
+wire bytes are the same regardless of `SCAN_RESOLUTION`. `LegacyDialectEntry.deliveredDpi` pins what each dialect
 actually delivers: 600 DPI for WF-3620 JPG / 300 for WF-3620 PDF (the firmware
 locks resolution to the panel's format choice — see
 [Action: JPG / PDF / Preview](#action-jpg--pdf--preview)); a flat 300 DPI for
@@ -664,8 +666,7 @@ Per-model differences are resolved through a small dialect registry rather than
 branching logic scattered through the graph — see [Per-model dialects
 (LegacyDialectEntry)](#per-model-dialects-legacydialectentry) below.
 
-Key wire differences (full table in
-`.reference/wireshark-captures/wf-3620/protocol-decode.md`):
+Key wire differences:
 
 - Init is `ESC @` (`1b 40`), not `FS Y` — sent inside a `0x2000` passthru
   after the lock, never as a bare write. The printer also emits an
@@ -694,6 +695,37 @@ The ESC/I state machine lives in `src/esci/scanner.ts`. Per-page raw
 pixel buffers are accumulated in memory (~104 MB at 600 DPI A4), encoded
 to JPEG via sharp, and handed off to `output-tail.ts`'s shared post-scan
 pipeline.
+
+### Block layout: FS W, FS G and the stream config
+
+The printer streams a page as a run of fixed-size blocks plus one shorter
+last block. Three messages describe that layout, and their fields agree on
+every legacy capture:
+
+- **`FS W` byte 28: lines per block.** The number of scanlines in each full
+  block. WF-3620: 4 at 600 DPI (JPG), 8 at 300 DPI (PDF); ET-2550: 8;
+  XP-620: 34 (`0x22`). Lines per block × width × 3 bytes is the block size.
+- **The 14-byte `FS G` reply** (`parseFsGReply`, little-endian): bytes 0–1 a
+  status word; bytes 2–5 `chunkSize`, the full block's byte count (zero
+  means not ready yet, see [Multi-page termination](#multi-page-termination));
+  bytes 6–9 `blockCount`, the number of full blocks; bytes 10–13
+  `lastBlockBytes`, the byte count of the lines left over. So
+  `blockCount × chunkSize + lastBlockBytes` is the page's raw size: WF-3620 JPG
+  is 1750 blocks of 4 lines plus a last block of 2 (7002 lines), PDF 437 of 8
+  plus 5 (3501). Each block then arrives as one IS-`0xa200` chunk with one
+  trailing status byte, so a page is `blockCount + 1` chunks.
+- **The 38-byte IS-`0x2200` stream config** the host sends after the `FS G`
+  reply (`buildStreamConfigPayload`, big-endian) restates that layout: the
+  block count (bytes 8–11), the block size + 1 for its status byte (bytes
+  16–19 and again at 24–27, followed by a `0x06` terminator at byte 28), and
+  the last block's byte count + 1 (bytes 33–36) followed by the `0x06`
+  terminator at byte 37. The remaining fields are constant: the sub-payload
+  length 30 (bytes 0–3) and `1` at bytes 20–23 and 29–32.
+
+The WF-3620 takes the block count and block size for its stream config from
+the `FS G` reply, but its lines per block and last block's byte count are
+per-format constants for its fixed A4 geometry. The XP-620 and ET-2550 send
+their captured `FS W` block and stream config verbatim (see below).
 
 ### Per-model dialects (LegacyDialectEntry)
 

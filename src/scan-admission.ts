@@ -6,7 +6,7 @@
 //
 // Why a reservation and not just the inflight count: a panel trigger is not
 // a tracked scan until the OK response has been flushed and the onPushScan
-// callback runs. For the FF-680W / DS-575W that gap contains a job-control
+// callback runs. For a v3 printer that gap contains a job-control
 // round-trip to the printer (JOBR over 1865, up to 3 s), and for every model
 // it contains the response write. Reading only the count would admit a
 // webhook inside that gap and start two scans. So the panel gate reserves

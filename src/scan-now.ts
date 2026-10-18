@@ -21,8 +21,8 @@ async function main() {
   const target = await createPrinterTarget(config);
   const printerIp = await target.target();
 
-  // No panel to ask, so the env-var fallbacks decide. Same vars the FF-680W
-  // job-number branch already uses (see resolveScanDispatch in startup.ts).
+  // No panel to ask, so the env-var fallbacks decide. Same vars a v3
+  // trigger without PushScanIDIn falls back to (see resolveScanDispatch in startup.ts).
   const duplex = config.scanSides === "duplex";
   const action = config.scanFormat;
   log.info(

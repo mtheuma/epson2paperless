@@ -10,10 +10,12 @@ import { resolveLegacyEntry } from "./esci/dialects/registry.js";
 import { runJobListCommit, runJobNumberCommit } from "./job-control.js";
 import { PID_FF680W, PID_DS575W } from "./printer-ids.js";
 import {
+  isV3Request,
   PushScanRefusedError,
   resolveEffectiveAction,
   type PushScanCallback,
   type PushScanInfo,
+  type PushScanRequestKind,
   type PushScanServerOptions,
 } from "./pushscan.js";
 import { setLastScanTime, type ScanTriggerOptions } from "./health.js";
@@ -61,7 +63,7 @@ export function logStartupBanner(config: Config, modeMessage: string): void {
   }
   if (config.netscanVersion !== "auto") {
     log.info(
-      `NetScanMonitor keepalive version: FORCED v${config.netscanVersion} (NETSCAN_VERSION) — auto normally selects by announced PID. Unset for normal operation.`,
+      `NetScanMonitor keepalive version: FORCED v${config.netscanVersion} (NETSCAN_VERSION) — auto normally answers the tags the printer's announcement requests (v3 when it asks for Ver), else selects by announced PID. Unset for normal operation.`,
     );
   }
   log.info(`JPEG quality: ${config.jpegQuality}`);
@@ -88,11 +90,12 @@ export async function startPrinterDiscovery(
       eventPort: 2968,
       destId: config.scanDestId,
       language: config.language,
-      // "auto" leaves version undefined so the responder picks per-announcement
-      // (3.0 for the V3_KEEPALIVE_PRODUCTS PIDs — FF-680W, DS-575W — 2.0
-      // otherwise). An explicit NETSCAN_VERSION
-      // pins every burst to that wire format — compatibility-triage aid for
-      // button-only scanners we don't recognise yet.
+      // "auto" leaves version undefined so the responder picks per-announcement:
+      // it answers the beacon's requested tags (3.0 exactly when `Ver` is
+      // requested), and a beacon with no tag list falls back to the PID (3.0
+      // for the V3_KEEPALIVE_PRODUCTS PIDs — FF-680W, DS-575W — 2.0 otherwise).
+      // An explicit NETSCAN_VERSION pins every burst to that wire format —
+      // compatibility-triage aid.
       version: config.netscanVersion === "auto" ? undefined : config.netscanVersion,
     },
     printerIp,
@@ -126,17 +129,28 @@ export function buildPaperlessOptions(config: Config): PaperlessUploadOptions | 
   };
 }
 
-// Button-only scanners (no destination-picker panel) trigger scanning through a
-// JobList → dummy-job-commit → JobNumber handshake rather than a direct
-// PushScanIDIn. Both the FF-680W and its DS-575W sibling use this flow; the
-// job-control commands in job-control.ts were reverse-engineered from the
-// FF-680W, and the DS-575W's JobList is structurally identical (verified on the
-// wire, issue #128). Mirrors V3_KEEPALIVE_PRODUCTS in keepalive.ts — separate
-// axis, shared membership today (see printer-ids.ts).
-const JOB_CONTROL_PRODUCTS = new Set([PID_FF680W, PID_DS575W]);
+// Job control follows the request, not the product: a NetScanMonitor v3
+// JobList is answered after a JOBW dummy-job write over TCP/1865, and a v3
+// PushScan after a JOBR read. v1 and v2 requests never use job control.
+type JobControlStep = "JOBW" | "JOBR";
 
-function usesJobControl(productName: string | null): boolean {
-  return productName !== null && JOB_CONTROL_PRODUCTS.has(productName);
+function jobControlFor(kind: PushScanRequestKind, info: PushScanInfo): JobControlStep | null {
+  if (!isV3Request(info.protocolVersion)) return null;
+  if (kind === "jobList") return "JOBW";
+  if (kind === "pushScan") return "JOBR";
+  return null;
+}
+
+// Printers whose job-control exchange is confirmed on the wire: the FF-680W
+// and its DS-575W sibling (issue #128). For them a job-control failure is
+// answered with the protocol ERROR. For any other v3 printer job control is
+// inferred from the request, so a failure there warns and the scan carries on.
+// Mirrors V3_KEEPALIVE_PRODUCTS in keepalive.ts — separate axis, shared
+// membership today (see printer-ids.ts).
+const CONFIRMED_JOB_CONTROL_PRODUCTS = new Set([PID_FF680W, PID_DS575W]);
+
+function hasConfirmedJobControl(productName: string | null): boolean {
+  return productName !== null && CONFIRMED_JOB_CONTROL_PRODUCTS.has(productName);
 }
 
 /**
@@ -162,6 +176,8 @@ export function buildPushScanServerOptions(
   admission: Pick<ScanAdmission, "isBusy" | "reserve"> &
     Partial<Pick<ScanAdmission, "expectFollowUp">>,
 ): PushScanServerOptions {
+  // Unrecognised products whose job control has already been announced.
+  const inferredJobControl = new Set<string | null>();
   return {
     validatePeer: target ? (peer) => target.accepts(peer) : undefined,
     beforeResponse: async ({ kind, info, peerAddress, onAbandon }) => {
@@ -173,8 +189,8 @@ export function buildPushScanServerOptions(
       //
       // Admitting also *reserves* the slot from this moment. The trigger only
       // becomes a tracked scan once the OK has been flushed and the callback
-      // runs; on the FF-680W / DS-575W that gap holds the JOBR read below (a
-      // network round-trip with a 3 s timeout), and on every model it holds
+      // runs; on a v3 printer that gap holds the JOBR read below (a network
+      // round-trip with a 3 s timeout), and on every model it holds
       // the response write. Without the reservation a webhook arriving in
       // that gap would be admitted and two scans would start. The release
       // hook goes to pushscan.ts at once via onAbandon, so the server drops
@@ -191,23 +207,45 @@ export function buildPushScanServerOptions(
 
       const targetIp = peerAddress || config.printerIp;
       if (!targetIp) throw new Error("Push-scan peer address is required");
-      if (!usesJobControl(info.productName)) return;
+      const step = jobControlFor(kind, info);
+      if (step === null) return;
 
-      if (kind === "jobList") {
-        log.debug(`${info.productName} JobList received — committing dummy job over TCP/1865`);
-        await runJobListCommit({ printerIp: targetIp });
+      const printer = info.productName ?? "Printer with no ProductNameIn";
+      const confirmed = hasConfirmedJobControl(info.productName);
+      if (!confirmed && !inferredJobControl.has(info.productName)) {
+        inferredJobControl.add(info.productName);
+        log.info(
+          `${printer} sent a v3 ${kind} — job control ` +
+            `(JOBW at JobList, JOBR at PushScan) inferred from the request; this printer's ` +
+            `job control is unconfirmed, so a failure warns and the scan carries on`,
+        );
+      }
+
+      try {
+        if (step === "JOBW") {
+          log.debug(`${printer} JobList received — committing dummy job over TCP/1865`);
+          await runJobListCommit({ printerIp: targetIp });
+        } else {
+          log.debug(
+            `${printer} PushScan (JobNumberIn=${info.jobNumber}) received — ` +
+              `reading selected job over TCP/1865`,
+          );
+          await runJobNumberCommit({ printerIp: targetIp });
+        }
+      } catch (err) {
+        if (confirmed) throw err;
+        log.warn(
+          `${printer} ${step} job-control step failed — carrying on with the scan ` +
+            `(job control is inferred for this printer)`,
+          err,
+        );
+      }
+
+      if (step === "JOBW") {
         // The PushScan that follows is the real trigger. The daemon's drain
         // must stay up for it (one-shot's coordinator already does), and the
         // gate must not refuse it — hence a hand-off, not a reservation.
         admission.expectFollowUp?.(JOB_LIST_HANDOFF_MS);
-        return;
-      }
-
-      if (kind === "pushScan" && info.jobNumber !== null && info.pushScanId === null) {
-        log.debug(
-          `${info.productName} JobNumberIn=${info.jobNumber} received — reading selected job over TCP/1865`,
-        );
-        await runJobNumberCommit({ printerIp: targetIp });
       }
     },
   };
@@ -216,7 +254,7 @@ export function buildPushScanServerOptions(
 /**
  * Counts `beforeResponse` hooks in flight, for one-shot's shutdown coordinator
  * (issue #202). A trigger holds the admission slot only from the moment its
- * `pushScan` hook reserves it, but on the FF-680W / DS-575W the panel press
+ * `pushScan` hook reserves it, but on a v3 printer the panel press
  * first sends a JobList whose JOBW round-trip over TCP/1865 reserves nothing —
  * a signal there would otherwise look like "nothing pending" and exit inside a
  * job-control transaction that holds the printer's lock. The count is the
@@ -432,10 +470,14 @@ export function resolveScanDispatch(
     return { duplex: info.duplex, action: effective };
   }
 
-  if (usesJobControl(info.productName) && info.jobNumber !== null && info.pushScanId === null) {
+  // A v3 trigger may carry no panel selection (button-only scanners send a
+  // bare JobNumberIn), and then its sides and format come from config. A v2
+  // trigger without one stays refused.
+  if (isV3Request(info.protocolVersion) && info.pushScanId === null) {
     const duplex = config.scanSides === "duplex";
+    const job = info.jobNumber === null ? "" : ` (JobNumberIn=${info.jobNumber})`;
     log.info(
-      `${info.productName} JobNumberIn=${info.jobNumber} with no PushScanIDIn — ` +
+      `${info.productName ?? "Printer with no ProductNameIn"} v3 trigger${job} with no PushScanIDIn — ` +
         `using SCAN_SIDES=${config.scanSides}, SCAN_FORMAT=${config.scanFormat}`,
     );
     return { duplex, action: config.scanFormat };

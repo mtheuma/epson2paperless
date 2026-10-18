@@ -1082,7 +1082,7 @@ describe("runEsci2ScanOverPlain — ET-2750 fixture replay", () => {
 
   it("flatbed-single-page-pdf: drives the captured wire and produces one PDF", async () => {
     // Source: tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl
-    // Provenance documented in `.reference/wireshark-captures/et-2750/protocol-decode.md`.
+    // Capture notes are in that fixture directory's README.md.
     // ET-2750 is flatbed-only hardware; no ADF or duplex variants exist.
     // The fixture is large (~3.9 MB) because each ESC/I-2 IMG cycle wraps
     // pixel data in 0xa000 IS frames — there's no 0xa200 image-stream

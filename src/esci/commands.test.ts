@@ -125,19 +125,21 @@ describe("esci-legacy FS W block", () => {
   });
 });
 
-import { parseFsGReply } from "./commands.js";
+import { parseFsGReply, type FsGReply } from "./commands.js";
 
 describe("esci-legacy FS G reply parser", () => {
   // Reproduced from .reference/wireshark-captures/wf-3620/flatbed-single-page-jpeg.pcap
   // (frame 209, printer→host, 14 bytes).
   const REPLY_HEX = "021250e80000d606000028740000";
 
-  it("parses status word, chunk size, bytes-per-line, and total lines", () => {
+  it("parses status word, block size, block count, and the last block's byte count", () => {
     const out = parseFsGReply(Buffer.from(REPLY_HEX, "hex"));
-    expect(out.statusWord).toBe(0x0212);
-    expect(out.chunkSize).toBe(0x0000e850);
-    expect(out.bytesPerLine).toBe(0x000006d6);
-    expect(out.totalLines).toBe(0x00007428);
+    expect(out).toEqual({
+      statusWord: 0x0212,
+      chunkSize: 59472, // 4 lines of 4956 px × 3 bytes
+      blockCount: 1750,
+      lastBlockBytes: 29736, // the 2 lines left over: 7002 = 1750 × 4 + 2
+    });
   });
 
   it("throws on a reply that's not 14 bytes", () => {
@@ -202,12 +204,86 @@ describe("esci-legacy IS-0x2200 stream-config payload", () => {
   });
 
   it("PDF mode payload matches the captured 38 bytes", () => {
-    const reply = parseFsGReply(Buffer.from("021250e80000b501000028740000", "hex"));
+    const reply = parseFsGReply(Buffer.from("021250e80000b501000032910000", "hex"));
     const payload = buildStreamConfigPayload(reply, "pdf");
     expect(payload.toString("hex")).toBe(
       "0000001e00000000" + "000001b5000000000000e851000000010000e85106000000010000913306",
     );
   });
+});
+
+import { ET_FSW_BLOCK, ET_STREAM_CONFIG } from "./dialects/et2550-data.js";
+import { XP_FSW_BLOCK, XP_STREAM_CONFIG } from "./dialects/xp620-data.js";
+
+describe("esci-legacy block layout across FS W, FS G and the stream config", () => {
+  // FS G replies and raster sizes as captured on each model (see the legacy
+  // fixtures under tools/pcap-extract/captures/). These pin that the fields
+  // agree on captured data; the WF-3620's last-block size is a per-format
+  // constant that happens to equal its captured reply's lastBlockBytes.
+  const cases = [
+    {
+      name: "WF-3620 JPG (600 dpi)",
+      fsw: buildFsWBlock({ source: "flatbed", format: "jpg" }),
+      fsg: "021250e80000d606000028740000",
+      streamConfig: (r: FsGReply) => buildStreamConfigPayload(r, "jpg"),
+      widthPx: 4956,
+      heightPx: 7002,
+      linesPerBlock: 4,
+    },
+    {
+      name: "WF-3620 PDF (300 dpi)",
+      fsw: buildFsWBlock({ source: "flatbed", format: "pdf" }),
+      fsg: "021250e80000b501000032910000",
+      streamConfig: (r: FsGReply) => buildStreamConfigPayload(r, "pdf"),
+      widthPx: 2478,
+      heightPx: 3501,
+      linesPerBlock: 8,
+    },
+    {
+      name: "ET-2550",
+      fsw: ET_FSW_BLOCK,
+      fsg: "020210ef0000b60100006a950000",
+      streamConfig: () => ET_STREAM_CONFIG,
+      widthPx: 2550,
+      heightPx: 3509,
+      linesPerBlock: 8,
+    },
+    {
+      name: "XP-620",
+      fsw: XP_FSW_BLOCK,
+      fsg: "020286dc0300670000005f910000",
+      streamConfig: () => XP_STREAM_CONFIG,
+      widthPx: 2481,
+      heightPx: 3507,
+      linesPerBlock: 34,
+    },
+  ];
+
+  it.each(cases)("$name: FS W byte 28 is the scanline count of each full block", (c) => {
+    const reply = parseFsGReply(Buffer.from(c.fsg, "hex"));
+    expect(c.fsw[28]).toBe(c.linesPerBlock);
+    expect(reply.chunkSize).toBe(c.linesPerBlock * c.widthPx * 3);
+  });
+
+  it.each(cases)("$name: the full blocks plus the last block cover the page", (c) => {
+    const reply = parseFsGReply(Buffer.from(c.fsg, "hex"));
+    expect(reply.blockCount * reply.chunkSize + reply.lastBlockBytes).toBe(
+      c.widthPx * c.heightPx * 3,
+    );
+  });
+
+  it.each(cases)(
+    "$name: the stream config carries the block count, each block's size plus its status byte, and the last block's size plus one before the 0x06 terminator",
+    (c) => {
+      const reply = parseFsGReply(Buffer.from(c.fsg, "hex"));
+      const sc = c.streamConfig(reply);
+      expect(sc.readUInt32BE(8)).toBe(reply.blockCount);
+      expect(sc.readUInt32BE(16)).toBe(reply.chunkSize + 1);
+      expect(sc.readUInt32BE(24)).toBe(reply.chunkSize + 1);
+      expect(sc.readUInt32BE(33)).toBe(reply.lastBlockBytes + 1);
+      expect(sc[37]).toBe(0x06);
+    },
+  );
 });
 
 import { legacyDetectSource } from "./commands.js";

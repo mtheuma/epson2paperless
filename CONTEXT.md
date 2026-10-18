@@ -51,7 +51,7 @@ Where the page is scanned from: flatbed, ADF simplex or ADF duplex.
 _Avoid_: input, feeder (for the flatbed)
 
 **Init poll**:
-The status cycles at the start of an ESC/I-2 session, before the mode switch. Their replies are not read: the source and the errors both come from the status reply after the mode switch, the last before PARA, as in Epson's driver. There, on a printer with both a flatbed and an ADF, "ADF paper empty" means flatbed and anything else means ADF; then an error on the unit being scanned ends the session, and one on another unit only warns. The poll count is an upper bound, not a requirement.
+The status cycles at the start of an ESC/I-2 session, before the mode switch. Their replies are not read: the source and the errors both come from the status reply after the mode switch, the last before PARA, which is the scanner's state at scan time. There, on a printer with both a flatbed and an ADF, "ADF paper empty" means flatbed and anything else means ADF; then an error on the unit being scanned ends the session, and one on another unit only warns. The poll count is an upper bound, not a requirement.
 _Avoid_: warm-up loop, readiness wait
 
 ## Colour

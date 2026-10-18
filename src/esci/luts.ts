@@ -1,6 +1,7 @@
-// Gamma LUTs captured from the WF-3620 driver. The driver hardcodes these
-// rather than computing per-scan, so we do likewise. Bytes are reproduced
-// verbatim from .reference/wireshark-captures/wf-3620/flatbed-single-page-jpeg.pcap
+// Gamma LUTs captured from WF-3620 sessions. Every captured session sends the
+// same bytes, so they are pinned here rather than computed per scan. Bytes are
+// reproduced verbatim from the flatbed-single-page-jpeg capture
+// (tools/pcap-extract/captures/wf-3620/flatbed-single-page-jpeg.jsonl)
 // — payload bytes 1..256 of the `52 / 47 / 42 + LUT` packets (the leading
 // tag is added by the FS Z command builder, not by the LUT itself).
 

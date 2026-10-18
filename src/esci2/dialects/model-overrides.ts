@@ -319,7 +319,7 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
       ],
     },
   },
-  // The JPG and PDF settings differ: the driver sent each action its own
+  // The JPG and PDF settings differ: the captures send each action its own
   // tone curve and colour matrix.
   {
     pids: ["1147"],
@@ -355,7 +355,7 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
         { kind: "epson-capture", link: { fixture: `${PCAP}/xp-7100/jpg-flatbed.jsonl` } },
         { kind: "epson-capture", link: { fixture: `${PCAP}/xp-7100/jpg-adf-simplex.jsonl` } },
       ],
-      // The driver polled 11-13 times; 3 is the ET-4950 count, run on the
+      // The captures poll 11-13 times; 3 is the ET-4950 count, run on the
       // reporter's hardware.
       pollCount: [{ kind: "reporter-report", link: { issue: 65 } }],
     },
@@ -404,7 +404,7 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
         { kind: "epson-capture", link: { fixture: `${PCAP}/et-4800/flatbed-jpg.jsonl` } },
         { kind: "epson-capture", link: { fixture: `${PCAP}/et-4800/adf-jpg.jsonl` } },
       ],
-      // The driver polled until ready (11-12 times); 3, the ET-4950 count, was
+      // The captures poll until ready (11-12 times); 3, the ET-4950 count, was
       // run on the reporter's hardware.
       pollCount: [{ kind: "reporter-report", link: { issue: 80 } }],
     },
@@ -437,7 +437,7 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
       ],
     },
   },
-  // A long-page window, as the driver sent it: 8.5" x 36" at 200 DPI.
+  // A long-page window, as captured: 8.5" x 36" at 200 DPI.
   {
     pids: [],
     names: ["FF-680W"],
