@@ -91,7 +91,7 @@ That is less of a limitation than it sounds, because the curve is not a per-mode
 
 So a new dialect that has no capture of its own should inherit the near-identity `et4950-stock` class. That's the pass-through choice: it asks the printer for no tone shaping and leaves its default rendering alone, rather than approximating some unknown model-specific value.
 
-The ET-8500 and ET-7700 both took that inheritance when they were added from a diagnostic alone, and both were later validated on real hardware. The ET-7700's compatibility-test-page scan puts numbers on it: nominal-64 grey returned 72/69/69 with no shadow crush, grey-patch channel spreads of 3–11 and no cast. That is what a correctly inherited pass-through curve looks like, and it is the practical answer to the question this section opens with. Full working in `.reference/research/esci2-tone-curve-query.md` (local only).
+The ET-8500 and ET-7700 both took that inheritance when they were added from a diagnostic alone, and both were later validated on real hardware. The ET-7700's compatibility-test-page scan puts numbers on it: nominal-64 grey returned 72/69/69 with no shadow crush, grey-patch channel spreads of 3–11 and no cast. That is what a correctly inherited pass-through curve looks like, and it is the practical answer to the question this section opens with. (That scan measured the ET-7700's earlier pair. It now sends the XP-7100's near-identity `xp7100-pdf` curve with the identity colour matrix, an inherited pair expected to match, which a scan has yet to confirm.) Full working in `.reference/research/esci2-tone-curve-query.md` (local only).
 
 ### The byte-for-byte replay test
 

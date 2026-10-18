@@ -17,7 +17,7 @@ See:
 
 ## Commands
 
-- `npm test` — full Vitest suite. Two replay harnesses anchor the regression shield. `src/esci2/scanner.test.ts` asserts byte-for-byte equivalence of the ESC/I-2 path against Frida-captured ET-4950 (TLS) traces, plus pcap-derived replay for the plain-TCP dialects (ET-2750, XP-7100, ET-4800, ET-7700, FF-680W, DS-575W) with a PARA byte-equivalence shield. `src/esci/scanner.test.ts` does the same for the WF-3620 / XP-620 ESC/I path against pcap-extracted fixtures. Protocol edits that change wire bytes must be mirrored in fixtures.
+- `npm test` — full Vitest suite. Two replay harnesses anchor the regression shield. `src/esci2/scanner.test.ts` asserts byte-for-byte equivalence of the ESC/I-2 path against Frida-captured ET-4950 (TLS) traces, plus pcap-derived replay for the plain-TCP dialects (ET-2750, XP-7100, ET-4800, ET-7700, FF-680W, DS-575W) with a PARA byte-equivalence shield (the ET-7700's own-capture fixtures record an earlier colour pair, so its PARA is held to them everywhere but `#GMT` / `#CMX`). `src/esci/scanner.test.ts` does the same for the WF-3620 / XP-620 ESC/I path against pcap-extracted fixtures. Protocol edits that change wire bytes must be mirrored in fixtures.
 - `npm test -- <name>` — filter by file name (e.g. `npm test -- pushscan`).
 - `npx vitest run <path> --reporter=verbose` — single file, verbose output.
 - `npm run dev` — start the long-running service via `tsx` (no build step).

@@ -13,10 +13,16 @@ ET-7700 is flatbed-only hardware (no ADF, no duplex). Both captures were
 provided by the issue [#145](https://github.com/mtheuma/epson2paperless/issues/145)
 reporter and record **epson2paperless itself** (the `:main` image carrying the
 speculative dialect from PR #153) scanning via a panel trigger — not Epson's
-driver. The captured PARA is byte-identical to `composePara`'s output for the
-model override in both sessions, which is what the replay test's
-byte-equivalence shield pins. Because the captures are of our own service,
-no init-handshake trimming is needed: the sessions replay verbatim.
+driver. Because the captures are of our own service, no init-handshake
+trimming is needed: the sessions replay verbatim.
+
+The recorded PARA carries the old colours: that dialect's mixed pair (the
+`et4950-stock` tone curve with the `et4800-um08` colour matrix). The model
+override now sends a neutral pair (the `xp7100-pdf` tone curve with the
+identity matrix), so the replay test pins the scanner's PARA to
+`composePara`'s output and holds it to the recording everywhere except the
+`#GMT` and `#CMX` segments. These fixtures are a structural oracle, not a
+colour one. The recordings are left as captured.
 
 Each pcap holds exactly one TCP conversation on port 1865, so no `--stream`
 isolation is required:

@@ -621,9 +621,10 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     },
   },
   // Shaped like the ET-8500 (same AREA, GMM, CMX and QIT lists), but its CAPA
-  // fingerprint differs, so it is an override of its own. Its pair is mixed
-  // (colour-pair.test.ts), and its fixtures are own captures: changing the
-  // pair means re-pinning their PARA.
+  // fingerprint differs, so it is an override of its own. It sends a neutral
+  // pair: the XP-7100's xp7100-pdf tone curve with the identity matrix. Its
+  // fixtures are own captures of the earlier pair, so its replay holds the
+  // PARA to them everywhere but #GMT and #CMX.
   {
     pids: ["112B"],
     names: [],
@@ -633,12 +634,14 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     fbExtents: "generic",
     adfExtents: null,
     gmm: "UG18",
-    gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
-    cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
+    gammaClass: { jpg: "xp7100-pdf", pdf: "xp7100-pdf" },
+    cmxClass: { jpg: "identity-um08", pdf: "identity-um08" },
     verifiedWireDpis: [300], // the replay fixtures (#145)
     provenance: {
       models: ["ET-7700"],
       colour: [
+        // The earlier mixed pair, the ET-8500's at the time: the replay
+        // fixtures record it, and the reporter's scan measured it.
         { kind: "inherited:ET-8500", link: { pr: 153 }, vouchesFor: "e15913fe2ab564e6" },
         {
           kind: "own-capture",
@@ -646,6 +649,24 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
           vouchesFor: "e15913fe2ab564e6",
         },
         { kind: "reporter-scan", link: { issue: 145 }, vouchesFor: "e15913fe2ab564e6" },
+        // The neutral pair: the XP-7100's captured xp7100-pdf tone curve,
+        // expected to match, with the identity matrix as the ET-2750 capture
+        // carries it. Provisional until a scan checks it.
+        {
+          kind: "inherited:XP-7100",
+          link: { fixture: "src/esci2/dialects/xp-7100-fixtures/pdf-single.bin" },
+          vouchesFor: "8515bd5a3e9c5c62",
+        },
+        {
+          kind: "inherited:ET-2750",
+          link: { fixture: `${PCAP}/et-2750/flatbed-single-page-pdf.jsonl` },
+          vouchesFor: "8515bd5a3e9c5c62",
+        },
+        {
+          kind: "provisional",
+          link: { fixture: "src/esci2/dialects/xp-7100-fixtures/pdf-single.bin" },
+          vouchesFor: "8515bd5a3e9c5c62",
+        },
       ],
       window: [{ kind: "own-capture", link: { fixture: `${PCAP}/et-7700/flatbed-jpg.jsonl` } }],
       pollCount: [{ kind: "own-capture", link: { fixture: `${PCAP}/et-7700/flatbed-jpg.jsonl` } }],
