@@ -13,6 +13,8 @@ export type ParaValue = number | string | Buffer;
 export interface ParaSegment {
   code: string;
   values: ParaValue[];
+  /** The segment's bytes as sent, `#` through its last padding byte. */
+  bytes: Buffer;
 }
 
 /** The segments of `body`; throws on any byte that doesn't fit the grammar. */
@@ -27,7 +29,8 @@ export function parseParaSegments(body: Buffer): ParaSegment[] {
   };
   while (off < body.length) {
     if (body[off] !== 0x23) throw new Error(`parseParaSegments: expected # at byte ${off}`);
-    const segment: ParaSegment = { code: text(off + 1, 3), values: [] };
+    const start = off;
+    const segment: Omit<ParaSegment, "bytes"> = { code: text(off + 1, 3), values: [] };
     off += 4;
     while (off < body.length && body[off] !== 0x23) {
       const kind = text(off, 1);
@@ -50,7 +53,7 @@ export function parseParaSegments(body: Buffer): ParaSegment[] {
         throw new Error(`parseParaSegments: unparseable value at byte ${off}`);
       }
     }
-    out.push(segment);
+    out.push({ ...segment, bytes: body.subarray(start, off) });
   }
   return out;
 }

@@ -14,10 +14,8 @@ import { recordedDialect } from "../test-support/dialects.js";
 // Models that send a mixed pair today, until their reporter-gated colour fix
 // lands. Keyed by model name, matched anywhere in the entry's displayName.
 const KNOWN_MIXED_PAIRS: Readonly<Record<string, string>> = {
-  "ET-8500":
-    "ET-4800's Epson-look matrix with a neutral curve picked as the photo default (#120); fix awaits a compatibility-page scan.",
   "ET-7700":
-    "Inherits the ET-8500's pair, pinned by own-capture fixtures (#145); fix awaits a compatibility-page scan.",
+    "The ET-4800's Epson-look matrix with a neutral curve, pinned by own-capture fixtures (#145).",
 };
 
 const knownException = (entry: Pick<ModelOverride, "displayName">): string | undefined =>
