@@ -319,7 +319,7 @@ export async function shutdown(deps: ShutdownDeps): Promise<void> {
 
   // Nothing closes until the drain is done, the push-scan listener included.
   // The tracker holds scans and admitted panel triggers alike (issue #207),
-  // and on the FF-680W / DS-575W a press is a JobList followed by a PushScan
+  // and on a v3 printer a press is a JobList followed by a PushScan
   // on a fresh connection: closing the listener first would turn a follow-up
   // that lands mid-drain into a refused connection and a panel error. A new
   // press while a scan drains is refused at admission as before, so the open

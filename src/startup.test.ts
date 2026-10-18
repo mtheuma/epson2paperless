@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, type MockInstance } from "vitest";
 
 vi.mock("./protocol-probe.js", () => ({
   detectVariant: vi.fn(),
@@ -59,6 +59,7 @@ const FF680W_JOB_NUMBER_INFO: PushScanInfo = {
   ipAddress: "C0A80A08",
   duplex: false,
   action: "unknown",
+  protocolVersion: "3.00",
 };
 
 // DS-575W (issue #128) is a button-only sibling of the FF-680W that drives the
@@ -112,12 +113,33 @@ describe("resolveScanDispatch", () => {
     ).toEqual({ duplex: true, action: "pdf" });
   });
 
-  it("refuses a JobNumberIn scan from a non-job-control product (no guessing)", () => {
-    // Only the job-control scanners (FF-680W, DS-575W) fall back to config
-    // defaults; any other product that sends JobNumberIn without a PushScanIDIn
-    // is ignored.
-    const otherInfo = { ...FF680W_JOB_NUMBER_INFO, productName: "PID 11D1" };
-    expect(resolveScanDispatch(otherInfo, makeConfig())).toBeNull();
+  it("refuses a v2 trigger with no PushScanIDIn (no guessing)", () => {
+    // Only a v3 trigger falls back to config defaults; a v2 one that sends
+    // JobNumberIn without a PushScanIDIn is ignored, whatever the product.
+    for (const productName of ["PID 11D1", PID_FF680W]) {
+      const v2 = { ...FF680W_JOB_NUMBER_INFO, productName, protocolVersion: "2.00" };
+      expect(resolveScanDispatch(v2, makeConfig())).toBeNull();
+    }
+  });
+
+  it("uses SCAN_FORMAT + SCAN_SIDES for a v3 trigger from a printer outside the known list", () => {
+    const unknownV3 = { ...FF680W_JOB_NUMBER_INFO, productName: "PID 1234" };
+    expect(
+      resolveScanDispatch(unknownV3, makeConfig({ scanFormat: "jpg", scanSides: "simplex" })),
+    ).toEqual({ duplex: false, action: "jpg" });
+  });
+
+  it("uses SCAN_FORMAT + SCAN_SIDES for a v3 trigger with neither PushScanIDIn nor JobNumberIn", () => {
+    const bare = { ...FF680W_JOB_NUMBER_INFO, productName: "PID 1234", jobNumber: null };
+    expect(
+      resolveScanDispatch(bare, makeConfig({ scanFormat: "pdf", scanSides: "duplex" })),
+    ).toEqual({ duplex: true, action: "pdf" });
+  });
+
+  it("does not override a v3 trigger whose PushScanIDIn decodes to preview-reject", () => {
+    // The fallback stands in for a missing panel selection, not a rejected one.
+    const preview = { ...FF680W_JOB_NUMBER_INFO, pushScanId: "04", action: "preview" as const };
+    expect(resolveScanDispatch(preview, makeConfig({ previewAction: "reject" }))).toBeNull();
   });
 });
 
@@ -325,6 +347,7 @@ describe("buildPushScanServerOptions", () => {
       ipAddress: "C0A8013A",
       duplex: false,
       action: "pdf",
+      protocolVersion: "2.00",
     };
     // pushscan.ts receives the release hook through ctx.onAbandon; `handed`
     // stands in for the server's slot.
@@ -447,18 +470,22 @@ describe("buildPushScanServerOptions", () => {
       expect(inflight.count).toBe(0);
     });
 
-    it("starts no hand-off for a JobList from a product without job-control", async () => {
+    it("starts no hand-off for a v2 JobList, which uses no job control", async () => {
       const inflight = createInflightTracker();
       const admission = createScanAdmission(inflight);
       const options = buildPushScanServerOptions(makeConfig(), undefined, admission);
       await options.beforeResponse?.(
-        hookArgs("jobList", { ...FF680W_JOB_NUMBER_INFO, productName: "PID 11D1" }),
+        hookArgs("jobList", {
+          ...FF680W_JOB_NUMBER_INFO,
+          productName: "PID 11D1",
+          protocolVersion: "2.00",
+        }),
       );
       expect(inflight.count).toBe(0);
     });
   });
 
-  it("does not run job-control for other products", async () => {
+  it("does not run job-control for a v2 request", async () => {
     const options = buildPushScanServerOptions(makeConfig(), undefined, NO_GATE);
 
     await options.beforeResponse?.({
@@ -468,12 +495,144 @@ describe("buildPushScanServerOptions", () => {
       xuid: "6",
       peerAddress: "192.0.2.5",
       onAbandon: () => {},
-      info: { ...FF680W_JOB_NUMBER_INFO, productName: "PID 11D1" },
+      info: { ...FF680W_JOB_NUMBER_INFO, productName: "PID 11D1", protocolVersion: "2.00" },
       capabilities: ["OfficeFormat"],
     });
 
     expect(runJobListCommitMock).not.toHaveBeenCalled();
     expect(runJobNumberCommitMock).not.toHaveBeenCalled();
+  });
+
+  // Job control follows the request, not a product list: a v3 JobList is
+  // answered after the JOBW write and a v3 PushScan after the JOBR read, for
+  // any printer. v1 and v2 requests never use it.
+  describe("job control from the request type", () => {
+    const UNKNOWN_V3: PushScanInfo = { ...FF680W_JOB_NUMBER_INFO, productName: "PID 1234" };
+    const args = (
+      kind: "jobList" | "pushScan" | "scanEnd",
+      info: PushScanInfo,
+      onAbandon: (release: () => void) => void = () => {},
+    ) => ({
+      kind,
+      headers: "",
+      body: "",
+      xuid: "9",
+      peerAddress: "203.0.113.30",
+      onAbandon,
+      info,
+      capabilities: [] as string[],
+    });
+    let infoSpy: MockInstance<typeof console.log>;
+    let warnSpy: MockInstance<typeof console.warn>;
+    const logged = (spy: MockInstance<typeof console.log>) =>
+      spy.mock.calls.map((call) => call.map(String).join(" ")).join("\n");
+    beforeEach(() => {
+      infoSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+      warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+      return () => {
+        infoSpy.mockRestore();
+        warnSpy.mockRestore();
+      };
+    });
+
+    it("runs JOBW for a v3 JobList from a printer outside the known list", async () => {
+      const options = buildPushScanServerOptions(makeConfig(), undefined, NO_GATE);
+      await options.beforeResponse?.(args("jobList", { ...UNKNOWN_V3, jobNumber: null }));
+      expect(runJobListCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.30" });
+      expect(runJobNumberCommitMock).not.toHaveBeenCalled();
+    });
+
+    it("runs JOBR for a v3 PushScan from a printer outside the known list", async () => {
+      const options = buildPushScanServerOptions(makeConfig(), undefined, NO_GATE);
+      await options.beforeResponse?.(args("pushScan", UNKNOWN_V3));
+      expect(runJobNumberCommitMock).toHaveBeenCalledWith({ printerIp: "203.0.113.30" });
+      expect(runJobListCommitMock).not.toHaveBeenCalled();
+    });
+
+    it("runs JOBR for a v3 PushScan that also carries PushScanIDIn", async () => {
+      const options = buildPushScanServerOptions(makeConfig(), undefined, NO_GATE);
+      await options.beforeResponse?.(
+        args("pushScan", { ...UNKNOWN_V3, pushScanId: "02", jobNumber: null, action: "pdf" }),
+      );
+      expect(runJobNumberCommitMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("never runs job control for a v2 request, whatever the product", async () => {
+      const options = buildPushScanServerOptions(makeConfig(), undefined, NO_GATE);
+      const v2 = { ...FF680W_JOB_NUMBER_INFO, protocolVersion: "2.00" };
+      await options.beforeResponse?.(args("jobList", v2));
+      await options.beforeResponse?.(args("pushScan", v2));
+      expect(runJobListCommitMock).not.toHaveBeenCalled();
+      expect(runJobNumberCommitMock).not.toHaveBeenCalled();
+    });
+
+    it("runs no job control for a v3 ScanEnd", async () => {
+      const options = buildPushScanServerOptions(makeConfig(), undefined, NO_GATE);
+      await options.beforeResponse?.(args("scanEnd", UNKNOWN_V3));
+      expect(runJobListCommitMock).not.toHaveBeenCalled();
+      expect(runJobNumberCommitMock).not.toHaveBeenCalled();
+    });
+
+    it("logs the inference once per unrecognised PID", async () => {
+      const options = buildPushScanServerOptions(makeConfig(), undefined, NO_GATE);
+      await options.beforeResponse?.(args("jobList", { ...UNKNOWN_V3, jobNumber: null }));
+      await options.beforeResponse?.(args("pushScan", UNKNOWN_V3));
+      await options.beforeResponse?.(args("pushScan", { ...UNKNOWN_V3, productName: "PID 5678" }));
+      const lines = logged(infoSpy)
+        .split("\n")
+        .filter((line) => /job control/i.test(line) && /inferred/i.test(line));
+      expect(lines).toHaveLength(2);
+      expect(lines[0]).toContain("PID 1234");
+      expect(lines[1]).toContain("PID 5678");
+    });
+
+    it("logs no inference for the FF-680W or DS-575W", async () => {
+      const options = buildPushScanServerOptions(makeConfig(), undefined, NO_GATE);
+      await options.beforeResponse?.(args("pushScan", FF680W_JOB_NUMBER_INFO));
+      await options.beforeResponse?.(args("pushScan", DS575W_JOB_NUMBER_INFO));
+      expect(logged(infoSpy)).not.toMatch(/inferred/i);
+    });
+
+    it("warns and carries on when JOBR fails for an unrecognised PID", async () => {
+      runJobNumberCommitMock.mockRejectedValue(new Error("JOBR timeout"));
+      const admission = createScanAdmission(createInflightTracker());
+      let release: (() => void) | undefined;
+      const options = buildPushScanServerOptions(makeConfig(), undefined, admission);
+      await expect(
+        options.beforeResponse?.(
+          args("pushScan", UNKNOWN_V3, (r) => {
+            release = r;
+          }),
+        ),
+      ).resolves.toBeUndefined();
+      expect(logged(warnSpy)).toMatch(/PID 1234[\s\S]*JOBR timeout/);
+      // The scan goes ahead, so the slot stays reserved for the callback.
+      expect(admission.isBusy()).toBe(true);
+      expect(typeof release).toBe("function");
+    });
+
+    it("warns, carries on and still expects the follow-up when JOBW fails for an unrecognised PID", async () => {
+      runJobListCommitMock.mockRejectedValue(new Error("JOBW timeout"));
+      const inflight = createInflightTracker();
+      const admission = createScanAdmission(inflight);
+      const options = buildPushScanServerOptions(makeConfig(), undefined, admission);
+      await expect(
+        options.beforeResponse?.(args("jobList", { ...UNKNOWN_V3, jobNumber: null })),
+      ).resolves.toBeUndefined();
+      expect(logged(warnSpy)).toMatch(/PID 1234[\s\S]*JOBW timeout/);
+      expect(inflight.count).toBe(1); // hand-off for the PushScan that follows the OK
+    });
+
+    it("still answers a job-control failure with an error for the FF-680W and DS-575W", async () => {
+      runJobNumberCommitMock.mockRejectedValue(new Error("JOBR timeout"));
+      const options = buildPushScanServerOptions(makeConfig(), undefined, NO_GATE);
+      await expect(
+        options.beforeResponse?.(args("pushScan", FF680W_JOB_NUMBER_INFO)),
+      ).rejects.toThrow("JOBR timeout");
+      await expect(
+        options.beforeResponse?.(args("pushScan", DS575W_JOB_NUMBER_INFO)),
+      ).rejects.toThrow("JOBR timeout");
+    });
   });
 });
 
