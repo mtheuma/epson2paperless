@@ -61,7 +61,7 @@ export function logStartupBanner(config: Config, modeMessage: string): void {
   }
   if (config.netscanVersion !== "auto") {
     log.info(
-      `NetScanMonitor keepalive version: FORCED v${config.netscanVersion} (NETSCAN_VERSION) — auto normally selects by announced PID. Unset for normal operation.`,
+      `NetScanMonitor keepalive version: FORCED v${config.netscanVersion} (NETSCAN_VERSION) — auto normally answers the tags the printer's announcement requests (v3 when it asks for Ver), else selects by announced PID. Unset for normal operation.`,
     );
   }
   log.info(`JPEG quality: ${config.jpegQuality}`);
@@ -88,11 +88,12 @@ export async function startPrinterDiscovery(
       eventPort: 2968,
       destId: config.scanDestId,
       language: config.language,
-      // "auto" leaves version undefined so the responder picks per-announcement
-      // (3.0 for the V3_KEEPALIVE_PRODUCTS PIDs — FF-680W, DS-575W — 2.0
-      // otherwise). An explicit NETSCAN_VERSION
-      // pins every burst to that wire format — compatibility-triage aid for
-      // button-only scanners we don't recognise yet.
+      // "auto" leaves version undefined so the responder picks per-announcement:
+      // it answers the beacon's requested tags (3.0 exactly when `Ver` is
+      // requested), and a beacon with no tag list falls back to the PID (3.0
+      // for the V3_KEEPALIVE_PRODUCTS PIDs — FF-680W, DS-575W — 2.0 otherwise).
+      // An explicit NETSCAN_VERSION pins every burst to that wire format —
+      // compatibility-triage aid.
       version: config.netscanVersion === "auto" ? undefined : config.netscanVersion,
     },
     printerIp,
