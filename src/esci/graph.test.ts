@@ -499,6 +499,18 @@ describe("esciGraph helper-generated *_ACK1 / *_ACK2 states", () => {
   }
 });
 
+/** A 14-byte FS G reply whose block layout covers ctx's raster exactly (8 lines per block). */
+function fsGReplyFor(ctx: EsciCtx): Buffer {
+  const { widthPx, heightPx } = ctx.entry.raster({ source: ctx.source, format: ctx.format });
+  const chunk = widthPx * 3 * 8;
+  const total = widthPx * heightPx * 3;
+  const payload = Buffer.alloc(14);
+  payload.writeUInt32LE(chunk, 2);
+  payload.writeUInt32LE(Math.floor(total / chunk), 6);
+  payload.writeUInt32LE(total % chunk, 10);
+  return payload;
+}
+
 describe("esciGraph reset / gamma / window / start cycles", () => {
   it("RESET_PAREN advances on a 1-byte reply", () => {
     const state = esciGraph.states.RESET_PAREN;
@@ -546,15 +558,26 @@ describe("esciGraph reset / gamma / window / start cycles", () => {
     const state = esciGraph.states.START;
     if (state.kind === "decision") {
       const ctx = makeCtx({ source: "flatbed", format: "jpg" });
-      const payload = Buffer.alloc(14);
-      payload.writeUInt32LE(0x1000, 2); // chunkSize
-      payload.writeUInt32LE(0x06d6, 6);
-      payload.writeUInt32LE(7002, 10);
+      const payload = fsGReplyFor(ctx);
       const result = state.decide(ctx, { type: ESCI_REPLY, payload });
       expect("next" in result && result.next).toBe("IMG_RECEIVING");
       expect(ctx.imageBuffer.length).toBeGreaterThan(0);
       expect(ctx.geom).not.toBeNull();
       expect(ctx.imageBuffer.length).toBe(ctx.geom!.widthPx * ctx.geom!.heightPx * 3);
+    }
+  });
+
+  it("START fails when the FS G block layout doesn't cover the dialect's raster", () => {
+    const state = esciGraph.states.START;
+    if (state.kind === "decision") {
+      const ctx = makeCtx({ source: "flatbed", format: "jpg" });
+      const payload = fsGReplyFor(ctx);
+      payload.writeUInt32LE(payload.readUInt32LE(10) + 3, 10); // one pixel too many
+      const result = state.decide(ctx, { type: ESCI_REPLY, payload });
+      expect("error" in result && result.error.message).toMatch(
+        /^START: the printer's FS G block layout .* doesn't match the wf3620 .* raster/,
+      );
+      expect(ctx.imageBuffer.length).toBe(0);
     }
   });
 
@@ -573,10 +596,7 @@ describe("esciGraph reset / gamma / window / start cycles", () => {
         format: "jpg",
         deferredImageChunks: [deferred],
       });
-      const payload = Buffer.alloc(14);
-      payload.writeUInt32LE(0x1000, 2);
-      payload.writeUInt32LE(0x06d6, 6);
-      payload.writeUInt32LE(7002, 10);
+      const payload = fsGReplyFor(ctx);
       const result = state.decide(ctx, { type: ESCI_REPLY, payload });
       expect("next" in result && result.next).toBe("IMG_RECEIVING");
       // 50 pixel bytes from the deferred chunk landed in the new buffer.
@@ -608,10 +628,7 @@ describe("esciGraph reset / gamma / window / start cycles", () => {
         pageCount: 1, // about to flush page 2 (back)
         deferredImageChunks: [overflowing],
       });
-      const payload = Buffer.alloc(14);
-      payload.writeUInt32LE(0x1000, 2);
-      payload.writeUInt32LE(0x06d6, 6);
-      payload.writeUInt32LE(7002, 10);
+      const payload = fsGReplyFor(ctx);
       const result = state.decide(ctx, { type: ESCI_REPLY, payload });
       if ("error" in result) throw new Error("unexpected error result");
       // Flush transition fired without any wire chunk needed.

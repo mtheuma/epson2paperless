@@ -117,9 +117,9 @@ export function isV3Request(protocolVersion: string): boolean {
 
 /**
  * Simple regex-based extraction from the SOAP body — no XML parser needed.
- * `headers` supplies the protocol version; omitted, it reads as `2.00`.
+ * `headers` supplies the protocol version (`2.00` when it has none).
  */
-export function parsePushScanRequest(body: string, headers = ""): PushScanInfo {
+export function parsePushScanRequest(body: string, headers: string): PushScanInfo {
   const getId = (tag: string) => {
     const match = body.match(new RegExp(`<${tag}>([^<]*)</${tag}>`));
     return match ? match[1] : null;

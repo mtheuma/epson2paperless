@@ -115,11 +115,20 @@ describe("resolveScanDispatch", () => {
 
   it("refuses a v2 trigger with no PushScanIDIn (no guessing)", () => {
     // Only a v3 trigger falls back to config defaults; a v2 one that sends
-    // JobNumberIn without a PushScanIDIn is ignored, whatever the product.
-    for (const productName of ["PID 11D1", PID_FF680W]) {
-      const v2 = { ...FF680W_JOB_NUMBER_INFO, productName, protocolVersion: "2.00" };
-      expect(resolveScanDispatch(v2, makeConfig())).toBeNull();
-    }
+    // JobNumberIn without a PushScanIDIn is ignored, unless it comes from a
+    // printer whose job control is confirmed.
+    const v2 = { ...FF680W_JOB_NUMBER_INFO, productName: "PID 11D1", protocolVersion: "2.00" };
+    expect(resolveScanDispatch(v2, makeConfig())).toBeNull();
+  });
+
+  it("uses SCAN_FORMAT + SCAN_SIDES for an FF-680W trigger without a v3 version header", () => {
+    const v2 = { ...FF680W_JOB_NUMBER_INFO, protocolVersion: "2.00" };
+    expect(
+      resolveScanDispatch(v2, makeConfig({ scanFormat: "pdf", scanSides: "simplex" })),
+    ).toEqual({
+      duplex: false,
+      action: "pdf",
+    });
   });
 
   it("uses SCAN_FORMAT + SCAN_SIDES for a v3 trigger from a printer outside the known list", () => {
@@ -549,21 +558,31 @@ describe("buildPushScanServerOptions", () => {
       expect(runJobListCommitMock).not.toHaveBeenCalled();
     });
 
-    it("runs JOBR for a v3 PushScan that also carries PushScanIDIn", async () => {
+    it("runs no JOBR for a v3 PushScan that carries a PushScanIDIn", async () => {
+      // A panel selection means the printer is not waiting on a job read.
       const options = buildPushScanServerOptions(makeConfig(), undefined, NO_GATE);
       await options.beforeResponse?.(
         args("pushScan", { ...UNKNOWN_V3, pushScanId: "02", jobNumber: null, action: "pdf" }),
       );
-      expect(runJobNumberCommitMock).toHaveBeenCalledTimes(1);
+      expect(runJobNumberCommitMock).not.toHaveBeenCalled();
     });
 
-    it("never runs job control for a v2 request, whatever the product", async () => {
+    it("never runs job control for a v2 request from an unconfirmed product", async () => {
       const options = buildPushScanServerOptions(makeConfig(), undefined, NO_GATE);
-      const v2 = { ...FF680W_JOB_NUMBER_INFO, protocolVersion: "2.00" };
+      const v2 = { ...UNKNOWN_V3, protocolVersion: "2.00" };
       await options.beforeResponse?.(args("jobList", v2));
       await options.beforeResponse?.(args("pushScan", v2));
       expect(runJobListCommitMock).not.toHaveBeenCalled();
       expect(runJobNumberCommitMock).not.toHaveBeenCalled();
+    });
+
+    it("runs job control for an FF-680W request without a v3 version header", async () => {
+      const options = buildPushScanServerOptions(makeConfig(), undefined, NO_GATE);
+      const v2 = { ...FF680W_JOB_NUMBER_INFO, protocolVersion: "2.00" };
+      await options.beforeResponse?.(args("jobList", { ...v2, jobNumber: null }));
+      await options.beforeResponse?.(args("pushScan", v2));
+      expect(runJobListCommitMock).toHaveBeenCalledTimes(1);
+      expect(runJobNumberCommitMock).toHaveBeenCalledTimes(1);
     });
 
     it("runs no job control for a v3 ScanEnd", async () => {

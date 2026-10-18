@@ -92,8 +92,9 @@ export async function startPrinterDiscovery(
       language: config.language,
       // "auto" leaves version undefined so the responder picks per-announcement:
       // it answers the beacon's requested tags (3.0 exactly when `Ver` is
-      // requested), and a beacon with no tag list falls back to the PID (3.0
-      // for the V3_KEEPALIVE_PRODUCTS PIDs — FF-680W, DS-575W — 2.0 otherwise).
+      // requested), and a beacon with no tag list, or a V3_KEEPALIVE_PRODUCTS one
+      // whose list lacks `Ver`, falls back to the PID (3.0 for the FF-680W and
+      // DS-575W, 2.0 otherwise).
       // An explicit NETSCAN_VERSION pins every burst to that wire format —
       // compatibility-triage aid.
       version: config.netscanVersion === "auto" ? undefined : config.netscanVersion,
@@ -129,15 +130,22 @@ export function buildPaperlessOptions(config: Config): PaperlessUploadOptions | 
   };
 }
 
-// Job control follows the request, not the product: a NetScanMonitor v3
-// JobList is answered after a JOBW dummy-job write over TCP/1865, and a v3
-// PushScan after a JOBR read. v1 and v2 requests never use job control.
+// Job control follows the request: a NetScanMonitor v3 JobList is answered
+// after a JOBW dummy-job write over TCP/1865, and a v3 PushScan with no panel
+// selection (no PushScanIDIn) after a JOBR read. v1 and v2 requests use no job
+// control, except from the printers whose job control is confirmed, which
+// keep it whatever version header they send.
 type JobControlStep = "JOBW" | "JOBR";
 
+/** A v3 request, or one from a printer whose job control is confirmed. */
+function usesV3Flow(info: PushScanInfo): boolean {
+  return isV3Request(info.protocolVersion) || hasConfirmedJobControl(info.productName);
+}
+
 function jobControlFor(kind: PushScanRequestKind, info: PushScanInfo): JobControlStep | null {
-  if (!isV3Request(info.protocolVersion)) return null;
+  if (!usesV3Flow(info)) return null;
   if (kind === "jobList") return "JOBW";
-  if (kind === "pushScan") return "JOBR";
+  if (kind === "pushScan" && info.pushScanId === null) return "JOBR";
   return null;
 }
 
@@ -472,8 +480,9 @@ export function resolveScanDispatch(
 
   // A v3 trigger may carry no panel selection (button-only scanners send a
   // bare JobNumberIn), and then its sides and format come from config. A v2
-  // trigger without one stays refused.
-  if (isV3Request(info.protocolVersion) && info.pushScanId === null) {
+  // trigger without one stays refused, unless its printer's job control is
+  // confirmed (usesV3Flow).
+  if (usesV3Flow(info) && info.pushScanId === null) {
     const duplex = config.scanSides === "duplex";
     const job = info.jobNumber === null ? "" : ` (JobNumberIn=${info.jobNumber})`;
     log.info(

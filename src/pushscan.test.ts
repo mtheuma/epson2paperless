@@ -108,7 +108,7 @@ describe("parsePushScanRequest", () => {
     `<?xml version="1.0" ?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><p:PushScan xmlns:p="http://schema.epson.net/EpsonNet/Scan/2004/pushscan"><ProductNameIn>PID 11D1</ProductNameIn><IPAddressIn>C0A8013A</IPAddressIn><PushScanIDIn>${id}</PushScanIDIn></p:PushScan></s:Body></s:Envelope>`;
 
   it("extracts PushScanIDIn and classifies '01' as simplex", () => {
-    const result = parsePushScanRequest(body("01"));
+    const result = parsePushScanRequest(body("01"), "");
     expect(result.pushScanId).toBe("01");
     expect(result.productName).toBe("PID 11D1");
     expect(result.ipAddress).toBe("C0A8013A");
@@ -120,33 +120,33 @@ describe("parsePushScanRequest", () => {
     // the probe hint) exact-matches on canonical `PID XXXX`, so casing and
     // spacing variance is absorbed here, once.
     const soap = `<s:Body><p:PushScan><ProductNameIn>  pid 11d1 </ProductNameIn><PushScanIDIn>01</PushScanIDIn></p:PushScan></s:Body>`;
-    expect(parsePushScanRequest(soap).productName).toBe("PID 11D1");
+    expect(parsePushScanRequest(soap, "").productName).toBe("PID 11D1");
   });
 
   it("passes a non-PID ProductNameIn through raw for diagnosability", () => {
     const soap = `<s:Body><p:PushScan><ProductNameIn>ET-7700 Series</ProductNameIn><PushScanIDIn>01</PushScanIDIn></p:PushScan></s:Body>`;
-    expect(parsePushScanRequest(soap).productName).toBe("ET-7700 Series");
+    expect(parsePushScanRequest(soap, "").productName).toBe("ET-7700 Series");
   });
 
   it("classifies '11' as duplex", () => {
-    const result = parsePushScanRequest(body("11"));
+    const result = parsePushScanRequest(body("11"), "");
     expect(result.pushScanId).toBe("11");
     expect(result.duplex).toBe(true);
   });
 
   it("classifies '02' (simplex PDF, unvalidated) as simplex", () => {
     // Digit 1 isn't decoded in this spec; only digit 0 matters for duplex.
-    const result = parsePushScanRequest(body("02"));
+    const result = parsePushScanRequest(body("02"), "");
     expect(result.duplex).toBe(false);
   });
 
   it("classifies '12' (duplex PDF, unvalidated) as duplex", () => {
-    const result = parsePushScanRequest(body("12"));
+    const result = parsePushScanRequest(body("12"), "");
     expect(result.duplex).toBe(true);
   });
 
   it("returns duplex=false and nulls when all fields are missing (silent)", () => {
-    const result = parsePushScanRequest("<xml>nothing</xml>");
+    const result = parsePushScanRequest("<xml>nothing</xml>", "");
     expect(result.pushScanId).toBeNull();
     expect(result.productName).toBeNull();
     expect(result.ipAddress).toBeNull();
@@ -154,7 +154,7 @@ describe("parsePushScanRequest", () => {
   });
 
   it("defaults to duplex=false for empty PushScanIDIn (warning-worthy)", () => {
-    const result = parsePushScanRequest(body(""));
+    const result = parsePushScanRequest(body(""), "");
     // The XML regex matches <PushScanIDIn></PushScanIDIn> → empty string,
     // not null. This is a malformed-ish case and should warn, but we don't
     // assert on the warning log here — duplex=false is the observable contract.
@@ -163,46 +163,47 @@ describe("parsePushScanRequest", () => {
   });
 
   it("defaults to duplex=false for unexpected first character 'X'", () => {
-    const result = parsePushScanRequest(body("X1"));
+    const result = parsePushScanRequest(body("X1"), "");
     expect(result.pushScanId).toBe("X1");
     expect(result.duplex).toBe(false);
   });
 
   it("sets action='jpg' for PushScanIDIn='01'", () => {
-    const result = parsePushScanRequest(body("01"));
+    const result = parsePushScanRequest(body("01"), "");
     expect(result.action).toBe("jpg");
   });
 
   it("sets action='pdf' for PushScanIDIn='02'", () => {
-    const result = parsePushScanRequest(body("02"));
+    const result = parsePushScanRequest(body("02"), "");
     expect(result.action).toBe("pdf");
   });
 
   it("sets action='preview' for PushScanIDIn='04'", () => {
-    const result = parsePushScanRequest(body("04"));
+    const result = parsePushScanRequest(body("04"), "");
     expect(result.action).toBe("preview");
   });
 
   it("sets action='jpg' and duplex=true for PushScanIDIn='11'", () => {
-    const result = parsePushScanRequest(body("11"));
+    const result = parsePushScanRequest(body("11"), "");
     expect(result.duplex).toBe(true);
     expect(result.action).toBe("jpg");
   });
 
   it("sets action='pdf' and duplex=true for PushScanIDIn='12'", () => {
-    const result = parsePushScanRequest(body("12"));
+    const result = parsePushScanRequest(body("12"), "");
     expect(result.duplex).toBe(true);
     expect(result.action).toBe("pdf");
   });
 
   it("sets action='unknown' for missing PushScanIDIn", () => {
-    const result = parsePushScanRequest("<xml>nothing</xml>");
+    const result = parsePushScanRequest("<xml>nothing</xml>", "");
     expect(result.action).toBe("unknown");
   });
 
   it("extracts FF-680W JobNumberIn when PushScanIDIn is absent", () => {
     const result = parsePushScanRequest(
       `<s:Body><p:PushScan><ProductNameIn>PID 016B</ProductNameIn><JobNumberIn>0</JobNumberIn></p:PushScan></s:Body>`,
+      "",
     );
     expect(result.productName).toBe("PID 016B");
     expect(result.pushScanId).toBeNull();
@@ -211,7 +212,7 @@ describe("parsePushScanRequest", () => {
   });
 
   it("sets action='unknown' for too-short PushScanIDIn", () => {
-    const result = parsePushScanRequest(body("0"));
+    const result = parsePushScanRequest(body("0"), "");
     expect(result.action).toBe("unknown");
   });
 });

@@ -599,7 +599,7 @@ describe("createKeepaliveResponder", () => {
     }
   });
 
-  it("answers v2 for an FF-680W PID whose tag list doesn't request Ver", async () => {
+  it("keeps an FF-680W PID on v3 when its tag list doesn't request Ver", async () => {
     const h = await setupHarness({ burstCount: 1 });
     try {
       await sendAnnouncement(
@@ -610,9 +610,9 @@ describe("createKeepaliveResponder", () => {
 
       expect(h.received).toHaveLength(1);
       expect(payloadOf(h.received[0])).toBe(
-        "(ClientName=TestClient),(IPAddress=127.0.0.1),(EventPort=12345)\0",
+        "(Ver=3.0),(ClientName=TestClient),(IPAddress=127.0.0.1),(EventPort=12345),(Group=0)\0",
       );
-      expect(h.receivedFrom[0]).toBe(h.responder.boundPort);
+      expect(h.receivedFrom[0]).not.toBe(h.responder.boundPort);
     } finally {
       h.teardown();
     }

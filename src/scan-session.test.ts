@@ -1911,6 +1911,28 @@ describe("runScanSession — delayed sends and the wait deadline", () => {
     expect(transport.written).toEqual([QUERY]);
   });
 
+  it("handles an abort event that arrives during the delay before the delayed send", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("FIRST", 1_000).globalAbortHandlers({
+      0x9000: () => new Error("simulated cancel"),
+    });
+    g.state(
+      "FIRST",
+      decision(() => ({ next: "SECOND", send: QUERY, delayMs: 100 })),
+    );
+    g.state("SECOND", { on: { 0xa000: { next: "DONE" } } });
+    const { promise } = run(g.build(), transport);
+    await vi.advanceTimersByTimeAsync(0);
+
+    transport.emit("data", READY);
+    await vi.advanceTimersByTimeAsync(50);
+    transport.emit("data", buildIsPacket(0x9000, Buffer.from([0x02])));
+    await vi.advanceTimersByTimeAsync(50);
+    const result = await promise;
+    expect(!result.ok && result.reason.message).toBe("simulated cancel");
+    expect(transport.written).toEqual([]);
+  });
+
   it("does not run the rolling timeout during the delay", async () => {
     const transport = new FakeTransport();
     // No wait, so no deadline: only the rolling timeout is in play.

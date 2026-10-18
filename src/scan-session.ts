@@ -817,6 +817,20 @@ export async function runScanSession<Ctx>(
       }
     }
 
+    /** The IS type of the packet at the head of recvChunks, once its header is in. */
+    function headType(): number | null {
+      if (recvBytes < IS_HEADER_SIZE) return null;
+      const head =
+        recvChunks[0].length >= IS_HEADER_SIZE
+          ? recvChunks[0]
+          : Buffer.concat(recvChunks, recvBytes);
+      return head.readUInt16BE(2);
+    }
+
+    function hasGlobalAbortHandler(type: number | null): boolean {
+      return type !== null && graph.globalAbortHandlers?.[type] !== undefined;
+    }
+
     /**
      * Parse one IS packet at the head of recvChunks if a complete one is
      * present. Reads payloadSize directly from header bytes 6-9 (rather
@@ -1022,6 +1036,15 @@ export async function runScanSession<Ctx>(
         // are buffered for `next`. The rolling timeout re-arms on entering it.
         clearTimeoutTimer();
         await delay(t.delayMs);
+        if (settled) return;
+        // A protocol meta-event (e.g. a panel cancel) that arrived during the
+        // delay is handled before the delayed send goes out; other packets
+        // stay buffered for `next`.
+        while (!settled && hasGlobalAbortHandler(headType())) {
+          const packet = tryParseHead();
+          if (!packet) break;
+          await dispatchPacket(packet);
+        }
         if (settled) return;
       }
 

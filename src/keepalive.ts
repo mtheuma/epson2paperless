@@ -175,7 +175,8 @@ interface KeepaliveFormat {
  * Picks the keepalive reply for one announcement, in priority order:
  *   1. a forced version (`NETSCAN_VERSION`) sends that version's fixed field list;
  *   2. a beacon tag list is answered tag by tag, in its order, and the reply is
- *      v3 exactly when `Ver` is requested. Unknown tags are skipped (debug log);
+ *      v3 exactly when `Ver` is requested. Unknown tags are skipped (debug log).
+ *      A V3_KEEPALIVE_PRODUCTS PID whose list lacks `Ver` skips this step;
  *   3. otherwise the announced PID decides (v3 for V3_KEEPALIVE_PRODUCTS).
  */
 function chooseKeepaliveFormat(
@@ -185,8 +186,11 @@ function chooseKeepaliveFormat(
   if (forced) {
     return { version: forced, tags: defaultTags(forced), basis: "forced by NETSCAN_VERSION" };
   }
+  const pidIsV3 =
+    announcement.productName !== null && V3_KEEPALIVE_PRODUCTS.has(announcement.productName);
   const requested = announcement.requestedTags;
-  if (requested) {
+  // A known v3 PID stays on v3: a tag list without `Ver` falls back to the PID.
+  if (requested && !(pidIsV3 && !requested.includes("Ver"))) {
     const known = requested.filter(isKeepaliveTag);
     const unknown = requested.filter((tag) => !isKeepaliveTag(tag));
     if (unknown.length > 0) {
@@ -200,12 +204,11 @@ function chooseKeepaliveFormat(
       basis: `answering requested tags ${known.join(",")}`,
     };
   }
-  const version =
-    announcement.productName && V3_KEEPALIVE_PRODUCTS.has(announcement.productName) ? "3.0" : "2.0";
+  const version = pidIsV3 ? "3.0" : "2.0";
   return {
     version,
     tags: defaultTags(version),
-    basis: "no usable tag list, chosen by announced PID",
+    basis: requested ? "chosen by announced PID" : "no usable tag list, chosen by announced PID",
   };
 }
 

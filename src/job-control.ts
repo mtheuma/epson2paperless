@@ -66,6 +66,10 @@ async function runJobControl(
   const timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
   const socketFactory = opts.socketFactory ?? ((host, p) => net.connect(p, host));
   const socket = socketFactory(opts.printerIp, port);
+  // The waits below listen for errors only while they wait. This one covers
+  // the gaps and teardown, so a late socket error can't go uncaught; the
+  // failure itself already reaches the caller through the rejected promise.
+  socket.on("error", (err) => log.debug(`${label} socket error`, err));
   const reader = new IsPacketReader(socket, timeoutMs);
   let locked = false;
 
@@ -106,7 +110,8 @@ async function runJobControl(
         socket.destroy();
       }
     } else {
-      socket.destroy(err instanceof Error ? err : undefined);
+      // No error argument: the caller gets it from the throw below.
+      socket.destroy();
     }
     throw err;
   } finally {

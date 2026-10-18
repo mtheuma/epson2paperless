@@ -755,6 +755,20 @@ g.state(
       return { next: "START_POLL", send: sendFsF() };
     }
     const geom = ctx.entry.raster({ source: ctx.source, format: ctx.format });
+    // The page buffer is sized from the dialect's raster, so a printer whose
+    // FS G layout describes a different page would overflow it or stall.
+    const pageBytes = geom.widthPx * geom.heightPx * 3;
+    const layoutBytes = reply.blockCount * reply.chunkSize + reply.lastBlockBytes;
+    if (layoutBytes !== pageBytes) {
+      return {
+        error: new Error(
+          `START: the printer's FS G block layout (${reply.blockCount} × ${reply.chunkSize} + ` +
+            `${reply.lastBlockBytes} = ${layoutBytes} bytes) doesn't match the ${ctx.entry.name} ` +
+            `${geom.widthPx}×${geom.heightPx} raster (${pageBytes} bytes) — this printer needs ` +
+            `settings of its own; please report it`,
+        ),
+      };
+    }
     ctx.geom = geom;
     ctx.imageBuffer = Buffer.alloc(geom.widthPx * geom.heightPx * 3);
     ctx.imageBufferOffset = 0;
