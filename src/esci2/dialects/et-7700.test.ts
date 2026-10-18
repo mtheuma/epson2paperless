@@ -10,8 +10,9 @@ const entry = recordedDialect(ET7700_FP);
 // the other dialects. This file covers only what's specific to the ET-7700's
 // composed PARA. The ET-7700 is an A4 EcoTank Photo (flatbed-only, ESC/I-2 over
 // plain TCP), speculative from the issue #145 diagnostic and shaped like the
-// ET-8500: et4950-stock gamma + et4800-um08 CMX + the optional #QITOFF segment,
-// so its flatbed PARA matches the ET-8500's 944 bytes.
+// ET-8500: et4950-stock gamma + the optional #QITOFF segment, so its flatbed
+// PARA is the ET-8500's 944 bytes. Unlike the ET-8500, it still sends the
+// et4800-um08 CMX.
 
 describe("ET-7700 composed PARA size", () => {
   it("flatbed is 944 bytes (ET-4800's 936 + 8 for the #QITOFF segment)", () => {

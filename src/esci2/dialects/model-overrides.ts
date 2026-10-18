@@ -568,8 +568,8 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     },
   },
   // Reported over TLS (#120) and over plain TCP (#123) with the same CAPA
-  // fingerprint, so one override serves both transports. Its pair is mixed
-  // (colour-pair.test.ts) until a compatibility-page scan checks the fix.
+  // fingerprint, so one override serves both transports. It sends the neutral
+  // pair: the ET-4950's captured tone curve with the identity matrix.
   {
     pids: ["1193"],
     names: [],
@@ -580,16 +580,35 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     adfExtents: null,
     gmm: "UG18",
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
-    cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
+    cmxClass: { jpg: "identity-um08", pdf: "identity-um08" },
     verifiedWireDpis: [300], // the reporter's hardware (#120)
     provenance: {
       models: ["ET-8500"],
       colour: [
-        // The tone curve from the ET-4950, the matrix from the ET-4800.
+        // The earlier mixed pair: the tone curve from the ET-4950, the matrix
+        // from the ET-4800. The reports vouch for it only.
         { kind: "inherited:ET-4950", link: { pr: 121 }, vouchesFor: "e15913fe2ab564e6" },
         { kind: "inherited:ET-4800", link: { pr: 121 }, vouchesFor: "e15913fe2ab564e6" },
         { kind: "reporter-report", link: { issue: 120 }, vouchesFor: "e15913fe2ab564e6" },
         { kind: "reporter-report", link: { issue: 123 }, vouchesFor: "e15913fe2ab564e6" },
+        // The neutral pair: the ET-4950's captured tone curve, expected to
+        // match, with the identity matrix as the ET-2750 capture carries it.
+        // Provisional until a scan checks it.
+        {
+          kind: "inherited:ET-4950",
+          link: { fixture: `${FRIDA}/2026-04-24T09-05-08-flatbed-1p-jpg.jsonl` },
+          vouchesFor: "58b3f5eab4e7ab0c",
+        },
+        {
+          kind: "inherited:ET-2750",
+          link: { fixture: `${PCAP}/et-2750/flatbed-single-page-pdf.jsonl` },
+          vouchesFor: "58b3f5eab4e7ab0c",
+        },
+        {
+          kind: "provisional",
+          link: { fixture: `${FRIDA}/2026-04-24T09-05-08-flatbed-1p-jpg.jsonl` },
+          vouchesFor: "58b3f5eab4e7ab0c",
+        },
       ],
       window: [
         { kind: "inherited:ET-4800", link: { pr: 121 } },
