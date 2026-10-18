@@ -64,16 +64,27 @@ export const SOURCE_BYTE: Record<Source, number> = {
   "adf-duplex": 0x02,
 };
 
+/** FS W byte 28 is one byte; 254 is the largest even count it can hold. */
+const MAX_LINES_PER_BLOCK = 254;
+
 /**
- * Scanlines per transfer block (FS W byte 28) for each WF-3620 format. The
- * format only matters through its resolution: 4 lines at 600 dpi (JPG) and
- * 8 at 300 dpi (PDF) both make a 59472-byte block, which the FS G reply then
- * reports as its block size.
+ * Scanlines per transfer block (FS W byte 28): the largest even count, at
+ * most 254, whose rows of `widthPx` 24-bit pixels fit in `bufferBytes`, the
+ * printer's per-block transfer buffer. The printer then reports lines per
+ * block × width × 3 as the FS G block size. FS W goes out before FS G, so
+ * this comes from the scan geometry rather than from the printer's reply.
  */
-const LINES_PER_BLOCK: Record<Format, number> = {
-  jpg: 4,
-  pdf: 8,
-};
+export function linesPerBlock(widthPx: number, bufferBytes: number): number {
+  const rowBytes = widthPx * 3;
+  const fit = Math.min(MAX_LINES_PER_BLOCK, Math.floor(bufferBytes / rowBytes));
+  const even = fit - (fit % 2);
+  if (even < 2) {
+    throw new Error(
+      `A ${widthPx} px row (${rowBytes} bytes) leaves fewer than 2 lines per block in a ${bufferBytes}-byte transfer buffer`,
+    );
+  }
+  return even;
+}
 
 export interface ScanGeometry {
   dpi: number;
@@ -99,6 +110,9 @@ function geometryFor(source: Source, format: Format): ScanGeometry {
   return { dpi, widthPx, heightPx, topYOffsetPx };
 }
 
+/** Offset of the lines-per-block byte in the 64-byte FS W block. */
+const FSW_LINES_PER_BLOCK_OFFSET = 28;
+
 /**
  * Build the 64-byte parameter block sent immediately after FS W.
  * Layout (all little-endian):
@@ -111,27 +125,34 @@ function geometryFor(source: Source, format: Format): ScanGeometry {
  *   bytes 24-25 : 0x0813 (constant)
  *   byte  26    : source (0=flatbed, 1=ADF simplex, 2=ADF duplex)
  *   byte  27    : 0x00 (constant)
- *   byte  28    : scanlines per transfer block (4 at 600 dpi JPEG, 8 at 300 dpi PDF)
+ *   byte  28    : scanlines per transfer block (see linesPerBlock)
  *   bytes 29-31 : 0x04 0x00 0x01 (constant)
  *   bytes 32-63 : zero pad
+ * The WF-3620 and ET-2550 both use this layout.
  */
-export function buildFsWBlock(mode: ScanMode): Buffer {
-  const { dpi, widthPx, heightPx, topYOffsetPx } = geometryFor(mode.source, mode.format);
+export function buildFsWBlock(geom: ScanGeometry, source: Source, lines: number): Buffer {
   const buf = Buffer.alloc(64);
-  buf.writeUInt32LE(dpi, 0);
-  buf.writeUInt32LE(dpi, 4);
-  buf.writeUInt32LE(topYOffsetPx, 8);
+  buf.writeUInt32LE(geom.dpi, 0);
+  buf.writeUInt32LE(geom.dpi, 4);
+  buf.writeUInt32LE(geom.topYOffsetPx, 8);
   buf.writeUInt32LE(0, 12);
-  buf.writeUInt32LE(widthPx, 16);
-  buf.writeUInt32LE(heightPx, 20);
+  buf.writeUInt32LE(geom.widthPx, 16);
+  buf.writeUInt32LE(geom.heightPx, 20);
   buf.writeUInt16LE(0x0813, 24);
-  buf.writeUInt8(SOURCE_BYTE[mode.source], 26);
+  buf.writeUInt8(SOURCE_BYTE[source], 26);
   buf.writeUInt8(0x00, 27);
-  buf.writeUInt8(LINES_PER_BLOCK[mode.format], 28);
+  buf.writeUInt8(lines, FSW_LINES_PER_BLOCK_OFFSET);
   buf.writeUInt8(0x04, 29);
   buf.writeUInt8(0x00, 30);
   buf.writeUInt8(0x01, 31);
   return buf;
+}
+
+/** A copy of a fixed 64-byte FS W block with its lines-per-block byte set. */
+export function withLinesPerBlock(block: Buffer, lines: number): Buffer {
+  const copy = Buffer.from(block);
+  copy.writeUInt8(lines, FSW_LINES_PER_BLOCK_OFFSET);
+  return copy;
 }
 
 export function geometry(mode: ScanMode): ScanGeometry {
@@ -216,20 +237,9 @@ export function parseFsIReply(buf: Buffer): FsIIdentity {
 const STREAM_CONFIG_TERMINATOR = 0x06;
 
 /**
- * The last block's byte count for each WF-3620 format at its fixed A4
- * geometry: the scanlines left over after the full blocks, times the bytes
- * per scanline. 600 dpi JPEG: 7002 lines = 1750 × 4 + 2, so 2 × 4956 × 3.
- * 300 dpi PDF: 3501 lines = 437 × 8 + 5, so 5 × 2478 × 3. Each equals the
- * `lastBlockBytes` the FS G reply reports for that geometry.
- */
-const LAST_BLOCK_BYTES: Record<Format, number> = {
-  jpg: 29736,
-  pdf: 37170,
-};
-
-/**
  * The 38-byte payload of the IS-0x2200 packet the host sends immediately
- * after FS G's reply. It restates the FS G block layout back to the printer.
+ * after FS G's reply. It restates the FS G block layout back to the printer,
+ * so every field is either taken from the reply or constant.
  *
  * Layout (big-endian u32s):
  *   bytes 0-3   : 30 (length of the trailing sub-payload, bytes 8-37)
@@ -245,7 +255,7 @@ const LAST_BLOCK_BYTES: Record<Format, number> = {
  *   bytes 33-36 : the last block's byte count + 1
  *   byte  37    : 0x06 terminator
  */
-export function buildStreamConfigPayload(reply: FsGReply, format: Format): Buffer {
+export function buildStreamConfigPayload(reply: FsGReply): Buffer {
   const buf = Buffer.alloc(38);
   buf.writeUInt32BE(30, 0);
   buf.writeUInt32BE(reply.blockCount, 8);
@@ -254,7 +264,7 @@ export function buildStreamConfigPayload(reply: FsGReply, format: Format): Buffe
   buf.writeUInt32BE(reply.chunkSize + 1, 24);
   buf.writeUInt8(STREAM_CONFIG_TERMINATOR, 28);
   buf.writeUInt32BE(1, 29);
-  buf.writeUInt32BE(LAST_BLOCK_BYTES[format] + 1, 33);
+  buf.writeUInt32BE(reply.lastBlockBytes + 1, 33);
   buf.writeUInt8(STREAM_CONFIG_TERMINATOR, 37);
   return buf;
 }

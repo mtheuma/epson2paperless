@@ -32,22 +32,3 @@ export const ET_GAMMA_B = Buffer.from(
   "000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f202122232425262728292a2b2c2d2e2f303132333435363738393a3b3c3d3e3f404142434445464748494a4b4c4d4e4f505152535455565758595a5b5c5d5e5f606162636465666768696a6b6c6d6e6f707172737475767778797a7b7c7d7e7f808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff",
   "hex",
 );
-
-/** 64-byte `FS W` parameter block: 300 dpi, 2550x3509, source byte 0x00
- *  (flatbed). Identical across the capture's JPG and PDF scans, so the block
- *  is format-independent. Byte 28 (0x08) is the scanlines per transfer block:
- *  8 × 2550 px × 3 bytes is the 61200-byte block the FS G reply reports. */
-export const ET_FSW_BLOCK = Buffer.from(
-  "2c0100002c0100000000000000000000f6090000b50d000013080000080400010000000000000000000000000000000000000000000000000000000000000000",
-  "hex",
-);
-
-/** 38-byte payload of the IS-0x2200 packet sent after `FS G` replies. It
- *  restates that reply's block layout (see `buildStreamConfigPayload`): 438
- *  full blocks of 61200 bytes, each +1 for its status byte, then a last
- *  block of 38250 bytes (+1) and the 0x06 terminator. Pinned
- *  here: only one geometry was captured. Same compromise as XP_STREAM_CONFIG. */
-export const ET_STREAM_CONFIG = Buffer.from(
-  "0000001e00000000000001b6000000000000ef11000000010000ef1106000000010000956b06",
-  "hex",
-);

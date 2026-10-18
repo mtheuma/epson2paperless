@@ -1,14 +1,10 @@
-import { buildEscInit, buildEscCleanup } from "../commands.js";
+import { buildEscInit, buildEscCleanup, buildFsWBlock } from "../commands.js";
 import { passthru } from "./send.js";
-import {
-  ET_RASTER,
-  ET_GAMMA_R,
-  ET_GAMMA_G,
-  ET_GAMMA_B,
-  ET_FSW_BLOCK,
-  ET_STREAM_CONFIG,
-} from "./et2550-data.js";
+import { ET_RASTER, ET_GAMMA_R, ET_GAMMA_G, ET_GAMMA_B } from "./et2550-data.js";
 import type { LegacyDialectEntry } from "./entry.js";
+
+/** The one captured resolution: FS W sends it and the scan delivers it. */
+const ET_DPI = 300;
 
 /**
  * ET-2550 (issue #166, PID 1106, firmware 1.40) — legacy ESC/I, flatbed-only.
@@ -30,11 +26,15 @@ export const ET2550_ENTRY: LegacyDialectEntry = {
   sourcePolicy: "detect",
   raster: () => ET_RASTER,
   gamma: { r: ET_GAMMA_R, g: ET_GAMMA_G, b: ET_GAMMA_B },
-  fswBlock: () => ET_FSW_BLOCK, // fixed; format-independent in the capture
-  streamConfig: () => ET_STREAM_CONFIG, // fixed; only one geometry captured
+  transferBufferBytes: 64 * 1024,
+  // The WF-3620's FS W layout at the fixed full-glass flatbed raster, with no
+  // ADF top offset. Format-independent: the capture's JPG and PDF scans send
+  // the same block.
+  fswBlock: (_mode, lines) =>
+    buildFsWBlock({ dpi: ET_DPI, ...ET_RASTER, topYOffsetPx: 0 }, "flatbed", lines),
   // FS W's ack is followed straight by FS G — no FS F prescan round-trip.
   prestart: "start-direct",
   setup: { next: "INIT", send: () => passthru(buildEscInit(), 1) }, // ESC @ (reply 1)
   teardown: { next: "ET_TEARDOWN_PAREN", send: () => passthru(buildEscCleanup(), 1) }, // ESC ) (reply 1)
-  deliveredDpi: () => 300, // fixed; only one geometry captured
+  deliveredDpi: () => ET_DPI,
 };

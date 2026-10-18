@@ -77,55 +77,118 @@ describe("esci-legacy command builders", () => {
   });
 });
 
-import { buildFsWBlock } from "./commands.js";
+import { fsWBlockFor } from "./dialects/entry.js";
+import { WF3620_ENTRY } from "./dialects/wf3620.js";
+import { ET2550_ENTRY } from "./dialects/et2550.js";
+import { XP620_ENTRY } from "./dialects/xp620.js";
+import { LEGACY_DIALECT_ENTRIES } from "./dialects/registry.js";
 
 describe("esci-legacy FS W block", () => {
-  // Reference bytes captured verbatim from the six pcaps.
-  const FLATBED_JPEG =
-    "58020000580200000000000000000000" +
-    "5c1300005a1b00001308000004040001" +
-    "00000000000000000000000000000000" +
-    "00000000000000000000000000000000";
-  const FLATBED_PDF =
-    "2c0100002c0100000000000000000000" +
-    "ae090000ad0d00001308000008040001" +
-    "00000000000000000000000000000000" +
-    "00000000000000000000000000000000";
-  const ADF_SIMPLEX_JPEG =
-    "58020000580200008e000000000000005c1300005a1b000013080100040400010000000000000000000000000000000000000000000000000000000000000000";
-  const ADF_DUPLEX_JPEG =
-    "58020000580200008e000000000000005c1300005a1b000013080200040400010000000000000000000000000000000000000000000000000000000000000000";
-  const ADF_SIMPLEX_PDF =
-    "2c0100002c0100004700000000000000ae090000ad0d000013080100080400010000000000000000000000000000000000000000000000000000000000000000";
-
-  it("flatbed JPEG matches the captured bytes", () => {
-    const block = buildFsWBlock({ source: "flatbed", format: "jpg" });
-    expect(block.toString("hex")).toBe(FLATBED_JPEG.replaceAll(/\s/g, ""));
+  // Reference bytes captured verbatim: the WF-3620's from its six pcaps, the
+  // ET-2550's and XP-620's from their committed flatbed fixtures. Byte 28,
+  // the lines per block, comes from linesPerBlock on each dialect's raster
+  // width and transfer buffer.
+  it.each([
+    {
+      name: "WF-3620 flatbed JPEG",
+      entry: WF3620_ENTRY,
+      mode: { source: "flatbed", format: "jpg" },
+      hex:
+        "58020000580200000000000000000000" +
+        "5c1300005a1b00001308000004040001" +
+        "00000000000000000000000000000000" +
+        "00000000000000000000000000000000",
+    },
+    {
+      name: "WF-3620 flatbed PDF",
+      entry: WF3620_ENTRY,
+      mode: { source: "flatbed", format: "pdf" },
+      hex:
+        "2c0100002c0100000000000000000000" +
+        "ae090000ad0d00001308000008040001" +
+        "00000000000000000000000000000000" +
+        "00000000000000000000000000000000",
+    },
+    {
+      name: "WF-3620 ADF simplex JPEG",
+      entry: WF3620_ENTRY,
+      mode: { source: "adf-simplex", format: "jpg" },
+      hex: "58020000580200008e000000000000005c1300005a1b000013080100040400010000000000000000000000000000000000000000000000000000000000000000",
+    },
+    {
+      name: "WF-3620 ADF duplex JPEG",
+      entry: WF3620_ENTRY,
+      mode: { source: "adf-duplex", format: "jpg" },
+      hex: "58020000580200008e000000000000005c1300005a1b000013080200040400010000000000000000000000000000000000000000000000000000000000000000",
+    },
+    {
+      name: "WF-3620 ADF simplex PDF",
+      entry: WF3620_ENTRY,
+      mode: { source: "adf-simplex", format: "pdf" },
+      hex: "2c0100002c0100004700000000000000ae090000ad0d000013080100080400010000000000000000000000000000000000000000000000000000000000000000",
+    },
+    ...(["jpg", "pdf"] as const).map((format) => ({
+      name: `ET-2550 flatbed ${format}`,
+      entry: ET2550_ENTRY,
+      mode: { source: "flatbed" as const, format },
+      hex: "2c0100002c0100000000000000000000f6090000b50d000013080000080400010000000000000000000000000000000000000000000000000000000000000000",
+    })),
+    ...(["jpg", "pdf"] as const).map((format) => ({
+      name: `XP-620 flatbed ${format}`,
+      entry: XP620_ENTRY,
+      mode: { source: "flatbed" as const, format },
+      hex: "2c0100002c0100000000000000000000b1090000b30d000013080000220400000100000000000000000100000000000000000000000000000000000000000000",
+    })),
+  ] as const)("$name matches the captured bytes", ({ entry, mode, hex }) => {
+    const block = fsWBlockFor(entry, mode);
     expect(block.length).toBe(64);
+    expect(block.toString("hex")).toBe(hex);
   });
 
-  it("flatbed PDF matches the captured bytes", () => {
-    const block = buildFsWBlock({ source: "flatbed", format: "pdf" });
-    expect(block.toString("hex")).toBe(FLATBED_PDF.replaceAll(/\s/g, ""));
+  // Lines per block is worked out from the raster width, so every block must
+  // carry that same width (bytes 16-19) or byte 28 would describe another row.
+  it.each(
+    LEGACY_DIALECT_ENTRIES.flatMap((entry) =>
+      (["flatbed", "adf-simplex", "adf-duplex"] as const).flatMap((source) =>
+        (["jpg", "pdf"] as const).map((format) => ({ entry, mode: { source, format } })),
+      ),
+    ),
+  )(
+    "$entry.name $mode.source $mode.format: the block's width is the raster's",
+    ({ entry, mode }) => {
+      expect(fsWBlockFor(entry, mode).readUInt32LE(16)).toBe(entry.raster(mode).widthPx);
+    },
+  );
+});
+
+import { linesPerBlock } from "./commands.js";
+
+describe("linesPerBlock", () => {
+  // Expected counts are the FS W byte 28 values in the committed captures.
+  it.each([
+    ["WF-3620 JPG, 4956 px in 64 KiB → 4", 4956, 64 * 1024, 4],
+    ["WF-3620 PDF, 2478 px in 64 KiB → 8", 2478, 64 * 1024, 8],
+    ["ET-2550, 2550 px in 64 KiB → 8", 2550, 64 * 1024, 8],
+    ["XP-620, 2481 px in 256 KiB (35 fit, rounded down to even) → 34", 2481, 256 * 1024, 34],
+  ])("%s", (_name, widthPx, bufferBytes, expected) => {
+    expect(linesPerBlock(widthPx, bufferBytes)).toBe(expected);
   });
 
-  it("ADF simplex JPEG matches", () => {
-    const block = buildFsWBlock({ source: "adf-simplex", format: "jpg" });
-    expect(block.toString("hex")).toBe(ADF_SIMPLEX_JPEG);
+  it("caps at 254, the largest even count that fits the one-byte field", () => {
+    expect(linesPerBlock(100, 256 * 1024)).toBe(254);
   });
 
-  it("ADF duplex JPEG matches", () => {
-    const block = buildFsWBlock({ source: "adf-duplex", format: "jpg" });
-    expect(block.toString("hex")).toBe(ADF_DUPLEX_JPEG);
+  it("returns exactly the count that fills the buffer when it is even", () => {
+    // 2 rows of 3000 bytes in a 6000-byte buffer.
+    expect(linesPerBlock(1000, 6000)).toBe(2);
   });
 
-  it("ADF simplex PDF matches", () => {
-    const block = buildFsWBlock({ source: "adf-simplex", format: "pdf" });
-    expect(block.toString("hex")).toBe(ADF_SIMPLEX_PDF);
+  it("throws when not even two rows fit the buffer", () => {
+    expect(() => linesPerBlock(11000, 64 * 1024)).toThrow(/11000 px.*65536-byte/);
   });
 });
 
-import { parseFsGReply, type FsGReply } from "./commands.js";
+import { parseFsGReply } from "./commands.js";
 
 describe("esci-legacy FS G reply parser", () => {
   // Reproduced from .reference/wireshark-captures/wf-3620/flatbed-single-page-jpeg.pcap
@@ -189,99 +252,81 @@ describe("esci-legacy FS I reply parser", () => {
 
 import { buildStreamConfigPayload } from "./commands.js";
 
-describe("esci-legacy IS-0x2200 stream-config payload", () => {
-  // Reference bytes verified against capture frames 210+212 (JPEG)
-  // and frames 198+200 (PDF) from the respective pcap files.
-  // The 0x1e constant sits at byte index 3 (BE u32 at offset 0), not index 6
-  // as the plan's comment suggested — capture is ground truth.
-  it("JPEG mode payload matches the captured 38 bytes", () => {
-    const reply = parseFsGReply(Buffer.from("021250e80000d606000028740000", "hex"));
-    const payload = buildStreamConfigPayload(reply, "jpg");
-    expect(payload.length).toBe(38);
-    expect(payload.toString("hex")).toBe(
-      "0000001e00000000" + "000006d6000000000000e851000000010000e85106000000010000742906",
-    );
-  });
+// The four committed legacy geometries: each model's captured FS G reply and
+// the stream config it sent back (see the legacy fixtures under
+// tools/pcap-extract/captures/).
+const LEGACY_GEOMETRIES = [
+  {
+    name: "WF-3620 JPG (600 dpi)",
+    entry: WF3620_ENTRY,
+    mode: { source: "flatbed", format: "jpg" },
+    fsg: "021250e80000d606000028740000",
+    streamConfig: "0000001e00000000000006d6000000000000e851000000010000e85106000000010000742906",
+  },
+  {
+    name: "WF-3620 PDF (300 dpi)",
+    entry: WF3620_ENTRY,
+    mode: { source: "flatbed", format: "pdf" },
+    fsg: "021250e80000b501000032910000",
+    streamConfig: "0000001e00000000000001b5000000000000e851000000010000e85106000000010000913306",
+  },
+  {
+    name: "ET-2550",
+    entry: ET2550_ENTRY,
+    mode: { source: "flatbed", format: "jpg" },
+    fsg: "020210ef0000b60100006a950000",
+    streamConfig: "0000001e00000000000001b6000000000000ef11000000010000ef1106000000010000956b06",
+  },
+  {
+    name: "XP-620",
+    entry: XP620_ENTRY,
+    mode: { source: "flatbed", format: "jpg" },
+    fsg: "020286dc0300670000005f910000",
+    streamConfig: "0000001e0000000000000067000000000003dc87000000010003dc8706000000010000916006",
+  },
+] as const;
 
-  it("PDF mode payload matches the captured 38 bytes", () => {
-    const reply = parseFsGReply(Buffer.from("021250e80000b501000032910000", "hex"));
-    const payload = buildStreamConfigPayload(reply, "pdf");
+describe("esci-legacy IS-0x2200 stream-config payload", () => {
+  it.each(LEGACY_GEOMETRIES)(
+    "$name: built from the FS G reply, matches the captured 38 bytes",
+    ({ fsg, streamConfig }) => {
+      const payload = buildStreamConfigPayload(parseFsGReply(Buffer.from(fsg, "hex")));
+      expect(payload.length).toBe(38);
+      expect(payload.toString("hex")).toBe(streamConfig);
+    },
+  );
+
+  it("follows whatever layout the reply reports, not a fixed geometry", () => {
+    const payload = buildStreamConfigPayload({
+      statusWord: 0x0212,
+      chunkSize: 0x00012345,
+      blockCount: 0x00010002, // more than 16 bits' worth
+      lastBlockBytes: 0x00000abc,
+    });
     expect(payload.toString("hex")).toBe(
-      "0000001e00000000" + "000001b5000000000000e851000000010000e85106000000010000913306",
+      "0000001e00000000" + "0001000200000000000123460000000100012346060000000100000abd06",
     );
   });
 });
 
-import { ET_FSW_BLOCK, ET_STREAM_CONFIG } from "./dialects/et2550-data.js";
-import { XP_FSW_BLOCK, XP_STREAM_CONFIG } from "./dialects/xp620-data.js";
-
 describe("esci-legacy block layout across FS W, FS G and the stream config", () => {
-  // FS G replies and raster sizes as captured on each model (see the legacy
-  // fixtures under tools/pcap-extract/captures/). These pin that the fields
-  // agree on captured data; the WF-3620's last-block size is a per-format
-  // constant that happens to equal its captured reply's lastBlockBytes.
-  const cases = [
-    {
-      name: "WF-3620 JPG (600 dpi)",
-      fsw: buildFsWBlock({ source: "flatbed", format: "jpg" }),
-      fsg: "021250e80000d606000028740000",
-      streamConfig: (r: FsGReply) => buildStreamConfigPayload(r, "jpg"),
-      widthPx: 4956,
-      heightPx: 7002,
-      linesPerBlock: 4,
+  it.each(LEGACY_GEOMETRIES)(
+    "$name: FS W's lines per block is the scanline count of each full FS G block",
+    ({ entry, mode, fsg }) => {
+      const reply = parseFsGReply(Buffer.from(fsg, "hex"));
+      const { widthPx } = entry.raster(mode);
+      expect(reply.chunkSize).toBe(fsWBlockFor(entry, mode)[28] * widthPx * 3);
     },
-    {
-      name: "WF-3620 PDF (300 dpi)",
-      fsw: buildFsWBlock({ source: "flatbed", format: "pdf" }),
-      fsg: "021250e80000b501000032910000",
-      streamConfig: (r: FsGReply) => buildStreamConfigPayload(r, "pdf"),
-      widthPx: 2478,
-      heightPx: 3501,
-      linesPerBlock: 8,
-    },
-    {
-      name: "ET-2550",
-      fsw: ET_FSW_BLOCK,
-      fsg: "020210ef0000b60100006a950000",
-      streamConfig: () => ET_STREAM_CONFIG,
-      widthPx: 2550,
-      heightPx: 3509,
-      linesPerBlock: 8,
-    },
-    {
-      name: "XP-620",
-      fsw: XP_FSW_BLOCK,
-      fsg: "020286dc0300670000005f910000",
-      streamConfig: () => XP_STREAM_CONFIG,
-      widthPx: 2481,
-      heightPx: 3507,
-      linesPerBlock: 34,
-    },
-  ];
+  );
 
-  it.each(cases)("$name: FS W byte 28 is the scanline count of each full block", (c) => {
-    const reply = parseFsGReply(Buffer.from(c.fsg, "hex"));
-    expect(c.fsw[28]).toBe(c.linesPerBlock);
-    expect(reply.chunkSize).toBe(c.linesPerBlock * c.widthPx * 3);
-  });
-
-  it.each(cases)("$name: the full blocks plus the last block cover the page", (c) => {
-    const reply = parseFsGReply(Buffer.from(c.fsg, "hex"));
-    expect(reply.blockCount * reply.chunkSize + reply.lastBlockBytes).toBe(
-      c.widthPx * c.heightPx * 3,
-    );
-  });
-
-  it.each(cases)(
-    "$name: the stream config carries the block count, each block's size plus its status byte, and the last block's size plus one before the 0x06 terminator",
-    (c) => {
-      const reply = parseFsGReply(Buffer.from(c.fsg, "hex"));
-      const sc = c.streamConfig(reply);
-      expect(sc.readUInt32BE(8)).toBe(reply.blockCount);
-      expect(sc.readUInt32BE(16)).toBe(reply.chunkSize + 1);
-      expect(sc.readUInt32BE(24)).toBe(reply.chunkSize + 1);
-      expect(sc.readUInt32BE(33)).toBe(reply.lastBlockBytes + 1);
-      expect(sc[37]).toBe(0x06);
+  it.each(LEGACY_GEOMETRIES)(
+    "$name: the full blocks plus the last block cover the page",
+    ({ entry, mode, fsg }) => {
+      const reply = parseFsGReply(Buffer.from(fsg, "hex"));
+      const { widthPx, heightPx } = entry.raster(mode);
+      expect(reply.blockCount * reply.chunkSize + reply.lastBlockBytes).toBe(
+        widthPx * heightPx * 3,
+      );
     },
   );
 });
