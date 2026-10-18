@@ -259,13 +259,23 @@ export function buildStreamConfigPayload(reply: FsGReply, format: Format): Buffe
   return buf;
 }
 
+/**
+ * Whether the printer has an ADF fitted: byte 1, bit 7 of a 16-byte FS F
+ * status reply. Set on every WF-3620 reply (flatbed scans included), clear
+ * on the flatbed-only ET-2550 and XP-620. Byte 0's high bit is unrelated —
+ * see legacyDetectSource.
+ */
+export function fsFAdfInstalled(status: Buffer): boolean {
+  return (status[1] & 0x80) !== 0;
+}
+
 export type DetectSourceResult = { ok: true; source: Source } | { ok: false; byte: number };
 
 /**
  * Map the legacy FS F status byte (byte 0 of the 16-byte STATUS_2 reply)
- * to a scan source. The Windows driver's Wireshark captures show two known
- * values:
- *   - 0x81 → flatbed (no ADF paper / no ADF present)
+ * to a scan source, on a printer whose FS F reply says it has an ADF
+ * (fsFAdfInstalled). The Wireshark captures show two known values:
+ *   - 0x81 → flatbed (no paper in the ADF)
  *   - 0x01 → ADF has paper; duplex flag from the panel disambiguates
  *            simplex vs duplex
  * Other values (jam, mid-feed, panel-vs-paper conflict, empty-tray for
