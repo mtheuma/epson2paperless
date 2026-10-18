@@ -42,6 +42,7 @@ const PANEL_INFO: PushScanInfo = {
   ipAddress: "C0A8013A",
   duplex: true,
   action: "pdf",
+  protocolVersion: "2.00",
 };
 
 /**
