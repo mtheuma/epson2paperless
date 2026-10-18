@@ -464,12 +464,15 @@ Legacy ESC/I (WF-3620 family, XP-620, ET-2550) uses a separate code path under
 none of the above applies to it. Its per-model data lives in
 `src/esci/dialects/`, resolved by push-scan PID rather than by fingerprint.
 
-A `fixed-flatbed` entry additionally suppresses the `ESC e` source probe. The
-ET-2550's captured sequence is the WF-3620 flatbed path with both `ESC e` +
-parameter pairs removed, so the shared states branch on `sourcePolicy` rather
-than the dialect getting its own state group:
+A printer without an ADF also gets no `ESC e` source probe. The session learns
+whether an ADF is fitted from its first `FS F` status reply (`STATUS_1A`): byte
+1, bit 7 is set on every WF-3620 reply, flatbed scans included, and clear on the
+ET-2550 and XP-620 (`fsFAdfInstalled`). With no ADF the source is the flatbed.
+The ET-2550's captured sequence is the WF-3620 flatbed path with both `ESC e` +
+parameter pairs removed, so the shared states branch on that flag rather than
+the dialect getting its own state group or source rule:
 
-| State        | `detect` (WF-3620)                       | `fixed-flatbed` (ET-2550)   |
+| State        | ADF fitted (WF-3620)                     | No ADF (ET-2550)            |
 | ------------ | ---------------------------------------- | --------------------------- |
 | `STATUS_1B`  | `ESC e` + `0x01` probe → `SOURCE_ACK1`   | `FS F` → `STATUS_2`         |
 | `STATUS_2`   | byte-0 detection; `0x81` → reset cycle   | reset cycle unconditionally |
@@ -477,7 +480,8 @@ than the dialect getting its own state group:
 
 `STATUS_2` must skip detection rather than merely ignore its result: the ET-2550
 reports `0x01` there, never the WF-3620's `0x81`, and `legacyDetectSource` reads
-`0x01` as an ADF. Its teardown is a bare `ESC )` whose 1-byte reply is `0x80`
+`0x01` as an ADF. Byte 0's high bit is not the ADF flag. The ET-2550's teardown
+is a bare `ESC )` whose 1-byte reply is `0x80`
 rather than an ACK, with no unlock packet (as on the XP-620), and the state sits
 in `cleanupStates` so a connection drop during teardown still saves a page that
 has already flushed.
@@ -732,18 +736,20 @@ their captured `FS W` block and stream config verbatim (see below).
 The legacy ESC/I graph (`src/esci/graph.ts`) is shared by all three models. It
 reads per-model decisions off a `LegacyDialectEntry` (`src/esci/dialects/entry.ts`):
 fixed raster geometry, gamma LUTs, the `FS W` parameter block, the
-`FS G`-following stream-config payload, a `sourcePolicy` (`"detect"` for
-WF-3620's `ESC e` + `FS F` probe vs. `"fixed-flatbed"` for the XP-620 and
-ET-2550, neither of which has an ADF), and two `Branch<S>` records — `setup`
-and `teardown` — each a `{ next, send }` pair naming the graph state to jump
-to and the command to emit on entry.
+`FS G`-following stream-config payload, a `sourcePolicy`, and two `Branch<S>`
+records — `setup` and `teardown` — each a `{ next, send }` pair naming the
+graph state to jump to and the command to emit on entry.
 
-`sourcePolicy` does double duty for the ET-2550: besides pinning the source, it
-suppresses the `ESC e` probe in the three shared states listed in [How
-printer-model differences are
-handled](#how-printer-model-differences-are-handled). The XP-620 never reaches
-those states — its setup branch jumps straight into its own group — so the two
-fixed-flatbed dialects arrive at the gamma phase by different routes.
+`sourcePolicy` is `"detect"` for the WF-3620 and ET-2550: the session's `FS F`
+replies settle the source. The first says whether an ADF is fitted; with none
+(the ET-2550) the source is the flatbed and the three shared states listed in
+[How printer-model differences are
+handled](#how-printer-model-differences-are-handled) skip the `ESC e` probe,
+otherwise the `ESC e` + `FS F` probe picks flatbed or ADF. The XP-620 is
+`"fixed-flatbed"`: its setup branch jumps straight into its own group and on to
+gamma, so it never reaches the states that read the flag, and its source is
+pinned to the flatbed from the start. `registry.test.ts` holds that only a
+dialect whose setup bypasses `INIT` may be `"fixed-flatbed"`.
 
 `src/esci/dialects/registry.ts`'s `resolveLegacyEntry(productName)` picks
 the entry. The push-scan SOAP's `ProductNameIn` field (parsed by
@@ -777,13 +783,11 @@ decodes it (`parseFsIReply`) and checks it against the running dialect
   the product, and its setup branch is the fallback's (same `setup.next`
   state, same first command). Every
   byte on the wire up to this `FS I` is then what that dialect would have
-  sent, so the session sets `ctx.entry` to it, resets the source state the
-  way `runEsciScan` initialises it for that dialect (pinned `flatbed` for a
-  fixed-flatbed one), and logs an info line naming both dialects. Today
-  that is a PID-less trigger (`scan:now`, the webhook) reaching an ET-2550:
-  both it and the WF-3620 open with `ESC @` into `INIT`. If the adopted
-  dialect can't service `ESCI_FORCE_SOURCE`, the session fails there with
-  the same error `runEsciScan` raises up front.
+  sent, so the session sets `ctx.entry` to it and logs an info line naming
+  both dialects. The source state carries over unchanged: the adopted
+  dialect's setup also enters `INIT`, so the first `FS F` reply still settles
+  the source. Today that is a PID-less trigger (`scan:now`, the webhook)
+  reaching an ET-2550: both it and the WF-3620 open with `ESC @` into `INIT`.
 - **Mismatch:** another dialect claims the product but the session is on a
   PID-keyed dialect (the trigger's own PID chose it, and `FS I` doesn't
   overrule that) or its setup diverged before `FS I`, or the session picked a
@@ -835,13 +839,13 @@ for the same reason (300 DPI, 2550×3509 px full glass) in
 than hand-transcribed. Its `FS W` block and stream config are byte-identical
 across the capture's JPG and PDF scans, so both are format-independent.
 
-`runEsciScan` (`src/esci/scanner.ts`) guards the mismatch this fixed
-dialect creates: if `entry.sourcePolicy === "fixed-flatbed"` and
-`ESCI_FORCE_SOURCE` names anything other than `flatbed`, the scan fails
-immediately with a descriptive error instead of desyncing mid-session
-against hardware with no ADF to source from. That check sees only the
-dialect the session starts on, so the identity switch repeats it
-(`unsupportedForcedSource` in `src/esci/graph.ts`).
+`ESCI_FORCE_SOURCE` set to an ADF source can't be serviced by a printer
+without one, and the scan stops with a descriptive error instead of desyncing
+mid-session. On the XP-620 (`sourcePolicy: "fixed-flatbed"`) `runEsciScan`
+(`src/esci/scanner.ts`) rejects it before connecting
+(`unsupportedForcedSource` in `src/esci/graph.ts`). Everywhere else the first
+`FS F` reply decides: when it says no ADF is fitted, `STATUS_1A` stops the
+session before any source command is sent.
 
 ### XP-620 setup and teardown
 
@@ -873,7 +877,7 @@ the session ends. Unlike WF-3620, the capture shows no `0xa101` unlock ack:
 the printer closes the TCP connection right after the `ESC )` reply, so the
 graph resolves straight to the engine's terminal `DONE` state instead of
 routing through `UNLOCKING`. The ET-2550 ends the same way (its teardown is
-just the `ESC )`), so the two legacy fixed-flatbed dialects share this trait
+just the `ESC )`), so the two legacy flatbed-only dialects share this trait
 against WF-3620's unlock.
 
 `src/esci/scanner.test.ts` replays the captured XP-620 flatbed session
@@ -882,14 +886,20 @@ both JPG and PDF output, alongside the WF-3620 fixtures.
 
 ### Source selection (ESC/I)
 
-This section describes WF-3620's `sourcePolicy: "detect"` behaviour.
+This section describes `sourcePolicy: "detect"` behaviour (WF-3620, ET-2550).
 XP-620's `sourcePolicy: "fixed-flatbed"` skips it entirely: `runEsciScan`
-pins `ctx.source = "flatbed"` and `ctx.sourceDetected = true` before the
-graph runs, since the hardware has no ADF to detect.
+starts it on `initialSource`'s pin (`ctx.source = "flatbed"`,
+`ctx.sourceDetected = true`, `ctx.adfInstalled = false`) before the graph
+runs, since the hardware has no ADF to detect.
+
+The session's first `FS F` status reply (`STATUS_1A`) says whether an ADF is
+fitted: byte 1, bit 7. With none, the source is the flatbed and no `ESC e` is
+sent (the ET-2550).
 
 The PushScan SOAP carries `duplex` and `action` (Sides + Format) but no
-explicit ADF-vs-flatbed selector. The legacy graph probes with `ESC e 0x01`
-and reads the following `FS F` status reply to detect the physical source:
+explicit ADF-vs-flatbed selector. On a printer with an ADF the legacy graph
+probes with `ESC e 0x01` and reads the following `FS F` status reply to detect
+the physical source:
 
 | `FS F` status byte | ESC/I source                           |
 | ------------------ | -------------------------------------- |
@@ -898,8 +908,9 @@ and reads the following `FS F` status reply to detect the physical source:
 
 Setting `ESCI_FORCE_SOURCE=flatbed` (or `adf-simplex` / `adf-duplex`)
 overrides the detected value for edge cases whose status byte has not been
-captured yet. XP-620 rejects any forced value other than `flatbed` at
-startup (see [Per-model dialects](#per-model-dialects-legacydialectentry)).
+captured yet. A printer with no ADF rejects any forced value other than
+`flatbed`: the XP-620 at startup, every other one at the first `FS F` reply
+(see [Per-model dialects](#per-model-dialects-legacydialectentry)).
 
 ### Multi-page termination
 

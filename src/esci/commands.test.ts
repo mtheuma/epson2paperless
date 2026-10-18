@@ -286,7 +286,29 @@ describe("esci-legacy block layout across FS W, FS G and the stream config", () 
   );
 });
 
-import { legacyDetectSource } from "./commands.js";
+import { legacyDetectSource, fsFAdfInstalled } from "./commands.js";
+
+describe("fsFAdfInstalled", () => {
+  // FS F replies as captured in the committed legacy fixtures.
+  it.each([
+    ["WF-3620 flatbed, ready", "018000c0000000000000000000000000", true],
+    ["WF-3620 flatbed, busy", "81e800c0000000000000000000000000", true],
+    ["WF-3620 ADF, paper loaded", "01c000c0000000000000000000000000", true],
+    ["WF-3620 ADF duplex", "01c100c0000000000000000000000000", true],
+    ["WF-3620 ADF duplex, mid-feed", "03c100c0000000000000000000000000", true],
+    ["WF-3620 ADF empty", "81e900c0000000000000000000000000", true],
+    ["ET-2550", "010000c0000000000000000000000000", false],
+    ["XP-620", "010000c0000000000000000000000000", false],
+  ])("%s (%s) → ADF installed: %s", (_model, hex, expected) => {
+    expect(fsFAdfInstalled(Buffer.from(hex, "hex"))).toBe(expected);
+  });
+
+  it("reads byte 1 bit 7, not byte 0's high bit", () => {
+    const reply = (b0: number, b1: number) => Buffer.from([b0, b1, ...Array<number>(14).fill(0)]);
+    expect(fsFAdfInstalled(reply(0x81, 0x7f))).toBe(false);
+    expect(fsFAdfInstalled(reply(0x00, 0x80))).toBe(true);
+  });
+});
 
 describe("legacyDetectSource", () => {
   it("0x81 + simplex → flatbed", () => {

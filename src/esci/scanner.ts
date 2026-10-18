@@ -65,8 +65,8 @@ export interface LegacyScanSession {
    */
   diagnoseProtocol?: boolean;
   /**
-   * Test-only hook fired once when STATUS_2 has decided the source (either
-   * from the FS F byte via legacyDetectSource or from forcedSource). Lets
+   * Test-only hook fired once the session has settled the source (from the
+   * FS F replies, from forcedSource, or a fixed-flatbed dialect's pin). Lets
    * the replay-test matrix assert per-fixture detection without needing a
    * mutable return value. Production code does not pass this.
    */
@@ -107,9 +107,9 @@ export async function runEsciScan(
     throw new Error(`Failed to create session temp dir under ${tempBase}: ${msg}`);
   }
 
-  // Reject an ESCI_FORCE_SOURCE the dialect can't service before connecting.
-  // This sees only the dialect the session starts on; the IDENTITY state
-  // re-checks it against any dialect the printer's FS I reply switches to.
+  // Reject an ESCI_FORCE_SOURCE a fixed-flatbed dialect can't service before
+  // connecting. Every other dialect checks it against the first FS F reply,
+  // which says whether the printer has an ADF (STATUS_1A).
   const forcedError = unsupportedForcedSource(session.entry, session.forcedSource);
   if (forcedError) throw forcedError;
 
@@ -174,7 +174,7 @@ export async function runEsciScan(
   });
 
   // Fire the public onSourceDetected hook only on success paths AND only
-  // when STATUS_2 actually ran. Production callers don't pass this hook;
+  // when the session actually settled the source. Production callers don't pass this hook;
   // the replay-test matrix uses it to assert per-fixture detection.
   if (result.ok && result.finalCtx.sourceDetected) {
     session.onSourceDetected?.(result.finalCtx.source);

@@ -8,16 +8,31 @@ import sharp from "sharp";
 import { runEsciScan, appendImageChunk } from "./scanner.js";
 import { parseIsPacket, buildIsPacket, IS_HEADER_SIZE } from "../protocol.js";
 import { FakeTcpSocket } from "./test-support/fake-tcp-socket.js";
-import { loadFixture, driveFixture, concatHostBytes } from "./test-support/replay.js";
+import {
+  loadFixture,
+  driveFixture,
+  concatHostBytes,
+  type FixtureEvent,
+} from "./test-support/replay.js";
 import { readJpegOrientation } from "../exif.js";
 import { WF3620_ENTRY } from "./dialects/wf3620.js";
 import { ET2550_ENTRY } from "./dialects/et2550.js";
 import { XP620_ENTRY } from "./dialects/xp620.js";
 import type { LegacyDialectEntry } from "./dialects/entry.js";
+import { fsFAdfInstalled } from "./commands.js";
 import { captureLogs } from "./test-support/log-capture.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const FIXTURES = path.join(__dirname, "..", "..", "tools", "pcap-extract", "captures");
+/**
+ * A fixture event's FS F status reply (a 16-byte IS-0xa000 payload), or null.
+ * Each p>h event in the legacy fixtures is exactly one IS frame.
+ */
+function fsFReply(event: FixtureEvent): Buffer | null {
+  if (event.dir !== "p>h" || !("hex" in event)) return null;
+  const pkt = parseIsPacket(Buffer.from(event.hex, "hex"));
+  return pkt?.type === 0xa000 && pkt.payloadSize === 16 ? pkt.payload : null;
+}
 
 // ---------------------------------------------------------------------------
 // Per-fixture metadata driving the it.each replay matrix
@@ -559,38 +574,65 @@ describe("scanner-esci", () => {
     60_000,
   );
 
-  it("a PID-less scan on an ET-2550 with an ADF ESCI_FORCE_SOURCE fails at FS I instead of switching", async () => {
-    const fixture = loadFixture(path.join(FIXTURES, "et-2550/flatbed.jsonl"));
-    const pid = Buffer.from("PID 1106", "latin1").toString("hex");
-    const identityIdx = fixture.findIndex(
-      (e) => e.dir === "p>h" && "hex" in e && e.hex.includes(pid),
-    );
-    expect(identityIdx).toBeGreaterThan(0);
-    const fake = new FakeTcpSocket();
+  // The ET-2550's first FS F reply says no ADF is fitted, whether the session
+  // started on its own dialect (trigger PID) or switched to it at FS I.
+  it.each([
+    ["a PID-less", WF3620_ENTRY],
+    ["an ET-2550 PID", ET2550_ENTRY],
+  ] as const)(
+    "%s scan on an ET-2550 with an ADF ESCI_FORCE_SOURCE stops at the first FS F reply",
+    async (_trigger, entry) => {
+      const fixture = loadFixture(path.join(FIXTURES, "et-2550/flatbed.jsonl"));
+      const firstStatusIdx = fixture.findIndex((e) => fsFReply(e) !== null);
+      expect(firstStatusIdx).toBeGreaterThan(0);
+      const fake = new FakeTcpSocket();
 
-    const sessionPromise = runEsciScan(
-      {
-        printerIp: "1.2.3.4",
-        port: 1865,
-        outputDir,
-        tempDir,
-        entry: WF3620_ENTRY, // supports ADF, so the shell's up-front check passes
-        duplex: false,
-        forcedSource: "adf-simplex",
-        format: "jpg",
-        jpegQuality: 90,
-      },
-      fake.asFactory(),
-    );
-    await expect(
-      driveFixture(fixture.slice(0, identityIdx + 1), fake, sessionPromise),
-    ).rejects.toThrow("ESCI_FORCE_SOURCE=adf-simplex is not supported by et2550");
+      const sessionPromise = runEsciScan(
+        {
+          printerIp: "1.2.3.4",
+          port: 1865,
+          outputDir,
+          tempDir,
+          entry,
+          duplex: false,
+          forcedSource: "adf-simplex",
+          format: "jpg",
+          jpegQuality: 90,
+        },
+        fake.asFactory(),
+      );
+      await expect(
+        driveFixture(fixture.slice(0, firstStatusIdx + 1), fake, sessionPromise),
+      ).rejects.toThrow(
+        "ESCI_FORCE_SOURCE=adf-simplex, but the printer reports no ADF fitted. " +
+          "Unset ESCI_FORCE_SOURCE or set it to flatbed.",
+      );
 
-    // Nothing is sent after the identity reply: the session stops there.
-    expect(Buffer.concat(fake.writes).toString("hex")).toBe(
-      concatHostBytes(fixture.slice(0, identityIdx)).toString("hex"),
+      // Nothing is sent after that reply: the session stops there.
+      expect(Buffer.concat(fake.writes).toString("hex")).toBe(
+        concatHostBytes(fixture.slice(0, firstStatusIdx)).toString("hex"),
+      );
+      expect(readdirSync(outputDir)).toEqual([]);
+    },
+  );
+
+  // Every FS F reply in the committed captures: byte 1 bit 7 (ADF installed)
+  // is set on every WF-3620 reply, flatbed scans included, and clear on the
+  // flatbed-only ET-2550 and XP-620.
+  it.each([
+    ["wf-3620", true],
+    ["et-2550", false],
+    ["xp-620", false],
+  ] as const)("every %s FS F reply reports ADF installed: %s", (dir, expected) => {
+    const files = readdirSync(path.join(FIXTURES, dir)).filter((f) => f.endsWith(".jsonl"));
+    const flags = files.flatMap((f) =>
+      loadFixture(path.join(FIXTURES, dir, f)).flatMap((e) => {
+        const reply = fsFReply(e);
+        return reply ? [fsFAdfInstalled(reply)] : [];
+      }),
     );
-    expect(readdirSync(outputDir)).toEqual([]);
+    expect(flags.length).toBeGreaterThan(0);
+    expect(new Set(flags)).toEqual(new Set([expected]));
   });
 
   it("an unrecognised PID in the FS I reply logs the experimental line and runs the WF-3620 settings unchanged", async () => {

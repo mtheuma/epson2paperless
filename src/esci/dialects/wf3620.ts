@@ -16,7 +16,6 @@ export const WF3620_ENTRY: LegacyDialectEntry = {
   // matching it is likely but unverified; the fallback covers it either way.
   productName: "PID 08B8",
   sourcePolicy: "detect",
-  supportedSources: ["flatbed", "adf-simplex", "adf-duplex"],
   raster: (mode) => geometry(mode),
   gamma: { r: GAMMA_LUT_R, g: GAMMA_LUT_G, b: GAMMA_LUT_B },
   fswBlock: (mode) => buildFsWBlock(mode),
