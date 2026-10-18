@@ -17,3 +17,4 @@ Every ESC/I-2 printer used to need a hand-written registry entry keyed by a hash
 - An unknown ESC/I-2 printer scans with neutral colour instead of failing, and the log says so. Printers the service does not support generically still fail with the diagnostic.
 - Replay fixtures remain the oracle: a field moves from the override to derivation only once derivation reproduces the committed session bytes for every fixture model.
 - A colour pair is chosen whole, as a neutral pair or an Epson-look pair, never mixed.
+- A model can be verified on provisional colour evidence, an inherited setting expected to match but not yet confirmed on its hardware, with a README caveat until a reporter scan or capture supersedes it.
