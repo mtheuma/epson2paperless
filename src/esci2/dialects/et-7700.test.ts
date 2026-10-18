@@ -4,6 +4,7 @@ import { makeParaSpec } from "./dispatch.js";
 import { CMX_CLASSES } from "../data/cmx-classes.js";
 import { GAMMA_CLASSES } from "../data/gamma-classes.js";
 import { recordedDialect } from "../test-support/dialects.js";
+import { parseParaSegments } from "../test-support/para-parse.js";
 
 const ET7700_FP = "72319314b621fea0aab6cc16f4fd891534cec08f33ce80116a849f6f6e1e58d4";
 const entry = recordedDialect(ET7700_FP);
@@ -35,10 +36,12 @@ describe("ET-7700 neutral colour pair", () => {
   it.each(["jpg", "pdf"] as const)(
     "%s PARA carries the xp7100-pdf tone curve and the identity matrix, in UG18",
     (action) => {
-      const para = composePara(makeParaSpec(entry, "flatbed", action));
-      expect(para.includes("#GMMUG18")).toBe(true);
-      expect(para.includes(GAMMA_CLASSES["xp7100-pdf"])).toBe(true);
-      expect(para.includes(CMX_CLASSES["identity-um08"])).toBe(true);
+      const segments = parseParaSegments(composePara(makeParaSpec(entry, "flatbed", action)));
+      const bytesOf = (code: string): Buffer =>
+        Buffer.concat(segments.filter((s) => s.code === code).map((s) => s.bytes));
+      expect(segments.filter((s) => s.code === "GMM").map((s) => s.values)).toEqual([["UG18"]]);
+      expect(bytesOf("GMT").equals(GAMMA_CLASSES["xp7100-pdf"])).toBe(true);
+      expect(bytesOf("CMX").equals(CMX_CLASSES["identity-um08"])).toBe(true);
     },
   );
 });

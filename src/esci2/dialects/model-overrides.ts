@@ -673,9 +673,9 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     },
   },
   // The tone curve is a judgement call. By segment shape (QIT present, CCT
-  // absent) the nearest overrides are the ET-8500 and ET-7700, on the flat
-  // et4950-stock; by hardware class (an office AIO) it is the ET-4800 and
-  // ET-15000, on et4800-stock. It follows hardware class: the flat curve was
+  // absent) the nearest overrides are the ET-8500 and ET-7700, on flat
+  // near-identity curves; by hardware class (an office AIO) it is the ET-4800
+  // and ET-15000, on et4800-stock. It follows hardware class: a flat curve was
   // chosen for the photo models. If wrong, et4800-stock crushes shadows, which
   // a compatibility-page scan would show as a lifted black floor.
   {
