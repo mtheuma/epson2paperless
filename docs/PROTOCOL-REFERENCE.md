@@ -375,7 +375,8 @@ pure data, holding only what the printer's replies can't tell us:
   `src/esci2/data/gamma-classes.ts` and `cmx-classes.ts`. Class definitions are
   inlined verbatim from captured fixtures; never algorithmically generated
   (`identity-um08` is another name for the `et2750-um08` bytes, the identity
-  matrix, for an override whose record should say so: the ET-8500 and ET-7700).
+  matrix, for a dialect whose record should say so: the ET-8500 and ET-7700
+  overrides, and the generic dialect).
   Each class is tagged neutral or Epson-look (a CMX class by whether its bytes
   are the identity matrix), and `checkColourPair` (`src/esci2/data/colour-pair.ts`)
   rejects a mixed pair; a test holds every override to it.

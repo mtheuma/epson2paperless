@@ -7,8 +7,9 @@
 //   - xp7100-pdf:  xp-7100-fixtures/pdf-single.bin, offsets 864..888.
 //   - et4800-um08: tools/pcap-extract/captures/et-4800/flatbed-jpg.jsonl, PARA body offsets 864..888.
 // identity-um08 is a name, not a capture: the identity matrix, the et2750-um08
-// bytes (which the xp7100-pdf capture also carries), for an override whose
-// record should say it sends the identity matrix rather than whose it is.
+// bytes (which the xp7100-pdf capture also carries), for a dialect (an
+// override, or the generic dialect) whose record should say it sends the
+// identity matrix rather than whose it is.
 
 import type { ColourLook } from "./colour-look.js";
 
