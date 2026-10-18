@@ -608,11 +608,12 @@ at a different DPI.
 
 The legacy path (WF-3620 family, XP-620, ET-2550) has no resolution arm on the
 wire at all: the cross-product of DPI × format × dialect was never captured
-across the board. The resolution-dependent values (the `FS W` block's lines per
-block and the stream config's block sizes) follow from the geometry, as
-described in [Block layout](#block-layout-fs-w-fs-g-and-the-stream-config), but
-each dialect only knows the values for its fixed captured geometries, so the
-wire bytes are the same regardless of `SCAN_RESOLUTION`. `LegacyDialectEntry.deliveredDpi` pins what each dialect
+across the board. The resolution-dependent values are already derived (the
+`FS W` block's lines per block from the raster width, the stream config from
+the printer's `FS G` reply, as described in
+[Block layout](#block-layout-fs-w-fs-g-and-the-stream-config)), but each
+dialect's raster is its fixed captured geometry, so the wire bytes are the
+same regardless of `SCAN_RESOLUTION`. `LegacyDialectEntry.deliveredDpi` pins what each dialect
 actually delivers: 600 DPI for WF-3620 JPG / 300 for WF-3620 PDF (the firmware
 locks resolution to the panel's format choice — see
 [Action: JPG / PDF / Preview](#action-jpg--pdf--preview)); a flat 300 DPI for
@@ -709,8 +710,12 @@ last block. Three messages describe that layout, and their fields agree on
 every legacy capture:
 
 - **`FS W` byte 28: lines per block.** The number of scanlines in each full
-  block. WF-3620: 4 at 600 DPI (JPG), 8 at 300 DPI (PDF); ET-2550: 8;
-  XP-620: 34 (`0x22`). Lines per block × width × 3 bytes is the block size.
+  block: the largest even count, at most 254, whose rows (width × 3 bytes)
+  fit in the model's transfer buffer, 64 KiB on the WF-3620 and ET-2550 and
+  256 KiB on the XP-620 (`linesPerBlock`). WF-3620: 4 at 600 DPI (JPG), 8 at
+  300 DPI (PDF); ET-2550: 8; XP-620: 34 (`0x22`; 35 rows fit, rounded down to
+  even). `FS W` goes out before `FS G`, so this comes from the geometry, not
+  the printer's reply. Lines per block × width × 3 bytes is the block size.
 - **The 14-byte `FS G` reply** (`parseFsGReply`, little-endian): bytes 0–1 a
   status word; bytes 2–5 `chunkSize`, the full block's byte count (zero
   means not ready yet, see [Multi-page termination](#multi-page-termination));
@@ -728,17 +733,15 @@ every legacy capture:
   terminator at byte 37. The remaining fields are constant: the sub-payload
   length 30 (bytes 0–3) and `1` at bytes 20–23 and 29–32.
 
-The WF-3620 takes the block count and block size for its stream config from
-the `FS G` reply, but its lines per block and last block's byte count are
-per-format constants for its fixed A4 geometry. The XP-620 and ET-2550 send
-their captured `FS W` block and stream config verbatim (see below).
+Every dialect builds its stream config from the `FS G` reply alone, and
+writes the derived lines per block into its `FS W` block (see below).
 
 ### Per-model dialects (LegacyDialectEntry)
 
 The legacy ESC/I graph (`src/esci/graph.ts`) is shared by all three models. It
 reads per-model decisions off a `LegacyDialectEntry` (`src/esci/dialects/entry.ts`):
-fixed raster geometry, gamma LUTs, the `FS W` parameter block, the
-`FS G`-following stream-config payload, a `sourcePolicy`, and two `Branch<S>`
+fixed raster geometry, gamma LUTs, the transfer buffer size, the `FS W`
+parameter block, a `sourcePolicy`, and two `Branch<S>`
 records — `setup` and `teardown` — each a `{ next, send }` pair naming the
 graph state to jump to and the command to emit on entry.
 
@@ -829,17 +832,21 @@ check, so they see any dialect it switched to:
 
 Per-entry fixed data lives on the entry rather than being derived
 per-request: `raster()` (page dimensions), `gamma` (R/G/B LUTs),
-`fswBlock()` (the 64-byte `FS W` block), and `streamConfig()` (the
-`FS G`-following `IS-0x2200` payload). WF-3620's versions compute these
-from the requested source/format (`geometry()`, `buildFsWBlock()`,
-`buildStreamConfigPayload()` in `src/esci/commands.ts`). XP-620's are
-fixed constants — the model only supports flatbed and only one mode
-(300 DPI A4, 2481×3507 px) has been captured — transcribed byte-for-byte
-from that capture into `src/esci/dialects/xp620-data.ts`. ET-2550's are fixed
-for the same reason (300 DPI, 2550×3509 px full glass) in
-`src/esci/dialects/et2550-data.ts`, generated from the committed fixture rather
-than hand-transcribed. Its `FS W` block and stream config are byte-identical
-across the capture's JPG and PDF scans, so both are format-independent.
+`transferBufferBytes` (the transfer buffer that sets the lines per block), and
+`fswBlock()` (the 64-byte `FS W` block, given the lines per block that
+`fsWBlockFor` works out from the raster width and the buffer). WF-3620's
+versions compute these from the requested source/format (`geometry()`,
+`buildFsWBlock()` in `src/esci/commands.ts`). ET-2550's raster is fixed —
+only one mode (300 DPI, 2550×3509 px full glass) has been captured, in
+`src/esci/dialects/et2550-data.ts`, generated from the committed fixture
+rather than hand-transcribed — and its `FS W` block is the WF-3620 layout at
+that raster, the same for the capture's JPG and PDF scans. XP-620's raster
+and `FS W` block are fixed constants for the same reason (300 DPI A4,
+2481×3507 px), transcribed byte-for-byte from that capture into
+`src/esci/dialects/xp620-data.ts`; its block differs from the WF-3620 layout
+in a few constant bytes, so the dialect keeps the captured block and writes
+only the lines per block into it. The stream config is not per-entry: the
+graph builds it from each `FS G` reply (`buildStreamConfigPayload()`).
 
 `ESCI_FORCE_SOURCE` set to an ADF source can't be serviced by a printer
 without one, and the scan stops with a descriptive error instead of desyncing

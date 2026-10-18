@@ -32,6 +32,7 @@ import {
   buildEscCleanup,
   buildPageEject,
   parseFsGReply,
+  buildStreamConfigPayload,
   legacyDetectSource,
   fsFAdfInstalled,
   SOURCE_BYTE,
@@ -51,7 +52,7 @@ import { encodeRawGbrToJpeg } from "./raw-to-jpeg.js";
 import { createLogger } from "../logger.js";
 import { passthru } from "./dialects/send.js";
 import { checkLegacyIdentity } from "./dialects/registry.js";
-import type { LegacyDialectEntry } from "./dialects/entry.js";
+import { fsWBlockFor, type LegacyDialectEntry } from "./dialects/entry.js";
 
 const log = createLogger("scanner-esci");
 
@@ -712,7 +713,7 @@ g.state("WINDOW_CMD", {
       validate: isAck,
       next: "WINDOW_DATA",
       send: (ctx: EsciCtx) =>
-        passthru(ctx.entry.fswBlock({ source: ctx.source, format: ctx.format }), 1),
+        passthru(fsWBlockFor(ctx.entry, { source: ctx.source, format: ctx.format }), 1),
     },
   },
 });
@@ -762,7 +763,7 @@ g.state(
     // PAGE_ENCODING_DRAIN. Without this, IMG_RECEIVING would sit on its
     // deferred queue until the engine timeout (#71). The IMG_RECEIVING
     // drain prelude stays as a backstop for fragmented arrivals.
-    const streamConfig = buildIsPacket(0x2200, ctx.entry.streamConfig(reply, ctx.format));
+    const streamConfig = buildIsPacket(0x2200, buildStreamConfigPayload(reply));
     if (drainDeferredIntoBuffer(ctx, null) === "overflowed") {
       // Bundle stream-config with the flush transition so the overflow
       // path still emits IS-0x2200 — every non-overflow START path

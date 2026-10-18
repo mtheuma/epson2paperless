@@ -1,13 +1,6 @@
-import { buildEscI, buildEscInit } from "../commands.js";
+import { buildEscI, buildEscInit, withLinesPerBlock } from "../commands.js";
 import { passthru } from "./send.js";
-import {
-  XP_RASTER,
-  XP_GAMMA_R,
-  XP_GAMMA_G,
-  XP_GAMMA_B,
-  XP_FSW_BLOCK,
-  XP_STREAM_CONFIG,
-} from "./xp620-data.js";
+import { XP_RASTER, XP_GAMMA_R, XP_GAMMA_G, XP_GAMMA_B, XP_FSW_BLOCK } from "./xp620-data.js";
 import type { LegacyDialectEntry } from "./entry.js";
 
 export const XP620_ENTRY: LegacyDialectEntry = {
@@ -19,8 +12,9 @@ export const XP620_ENTRY: LegacyDialectEntry = {
   sourcePolicy: "fixed-flatbed",
   raster: () => XP_RASTER,
   gamma: { r: XP_GAMMA_R, g: XP_GAMMA_G, b: XP_GAMMA_B },
-  fswBlock: () => XP_FSW_BLOCK, // fixed; format-independent
-  streamConfig: () => XP_STREAM_CONFIG, // fixed; format-independent
+  transferBufferBytes: 256 * 1024,
+  // Fixed and format-independent, apart from the lines per block.
+  fswBlock: (_mode, lines) => withLinesPerBlock(XP_FSW_BLOCK, lines),
   prestart: "start-direct",
   // ESC I is a two-phase read: reply size 4 (STX 02 02 + LE u16 length), then a
   // pure-read of that length. XP_IDENT_A_META handles phase 2 (see Task 12).
