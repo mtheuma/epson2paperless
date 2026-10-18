@@ -159,6 +159,16 @@ export function readPreParaStatus(path: string): { header: Buffer; body: Buffer 
   return firstReply(payloads.slice(stat), "STAT", path);
 }
 
+/**
+ * Every ESC/I-2 reply frame the printer sent: each frame payload that
+ * starts with a reply header ("<NAME>x" + 7 hex digits).
+ */
+export function readReplyFrames(path: string): Buffer[] {
+  return readPrinterPayloads(path).filter(
+    (p) => p.length >= 12 && /^[A-Z ]{4}x[0-9A-Fa-f]{7}$/.test(p.toString("latin1", 0, 12)),
+  );
+}
+
 // Models with no replay fixture: the facts their reporters posted in the
 // unsupported-printer diagnostic block. A diagnostic carries only the lists,
 // the duplex flag and the scan areas (and older blocks have no CCT line), so

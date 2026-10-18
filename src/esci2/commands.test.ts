@@ -6,6 +6,7 @@ import {
   parseEsci2ReplyHeader,
   parseTokens,
 } from "./commands.js";
+import { REPLAY_FIXTURES, readReplyFrames } from "./test-support/capability-bodies.js";
 
 describe("buildFsY", () => {
   it("returns exactly the 2 bytes 0x1c 0x59", () => {
@@ -98,6 +99,57 @@ describe("parseEsci2ReplyHeader", () => {
 
   it("returns null when the hex field contains non-hex chars", () => {
     expect(parseEsci2ReplyHeader(Buffer.from("IMG x00ZZ25F", "ascii"))).toBeNull();
+  });
+});
+
+describe("parseEsci2ReplyHeader — the reply-header block", () => {
+  // A 64-byte reply: the 12-byte header, then a 52-byte block of tokens
+  // padded with #--- filler.
+  const frame = (cmd: string, tokens: string) =>
+    Buffer.from(`${cmd}x0000000${tokens}`.padEnd(64, "#---").slice(0, 64), "ascii");
+
+  it("a block of filler has nothing to report", () => {
+    expect(parseEsci2ReplyHeader(frame("STAT", ""))).toMatchObject({
+      error: null,
+      notReady: null,
+    });
+  });
+
+  it("reads a header-level error as its unit and code", () => {
+    expect(parseEsci2ReplyHeader(frame("IMG ", "#errADF PJ  "))).toMatchObject({
+      error: "ADF PJ",
+      notReady: null,
+    });
+    expect(parseEsci2ReplyHeader(frame("STAT", "#errFB  LOCK"))!.error).toBe("FB LOCK");
+  });
+
+  it("reads why the scanner is not ready", () => {
+    for (const code of ["BUSY", "WUP", "RSVD", "AFEN"]) {
+      expect(parseEsci2ReplyHeader(frame("STAT", `#nrd${code.padEnd(4)}`))).toMatchObject({
+        error: null,
+        notReady: code,
+      });
+    }
+  });
+
+  it.each(REPLAY_FIXTURES)(
+    "every reply in the $model fixture $path has nothing to report",
+    ({ path }) => {
+      const replies = readReplyFrames(path).map((frame) => parseEsci2ReplyHeader(frame));
+      // The status before PARA and the image replies among them.
+      expect(replies.filter((r) => r?.cmd === "STAT").length).toBeGreaterThan(0);
+      expect(replies.filter((r) => r?.cmd === "IMG").length).toBeGreaterThan(0);
+      for (const reply of replies) {
+        expect(reply).toMatchObject({ error: null, notReady: null });
+      }
+    },
+  );
+
+  it("keeps the block's other tokens, and leaves body-style #ERR tokens to the status read", () => {
+    const parsed = parseEsci2ReplyHeader(frame("IMG ", "#pst#typIMGF#ERRADF PE  "))!;
+    expect(parsed.tokens.get("typ")).toBe("IMGF");
+    expect(parsed.tokens.has("pst")).toBe(true);
+    expect(parsed.error).toBeNull();
   });
 });
 
