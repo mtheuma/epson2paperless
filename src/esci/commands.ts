@@ -64,9 +64,15 @@ export const SOURCE_BYTE: Record<Source, number> = {
   "adf-duplex": 0x02,
 };
 
-const FORMAT_BYTE: Record<Format, number> = {
-  jpg: 0x04,
-  pdf: 0x08,
+/**
+ * Scanlines per transfer block (FS W byte 28) for each WF-3620 format. The
+ * format only matters through its resolution: 4 lines at 600 dpi (JPG) and
+ * 8 at 300 dpi (PDF) both make a 59472-byte block, which the FS G reply then
+ * reports as its block size.
+ */
+const LINES_PER_BLOCK: Record<Format, number> = {
+  jpg: 4,
+  pdf: 8,
 };
 
 export interface ScanGeometry {
@@ -105,7 +111,7 @@ function geometryFor(source: Source, format: Format): ScanGeometry {
  *   bytes 24-25 : 0x0813 (constant)
  *   byte  26    : source (0=flatbed, 1=ADF simplex, 2=ADF duplex)
  *   byte  27    : 0x00 (constant)
- *   byte  28    : format (0x04=JPEG, 0x08=PDF)
+ *   byte  28    : scanlines per transfer block (4 at 600 dpi JPEG, 8 at 300 dpi PDF)
  *   bytes 29-31 : 0x04 0x00 0x01 (constant)
  *   bytes 32-63 : zero pad
  */
@@ -121,7 +127,7 @@ export function buildFsWBlock(mode: ScanMode): Buffer {
   buf.writeUInt16LE(0x0813, 24);
   buf.writeUInt8(SOURCE_BYTE[mode.source], 26);
   buf.writeUInt8(0x00, 27);
-  buf.writeUInt8(FORMAT_BYTE[mode.format], 28);
+  buf.writeUInt8(LINES_PER_BLOCK[mode.format], 28);
   buf.writeUInt8(0x04, 29);
   buf.writeUInt8(0x00, 30);
   buf.writeUInt8(0x01, 31);
@@ -132,15 +138,26 @@ export function geometry(mode: ScanMode): ScanGeometry {
   return geometryFor(mode.source, mode.format);
 }
 
+/**
+ * The 14-byte FS G reply describes how the page's image data will be split
+ * into blocks: `blockCount` full blocks of `chunkSize` bytes each, then one
+ * last block of `lastBlockBytes`. A full block holds the FS W block's
+ * lines-per-block count of scanlines (byte 28); the last block holds the
+ * lines left over. Each block arrives as one IS-0xa200 chunk carrying one
+ * extra trailing status byte, so a page is `blockCount + 1` chunks.
+ */
 export interface FsGReply {
   /** First 2 bytes — status flags. We don't decode bits; just preserve. */
   statusWord: number;
-  /** LE u32 at bytes 2-5: per-chunk transport size used by IS-0xa200 frames. */
+  /**
+   * LE u32 at bytes 2-5: byte count of each full block (lines per block ×
+   * bytes per scanline). Zero means the printer is not ready to stream yet.
+   */
   chunkSize: number;
-  /** LE u32 at bytes 6-9: bytes per scanline as the firmware sees it. Used in IS-0x2200 stream-config. */
-  bytesPerLine: number;
-  /** LE u32 at bytes 10-13: total scanlines. Used in IS-0x2200 stream-config. */
-  totalLines: number;
+  /** LE u32 at bytes 6-9: number of full blocks before the last block. */
+  blockCount: number;
+  /** LE u32 at bytes 10-13: byte count of the last block (the leftover scanlines). */
+  lastBlockBytes: number;
 }
 
 export function parseFsGReply(buf: Buffer): FsGReply {
@@ -150,8 +167,8 @@ export function parseFsGReply(buf: Buffer): FsGReply {
   return {
     statusWord: buf.readUInt16BE(0),
     chunkSize: buf.readUInt32LE(2),
-    bytesPerLine: buf.readUInt32LE(6),
-    totalLines: buf.readUInt32LE(10),
+    blockCount: buf.readUInt32LE(6),
+    lastBlockBytes: buf.readUInt32LE(10),
   };
 }
 
@@ -196,46 +213,49 @@ export function parseFsIReply(buf: Buffer): FsIIdentity {
   };
 }
 
+const STREAM_CONFIG_TERMINATOR = 0x06;
+
 /**
- * The 38-byte payload of the IS-0x2200 packet the host sends immediately
- * after FS G's reply.
- *
- * Layout:
- *   bytes 0-3   : BE u32 = 30 (length of the trailing sub-payload, bytes 8-37)
- *   bytes 4-7   : zero
- *   --- end of 8-byte preamble ---
- *   bytes 8-9   : zero
- *   bytes 10-11 : BE u16 = bytesPerLine low 16 (0x06d6 JPEG / 0x01b5 PDF)
- *   bytes 12-15 : zero
- *   bytes 16-19 : BE u32 = chunkSize + 1 (0xe851 in all six captures)
- *   bytes 20-23 : BE u32 = 1
- *   bytes 24-27 : BE u32 = chunkSize + 1 (duplicate)
- *   bytes 28-31 : LE u32 = 6 (constant; meaning unknown)
- *   byte 32     : 0x01 (constant — purpose unknown but consistent across captures)
- *   byte 33     : 0x00
- *   bytes 34-37 : LE u32 = format-keyed empirical constant
- *                  JPEG: 0x06297400 (wire bytes 00 74 29 06)
- *                  PDF:  0x06339100 (wire bytes 00 91 33 06)
- *
- * The format-keyed constant matches across flatbed/ADF/duplex captures
- * (only format affects it). We have not derived an algorithmic formula
- * from FS G fields, so we hardcode the two observed values per format.
+ * The last block's byte count for each WF-3620 format at its fixed A4
+ * geometry: the scanlines left over after the full blocks, times the bytes
+ * per scanline. 600 dpi JPEG: 7002 lines = 1750 × 4 + 2, so 2 × 4956 × 3.
+ * 300 dpi PDF: 3501 lines = 437 × 8 + 5, so 5 × 2478 × 3. Each equals the
+ * `lastBlockBytes` the FS G reply reports for that geometry.
  */
-const TOTAL_BYTES_FIELD: Record<Format, number> = {
-  jpg: 0x06297400,
-  pdf: 0x06339100,
+const LAST_BLOCK_BYTES: Record<Format, number> = {
+  jpg: 29736,
+  pdf: 37170,
 };
 
+/**
+ * The 38-byte payload of the IS-0x2200 packet the host sends immediately
+ * after FS G's reply. It restates the FS G block layout back to the printer.
+ *
+ * Layout (big-endian u32s):
+ *   bytes 0-3   : 30 (length of the trailing sub-payload, bytes 8-37)
+ *   bytes 4-7   : zero
+ *   --- end of 8-byte preamble ---
+ *   bytes 8-11  : FS G block count (full blocks before the last one)
+ *   bytes 12-15 : zero
+ *   bytes 16-19 : FS G block size + 1 (each block plus its trailing status byte)
+ *   bytes 20-23 : 1
+ *   bytes 24-27 : FS G block size + 1 (again)
+ *   byte  28    : 0x06 terminator
+ *   bytes 29-32 : 1
+ *   bytes 33-36 : the last block's byte count + 1
+ *   byte  37    : 0x06 terminator
+ */
 export function buildStreamConfigPayload(reply: FsGReply, format: Format): Buffer {
   const buf = Buffer.alloc(38);
-  buf.writeUInt32BE(0x0000001e, 0);
-  buf.writeUInt16BE(reply.bytesPerLine & 0xffff, 10);
+  buf.writeUInt32BE(30, 0);
+  buf.writeUInt32BE(reply.blockCount, 8);
   buf.writeUInt32BE(reply.chunkSize + 1, 16);
   buf.writeUInt32BE(1, 20);
   buf.writeUInt32BE(reply.chunkSize + 1, 24);
-  buf.writeUInt32LE(6, 28);
-  buf.writeUInt8(0x01, 32);
-  buf.writeUInt32LE(TOTAL_BYTES_FIELD[format], 34);
+  buf.writeUInt8(STREAM_CONFIG_TERMINATOR, 28);
+  buf.writeUInt32BE(1, 29);
+  buf.writeUInt32BE(LAST_BLOCK_BYTES[format] + 1, 33);
+  buf.writeUInt8(STREAM_CONFIG_TERMINATOR, 37);
   return buf;
 }
 

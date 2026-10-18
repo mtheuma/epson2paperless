@@ -35,16 +35,18 @@ export const ET_GAMMA_B = Buffer.from(
 
 /** 64-byte `FS W` parameter block: 300 dpi, 2550x3509, source byte 0x00
  *  (flatbed). Identical across the capture's JPG and PDF scans, so the block
- *  is format-independent and byte 28 (0x08) is not a format selector. */
+ *  is format-independent. Byte 28 (0x08) is the scanlines per transfer block:
+ *  8 × 2550 px × 3 bytes is the 61200-byte block the FS G reply reports. */
 export const ET_FSW_BLOCK = Buffer.from(
   "2c0100002c0100000000000000000000f6090000b50d000013080000080400010000000000000000000000000000000000000000000000000000000000000000",
   "hex",
 );
 
-/** 38-byte payload of the IS-0x2200 packet sent after `FS G` replies.
- *  Derived by the driver from that reply (chunk size and count, each +1 for the
- *  per-chunk status byte), but pinned here: only one geometry was captured, so
- *  a derivation cannot be validated. Same compromise as XP_STREAM_CONFIG. */
+/** 38-byte payload of the IS-0x2200 packet sent after `FS G` replies. It
+ *  restates that reply's block layout (see `buildStreamConfigPayload`): 438
+ *  full blocks of 61200 bytes, each +1 for its status byte, then a last
+ *  block of 38250 bytes (+1) and the 0x06 terminator. Pinned
+ *  here: only one geometry was captured. Same compromise as XP_STREAM_CONFIG. */
 export const ET_STREAM_CONFIG = Buffer.from(
   "0000001e00000000000001b6000000000000ef11000000010000ef1106000000010000956b06",
   "hex",

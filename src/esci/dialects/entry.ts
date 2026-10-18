@@ -27,9 +27,10 @@ export interface LegacyDialectEntry {
   teardown: Branch<TeardownEntryState>;
   /**
    * DPI the fixed wire parameters actually deliver for a mode. The legacy
-   * path has NO wire resolution arm (spec: cross-product DPI×format combos
-   * are uncaptured and the stream-config trailer's derivation is unknown) —
-   * this feeds only the host-side downsample decision.
+   * path has NO wire resolution arm (cross-product DPI×format combos are
+   * uncaptured, and every dialect's FS W block and stream config are built
+   * for its fixed captured geometries only) — this feeds only the host-side
+   * downsample decision.
    */
   deliveredDpi: (mode: ScanMode) => number;
 }

@@ -484,7 +484,7 @@ describe("esciGraph reset / gamma / window / start cycles", () => {
     const state = esciGraph.states.START;
     if (state.kind === "decision") {
       const ctx = makeCtx();
-      // 14-byte FS G reply: status(2) + chunkSize(4) + bytesPerLine(4) + totalLines(4)
+      // 14-byte FS G reply: status(2) + chunkSize(4) + blockCount(4) + lastBlockBytes(4)
       const payload = Buffer.alloc(14);
       payload.writeUInt16BE(0x0000, 0); // status
       payload.writeUInt32LE(0, 2); // chunkSize = 0 → poll path
