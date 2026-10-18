@@ -82,6 +82,27 @@ describe("runJobControl error handling", () => {
     expect(fake.destroyed).toBe(false);
   });
 
+  it("fails on a socket error that lands between two reads, naming it, not a timeout", async () => {
+    const welcome = buildIsPacket(0x8000, Buffer.from([0x01, 0x04, 0x00, 0x00, 0x00]));
+    // The printer resets the connection as the lock goes out, before the
+    // lock-ack read is listening.
+    const fake: FakeJobSocket = new FakeJobSocket((data) => {
+      if (isType(data) === 0x2100) {
+        fake.emit("error", new Error("read ECONNRESET"));
+        fake.emit("close");
+      }
+      return null;
+    });
+    const p = runJobNumberCommit({
+      printerIp: "192.0.2.9",
+      timeoutMs: 2000,
+      socketFactory: () => asSocket(fake),
+    });
+    setImmediate(() => fake.emit("data", welcome));
+
+    await expect(p).rejects.toThrow(/^JOBR lock ack: read ECONNRESET$/);
+  });
+
   it("reports the reply type and bytes when a packet has an unexpected IS type", async () => {
     const welcome = buildIsPacket(0x8000, Buffer.from([0x01, 0x04, 0x00, 0x00, 0x00]));
     const lockAck = buildIsPacket(0xa100, Buffer.from([0x06]));

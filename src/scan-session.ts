@@ -473,6 +473,8 @@ export async function runScanSession<Ctx>(
   let waitReason = "";
   // Ends a pending delayed send early (TransitionResult.delayMs) once the session settles.
   let cancelDelay: (() => void) | null = null;
+  // Wakes a wait for more bytes (moreData) on the next data event or on settle.
+  let wakeOnData: (() => void) | null = null;
 
   const recvChunks: Buffer[] = [];
   let recvBytes = 0;
@@ -577,12 +579,23 @@ export async function runScanSession<Ctx>(
       });
     }
 
+    /** Resolves on the next data event, or as soon as the session settles. */
+    function moreData(): Promise<void> {
+      return new Promise((resolve) => {
+        wakeOnData = () => {
+          wakeOnData = null;
+          resolve();
+        };
+      });
+    }
+
     const settle = (result: RunScanSessionResult<Ctx>) => {
       if (settled) return; // idempotent — close handler may also call this
       settled = true;
       clearTimeoutTimer(); // (T15)
       clearWaitDeadline();
       cancelDelay?.();
+      wakeOnData?.();
       // Always destroy — final resource cleanup is the engine's job.
       // Adapters that want to no-op a redundant destroy after a polite
       // end() (DONE path) do so via their own clean-close state
@@ -749,6 +762,7 @@ export async function runScanSession<Ctx>(
     transport.on("data", (chunk: Buffer) => {
       recvChunks.push(chunk);
       recvBytes += chunk.length;
+      wakeOnData?.();
       void tryDispatch();
     });
 
@@ -1042,8 +1056,16 @@ export async function runScanSession<Ctx>(
         // stay buffered for `next`.
         while (!settled && hasGlobalAbortHandler(headType())) {
           const packet = tryParseHead();
-          if (!packet) break;
-          await dispatchPacket(packet);
+          if (packet) {
+            await dispatchPacket(packet);
+            continue;
+          }
+          if (settled) break; // tryParseHead failed the session (framing)
+          // Its payload is still arriving: wait for it under the rolling
+          // timeout rather than send ahead of it.
+          armTimeout();
+          await moreData();
+          clearTimeoutTimer();
         }
         if (settled) return;
       }

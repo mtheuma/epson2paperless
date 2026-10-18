@@ -770,7 +770,7 @@ g.state(
       };
     }
     ctx.geom = geom;
-    ctx.imageBuffer = Buffer.alloc(geom.widthPx * geom.heightPx * 3);
+    ctx.imageBuffer = Buffer.alloc(pageBytes);
     ctx.imageBufferOffset = 0;
     // Drain proactively here, BEFORE entering IMG_RECEIVING, in case a
     // slow encode let the printer stash the entire next page during
