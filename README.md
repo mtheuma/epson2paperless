@@ -32,7 +32,7 @@ What you get:
 | **ET-4800**           | ✅&nbsp;Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS                                                                                   |
 | **ET-4950 / ET-4956** | ✅&nbsp;Verified     |                                                                                                                               |
 | **ET-7700**           | ✅&nbsp;Verified     | Flatbed-only hardware                                                                                                         |
-| **ET-8500**           | ✅&nbsp;Verified     | Flatbed-only hardware                                                                                                         |
+| **ET-8500**           | ✅&nbsp;Verified     | Flatbed-only hardware; colours not yet confirmed on hardware                                                                  |
 | **ET-15000**          | 🟡&nbsp;Experimental | Flatbed verified; ADF simplex untested                                                                                        |
 | **FF-680W**           | 🟡&nbsp;Experimental | Requires [pairing](docs/BUTTON-ONLY-SCANNERS.md); ADF-only; 200/300 DPI verified                                              |
 | **WF-2845**           | ✅&nbsp;Verified     | ADF simplex ([#178](https://github.com/mtheuma/epson2paperless/issues/178))                                                   |

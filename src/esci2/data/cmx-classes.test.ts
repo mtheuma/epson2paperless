@@ -35,8 +35,19 @@ describe("cmx-classes", () => {
   });
 
   it("class names enumerate", () => {
-    const _names: CmxClassName[] = ["et2750-um08", "xp7100-jpg", "xp7100-pdf", "et4800-um08"];
-    expect(_names).toHaveLength(4);
+    const _names: CmxClassName[] = [
+      "et2750-um08",
+      "xp7100-jpg",
+      "xp7100-pdf",
+      "et4800-um08",
+      "identity-um08",
+    ];
+    expect(_names).toHaveLength(5);
+  });
+
+  it("identity-um08 names the identity matrix, already captured as et2750-um08", () => {
+    expect(isIdentityCmx(CMX_CLASSES["identity-um08"])).toBe(true);
+    expect(CMX_CLASSES["identity-um08"].equals(CMX_CLASSES["et2750-um08"])).toBe(true);
   });
 
   describe("identity recognition", () => {
@@ -44,7 +55,7 @@ describe("cmx-classes", () => {
     const segment = (body: number[]) => Buffer.concat([header, Buffer.from(body)]);
     const identity = [0x20, 0, 0, 0, 0x20, 0, 0, 0, 0x20, 0, 0, 0];
 
-    it("tags each class from its bytes: et2750-um08 and xp7100-pdf are identity", () => {
+    it("tags each class from its bytes: et2750-um08, xp7100-pdf and identity-um08 are identity", () => {
       const looks = Object.fromEntries(
         (Object.keys(CMX_CLASSES) as CmxClassName[]).map((name) => [name, cmxClassLook(name)]),
       );
@@ -53,6 +64,7 @@ describe("cmx-classes", () => {
         "xp7100-jpg": "epson-look",
         "xp7100-pdf": "neutral",
         "et4800-um08": "epson-look",
+        "identity-um08": "neutral",
       });
     });
 
