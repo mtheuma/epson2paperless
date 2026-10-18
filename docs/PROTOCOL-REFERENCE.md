@@ -121,7 +121,7 @@ The command bytes are either:
 
 **PARA is sent in two passthru packets**, not one. The first packet carries the 12-byte `PARAx<hex-len>` header with `reply_size=0`. The second carries the raw parameter bytes with `reply_size=64`. The printer acks the first packet with an empty `0xa000` reply, then responds to the second with a 64-byte `PARAx0000000#parOK…` reply if the parameters were accepted (or `#parNG…` if not). This two-phase structure was discovered from the Frida capture: the Windows driver never batches the two sends into a single passthru.
 
-ESC/I-2 command builders are in `src/esci2/commands.ts`. The legacy 2-byte initialization commands (`buildFsY`, `buildFsX`, `buildFsZ`) live in `src/commands-fs.ts` and are shared with the WF-3620 ESC/I path (which uses `buildFsY` for the `DIAGNOSE_PROTOCOL` probe). `buildEsci2Command` builds the generic 12-byte ESC/I-2 header. `buildParaHeader` builds the PARA passthru header; the PARA body is assembled by `composePara` driven by the model override and runtime axes (see [How printer-model differences are handled](#how-printer-model-differences-are-handled)). Reply parsing is done by `parseEsci2ReplyHeader` (extracts the 12-byte reply header's `cmd` and `length` fields) and `parseTokens` (splits the `#KEY value` token stream from reply bodies).
+ESC/I-2 command builders are in `src/esci2/commands.ts`. The legacy 2-byte initialization commands (`buildFsY`, `buildFsX`, `buildFsZ`) live in `src/commands-fs.ts` and are shared with the WF-3620 ESC/I path (which uses `buildFsY` for the `DIAGNOSE_PROTOCOL` probe). `buildEsci2Command` builds the generic 12-byte ESC/I-2 header. `buildParaHeader` builds the PARA passthru header; the PARA body is assembled by `composePara` driven by the model override and runtime axes (see [How printer-model differences are handled](#how-printer-model-differences-are-handled)). Reply parsing is done by `parseEsci2ReplyHeader` (the 12-byte reply header's `cmd` and `length` fields, then the reply-header block's tokens, its `#err` and its `#nrd`; see **Reply-header block** below) and `parseTokens` (splits the `#KEY value` token stream from reply bodies).
 
 The SANE `epsonds` backend provides a useful cross-reference: its passthru framing — IS header layout, `0x000C` data offset, 8-byte data header with `cmd_size` / `reply_size` — is byte-identical to what the ET-4950 expects. However, `epsonds` targets older scanners that do not require the legacy ESC/I initialization loop before ESC/I-2 commands. The ET-4950's firmware requires a legacy preamble (`FS Y` / `FS Z`, then repeated `FS Y → STAT → FIN` polling, then `FS X`) before the scan-parameter and image-transfer half of the session will be accepted.
 
@@ -222,9 +222,11 @@ The IMG loop's termination condition differs by source:
 
 **Source detection.** The push-scan SOAP body does not indicate whether the printer will scan from the ADF or the flatbed glass — the panel does not expose a source selector. Instead, the printer detects its own source (via the ADF paper sensor) and signals the result in its `@STAT` replies. The session reads the last one before PARA, the one POST_MODE_STAT reads after the mode switch (with its drained body), for both the source and the errors, since it is the scanner's state at scan time; the init poll's replies are drained unread. A printer whose INFO reply advertises both a flatbed and an ADF scan area (`sourceDetection: "pre-para-status"`, derived for every session; on the recorded models: ET-4950 family, XP-7100, ET-4800, ET-15000, WF-3835) reads that reply's content: an ADF-mode printer queues no status (a zero-length `STATx0000000` reply), and a flatbed-mode printer queues `#ERRADF PE  ` ("ADF paper empty", a 12-byte `STATx000000C` reply). `#ERRADF PE` sets `ctx.source` to flatbed, and anything else (no error, or any other ADF code, which reads as a document in the feeder) to ADF; the same reply's errors are then judged against that source (below). `ctx.source` governs the PARA blob selection, the IMG loop terminator, and the POSTSCAN branching; nothing reads it before POST_MODE_STAT. On every replay fixture the first status and the one before PARA give the same source; only the DS-575W duplex capture differs between them, and it is ADF-only.
 
-**Status errors.** Errors are judged on the last `@STAT` reply before PARA, the same reply that decided the source, from one parse of it. Each `#ERR` token is a 4-character unit (`ADF`, `FB`, `TPU`) and a code, and the session keeps one code per unit, the last the reply gives (`#ERRADF PE  #ERRADF PJ  ` is a jammed ADF). An error on the unit being scanned ends the session before PARA is sent, with a message naming it (e.g. `POST_MODE_STAT_DRAIN: the printer reported an error before scanning (ADF PJ)`); an error on any other unit is logged as a warning, once per process per model and set of codes (repeats at `debug`), and the scan carries on. `ADF PE` on a flatbed scan is a state, not a fault, and is not reported. There is no always-fatal code, and no exemption: an ADF-only printer stops on `ADF PE` when the feeder is still empty just before PARA. On a printer with both sources an empty feeder cannot stop the scan: `ADF PE` makes the flatbed the source, and the glass is scanned. The DS-575W duplex capture's first status says `ADF PE`, which clears by the status before PARA. Every replay fixture's status before PARA is clear for its source (empty on ADF sessions, `ADF PE` alone on flatbed ones). Reply-header `#err` / `#nrd` tokens are not part of this rule. Only the status reply is judged: the `#ERR` tokens some printers (FF-680W, DS-575W) put in their `CAPA` and `RESA` replies list error codes, not an error the printer is reporting now.
+**Status errors.** Errors are judged on the last `@STAT` reply before PARA, the same reply that decided the source, from one parse of it. Each `#ERR` token is a 4-character unit (`ADF`, `FB`, `TPU`) and a code, and the session keeps one code per unit, the last the reply gives (`#ERRADF PE  #ERRADF PJ  ` is a jammed ADF). An error on the unit being scanned ends the session before PARA is sent, with a message naming it (e.g. `POST_MODE_STAT_DRAIN: the printer reported an error before scanning (ADF PJ)`); an error on any other unit is logged as a warning, once per process per model and set of codes (repeats at `debug`), and the scan carries on. `ADF PE` on a flatbed scan is a state, not a fault, and is not reported. There is no always-fatal code, and no exemption: an ADF-only printer stops on `ADF PE` when the feeder is still empty just before PARA. On a printer with both sources an empty feeder cannot stop the scan: `ADF PE` makes the flatbed the source, and the glass is scanned. The DS-575W duplex capture's first status says `ADF PE`, which clears by the status before PARA. Every replay fixture's status before PARA is clear for its source (empty on ADF sessions, `ADF PE` alone on flatbed ones). The reply's header block is read before any of this (below). Only the status reply is judged: the `#ERR` tokens some printers (FF-680W, DS-575W) put in their `CAPA` and `RESA` replies list error codes, not an error the printer is reporting now.
 
-A printer that advertises one source is fixed to it (`fixed-flatbed` / `fixed-adf`): its status before PARA is judged against that source and never changes it. The ET-2750 depends on that: its STAT reply declares `length=0` in the 12-byte ESC/I-2 header but packs a 52-byte filler (`#---#---#---…`) inline in the same 64-byte IS frame. The filler carries no error, so reading the source from it would say ADF on flatbed-only hardware. As a flatbed-only printer it is `fixed-flatbed`, and the graph pins `ctx.source = "flatbed"` at INIT1. Every other flatbed-only model (ET-2950, ET-2810 / XP-3200, ET-8500, ET-7700) takes the same path.
+**Reply-header block.** Every ESC/I-2 reply frame is 64 bytes: the 12-byte `<NAME>x<length>` header, then a 52-byte reply-header block. The block carries the reply's own tokens (`#parOK`, `#pen`, `#typIMGA`, …) and is padded with `#---` filler; a zero-length `STATx0000000` reply is header and filler only. `parseEsci2ReplyHeader` reads two header-level signals from it: `#nrd`, the scanner is not ready (`BUSY`, `WUP` warming up, `RSVD` reserved by another client, `AFEN` user authentication required), and `#err`, a header-level error (a 4-character unit and a code, e.g. `#errADF PJ  `). The status before PARA (POST_MODE_STAT) and every `IMG` reply (IMG_META) read the block first. They stop the session with a message naming the cause on `#nrd RSVD`, on `#nrd AFEN`, and on any `#err` whatever its unit (e.g. `POST_MODE_STAT: the printer reported an error (ADF PJ) — clear it on the printer and scan again`). `BUSY` and `WUP` are not acted on. Lowercase `#err` is the header token; uppercase `#ERR` tokens are status errors. In the status before PARA they are judged as above even when a printer puts them inline in the block; an `IMG` reply carrying one stops the session, whatever its unit. No replay fixture's block carries `#nrd` or `#err`: every reply in every fixture parses as nothing to report.
+
+A printer that advertises one source is fixed to it (`fixed-flatbed` / `fixed-adf`): its status before PARA is judged against that source and never changes it. The ET-2750 depends on that: having no ADF, its status reply carries no `#ERRADF PE`, only the header and its filler, so reading the source from it would say ADF on flatbed-only hardware. As a flatbed-only printer it is `fixed-flatbed`, and the graph pins `ctx.source = "flatbed"` at INIT1. Every other flatbed-only model (ET-2950, ET-2810 / XP-3200, ET-8500, ET-7700) takes the same path.
 
 ### Transport adapters
 
@@ -245,7 +247,7 @@ The WF-3620 ESC/I path uses no transport-shape adapters. It still emits LOCK and
 
 For a printer with both sources (**`sourceDetection: "pre-para-status"`**, derived from INFO: ET-4950 family, XP-7100, ET-4800, ET-15000, WF-3835), the scanner detects the physical source from the content of the last `@STAT` reply before PARA (POST_MODE_STAT, after the mode switch): `#ERRADF PE` → flatbed; anything else → ADF (see **Status errors** above for which errors in the same reply stop the scan). Every recorded flatbed session's reply is the 12-byte `#ERRADF PE  ` and every ADF session's is empty, so on the fixtures this agrees with the reply's declared length. When the declared length is non-zero, those bytes are drained with a pure-read before the next command is sent — the printer queues them as pending output, and failing to drain them desynchronises the IS framing for all subsequent packets. The tokens are read from the reply and its drained body together.
 
-A printer with one source (**`fixed-flatbed`** / **`fixed-adf`**) never takes its source from the reply, and `ctx.source` is pinned at INIT1. The ET-2750 relies on that: its STAT reply declares length `0` with a 52-byte filler packed inline in the same 64-byte IS frame, and that filler carries no error, so reading the source from it would misclassify it as ADF.
+A printer with one source (**`fixed-flatbed`** / **`fixed-adf`**) never takes its source from the reply, and `ctx.source` is pinned at INIT1. The ET-2750 relies on that: its status reply is a zero-length `STATx0000000` with only `#---` filler in its header block, which carries no `#ERRADF PE`, so reading the source from it would misclassify it as ADF.
 
 ADF precedence (the printers with both sources, above): when the ADF feeder has paper loaded, the printer picks ADF regardless of whether a document is also present on the glass. The STAT reply before PARA carries no error in this case. Users who want flatbed must clear the ADF first.
 
@@ -343,7 +345,7 @@ Wire differences from the ET-4950 (decoded from the pcap captures under `tools/p
 
 - **No TLS handshake.** The printer sends the welcome IS packet (type `0x8000`) immediately after TCP connect. (Before the real session the driver opens a throwaway connection on 1865 — a rejected TLS probe on XP-7100 / ET-4800 / FF-680W / DS-575W, an aborted SYN/RST on ET-2750 — so each capture holds two `tcp.port==1865` conversations; isolate the real plain-TCP one — see [REVERSE-ENGINEERING.md](REVERSE-ENGINEERING.md).)
 - **INIT_POLL count is per-dialect:** 2 for ET-2750, 3 for XP-7100 and ET-4800, 8 for FF-680W, 12 for DS-575W (`ctx.entry.initPollIterations`). The ET-2750 capture ends after its two cycles, so how it answers a third FS Y is untested.
-- **Source detection / STAT.** XP-7100 and ET-4800 read the content of the status reply before PARA like the ET-4950 family (`#ERRADF PE` → flatbed, no error → ADF). ET-2750 is flatbed-only, so it is `fixed-flatbed` and never takes its source from it: its STAT reply packs a 52-byte filler inline in a single 64-byte IS frame while the 12-byte header still declares `length=0`, and that filler carries no error, which a content read would take for ADF. The FF-680W and DS-575W are ADF-only, so they are `fixed-adf` (the DS-575W duplex capture's first statuses report `ADF PE`, which clears by the status before PARA).
+- **Source detection / STAT.** XP-7100 and ET-4800 read the content of the status reply before PARA like the ET-4950 family (`#ERRADF PE` → flatbed, no error → ADF). ET-2750 is flatbed-only, so it is `fixed-flatbed` and never takes its source from it: its status reply is a zero-length `STATx0000000` with only filler in its header block, like any ADF-mode status, which a content read would take for ADF. The FF-680W and DS-575W are ADF-only, so they are `fixed-adf` (the DS-575W duplex capture's first statuses report `ADF PE`, which clears by the status before PARA).
 - **PARA bodies are dialect-specific** and generally larger than the ET-4950 family's, carrying `#GMMUG18`, the optional segments the printer's CAPA lists, and a model-specific inline `#CMXUM08` ICC-matrix block. Per-dialect sizes are in the [PARA table above](#source-adf-vs-flatbed).
 
 These dialects are resolved by the same model-identity lookup used by the rest of the ESC/I-2 family. The scanner shell picks the entry point (`runEsci2Scan` for TLS vs `runEsci2ScanOverPlain` for plain TCP) and pre-sets `ctx.transport` in the initial ctx. On the `esci2-plain` transport, config-time validation rejects `ESCI_FORCE_SOURCE` (a legacy-ESC/I-only knob) and `PRINTER_CERT_FINGERPRINT` (no TLS layer to pin) at startup.
@@ -463,12 +465,15 @@ Legacy ESC/I (WF-3620 family, XP-620, ET-2550) uses a separate code path under
 none of the above applies to it. Its per-model data lives in
 `src/esci/dialects/`, resolved by push-scan PID rather than by fingerprint.
 
-A `fixed-flatbed` entry additionally suppresses the `ESC e` source probe. The
-ET-2550's captured sequence is the WF-3620 flatbed path with both `ESC e` +
-parameter pairs removed, so the shared states branch on `sourcePolicy` rather
-than the dialect getting its own state group:
+A printer without an ADF also gets no `ESC e` source probe. The session learns
+whether an ADF is fitted from its first `FS F` status reply (`STATUS_1A`): byte
+1, bit 7 is set on every WF-3620 reply, flatbed scans included, and clear on the
+ET-2550 and XP-620 (`fsFAdfInstalled`). With no ADF the source is the flatbed.
+The ET-2550's captured sequence is the WF-3620 flatbed path with both `ESC e` +
+parameter pairs removed, so the shared states branch on that flag rather than
+the dialect getting its own state group or source rule:
 
-| State        | `detect` (WF-3620)                       | `fixed-flatbed` (ET-2550)   |
+| State        | ADF fitted (WF-3620)                     | No ADF (ET-2550)            |
 | ------------ | ---------------------------------------- | --------------------------- |
 | `STATUS_1B`  | `ESC e` + `0x01` probe → `SOURCE_ACK1`   | `FS F` → `STATUS_2`         |
 | `STATUS_2`   | byte-0 detection; `0x81` → reset cycle   | reset cycle unconditionally |
@@ -476,7 +481,8 @@ than the dialect getting its own state group:
 
 `STATUS_2` must skip detection rather than merely ignore its result: the ET-2550
 reports `0x01` there, never the WF-3620's `0x81`, and `legacyDetectSource` reads
-`0x01` as an ADF. Its teardown is a bare `ESC )` whose 1-byte reply is `0x80`
+`0x01` as an ADF. Byte 0's high bit is not the ADF flag. The ET-2550's teardown
+is a bare `ESC )` whose 1-byte reply is `0x80`
 rather than an ACK, with no unlock packet (as on the XP-620), and the state sits
 in `cleanupStates` so a connection drop during teardown still saves a page that
 has already flushed.
@@ -731,18 +737,20 @@ their captured `FS W` block and stream config verbatim (see below).
 The legacy ESC/I graph (`src/esci/graph.ts`) is shared by all three models. It
 reads per-model decisions off a `LegacyDialectEntry` (`src/esci/dialects/entry.ts`):
 fixed raster geometry, gamma LUTs, the `FS W` parameter block, the
-`FS G`-following stream-config payload, a `sourcePolicy` (`"detect"` for
-WF-3620's `ESC e` + `FS F` probe vs. `"fixed-flatbed"` for the XP-620 and
-ET-2550, neither of which has an ADF), and two `Branch<S>` records — `setup`
-and `teardown` — each a `{ next, send }` pair naming the graph state to jump
-to and the command to emit on entry.
+`FS G`-following stream-config payload, a `sourcePolicy`, and two `Branch<S>`
+records — `setup` and `teardown` — each a `{ next, send }` pair naming the
+graph state to jump to and the command to emit on entry.
 
-`sourcePolicy` does double duty for the ET-2550: besides pinning the source, it
-suppresses the `ESC e` probe in the three shared states listed in [How
-printer-model differences are
-handled](#how-printer-model-differences-are-handled). The XP-620 never reaches
-those states — its setup branch jumps straight into its own group — so the two
-fixed-flatbed dialects arrive at the gamma phase by different routes.
+`sourcePolicy` is `"detect"` for the WF-3620 and ET-2550: the session's `FS F`
+replies settle the source. The first says whether an ADF is fitted; with none
+(the ET-2550) the source is the flatbed and the three shared states listed in
+[How printer-model differences are
+handled](#how-printer-model-differences-are-handled) skip the `ESC e` probe,
+otherwise the `ESC e` + `FS F` probe picks flatbed or ADF. The XP-620 is
+`"fixed-flatbed"`: its setup branch jumps straight into its own group and on to
+gamma, so it never reaches the states that read the flag, and its source is
+pinned to the flatbed from the start. `registry.test.ts` holds that only a
+dialect whose setup bypasses `INIT` may be `"fixed-flatbed"`.
 
 `src/esci/dialects/registry.ts`'s `resolveLegacyEntry(productName)` picks
 the entry. The push-scan SOAP's `ProductNameIn` field (parsed by
@@ -776,13 +784,11 @@ decodes it (`parseFsIReply`) and checks it against the running dialect
   the product, and its setup branch is the fallback's (same `setup.next`
   state, same first command). Every
   byte on the wire up to this `FS I` is then what that dialect would have
-  sent, so the session sets `ctx.entry` to it, resets the source state the
-  way `runEsciScan` initialises it for that dialect (pinned `flatbed` for a
-  fixed-flatbed one), and logs an info line naming both dialects. Today
-  that is a PID-less trigger (`scan:now`, the webhook) reaching an ET-2550:
-  both it and the WF-3620 open with `ESC @` into `INIT`. If the adopted
-  dialect can't service `ESCI_FORCE_SOURCE`, the session fails there with
-  the same error `runEsciScan` raises up front.
+  sent, so the session sets `ctx.entry` to it and logs an info line naming
+  both dialects. The source state carries over unchanged: the adopted
+  dialect's setup also enters `INIT`, so the first `FS F` reply still settles
+  the source. Today that is a PID-less trigger (`scan:now`, the webhook)
+  reaching an ET-2550: both it and the WF-3620 open with `ESC @` into `INIT`.
 - **Mismatch:** another dialect claims the product but the session is on a
   PID-keyed dialect (the trigger's own PID chose it, and `FS I` doesn't
   overrule that) or its setup diverged before `FS I`, or the session picked a
@@ -834,13 +840,13 @@ for the same reason (300 DPI, 2550×3509 px full glass) in
 than hand-transcribed. Its `FS W` block and stream config are byte-identical
 across the capture's JPG and PDF scans, so both are format-independent.
 
-`runEsciScan` (`src/esci/scanner.ts`) guards the mismatch this fixed
-dialect creates: if `entry.sourcePolicy === "fixed-flatbed"` and
-`ESCI_FORCE_SOURCE` names anything other than `flatbed`, the scan fails
-immediately with a descriptive error instead of desyncing mid-session
-against hardware with no ADF to source from. That check sees only the
-dialect the session starts on, so the identity switch repeats it
-(`unsupportedForcedSource` in `src/esci/graph.ts`).
+`ESCI_FORCE_SOURCE` set to an ADF source can't be serviced by a printer
+without one, and the scan stops with a descriptive error instead of desyncing
+mid-session. On the XP-620 (`sourcePolicy: "fixed-flatbed"`) `runEsciScan`
+(`src/esci/scanner.ts`) rejects it before connecting
+(`unsupportedForcedSource` in `src/esci/graph.ts`). Everywhere else the first
+`FS F` reply decides: when it says no ADF is fitted, `STATUS_1A` stops the
+session before any source command is sent.
 
 ### XP-620 setup and teardown
 
@@ -872,7 +878,7 @@ the session ends. Unlike WF-3620, the capture shows no `0xa101` unlock ack:
 the printer closes the TCP connection right after the `ESC )` reply, so the
 graph resolves straight to the engine's terminal `DONE` state instead of
 routing through `UNLOCKING`. The ET-2550 ends the same way (its teardown is
-just the `ESC )`), so the two legacy fixed-flatbed dialects share this trait
+just the `ESC )`), so the two legacy flatbed-only dialects share this trait
 against WF-3620's unlock.
 
 `src/esci/scanner.test.ts` replays the captured XP-620 flatbed session
@@ -881,14 +887,20 @@ both JPG and PDF output, alongside the WF-3620 fixtures.
 
 ### Source selection (ESC/I)
 
-This section describes WF-3620's `sourcePolicy: "detect"` behaviour.
+This section describes `sourcePolicy: "detect"` behaviour (WF-3620, ET-2550).
 XP-620's `sourcePolicy: "fixed-flatbed"` skips it entirely: `runEsciScan`
-pins `ctx.source = "flatbed"` and `ctx.sourceDetected = true` before the
-graph runs, since the hardware has no ADF to detect.
+starts it on `initialSource`'s pin (`ctx.source = "flatbed"`,
+`ctx.sourceDetected = true`, `ctx.adfInstalled = false`) before the graph
+runs, since the hardware has no ADF to detect.
+
+The session's first `FS F` status reply (`STATUS_1A`) says whether an ADF is
+fitted: byte 1, bit 7. With none, the source is the flatbed and no `ESC e` is
+sent (the ET-2550).
 
 The PushScan SOAP carries `duplex` and `action` (Sides + Format) but no
-explicit ADF-vs-flatbed selector. The legacy graph probes with `ESC e 0x01`
-and reads the following `FS F` status reply to detect the physical source:
+explicit ADF-vs-flatbed selector. On a printer with an ADF the legacy graph
+probes with `ESC e 0x01` and reads the following `FS F` status reply to detect
+the physical source:
 
 | `FS F` status byte | ESC/I source                           |
 | ------------------ | -------------------------------------- |
@@ -897,8 +909,9 @@ and reads the following `FS F` status reply to detect the physical source:
 
 Setting `ESCI_FORCE_SOURCE=flatbed` (or `adf-simplex` / `adf-duplex`)
 overrides the detected value for edge cases whose status byte has not been
-captured yet. XP-620 rejects any forced value other than `flatbed` at
-startup (see [Per-model dialects](#per-model-dialects-legacydialectentry)).
+captured yet. A printer with no ADF rejects any forced value other than
+`flatbed`: the XP-620 at startup, every other one at the first `FS F` reply
+(see [Per-model dialects](#per-model-dialects-legacydialectentry)).
 
 ### Multi-page termination
 

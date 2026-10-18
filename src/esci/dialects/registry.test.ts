@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { checkLegacyIdentity, resolveLegacyEntry } from "./registry.js";
+import { checkLegacyIdentity, resolveLegacyEntry, LEGACY_DIALECT_ENTRIES } from "./registry.js";
 import { WF3620_ENTRY } from "./wf3620.js";
 import { XP620_ENTRY } from "./xp620.js";
 import { ET2550_ENTRY } from "./et2550.js";
@@ -56,4 +56,19 @@ describe("checkLegacyIdentity", () => {
   it("flags a PID-keyed dialect the printer doesn't name, with no owner", () => {
     expect(checkLegacyIdentity(XP620_ENTRY, "PID 9999")).toEqual({ kind: "mismatch", owner: null });
   });
+});
+
+describe("legacy source policy", () => {
+  // A dialect whose setup enters INIT reaches the first FS F reply, which says
+  // whether an ADF is fitted; only one that never gets there pins the flatbed.
+  // A switch needs the fallback's setup (INIT), so this also means a switch
+  // never adopts a fixed-flatbed dialect — resolveIdentity carries the source
+  // state over unchanged on that basis.
+  it.each(LEGACY_DIALECT_ENTRIES.map((e) => [e.name, e] as const))(
+    "%s pins the flatbed only if its setup never reaches the first FS F reply",
+    (_name, entry) => {
+      const readsFsF = entry.setup.next === "INIT";
+      expect(entry.sourcePolicy).toBe(readsFsF ? "detect" : "fixed-flatbed");
+    },
+  );
 });

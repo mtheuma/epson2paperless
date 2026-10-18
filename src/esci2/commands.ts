@@ -35,12 +35,33 @@ export interface Esci2ReplyHeader {
   cmd: string;
   /** The 7-hex length field parsed as an integer. */
   length: number;
+  /**
+   * The reply-header block's tokens (parseTokens over everything after the
+   * 12-byte prefix): `#par`, `#pen`, `#typ` and the like, and the `#---`
+   * filler that pads the rest of a 64-byte reply.
+   */
+  tokens: Map<string, string>;
+  /**
+   * `#err`, a header-level error: the 4-character unit and the code,
+   * trimmed and space-joined, e.g. "ADF PJ" from `#errADF PJ  `. Empty for a
+   * bare `#err`; null when the block has none. The lowercase header token
+   * only: an uppercase `#ERR` is a status error, read by parseStatErrors.
+   */
+  error: string | null;
+  /**
+   * `#nrd`, why the scanner is not ready, trimmed: "BUSY", "WUP" (warming
+   * up), "RSVD" (reserved by another client), "AFEN" (user authentication
+   * required), or any other code the printer gives. Null when absent.
+   */
+  notReady: string | null;
 }
 
 /**
- * Parses the 12-byte ESC/I-2 reply header prefix, e.g. "IMG x000025F".
- * Returns null if the body is shorter than 12 bytes or the prefix doesn't
- * match "<4-char-name>x<7-hex-digits>".
+ * Parses an ESC/I-2 reply: the 12-byte header prefix, e.g. "IMG x000025F",
+ * then the reply-header block after it. Every reply frame has that block
+ * (a 64-byte reply carries 52 bytes of it), padded with `#---` filler when
+ * the printer has nothing to put in it. Returns null if the body is shorter
+ * than 12 bytes or the prefix doesn't match "<4-char-name>x<7-hex-digits>".
  *
  * The `length` field is the critical signal in IMG replies — it tells the
  * scanner how many bytes to pure-read next for actual image data.
@@ -53,7 +74,22 @@ export function parseEsci2ReplyHeader(body: Buffer): Esci2ReplyHeader | null {
   const hex = body.subarray(5, 12).toString("ascii");
   if (!/^[0-9a-fA-F]{7}$/.test(hex)) return null;
   const length = parseInt(hex, 16);
-  return { cmd, length };
+  const tokens = parseTokens(body.subarray(12));
+  const err = tokens.get("err");
+  const error = err === undefined ? null : unitAndCode(err);
+  const nrd = tokens.get("nrd");
+  const notReady = nrd === undefined ? null : nrd.trim();
+  return { cmd, length, tokens, error, notReady };
+}
+
+/**
+ * An error token's value, a 4-character unit (ADF, FB, TPU) then a code,
+ * both trimmed and space-joined: "ADF PJ  " → "ADF PJ". Split at the field
+ * boundary, so a four-letter unit stays apart from its code. Empty when the
+ * value names neither.
+ */
+export function unitAndCode(value: string): string {
+  return `${value.slice(0, 4).trim()} ${value.slice(4).trim()}`.trim();
 }
 
 /**
