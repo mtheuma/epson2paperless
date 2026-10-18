@@ -1,6 +1,6 @@
 /**
  * Legacy ESC/I command builders for the WF-3620 protocol generation.
- * Byte literals from .reference/wireshark-captures/wf-3620/protocol-decode.md.
+ * Byte literals from the WF-3620 captures (tools/pcap-extract/captures/wf-3620/).
  *
  * These return only the command opcode bytes; parameter bytes (e.g. the
  * source-byte argument to ESC e, or the channel tag + LUT body for ESC z)

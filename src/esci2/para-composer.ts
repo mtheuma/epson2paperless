@@ -87,7 +87,7 @@ const ADF_CRP_PREFIX_HEAD = "#ADFCRP SKEW";
 // The overrides' adfExtents are captured at this DPI; both the RSM/RSS
 // resolution fields and the ACQ extents scale linearly off it. For the FF-680W
 // only 200 and 300 are wire-verified — see
-// .reference/wireshark-captures/ff-680w/SOURCE-NOTES.md. DS-575W adfExtents are
+// tools/pcap-extract/captures/ff-680w/README.md. DS-575W adfExtents are
 // stored at the same 200-DPI reference (wire captures at 400 and 600 confirm the
 // linear scaling).
 export const ADF_CRP_BASE_DPI = 200;

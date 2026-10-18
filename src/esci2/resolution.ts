@@ -17,10 +17,10 @@ export interface WireDpiSelection {
  * "neither global list" branch below). When a global-derived base exists,
  * the source's own RSMSLIST — when present — acts as a CAP (max) on it,
  * never as the allowed-set itself: FF-680W and DS-575W advertise
- * #ADFRSMSLISTd300d600 yet Epson's driver scans them at 200 / 400
- * (capture-proven). What the cap preserves is the real per-source ceiling
- * (ET-4950: ADF 600 vs flatbed 1200). Sorted ascending; empty = nothing
- * advertised (caller falls back to the dialect's pinned default).
+ * #ADFRSMSLISTd300d600 yet are captured scanning at 200 / 400 DPI. What the
+ * cap preserves is the real per-source ceiling (ET-4950: ADF 600 vs flatbed
+ * 1200). Sorted ascending; empty = nothing advertised (caller falls back to
+ * the dialect's pinned default).
  */
 export function advertisedDpiSet(capa: CapaTokens, source: ParaSpec["source"]): number[] {
   const sourceList = source === "flatbed" ? capa.fbRsmsList : capa.adfRsmsList;
