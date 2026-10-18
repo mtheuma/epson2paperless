@@ -7,8 +7,9 @@ on:
   # Manual trigger for building a branch into a throwaway GHCR image
   # (e.g. ghcr.io/<repo>:<branch>) so a compatibility reporter can test an
   # unmerged speculative-printer PR without polluting main or cutting a release.
-  # The merge job's `type=ref,event=branch` tag names the image after the ref;
-  # `latest` stays gated to v* tags, so a branch build never moves it.
+  # The merge job's `type=ref,event=branch` tag names the image after the ref.
+  # `latest` moves only on a final release tag (v1.2.3, no pre-release
+  # suffix), so neither a branch build nor a release candidate moves it.
   workflow_dispatch:
 
 concurrency:
@@ -79,10 +80,16 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE }}
+          # The action's default (latest=auto) can add `latest` on any tag
+          # push; turn it off so the explicit rule below is the only one.
+          flavor: |
+            latest=false
+          # A tag with a `-` (v1.0.0-rc.1) is a pre-release: it gets its own
+          # tag only. A final tag (v1.0.0) also moves `latest`.
           tags: |
             type=ref,event=branch
             type=ref,event=tag
-            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' && !contains(github.ref_name, '-') }}
       - name: Create manifest list and push
         working-directory: /tmp/digests
         run: |

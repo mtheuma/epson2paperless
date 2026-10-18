@@ -56,11 +56,22 @@ Compatibility reports are welcome whether your model works or doesn't. [Open an 
 
 ### Docker (recommended)
 
-Image: **`ghcr.io/mtheuma/epson2paperless`**. Multi-arch (`linux/amd64`, `linux/arm64`). Published to GHCR on every `main` push (`:main`) and every `v*` git tag (`:vX.Y.Z` + `:latest`).
+Image: **`ghcr.io/mtheuma/epson2paperless`**. Multi-arch (`linux/amd64`, `linux/arm64`). Published to GHCR on every `main` push and every `v*` git tag; see the image tags below.
 
 1. In `compose.yaml`, set exactly one of `PRINTER_IP` (fixed IPv4) or `PRINTER_HOSTNAME` (IPv4-resolvable DNS name), and `./output` to wherever you want scans written.
 2. `docker compose up -d`.
 3. Follow the logs: `docker compose logs -f epson2paperless`.
+
+Image tags:
+
+| Tag            | What it is                                                  |
+| -------------- | ----------------------------------------------------------- |
+| `:latest`      | The last final release. A release candidate never moves it. |
+| `:vX.Y.Z`      | One final release, e.g. `:v0.12.0`.                         |
+| `:vX.Y.Z-rc.N` | A release candidate, e.g. `:v1.0.0-rc.1`.                   |
+| `:main`        | The current `main` branch, not yet released.                |
+
+To try a release candidate, set `image:` in `compose.yaml` to its tag, then `docker compose pull && docker compose up -d`. To go back, set it to a final release (e.g. `:v0.12.0`, or `:latest`), undo any settings that only the candidate accepts, and run the same two commands.
 
 Notes:
 

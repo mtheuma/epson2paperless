@@ -3,7 +3,7 @@
 
 services:
   epson2paperless:
-    image: ghcr.io/mtheuma/epson2paperless:latest
+    image: ghcr.io/mtheuma/epson2paperless:latest # last final release; other tags in the README
     container_name: epson2paperless
     restart: unless-stopped
     network_mode: host
