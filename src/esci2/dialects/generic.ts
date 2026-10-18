@@ -37,14 +37,14 @@ export class GenericDialectUnusableError extends Error {
 
 /** The ET-4950 family's captured tone curve: gray balance only, tagged neutral. */
 const NEUTRAL_TONE_CURVE = "et4950-stock";
-/** The identity UM08 matrix, captured on the ET-2750 (isIdentityCmx confirms it from the bytes). */
-const IDENTITY_MATRIX = "et2750-um08";
+/** The identity UM08 matrix (isIdentityCmx confirms it from the bytes). */
+const IDENTITY_MATRIX = "identity-um08";
 
 /** Poll counts. 3 is what most captured printers with a flatbed are polled for. */
 const POLLS_WITH_FLATBED = 3;
-// 12 is for timing parity with the captured driver on an ADF-only scanner
-// (the DS-575W): the poll count can't be derived, and nothing shows an
-// ADF-only printer needs this many.
+// 12 matches the poll count in the captures of an ADF-only scanner (the
+// DS-575W): the poll count can't be derived, and nothing shows an ADF-only
+// printer needs this many.
 const POLLS_ADF_ONLY = 12;
 
 /**

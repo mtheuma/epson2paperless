@@ -406,11 +406,36 @@ describe("createKeepaliveResponder", () => {
     );
   }
 
+  // A fixed pause for the negative half of a test: proving nothing more
+  // arrives. Only ever used after the positive part has been awaited.
+  function settle(ms: number): Promise<void> {
+    return new Promise((r) => setTimeout(r, ms));
+  }
+
+  // Poll until `assertion` passes. Loopback delivery and the burst timers both
+  // run on the event loop, so under a busy suite a fixed sleep can run out
+  // first. The timeout stays well under the 5 s test timeout so a failure
+  // reports the assertion, not a bare test timeout.
+  function waitUntil(assertion: () => void): Promise<void> {
+    return vi.waitFor(assertion, { timeout: 2_000, interval: 5 });
+  }
+
+  // Burst packets are 10 ms apart here, so a stray extra one would land well
+  // inside this window.
+  const EXTRA_PACKET_WINDOW_MS = 40;
+
+  // Wait until the fake printer has seen at least `count` packets, then hold
+  // a short window so any extra packet arrives too: the exact-count assertion
+  // that follows then catches a burst that sends one too many.
+  async function waitForReceived(harness: Harness, count: number): Promise<void> {
+    await waitUntil(() => expect(harness.received.length).toBeGreaterThanOrEqual(count));
+    await settle(EXTRA_PACKET_WINDOW_MS);
+  }
+
   it("responds to a printer announcement with a burst of N keepalives", async () => {
     const h = await setupHarness();
     await sendAnnouncement(h, makeAnnouncement(0x42));
-    // Wait for the 3-packet burst (3 * 10ms + slack)
-    await new Promise((r) => setTimeout(r, 80));
+    await waitForReceived(h, 3);
 
     expect(h.received).toHaveLength(3);
     h.received.forEach((p) => {
@@ -430,7 +455,7 @@ describe("createKeepaliveResponder", () => {
     const h = await setupHarness({ burstCount: 1 });
     try {
       await sendAnnouncement(h, makePidAnnouncement(0x43, pid));
-      await new Promise((r) => setTimeout(r, 40));
+      await waitForReceived(h, 1);
 
       expect(h.received).toHaveLength(1);
       expect(h.received[0].subarray(20).toString("ascii")).toContain("(Ver=3.0)");
@@ -443,7 +468,7 @@ describe("createKeepaliveResponder", () => {
   it("sends the v2 fleet keepalive from the bound multicast socket (port preserved)", async () => {
     const h = await setupHarness({ burstCount: 2 });
     await sendAnnouncement(h, makeAnnouncement(0x44));
-    await new Promise((r) => setTimeout(r, 60));
+    await waitForReceived(h, 2);
 
     expect(h.receivedFrom).toHaveLength(2);
     // v2 bursts egress from the bound multicast socket, exactly as before the
@@ -456,7 +481,7 @@ describe("createKeepaliveResponder", () => {
   it("sends the FF-680W (v3) keepalive from the separate ephemeral sender socket", async () => {
     const h = await setupHarness({ burstCount: 2 });
     await sendAnnouncement(h, makePidAnnouncement(0x45, PID_FF680W));
-    await new Promise((r) => setTimeout(r, 60));
+    await waitForReceived(h, 2);
 
     expect(h.receivedFrom).toHaveLength(2);
     // v3 bursts egress from the dedicated `sender` socket (matching the FF-680W
@@ -473,7 +498,7 @@ describe("createKeepaliveResponder", () => {
     });
     // Bare announcement with no PID string — would get v2 under auto-selection.
     await sendAnnouncement(h, makeAnnouncement(0x46));
-    await new Promise((r) => setTimeout(r, 40));
+    await waitForReceived(h, 1);
 
     expect(h.received).toHaveLength(1);
     const payload = h.received[0].subarray(20).toString("ascii");
@@ -491,7 +516,7 @@ describe("createKeepaliveResponder", () => {
       keepalive: { ...KEEPALIVE_OPTS, version: "2.0" },
     });
     await sendAnnouncement(h, makePidAnnouncement(0x47, PID_FF680W));
-    await new Promise((r) => setTimeout(r, 40));
+    await waitForReceived(h, 1);
 
     expect(h.received).toHaveLength(1);
     const payload = h.received[0].subarray(20).toString("ascii");
@@ -528,7 +553,7 @@ describe("createKeepaliveResponder", () => {
     const h = await setupHarness({ burstCount: 1 });
     try {
       await sendAnnouncement(h, ff680wAnnouncementBytes);
-      await new Promise((r) => setTimeout(r, 40));
+      await waitForReceived(h, 1);
 
       expect(h.received).toHaveLength(1);
       expect(h.received[0][11]).toBe(0x02);
@@ -545,7 +570,7 @@ describe("createKeepaliveResponder", () => {
     const h = await setupHarness({ burstCount: 1 });
     try {
       await sendAnnouncement(h, announcementBytes);
-      await new Promise((r) => setTimeout(r, 40));
+      await waitForReceived(h, 1);
 
       expect(h.received).toHaveLength(1);
       expect(payloadOf(h.received[0])).toBe(
@@ -564,7 +589,7 @@ describe("createKeepaliveResponder", () => {
         h,
         makeTaggedAnnouncement(0x48, "PID 9999", "Ver,ClientName,IPAddress,EventPort,Group"),
       );
-      await new Promise((r) => setTimeout(r, 40));
+      await waitForReceived(h, 1);
 
       expect(h.received).toHaveLength(1);
       expect(payloadOf(h.received[0])).toContain("(Ver=3.0)");
@@ -581,7 +606,7 @@ describe("createKeepaliveResponder", () => {
         h,
         makeTaggedAnnouncement(0x49, PID_FF680W, "ClientName,IPAddress,EventPort"),
       );
-      await new Promise((r) => setTimeout(r, 40));
+      await waitForReceived(h, 1);
 
       expect(h.received).toHaveLength(1);
       expect(payloadOf(h.received[0])).toBe(
@@ -603,7 +628,7 @@ describe("createKeepaliveResponder", () => {
         h,
         makeTaggedAnnouncement(0x4a, "PID 9999", "ClientName,Colour,IPAddress,EventPort"),
       );
-      await new Promise((r) => setTimeout(r, 40));
+      await waitForReceived(h, 1);
 
       expect(h.received).toHaveLength(1);
       expect(payloadOf(h.received[0])).toBe(
@@ -624,7 +649,7 @@ describe("createKeepaliveResponder", () => {
     const h = await setupHarness({ burstCount: 1 });
     try {
       await sendAnnouncement(h, makeTaggedAnnouncement(0x4b, PID_DS575W, "Colour,Duplex"));
-      await new Promise((r) => setTimeout(r, 40));
+      await waitForReceived(h, 1);
 
       expect(h.received).toHaveLength(1);
       expect(payloadOf(h.received[0])).toBe(
@@ -642,7 +667,7 @@ describe("createKeepaliveResponder", () => {
     });
     try {
       await sendAnnouncement(h, ff680wAnnouncementBytes);
-      await new Promise((r) => setTimeout(r, 40));
+      await waitForReceived(h, 1);
 
       expect(h.received).toHaveLength(1);
       expect(payloadOf(h.received[0])).toBe(
@@ -661,7 +686,7 @@ describe("createKeepaliveResponder", () => {
     });
     try {
       await sendAnnouncement(h, announcementBytes);
-      await new Promise((r) => setTimeout(r, 40));
+      await waitForReceived(h, 1);
 
       expect(h.received).toHaveLength(1);
       expect(payloadOf(h.received[0])).toBe(
@@ -680,7 +705,7 @@ describe("createKeepaliveResponder", () => {
     badPacket[0] = 0x02;
     badPacket[1] = 0x07;
     await sendAnnouncement(h, badPacket);
-    await new Promise((r) => setTimeout(r, 80));
+    await settle(80);
 
     expect(h.received).toHaveLength(0);
 
@@ -706,25 +731,32 @@ describe("createKeepaliveResponder", () => {
     const send = (pkt: Buffer) =>
       new Promise<void>((r) => announcer.send(pkt, responder.boundPort, "127.0.0.1", () => r()));
 
-    await send(makeAnnouncement(0x50));
-    await new Promise((r) => setTimeout(r, 20));
-    // Same peer, different seq — the per-address throttle should suppress it.
-    await send(makeAnnouncement(0x51));
-    await new Promise((r) => setTimeout(r, 20));
+    const rejectionWarns = () =>
+      warnSpy.mock.calls
+        .map((c) => c.map(String).join(" "))
+        .filter((line) => line.includes("unrecognised peer"));
 
-    const rejectionWarns = warnSpy.mock.calls
-      .map((c) => c.map(String).join(" "))
-      .filter((line) => line.includes("unrecognised peer"));
-    expect(rejectionWarns).toHaveLength(1);
-    expect(rejectionWarns[0]).toContain("127.0.0.1");
-    expect(rejectionWarns[0]).toContain("192.0.2.1");
+    try {
+      await send(makeAnnouncement(0x50));
+      await waitUntil(() => expect(rejectionWarns().length).toBeGreaterThanOrEqual(1));
+      // Same peer, different seq — the per-address throttle should suppress
+      // it. A rejected beacon leaves no other trace, so this half can only be
+      // a fixed wait.
+      await send(makeAnnouncement(0x51));
+      await settle(EXTRA_PACKET_WINDOW_MS);
 
-    responder.stop();
-    announcer.close();
-    warnSpy.mockRestore();
+      expect(rejectionWarns()).toHaveLength(1);
+      expect(rejectionWarns()[0]).toContain("127.0.0.1");
+      expect(rejectionWarns()[0]).toContain("192.0.2.1");
+    } finally {
+      responder.stop();
+      announcer.close();
+      warnSpy.mockRestore();
+    }
   });
 
   it("drops the dedup entry on a local-route failure so the next announcement retries", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
     let calls = 0;
     const h = await setupHarness({
       burstCount: 1,
@@ -735,26 +767,38 @@ describe("createKeepaliveResponder", () => {
         return Promise.resolve("127.0.0.1");
       },
     });
-    // First attempt: route resolution rejects → no burst, no unhandled rejection.
-    await sendAnnouncement(h, makeAnnouncement(0x60));
-    await new Promise((r) => setTimeout(r, 40));
-    expect(h.received).toHaveLength(0);
+    try {
+      // First attempt: route resolution rejects → no burst, no unhandled
+      // rejection. The warning is logged after the dedup entry is dropped, so
+      // once it shows the retry below can't be mistaken for a duplicate.
+      await sendAnnouncement(h, makeAnnouncement(0x60));
+      await waitUntil(() =>
+        expect(
+          warnSpy.mock.calls.some((c) => c.map(String).join(" ").includes("No local route")),
+        ).toBe(true),
+      );
+      await settle(EXTRA_PACKET_WINDOW_MS);
+      expect(h.received).toHaveLength(0);
 
-    // Same seq again: must NOT be skipped as a duplicate — the failed attempt
-    // cleared the dedup entry — so it retries and now succeeds.
-    await sendAnnouncement(h, makeAnnouncement(0x60));
-    await new Promise((r) => setTimeout(r, 40));
-    expect(h.received).toHaveLength(1);
-    expect(h.received[0][11]).toBe(0x60);
-
-    h.teardown();
+      // Same seq again: must NOT be skipped as a duplicate — the failed attempt
+      // cleared the dedup entry — so it retries and now succeeds.
+      await sendAnnouncement(h, makeAnnouncement(0x60));
+      await waitForReceived(h, 1);
+      expect(h.received).toHaveLength(1);
+      expect(h.received[0][11]).toBe(0x60);
+    } finally {
+      h.teardown();
+      warnSpy.mockRestore();
+    }
   });
 
   it("dedupes repeated announcements of the same seq within the window (3 announcements → 1 burst)", async () => {
     const h = await setupHarness({ dedupWindowMs: 1_000 });
     // Simulate the printer's 3-in-a-row beacons with identical seq.
     for (let i = 0; i < 3; i++) await sendAnnouncement(h, makeAnnouncement(0x42));
-    await new Promise((r) => setTimeout(r, 80));
+    // The settle inside waitForReceived also gives the two duplicates time to
+    // start a second burst, if they were going to.
+    await waitForReceived(h, 3);
 
     // Only the first announcement triggered a burst: 3 packets total.
     expect(h.received).toHaveLength(3);
@@ -772,7 +816,7 @@ describe("createKeepaliveResponder", () => {
     const h = await setupHarness({ burstCount: 2, dedupWindowMs: 1_000 });
     await sendAnnouncement(h, makeAnnouncement(0x01));
     await sendAnnouncement(h, makeAnnouncement(0x02));
-    await new Promise((r) => setTimeout(r, 60));
+    await waitForReceived(h, 4);
 
     // Both seqs fire their own burst: 2 bursts × 2 packets = 4 total.
     expect(h.received).toHaveLength(4);
@@ -786,9 +830,10 @@ describe("createKeepaliveResponder", () => {
   it("fires a new burst for the same seq after the dedup window expires", async () => {
     const h = await setupHarness({ burstCount: 1, dedupWindowMs: 40 });
     await sendAnnouncement(h, makeAnnouncement(0x05));
-    await new Promise((r) => setTimeout(r, 80)); // wait past the dedup window
+    await waitForReceived(h, 1);
+    await settle(80); // wait past the dedup window
     await sendAnnouncement(h, makeAnnouncement(0x05));
-    await new Promise((r) => setTimeout(r, 40));
+    await waitForReceived(h, 2);
 
     // Both announcements fired: 2 bursts × 1 packet = 2 total.
     expect(h.received).toHaveLength(2);
@@ -798,15 +843,17 @@ describe("createKeepaliveResponder", () => {
   });
 
   it("stop() cancels pending burst timers before they fire", async () => {
-    const h = await setupHarness({ burstIntervalMs: 100 }); // long enough that stop() interrupts
+    // Long enough that stop() interrupts even if the poll below is slow to
+    // see the first packet.
+    const h = await setupHarness({ burstIntervalMs: 400 });
     await sendAnnouncement(h, makeAnnouncement(0x01));
-    // Let the first burst packet fire (i=0 fires at t+0)...
-    await new Promise((r) => setTimeout(r, 30));
+    // Let the first burst packet arrive (i=0 fires at t+0)...
+    await waitUntil(() => expect(h.received.length).toBeGreaterThanOrEqual(1));
     h.responder.stop();
     // ...and wait past when the 2nd and 3rd would have fired
-    await new Promise((r) => setTimeout(r, 250));
+    await settle(900);
 
-    expect(h.received.length).toBeLessThanOrEqual(1);
+    expect(h.received).toHaveLength(1);
 
     h.listener.close();
     h.announcer.close();

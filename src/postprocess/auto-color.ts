@@ -44,8 +44,8 @@ import { scaledDimensions, type Downsample } from "./downsample.js";
 // the evidence supports rather than a comfortable choice.
 //
 // Cream stock is deliberately on the "colour" side: its paper tint reads
-// 1.015% after the clip, well above any workable cut point, and Epson's own
-// software preserves that tint rather than neutralising it. Treating such
+// 1.015% after the clip, well above any workable cut point, and the tint is
+// part of the sheet, so it is kept rather than neutralised. Treating such
 // pages as colour is the intended behaviour, not a miss.
 //
 // Under POST_PROCESS=document the classification runs INSIDE the document
