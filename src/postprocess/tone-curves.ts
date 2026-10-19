@@ -9,8 +9,8 @@
 // curve gets stage 1 only (clean white background, no tone match).
 //
 // et4950-family: derived 2026-07-08 from the ET-4956 compatibility-test-page
-// raw-vs-ScanSmart pair (.reference/scan-quality-oracle/); reproduces Epson's
-// rendering to ~7 grey/colour levels across the 12 swatches.
+// raw-vs-reference pair; reproduces the reference rendering to ~7 grey/colour
+// levels across the 12 swatches.
 //
 // Top-end reshape (issue #158): the 12 swatches leave the domain above ~248
 // unconstrained, and the original interpolation there never reached pure

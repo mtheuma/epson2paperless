@@ -84,7 +84,7 @@ describe("OVERRIDES_BY_FINGERPRINT", () => {
     expect(e!.adfExtents).toEqual({ x0: 69, y0: 0, w: 2481, h: 3506 });
   });
 
-  it("includes ET-8500 entry (flatbed-only, TLS; TLS-sibling gamma + ET-4800 CMX)", () => {
+  it("includes ET-8500 entry (flatbed-only; ET-4950 gamma + identity CMX, a neutral pair)", () => {
     const e = OVERRIDES_BY_FINGERPRINT.get(
       "05b5c7eaad217e9538883f3fffe9796464689a5d9006c5b3e3c3fd2c24e21467",
     );
@@ -92,20 +92,20 @@ describe("OVERRIDES_BY_FINGERPRINT", () => {
     expect(e!.initPollIterations).toBe(3);
     expect(e!.gmm).toBe("UG18");
     expect(e!.gammaClass).toEqual({ jpg: "et4950-stock", pdf: "et4950-stock" });
-    expect(e!.cmxClass).toEqual({ jpg: "et4800-um08", pdf: "et4800-um08" });
+    expect(e!.cmxClass).toEqual({ jpg: "identity-um08", pdf: "identity-um08" });
     expect(e!.fbExtents).toEqual({ x0: 0, y0: 0, w: 2481, h: 3506 });
     expect(e!.adfExtents).toBeNull();
   });
 
-  it("includes ET-7700 entry (flatbed-only; ET-8500-shaped, speculative from #145)", () => {
+  it("includes ET-7700 entry (flatbed-only; XP-7100 gamma + identity CMX, a neutral pair)", () => {
     const e = OVERRIDES_BY_FINGERPRINT.get(
       "72319314b621fea0aab6cc16f4fd891534cec08f33ce80116a849f6f6e1e58d4",
     );
     expect(e).toBeDefined();
     expect(e!.initPollIterations).toBe(3);
     expect(e!.gmm).toBe("UG18");
-    expect(e!.gammaClass).toEqual({ jpg: "et4950-stock", pdf: "et4950-stock" });
-    expect(e!.cmxClass).toEqual({ jpg: "et4800-um08", pdf: "et4800-um08" });
+    expect(e!.gammaClass).toEqual({ jpg: "xp7100-pdf", pdf: "xp7100-pdf" });
+    expect(e!.cmxClass).toEqual({ jpg: "identity-um08", pdf: "identity-um08" });
     expect(e!.fbExtents).toBe("generic");
     expect(e!.adfExtents).toBeNull();
   });

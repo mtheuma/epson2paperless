@@ -4,24 +4,8 @@ import { GAMMA_CLASSES, type GammaClassName } from "./gamma-classes.js";
 import { CMX_CLASSES, type CmxClassName } from "./cmx-classes.js";
 import { composePara } from "../para-composer.js";
 import { makeParaSpec } from "../dialects/dispatch.js";
-import {
-  OVERRIDES_BY_FINGERPRINT,
-  type Dialect,
-  type ModelOverride,
-} from "../dialects/model-overrides.js";
+import { OVERRIDES_BY_FINGERPRINT, type Dialect } from "../dialects/model-overrides.js";
 import { recordedDialect } from "../test-support/dialects.js";
-
-// Models that send a mixed pair today, until their reporter-gated colour fix
-// lands. Keyed by model name, matched anywhere in the entry's displayName.
-const KNOWN_MIXED_PAIRS: Readonly<Record<string, string>> = {
-  "ET-8500":
-    "ET-4800's Epson-look matrix with a neutral curve picked as the photo default (#120); fix awaits a compatibility-page scan.",
-  "ET-7700":
-    "Inherits the ET-8500's pair, pinned by own-capture fixtures (#145); fix awaits a compatibility-page scan.",
-};
-
-const knownException = (entry: Pick<ModelOverride, "displayName">): string | undefined =>
-  Object.keys(KNOWN_MIXED_PAIRS).find((model) => entry.displayName.includes(model));
 
 // The colour pair a composed PARA body carries, read back from its #GMM, #GMT
 // and #CMX segments and named by matching the class bytes.
@@ -109,30 +93,9 @@ describe("checkColourPair", () => {
 });
 
 describe("model override colour pairs", () => {
-  it.each(entries.filter((e) => knownException(e) === undefined).map((e) => [e.displayName, e]))(
-    "%s sends only valid pairs",
-    (_name, entry) => {
-      for (const { label, pair } of sentPairs(entry)) {
-        expect(checkColourPair(pair), label).toMatchObject({ valid: true });
-      }
-    },
-  );
-
-  it.each(Object.keys(KNOWN_MIXED_PAIRS))(
-    "known exception %s still sends a mixed pair",
-    (model) => {
-      const entry = entries.find((e) => knownException(e) === model);
-      expect(entry, `${model} has no model override`).toBeDefined();
-      const invalid = sentPairs(entry!)
-        .map(({ label, pair }) => ({ label, verdict: checkColourPair(pair) }))
-        .filter(({ verdict }) => !verdict.valid);
-      expect(invalid, "fixed: drop it from KNOWN_MIXED_PAIRS").not.toHaveLength(0);
-      for (const { label, verdict } of invalid) {
-        expect(verdict, label).toMatchObject({
-          valid: false,
-          reason: expect.stringMatching(/^mixed pair:/),
-        });
-      }
-    },
-  );
+  it.each(entries.map((e) => [e.displayName, e]))("%s sends only valid pairs", (_name, entry) => {
+    for (const { label, pair } of sentPairs(entry)) {
+      expect(checkColourPair(pair), label).toMatchObject({ valid: true });
+    }
+  });
 });

@@ -12,9 +12,8 @@ Epson XP-7100 (ESC/I-2 over plain TCP, PID 1147).
 ## Provenance
 
 Source pcaps from issue [#65](https://github.com/mtheuma/epson2paperless/issues/65)
-(reporter: utf8please), age-encrypted in
-`.reference/wireshark-captures/xp-7100/*.age` and decrypted-locally under
-`_decrypted/` (gitignored).
+(reporter: utf8please), age-encrypted
+and kept outside the repo.
 
 Each pcap contains two TCP streams to port 1865: the first is the driver's
 TLS attempt (rejected by the printer); the second is the actual scan

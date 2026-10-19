@@ -83,7 +83,7 @@ describe("the generic dialect, on every fixture model with its override ignored"
 describe("genericColourPair", () => {
   it("is the neutral pair in UG18 when the printer lists it", () => {
     const pair = genericColourPair(capa(NEUTRAL_CAPA), "standard");
-    expect(pair).toEqual({ gmm: "UG18", gamma: "et4950-stock", cmx: "et2750-um08" });
+    expect(pair).toEqual({ gmm: "UG18", gamma: "et4950-stock", cmx: "identity-um08" });
     expect(checkColourPair(pair)).toEqual({ valid: true, kind: "neutral" });
   });
 

@@ -90,12 +90,12 @@ export function capabilityFields(derived: DerivedCapabilities): CapabilityFields
 }
 
 /**
- * What the status reply just before PARA means for the scan, as Epson's own
- * driver judges it: an error on the unit being scanned stops the scan
- * (`blocking`), and an error on any other unit is only `warnings`. A unit is
- * an error's location (ADF, FB, TPU, or one no source maps to), so it is
- * never the unit being scanned unless it is ADF or FB. There is no
- * always-fatal code: Epson has none.
+ * What the status reply just before PARA means for the scan: an error on the
+ * unit being scanned stops the scan (`blocking`), and an error on any other
+ * unit is only `warnings`. A unit is an error's location (ADF, FB, TPU, or one
+ * no source maps to), so it is never the unit being scanned unless it is ADF
+ * or FB. No code is fatal on its own: what an error means depends only on
+ * whether its unit is the one being scanned.
  */
 export type StatusJudgement = { warnings: string[] } | { blocking: string };
 
@@ -109,7 +109,7 @@ const UNIT = { flatbed: "FB", adf: "ADF" } as const;
 
 /**
  * A status reply's errors (parseStatErrors) with one code per unit: the last
- * one the reply gives that unit, as Epson's driver keeps them.
+ * one the reply gives that unit wins over any earlier one.
  */
 function lastCodePerUnit(errors: string[]): string[] {
   const byUnit = new Map<string, string>();
@@ -119,8 +119,8 @@ function lastCodePerUnit(errors: string[]): string[] {
 
 /**
  * The source a printer with both sources scans from, read from a status
- * reply's errors as Epson's own source detection reads them: the ADF is empty
- * only when its code is paper empty, which means the flatbed. Any other ADF
+ * reply's errors: the ADF is empty only when its code is paper empty, which
+ * means the flatbed. Any other ADF
  * code reads as a document loaded, so the ADF is the source (and the status
  * judged before PARA stops on that code), as it is with no ADF error.
  */

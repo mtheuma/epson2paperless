@@ -66,6 +66,7 @@ const PANEL_INFO: PushScanInfo = {
   ipAddress: "C0A8013A",
   duplex: false,
   action: "pdf",
+  protocolVersion: "2.00",
 };
 
 interface Harness {
@@ -314,13 +315,14 @@ describe("scan webhook wiring", () => {
     capabilities: [] as string[],
     peerAddress: "192.0.2.5",
   });
-  const jobInfo = (productName: string): PushScanInfo => ({
+  const jobInfo = (productName: string, protocolVersion = "3.00"): PushScanInfo => ({
     pushScanId: null,
     jobNumber: "0",
     productName,
     ipAddress: "C0A80A08",
     duplex: false,
     action: "unknown",
+    protocolVersion,
   });
 
   for (const [model, pid] of [
@@ -377,12 +379,12 @@ describe("scan webhook wiring", () => {
       admission: h.admission,
       dispatch: panelDispatch,
     });
-    // A non-job-control product sending JobNumberIn with no PushScanIDIn is
-    // ignored, so this trigger reaches the callback's reject arm.
-    await panel.beforeResponse!(hookArgs(jobInfo("PID 11D1")));
+    // A v2 trigger with no PushScanIDIn is ignored, so this one reaches the
+    // callback's reject arm.
+    await panel.beforeResponse!(hookArgs(jobInfo("PID 11D1", "2.00")));
     expect(typeof handed.release).toBe("function");
     expect(await post(h.base)).toBe(409);
-    onPushScan(jobInfo("PID 11D1"), "192.0.2.5");
+    onPushScan(jobInfo("PID 11D1", "2.00"), "192.0.2.5");
     expect(panelDispatch).not.toHaveBeenCalled();
     expect(await post(h.base)).toBe(202);
   });
@@ -390,7 +392,7 @@ describe("scan webhook wiring", () => {
   it("a panel trigger that ends without a callback releases the slot via the hook", async () => {
     h = await harness({});
     const panel = buildPushScanServerOptions(makeConfig(), undefined, h.admission);
-    await panel.beforeResponse!(hookArgs(jobInfo("PID 11D1")));
+    await panel.beforeResponse!(hookArgs(jobInfo("PID 11D1", "2.00")));
     expect(await post(h.base)).toBe(409);
     handed.release!(); // what pushscan.ts does on socket close without a callback
     expect(await post(h.base)).toBe(202);

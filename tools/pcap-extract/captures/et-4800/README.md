@@ -45,4 +45,4 @@ fixture-generation time for the pcap-extract `{dir, hex}` shape.
 
 CAPA fingerprint: `7870a725ab969136d5eb04387bf01d3cc3168aabb3d11cfaca7d59a4169971c2`
 
-Source `.pcapng` files are gitignored under `.reference/wireshark-captures/et-4800/`.
+The source `.pcapng` files are kept outside the repo.

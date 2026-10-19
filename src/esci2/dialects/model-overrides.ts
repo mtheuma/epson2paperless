@@ -112,13 +112,20 @@ export interface Provenance {
  * - `reporter-scan`: a measured compatibility-page scan on that model's
  *   hardware (a reporter's, or the maintainer's on borrowed hardware);
  * - `reporter-report`: a reporter's qualitative "works" or "colours look right";
- * - `inherited:<model>`: copied from the override recorded for that model.
+ * - `inherited:<model>`: copied from the override recorded for that model;
+ * - `provisional`: colour only. An inherited setting expected to match on
+ *   this model but not yet confirmed on its hardware. It sits next to the
+ *   `inherited:<model>` entry and links the capture the inherited bytes came
+ *   from. It satisfies the ✅ colour check, but a ✅ model whose colour rests
+ *   on it alone is listed as provisional and carries a README caveat, until
+ *   a reporter scan or a capture supersedes it.
  */
 export type EvidenceKind =
   | "epson-capture"
   | "own-capture"
   | "reporter-scan"
   | "reporter-report"
+  | "provisional"
   | `inherited:${string}`;
 
 /** Where the evidence is: a GitHub issue or PR, or a fixture in the tree (repo-relative path). */
@@ -312,7 +319,7 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
       ],
     },
   },
-  // The JPG and PDF settings differ: the driver sent each action its own
+  // The JPG and PDF settings differ: the captures send each action its own
   // tone curve and colour matrix.
   {
     pids: ["1147"],
@@ -348,7 +355,7 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
         { kind: "epson-capture", link: { fixture: `${PCAP}/xp-7100/jpg-flatbed.jsonl` } },
         { kind: "epson-capture", link: { fixture: `${PCAP}/xp-7100/jpg-adf-simplex.jsonl` } },
       ],
-      // The driver polled 11-13 times; 3 is the ET-4950 count, run on the
+      // The captures poll 11-13 times; 3 is the ET-4950 count, run on the
       // reporter's hardware.
       pollCount: [{ kind: "reporter-report", link: { issue: 65 } }],
     },
@@ -397,7 +404,7 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
         { kind: "epson-capture", link: { fixture: `${PCAP}/et-4800/flatbed-jpg.jsonl` } },
         { kind: "epson-capture", link: { fixture: `${PCAP}/et-4800/adf-jpg.jsonl` } },
       ],
-      // The driver polled until ready (11-12 times); 3, the ET-4950 count, was
+      // The captures poll until ready (11-12 times); 3, the ET-4950 count, was
       // run on the reporter's hardware.
       pollCount: [{ kind: "reporter-report", link: { issue: 80 } }],
     },
@@ -430,7 +437,7 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
       ],
     },
   },
-  // A long-page window, as the driver sent it: 8.5" x 36" at 200 DPI.
+  // A long-page window, as captured: 8.5" x 36" at 200 DPI.
   {
     pids: [],
     names: ["FF-680W"],
@@ -561,8 +568,8 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     },
   },
   // Reported over TLS (#120) and over plain TCP (#123) with the same CAPA
-  // fingerprint, so one override serves both transports. Its pair is mixed
-  // (colour-pair.test.ts) until a compatibility-page scan checks the fix.
+  // fingerprint, so one override serves both transports. It sends the neutral
+  // pair: the ET-4950's captured tone curve with the identity matrix.
   {
     pids: ["1193"],
     names: [],
@@ -573,16 +580,35 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     adfExtents: null,
     gmm: "UG18",
     gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
-    cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
+    cmxClass: { jpg: "identity-um08", pdf: "identity-um08" },
     verifiedWireDpis: [300], // the reporter's hardware (#120)
     provenance: {
       models: ["ET-8500"],
       colour: [
-        // The tone curve from the ET-4950, the matrix from the ET-4800.
+        // The earlier mixed pair: the tone curve from the ET-4950, the matrix
+        // from the ET-4800. The reports vouch for it only.
         { kind: "inherited:ET-4950", link: { pr: 121 }, vouchesFor: "e15913fe2ab564e6" },
         { kind: "inherited:ET-4800", link: { pr: 121 }, vouchesFor: "e15913fe2ab564e6" },
         { kind: "reporter-report", link: { issue: 120 }, vouchesFor: "e15913fe2ab564e6" },
         { kind: "reporter-report", link: { issue: 123 }, vouchesFor: "e15913fe2ab564e6" },
+        // The neutral pair: the ET-4950's captured tone curve, expected to
+        // match, with the identity matrix as the ET-2750 capture carries it.
+        // Provisional until a scan checks it.
+        {
+          kind: "inherited:ET-4950",
+          link: { fixture: `${FRIDA}/2026-04-24T09-05-08-flatbed-1p-jpg.jsonl` },
+          vouchesFor: "58b3f5eab4e7ab0c",
+        },
+        {
+          kind: "inherited:ET-2750",
+          link: { fixture: `${PCAP}/et-2750/flatbed-single-page-pdf.jsonl` },
+          vouchesFor: "58b3f5eab4e7ab0c",
+        },
+        {
+          kind: "provisional",
+          link: { fixture: `${FRIDA}/2026-04-24T09-05-08-flatbed-1p-jpg.jsonl` },
+          vouchesFor: "58b3f5eab4e7ab0c",
+        },
       ],
       window: [
         { kind: "inherited:ET-4800", link: { pr: 121 } },
@@ -595,9 +621,10 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     },
   },
   // Shaped like the ET-8500 (same AREA, GMM, CMX and QIT lists), but its CAPA
-  // fingerprint differs, so it is an override of its own. Its pair is mixed
-  // (colour-pair.test.ts), and its fixtures are own captures: changing the
-  // pair means re-pinning their PARA.
+  // fingerprint differs, so it is an override of its own. It sends a neutral
+  // pair: the XP-7100's xp7100-pdf tone curve with the identity matrix. Its
+  // fixtures are own captures of the earlier pair, so its replay holds the
+  // PARA to them everywhere but #GMT and #CMX.
   {
     pids: ["112B"],
     names: [],
@@ -607,12 +634,14 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     fbExtents: "generic",
     adfExtents: null,
     gmm: "UG18",
-    gammaClass: { jpg: "et4950-stock", pdf: "et4950-stock" },
-    cmxClass: { jpg: "et4800-um08", pdf: "et4800-um08" },
+    gammaClass: { jpg: "xp7100-pdf", pdf: "xp7100-pdf" },
+    cmxClass: { jpg: "identity-um08", pdf: "identity-um08" },
     verifiedWireDpis: [300], // the replay fixtures (#145)
     provenance: {
       models: ["ET-7700"],
       colour: [
+        // The earlier mixed pair, the ET-8500's at the time: the replay
+        // fixtures record it, and the reporter's scan measured it.
         { kind: "inherited:ET-8500", link: { pr: 153 }, vouchesFor: "e15913fe2ab564e6" },
         {
           kind: "own-capture",
@@ -620,15 +649,33 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
           vouchesFor: "e15913fe2ab564e6",
         },
         { kind: "reporter-scan", link: { issue: 145 }, vouchesFor: "e15913fe2ab564e6" },
+        // The neutral pair: the XP-7100's captured xp7100-pdf tone curve,
+        // expected to match, with the identity matrix as the ET-2750 capture
+        // carries it. Provisional until a scan checks it.
+        {
+          kind: "inherited:XP-7100",
+          link: { fixture: "src/esci2/dialects/xp-7100-fixtures/pdf-single.bin" },
+          vouchesFor: "8515bd5a3e9c5c62",
+        },
+        {
+          kind: "inherited:ET-2750",
+          link: { fixture: `${PCAP}/et-2750/flatbed-single-page-pdf.jsonl` },
+          vouchesFor: "8515bd5a3e9c5c62",
+        },
+        {
+          kind: "provisional",
+          link: { fixture: "src/esci2/dialects/xp-7100-fixtures/pdf-single.bin" },
+          vouchesFor: "8515bd5a3e9c5c62",
+        },
       ],
       window: [{ kind: "own-capture", link: { fixture: `${PCAP}/et-7700/flatbed-jpg.jsonl` } }],
       pollCount: [{ kind: "own-capture", link: { fixture: `${PCAP}/et-7700/flatbed-jpg.jsonl` } }],
     },
   },
   // The tone curve is a judgement call. By segment shape (QIT present, CCT
-  // absent) the nearest overrides are the ET-8500 and ET-7700, on the flat
-  // et4950-stock; by hardware class (an office AIO) it is the ET-4800 and
-  // ET-15000, on et4800-stock. It follows hardware class: the flat curve was
+  // absent) the nearest overrides are the ET-8500 and ET-7700, on flat
+  // near-identity curves; by hardware class (an office AIO) it is the ET-4800
+  // and ET-15000, on et4800-stock. It follows hardware class: a flat curve was
   // chosen for the photo models. If wrong, et4800-stock crushes shadows, which
   // a compatibility-page scan would show as a lifted black floor.
   {

@@ -18,6 +18,7 @@ import { composePara, type ParaSpec } from "./para-composer.js";
 import { readJpegOrientation } from "../exif.js";
 import sharp from "sharp";
 import { recordedDialect } from "./test-support/dialects.js";
+import { changedParaSegments } from "./test-support/para-diff.js";
 
 const XP7100_FP = "56d26c61896ca417807ac68d37775036fa1e702ee44c0beaa27d8a6ea9fa457e";
 
@@ -1082,7 +1083,7 @@ describe("runEsci2ScanOverPlain — ET-2750 fixture replay", () => {
 
   it("flatbed-single-page-pdf: drives the captured wire and produces one PDF", async () => {
     // Source: tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl
-    // Provenance documented in `.reference/wireshark-captures/et-2750/protocol-decode.md`.
+    // Capture notes are in that fixture directory's README.md.
     // ET-2750 is flatbed-only hardware; no ADF or duplex variants exist.
     // The fixture is large (~3.9 MB) because each ESC/I-2 IMG cycle wraps
     // pixel data in 0xa000 IS frames — there's no 0xa200 image-stream
@@ -1432,9 +1433,11 @@ describe("runEsci2ScanOverPlain — ET-7700 fixture replay", () => {
   const FIX_DIR = path.join("tools", "pcap-extract", "captures", "et-7700");
 
   // Fixtures capture epson2paperless itself (the PR #153 speculative dialect)
-  // scanning the reporter's ET-7700 — see the fixture dir README. The PARA
-  // shield therefore pins that the composer still emits the hardware-validated
-  // bytes, and the recipe cross-check ties them to the model override.
+  // scanning the reporter's ET-7700 — see the fixture dir README. They are a
+  // structural oracle, not a colour one: the recorded PARA carries the earlier
+  // mixed colour pair, and the model now sends a neutral one. So the shield
+  // pins the scanner's PARA to the model override's composed bytes, and holds
+  // it to the recording everywhere except the tone curve and colour matrix.
   async function runOne(opts: { fixtureFile: string; action: "jpg" | "pdf" }) {
     const fixture = loadFixture(path.join(FIX_DIR, opts.fixtureFile));
     const fake = new FakePlainSocket();
@@ -1452,16 +1455,18 @@ describe("runEsci2ScanOverPlain — ET-7700 fixture replay", () => {
     );
     await driveFixture(fixture, fake, sessionPromise);
 
-    const capturedPara = extractCapturedParaBody(fixture);
-    const scannerPara = extractScannerParaWrite(fake);
-    expect(scannerPara.equals(capturedPara)).toBe(true);
-
     // ET-7700 PARA is action-invariant (asserted in et-7700.test.ts), so both
-    // fixtures must match the composer's flatbed recipe byte-for-byte.
+    // sessions send the composer's flatbed recipe byte-for-byte.
     const recipePara = composePara(
       makeParaSpec(recordedDialect(ET7700_FP), "flatbed", opts.action),
     );
-    expect(capturedPara.equals(recipePara)).toBe(true);
+    const scannerPara = extractScannerParaWrite(fake);
+    expect(scannerPara.equals(recipePara)).toBe(true);
+
+    // Against the recording: #GMT and #CMX changed, every other segment
+    // byte-identical and in place.
+    const capturedPara = extractCapturedParaBody(fixture);
+    expect(changedParaSegments(capturedPara, scannerPara)).toEqual(["GMT", "CMX"]);
 
     return readdirSync(outputDir);
   }

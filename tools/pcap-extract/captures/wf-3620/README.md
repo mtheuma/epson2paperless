@@ -1,8 +1,7 @@
 # WF-3620 replay fixtures
 
 JSONL fixtures used by `src/esci/scanner.test.ts` replay tests. Generated
-from gitignored Wireshark captures in `.reference/wireshark-captures/wf-3620/`
-via `npm run pcap:extract`. Image-stream runs are folded into summary records
+from Wireshark captures kept outside the repo, via `npm run pcap:extract`. Image-stream runs are folded into summary records
 so each fixture stays under ~80 KB.
 
 | Fixture                          | Source pcap                     | Scenario                               |
@@ -22,7 +21,7 @@ To regenerate a fixture:
 
 ```
 TSHARK_PATH="/path/to/tshark" npm run pcap:extract -- \
-  .reference/wireshark-captures/wf-3620/<source>.pcap \
+  /path/to/captures/wf-3620/<source>.pcap \
   192.168.188.140 192.168.188.54 1865 \
   tools/pcap-extract/captures/wf-3620/<fixture>.jsonl
 ```

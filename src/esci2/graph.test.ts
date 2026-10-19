@@ -1,4 +1,6 @@
-import { describe, it, expect, vi } from "vitest";
+import { afterEach, beforeEach, describe, it, expect, vi } from "vitest";
+import { EventEmitter } from "node:events";
+import { runScanSession, type SessionTransport } from "../scan-session.js";
 import { esci2Graph, ESCI2_REPLY_SIZE, ESCI2_TIMEOUT_MS, nameInitPollEarlyStop } from "./graph.js";
 import { buildEsci2Command } from "./commands.js";
 import { buildFsX } from "../commands-fs.js";
@@ -6,6 +8,7 @@ import { applyEntrySourceOverride } from "./dialects/dispatch.js";
 import { OVERRIDES_BY_FINGERPRINT } from "./dialects/model-overrides.js";
 import {
   IS_HEADER_SIZE,
+  buildIsPacket,
   buildPassthruPacket,
   buildPurereadPacket,
   parseIsPacket,
@@ -568,6 +571,24 @@ describe("esci2Graph T24 — MODE_SWITCH / POST_MODE_STAT / PARA / TRDT / IMG_ME
       const result = state.decide(ctx, { type: 0xa000, payload });
       expect("error" in result).toBe(true);
     }
+  });
+
+  it("IMG_META reads its header block as the status before PARA does, naming the stop", () => {
+    const state = esci2Graph.states.IMG_META;
+    if (state.kind !== "decision") throw new Error("IMG_META not a decision");
+    const outcome = (tokens: string) => {
+      const payload = Buffer.from(`IMG x0000020${tokens}`.padEnd(64, "#---").slice(0, 64));
+      const result = state.decide(makeCtx(), { type: 0xa000, payload });
+      return "error" in result ? result.error.message : result.next;
+    };
+    // A jammed ADF mid-scan.
+    expect(outcome("#errADF PJ  ")).toBe(
+      "IMG_META: the printer reported an error (ADF PJ) — clear it on the printer and scan again",
+    );
+    expect(outcome("#nrdRSVD")).toMatch(
+      /^IMG_META: the scanner is in use by another client \(RSVD\)/,
+    );
+    expect(outcome("#pst#typIMGF")).toBe("IMG_DATA");
   });
 
   it("IMG_META sets ctx fields and advances to IMG_DATA", () => {
@@ -1705,7 +1726,7 @@ describe("esci2Graph POST_MODE_STAT — source from the status before PARA (mode
 
   it("decides the source, then judges the same reply's errors on it", () => {
     // A jam with no paper empty reads as a loaded ADF, which then stops on
-    // the jam, as Epson's Auto source does.
+    // the jam: the scan never falls back to the flatbed.
     const jammed = statusBeforePara(ET4950_ENTRY, statHeader(12), Buffer.from("#ERRADF PJ  "));
     expect(jammed).toMatchObject({ ctx: { source: "adf" }, outcome: STOP("ADF PJ") });
     const locked = statusBeforePara(
@@ -1716,10 +1737,10 @@ describe("esci2Graph POST_MODE_STAT — source from the status before PARA (mode
     expect(locked).toMatchObject({ ctx: { source: "flatbed" }, outcome: STOP("FB LOCK") });
   });
 
-  it("ET-2750: fixed to the flatbed, so its filler-packed zero-length status never says ADF", () => {
-    // Its STAT reply declares length 0 but packs filler inline. Read by
-    // content it carries no error, which would say ADF; as a flatbed-only
-    // printer it never reaches that rule.
+  it("ET-2750: fixed to the flatbed, so its zero-length status never says ADF", () => {
+    // Its STAT reply declares length 0: the header and its filler-padded
+    // header block. Read by content it carries no error, which would say
+    // ADF; as a flatbed-only printer it never reaches that rule.
     const { header, body } = readPreParaStatus(ET2750_PATH);
     expect(body).toBeNull();
     expect(header.length).toBeGreaterThan(12);
@@ -1999,6 +2020,264 @@ describe("esci2Graph POST_MODE_STAT — the status before PARA is judged against
     } finally {
       setLogLevel(previous);
     }
+  });
+
+  // Synthetic: no fixture's reply-header block carries #nrd or #err.
+  describe("the reply-header block", () => {
+    /** A 64-byte STAT reply declaring `length` body bytes, `tokens` in its header block. */
+    const statWith = (length: number, tokens: string) =>
+      Buffer.from(
+        (
+          `STATx${length.toString(16).toUpperCase().padStart(7, "0")}${tokens}` + "#---".repeat(13)
+        ).slice(0, 64),
+        "ascii",
+      );
+    const RESERVED =
+      "POST_MODE_STAT: the scanner is in use by another client (RSVD) — " +
+      "wait for it to finish and scan again";
+    const AUTH =
+      "POST_MODE_STAT: the printer requires user authentication (AFEN), which this " +
+      "service does not support — turn it off on the printer and scan again";
+    const HEADER_ERROR = (error: string) =>
+      `POST_MODE_STAT: the printer reported an error (${error}) — clear it on the printer and scan again`;
+
+    it.each([
+      ["#nrdRSVD", RESERVED],
+      ["#nrdAFEN", AUTH],
+      ["#errADF PJ  ", HEADER_ERROR("ADF PJ")],
+      ["#errFB  LOCK", HEADER_ERROR("FB LOCK")],
+      // Whatever the unit: in the header block even ADF paper empty stops.
+      [
+        "#errADF PE  ",
+        "POST_MODE_STAT: the printer reported an error (ADF PE) — " +
+          "load the document into the ADF and scan again",
+      ],
+    ])("%s stops the session before PARA, naming it", (tokens, message) => {
+      const entry = model(`Model header ${tokens}`);
+      // Read from the reply itself, before any body is drained.
+      expect(prePara({ entry }, statWith(12, tokens), Buffer.from("#ERRADF PE  ")).outcome).toBe(
+        message,
+      );
+      expect(prePara({ entry }, statWith(0, tokens), null).outcome).toBe(message);
+    });
+
+    it("stops on the header even where the status alone would scan, on every source", () => {
+      // A clear status on a flatbed-only, an ADF-only and a both-sources printer.
+      for (const entry of [
+        flatbedOnly("Model HF"),
+        recordedDialect(FF680W_FP),
+        model("Model HB"),
+      ]) {
+        const overrides = { entry, source: "adf" as const };
+        applyEntrySourceOverride(overrides, entry);
+        expect(prePara(overrides, statWith(0, "#nrdRSVD"), null).outcome).toBe(RESERVED);
+      }
+    });
+
+    it("a header stop is never blamed on an early-stopped init poll", () => {
+      const stat = esci2Graph.states.POST_MODE_STAT;
+      if (stat.kind !== "decision") throw new Error("POST_MODE_STAT not a decision");
+      const ctx = makeCtx({ entry: ET4950_ENTRY, initPollEarlyStop: { cycle: 2, reply: "15" } });
+      const result = stat.decide(ctx, { type: 0xa000, payload: statWith(0, "#errADF PJ  ") });
+      if (!("error" in result)) throw new Error("expected the session to end");
+      expect(nameInitPollEarlyStop(ctx, result.error).message).toBe(HEADER_ERROR("ADF PJ"));
+    });
+
+    describe("busy and warming up", () => {
+      const STAT = buildPassthruPacket(buildEsci2Command("STAT"), ESCI2_REPLY_SIZE);
+      const BUSY = "the printer reports it is busy (BUSY)";
+      const WARMING_UP = "the printer reports it is warming up (WUP)";
+
+      function decide(
+        state: "POST_MODE_STAT" | "POST_MODE_STAT_DRAIN",
+        ctx: import("./graph.js").Esci2Ctx,
+        payload: Buffer,
+      ) {
+        const s = esci2Graph.states[state];
+        if (s.kind !== "decision") throw new Error(`${state} not a decision`);
+        return s.decide(ctx, { type: 0xa000, payload });
+      }
+
+      it.each([
+        ["#nrdBUSY", BUSY],
+        ["#nrdWUP ", WARMING_UP],
+      ])("%s re-sends STAT after 100 ms, as a wait, without reading the status", (tokens, wait) => {
+        // Both sources: a ready status like this one (no ADF PE) would mean the ADF.
+        const ctx = makeCtx({ entry: model(`Model wait ${tokens}`), source: "flatbed" });
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+        try {
+          expect(decide("POST_MODE_STAT", ctx, statWith(0, tokens))).toEqual({
+            next: "POST_MODE_STAT",
+            send: STAT,
+            delayMs: 100,
+            wait,
+          });
+        } finally {
+          log.mockRestore();
+        }
+        expect(ctx.source).toBe("flatbed");
+      });
+
+      it("drains a not-ready reply's body before re-sending STAT, without reading it", () => {
+        const ctx = makeCtx({ entry: model("Model wait drain"), source: "adf" });
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+        try {
+          expect(decide("POST_MODE_STAT", ctx, statWith(12, "#nrdWUP "))).toEqual({
+            next: "POST_MODE_STAT_DRAIN",
+            send: buildPurereadPacket(12),
+            wait: WARMING_UP,
+          });
+          // ADF PE would otherwise mean the flatbed.
+          expect(decide("POST_MODE_STAT_DRAIN", ctx, Buffer.from("#ERRADF PE  "))).toEqual({
+            next: "POST_MODE_STAT",
+            send: STAT,
+            delayMs: 100,
+            wait: WARMING_UP,
+          });
+        } finally {
+          log.mockRestore();
+        }
+        expect(ctx.source).toBe("adf");
+        expect(ctx.preParaStatusReply).toBeUndefined();
+      });
+
+      it("logs at debug when the wait starts or its reason changes, not on every retry", () => {
+        const previous = getLogLevel();
+        setLogLevel("debug");
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+        try {
+          const ctx = makeCtx({ entry: model("Model wait log") });
+          for (const tokens of ["#nrdWUP ", "#nrdWUP ", "#nrdBUSY", "#nrdBUSY"]) {
+            decide("POST_MODE_STAT", ctx, statWith(0, tokens));
+          }
+          const waiting = log.mock.calls
+            .map((args) => args.join(" "))
+            .filter((line) => line.includes("not ready"));
+          expect(waiting).toHaveLength(2);
+          expect(waiting[0]).toMatch(/\[DEBUG\].*WUP/);
+          expect(waiting[1]).toMatch(/\[DEBUG\].*BUSY/);
+        } finally {
+          log.mockRestore();
+          setLogLevel(previous);
+        }
+      });
+
+      it("a ready reply after a wait reads the status and sends PARA", () => {
+        const ctx = makeCtx({ entry: model("Model wait ready"), source: "adf" });
+        const log = vi.spyOn(console, "log").mockImplementation(() => {});
+        try {
+          decide("POST_MODE_STAT", ctx, statWith(0, "#nrdBUSY"));
+          const result = decide("POST_MODE_STAT", ctx, statWith(12, ""));
+          expect(result).toMatchObject({ next: "POST_MODE_STAT_DRAIN" });
+          expect(result).not.toHaveProperty("wait");
+          const para = decide("POST_MODE_STAT_DRAIN", ctx, Buffer.from("#ERRADF PE  "));
+          expect(para).toMatchObject({ next: "PARA" });
+          expect(para).not.toHaveProperty("wait");
+        } finally {
+          log.mockRestore();
+        }
+        expect(ctx.source).toBe("flatbed");
+      });
+
+      describe("through the engine", () => {
+        /** A transport that answers every STAT with `reply()`, and records writes. */
+        class Printer extends EventEmitter implements SessionTransport {
+          written: Buffer[] = [];
+          constructor(private readonly reply: () => Buffer) {
+            super();
+          }
+          write(buf: Buffer): boolean {
+            this.written.push(buf);
+            if (buf.equals(STAT)) this.emit("data", buildIsPacket(0xa000, this.reply()));
+            return true;
+          }
+          end(): void {}
+          destroy(): void {}
+        }
+
+        function run(printer: Printer, overrides: Partial<import("./graph.js").Esci2Ctx> = {}) {
+          return runScanSession({
+            // Starts where the mode switch's STAT reply is read.
+            graph: { ...esci2Graph, initial: "POST_MODE_STAT" },
+            initialCtx: makeCtx({ entry: model("Model wait engine"), ...overrides }),
+            transportFactory: () => Promise.resolve(printer),
+            outputDir: "/tmp",
+            tempDir: "/tmp",
+            sessionTs: new Date(),
+            action: "jpg",
+            timeoutMs: 1_000,
+          });
+        }
+
+        beforeEach(() => {
+          vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+          vi.spyOn(console, "log").mockImplementation(() => {});
+        });
+        afterEach(() => {
+          vi.useRealTimers();
+          vi.restoreAllMocks();
+        });
+
+        it("sends PARA once the printer is ready", async () => {
+          let replies = 0;
+          const printer = new Printer(() => statWith(0, ++replies < 3 ? "#nrdWUP " : ""));
+          const session = run(printer);
+          await vi.advanceTimersByTimeAsync(0);
+          printer.emit("data", buildIsPacket(0xa000, statWith(0, "#nrdWUP ")));
+          await vi.advanceTimersByTimeAsync(299);
+          expect(printer.written).toEqual([STAT, STAT]);
+          await vi.advanceTimersByTimeAsync(1);
+          const sent = printer.written.map((buf) => parseIsPacket(buf)?.payload.toString("latin1"));
+          expect(sent.slice(0, 3)).toEqual(Array(3).fill(expect.stringContaining("STAT")));
+          expect(sent[3]).toContain("PARA");
+          // Nothing answers PARA: the rolling timeout ends the run.
+          await vi.advanceTimersByTimeAsync(1_000);
+          const result = await session;
+          expect(!result.ok && result.reason.message).toMatch(
+            /^Timeout in state PARA — no response/,
+          );
+        });
+
+        it("stops a printer still busy a run's timeout after the first busy reply, naming the state", async () => {
+          const printer = new Printer(() => statWith(0, "#nrdBUSY"));
+          const session = run(printer);
+          await vi.advanceTimersByTimeAsync(0);
+          printer.emit("data", buildIsPacket(0xa000, statWith(0, "#nrdBUSY")));
+          await vi.advanceTimersByTimeAsync(1_000);
+          const result = await session;
+          expect(!result.ok && result.reason.message).toBe(
+            `Timeout in state POST_MODE_STAT — still waiting after 1000ms: ${BUSY}`,
+          );
+          expect(printer.written).toHaveLength(9);
+        });
+
+        it("a printer still busy is not blamed on an early-stopped init poll", async () => {
+          const printer = new Printer(() => statWith(0, "#nrdBUSY"));
+          const session = run(printer, { initPollEarlyStop: { cycle: 2, reply: "15" } });
+          await vi.advanceTimersByTimeAsync(0);
+          printer.emit("data", buildIsPacket(0xa000, statWith(0, "#nrdBUSY")));
+          await vi.advanceTimersByTimeAsync(1_000);
+          const result = await session;
+          expect(!result.ok && result.reason.message).toBe(
+            `Timeout in state POST_MODE_STAT — still waiting after 1000ms: ${BUSY}`,
+          );
+        });
+
+        it("an early-stopped init poll is still named for a failure after the wait", async () => {
+          let replies = 0;
+          const printer = new Printer(() => statWith(0, ++replies < 2 ? "#nrdBUSY" : ""));
+          const session = run(printer, { initPollEarlyStop: { cycle: 2, reply: "15" } });
+          await vi.advanceTimersByTimeAsync(0);
+          printer.emit("data", buildIsPacket(0xa000, statWith(0, "#nrdBUSY")));
+          // Ready at 200ms; nothing answers PARA.
+          await vi.advanceTimersByTimeAsync(1_200);
+          const result = await session;
+          expect(!result.ok && result.reason.message).toMatch(
+            /^Timeout in state PARA — no response in 1000ms — likely cause: the init poll stopped early/,
+          );
+        });
+      });
+    });
   });
 });
 

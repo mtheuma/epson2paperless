@@ -14,6 +14,7 @@ function makeCtx(overrides: Partial<EsciCtx> = {}): EsciCtx {
     forcedSource: null,
     source: "adf-simplex",
     sourceDetected: false,
+    adfInstalled: null,
     format: "jpg",
     jpegQuality: 90,
     diagnoseProtocol: false,
@@ -206,10 +207,9 @@ describe("esciGraph IDENTITY / STATUS_1A / STATUS_1B / STATUS_2", () => {
     const { result, lines } = decideIdentity(ctx, buildFsIReply("PID 1106", "1.40"));
     expect("next" in result && result.next).toBe("STATUS_1A");
     expect(ctx.entry).toBe(ET2550_ENTRY);
-    // Fixed-flatbed: the source is pinned, as the shell pins it for a session
-    // that starts on the ET-2550.
-    expect(ctx.source).toBe("flatbed");
-    expect(ctx.sourceDetected).toBe(true);
+    // The source is still open: the first FS F reply settles it.
+    expect(ctx.sourceDetected).toBe(false);
+    expect(ctx.adfInstalled).toBeNull();
     expect(lines.filter((l) => l.stream === "warn")).toEqual([]);
     const switched = lines.filter((l) => l.text.includes("switching"));
     expect(switched).toHaveLength(1);
@@ -221,11 +221,10 @@ describe("esciGraph IDENTITY / STATUS_1A / STATUS_1B / STATUS_2", () => {
 
   it("IDENTITY keeps a PID-keyed dialect the printer names differently, and warns", () => {
     // The trigger's own PID chose the ET-2550; FS I doesn't overrule it.
-    const ctx = makeCtx({ entry: ET2550_ENTRY, source: "flatbed", sourceDetected: true });
+    const ctx = makeCtx({ entry: ET2550_ENTRY });
     const { result, lines } = decideIdentity(ctx, buildFsIReply("PID 08B8", "1.20"));
     expect("next" in result && result.next).toBe("STATUS_1A");
     expect(ctx.entry).toBe(ET2550_ENTRY);
-    expect(ctx.source).toBe("flatbed");
     expect(lines.filter((l) => l.stream === "warn").map((l) => l.text)).toEqual([
       expect.stringContaining(
         "Printer identifies as PID 08B8, which has its own wf3620 dialect, but this session is running the et2550 settings",
@@ -233,33 +232,16 @@ describe("esciGraph IDENTITY / STATUS_1A / STATUS_1B / STATUS_2", () => {
     ]);
   });
 
-  it("IDENTITY keeps a flatbed ESCI_FORCE_SOURCE across the switch", () => {
-    const ctx = makeCtx({ forcedSource: "flatbed", source: "flatbed" });
-    const { result } = decideIdentity(ctx, buildFsIReply("PID 1106", "1.40"));
-    expect("next" in result && result.next).toBe("STATUS_1A");
-    expect(ctx.entry).toBe(ET2550_ENTRY);
-    expect(ctx.source).toBe("flatbed");
-    expect(ctx.sourceDetected).toBe(true);
-  });
-
-  it("IDENTITY fails rather than switch to a dialect that can't service ESCI_FORCE_SOURCE", () => {
-    const ctx = makeCtx({ forcedSource: "adf-simplex" });
-    const { result } = decideIdentity(ctx, buildFsIReply("PID 1106", "1.40"));
-    expect("error" in result && result.error.message).toBe(
-      "ESCI_FORCE_SOURCE=adf-simplex is not supported by et2550 (supports: flatbed). " +
-        "Unset ESCI_FORCE_SOURCE or set it to one of the supported sources.",
-    );
-    expect(ctx.entry).toBe(WF3620_ENTRY);
-  });
-
-  it("STATUS_1B after a switch to the ET-2550 skips the ESC e probe", () => {
-    const ctx = makeCtx();
-    decideIdentity(ctx, buildFsIReply("PID 1106", "1.40"));
-    const state = esciGraph.states.STATUS_1B;
-    if (state.kind !== "decision") throw new Error("STATUS_1B must be a decision state");
-    const result = state.decide(ctx, { type: ESCI_REPLY, payload: Buffer.alloc(16) });
-    expect("next" in result && result.next).toBe("STATUS_2");
-  });
+  it.each(["flatbed", "adf-simplex"] as const)(
+    "IDENTITY switches an ET-2550 with ESCI_FORCE_SOURCE=%s, leaving the check to FS F",
+    (forcedSource) => {
+      const ctx = makeCtx({ forcedSource, source: forcedSource });
+      const { result } = decideIdentity(ctx, buildFsIReply("PID 1106", "1.40"));
+      expect("next" in result && result.next).toBe("STATUS_1A");
+      expect(ctx.entry).toBe(ET2550_ENTRY);
+      expect(ctx.source).toBe(forcedSource);
+    },
+  );
 
   it("IDENTITY on a PID-keyed dialect the printer doesn't name warns without the experimental line", () => {
     const ctx = makeCtx({ entry: XP620_ENTRY });
@@ -436,6 +418,71 @@ describe("esciGraph IDENTITY / STATUS_1A / STATUS_1B / STATUS_2", () => {
   });
 });
 
+describe("esciGraph ADF-installed flag (first FS F reply)", () => {
+  // FS F replies from the committed captures: byte 1 bit 7 = ADF installed.
+  const WF3620_STATUS = Buffer.from("018000c0000000000000000000000000", "hex");
+  const ET2550_STATUS = Buffer.from("010000c0000000000000000000000000", "hex");
+
+  function decide(stateName: string, ctx: EsciCtx, payload: Buffer): TransitionResult<EsciCtx> {
+    const state = esciGraph.states[stateName];
+    if (state?.kind !== "decision") throw new Error(`${stateName} must be a decision state`);
+    return state.decide(ctx, { type: ESCI_REPLY, payload });
+  }
+  const nextOf = (result: TransitionResult<EsciCtx>) => ("next" in result ? result.next : result);
+
+  it("STATUS_1A records an installed ADF and leaves the source to STATUS_2", () => {
+    const ctx = makeCtx();
+    expect(nextOf(decide("STATUS_1A", ctx, WF3620_STATUS))).toBe("STATUS_1B");
+    expect(ctx.adfInstalled).toBe(true);
+    expect(ctx.sourceDetected).toBe(false);
+    expect(nextOf(decide("STATUS_1B", ctx, WF3620_STATUS))).toBe("SOURCE_ACK1");
+  });
+
+  it.each([WF3620_ENTRY, ET2550_ENTRY].map((entry) => [entry.name, entry] as const))(
+    "a printer reporting no ADF scans from the flatbed on the %s settings, with no ESC e",
+    (_name, entry) => {
+      const ctx = makeCtx({ entry });
+      expect(nextOf(decide("STATUS_1A", ctx, ET2550_STATUS))).toBe("STATUS_1B");
+      expect(ctx.adfInstalled).toBe(false);
+      expect(ctx.source).toBe("flatbed");
+      expect(ctx.sourceDetected).toBe(true);
+      // No ESC e probe: straight to the status read it would have preceded.
+      expect(nextOf(decide("STATUS_1B", ctx, ET2550_STATUS))).toBe("STATUS_2");
+      // Byte 0 is 0x01 here, which on a printer with an ADF means "ADF".
+      expect(nextOf(decide("STATUS_2", ctx, ET2550_STATUS))).toBe("RESET_PAREN");
+      expect(ctx.source).toBe("flatbed");
+      // No ESC e + source after the reset's ESC @ either.
+      expect(nextOf(decide("RESET_INIT", ctx, Buffer.from([0x06])))).toBe("STATUS_READY");
+    },
+  );
+
+  it.each(["adf-simplex", "adf-duplex"] as const)(
+    "a forced %s source on a printer reporting no ADF stops at the first FS F reply",
+    (forcedSource) => {
+      const ctx = makeCtx({ forcedSource, source: forcedSource });
+      const result = decide("STATUS_1A", ctx, ET2550_STATUS);
+      expect("error" in result && result.error.message).toBe(
+        `ESCI_FORCE_SOURCE=${forcedSource}, but the printer reports no ADF fitted. ` +
+          "Unset ESCI_FORCE_SOURCE or set it to flatbed.",
+      );
+    },
+  );
+
+  it("a forced flatbed source on a printer reporting no ADF scans from the flatbed", () => {
+    const ctx = makeCtx({ forcedSource: "flatbed", source: "flatbed" });
+    expect(nextOf(decide("STATUS_1A", ctx, ET2550_STATUS))).toBe("STATUS_1B");
+    expect(ctx.source).toBe("flatbed");
+    expect(ctx.sourceDetected).toBe(true);
+  });
+
+  it("STATUS_1A in the inter-page loop does not re-read the flag", () => {
+    const ctx = makeCtx({ adfInstalled: true, inInterPageLoop: true, source: "adf-duplex" });
+    decide("STATUS_1A", ctx, ET2550_STATUS);
+    expect(ctx.adfInstalled).toBe(true);
+    expect(ctx.source).toBe("adf-duplex");
+  });
+});
+
 describe("esciGraph helper-generated *_ACK1 / *_ACK2 states", () => {
   for (const prefix of ["SOURCE", "ADF_PRESRC", "RESET_SRC", "ADF_PDF_SRC", "ADF_CLEANUP"]) {
     it(`${prefix}_ACK1 / ${prefix}_ACK2 are static states that validate ack byte 0x06`, () => {
@@ -451,6 +498,18 @@ describe("esciGraph helper-generated *_ACK1 / *_ACK2 states", () => {
     });
   }
 });
+
+/** A 14-byte FS G reply whose block layout covers ctx's raster exactly (8 lines per block). */
+function fsGReplyFor(ctx: EsciCtx): Buffer {
+  const { widthPx, heightPx } = ctx.entry.raster({ source: ctx.source, format: ctx.format });
+  const chunk = widthPx * 3 * 8;
+  const total = widthPx * heightPx * 3;
+  const payload = Buffer.alloc(14);
+  payload.writeUInt32LE(chunk, 2);
+  payload.writeUInt32LE(Math.floor(total / chunk), 6);
+  payload.writeUInt32LE(total % chunk, 10);
+  return payload;
+}
 
 describe("esciGraph reset / gamma / window / start cycles", () => {
   it("RESET_PAREN advances on a 1-byte reply", () => {
@@ -484,7 +543,7 @@ describe("esciGraph reset / gamma / window / start cycles", () => {
     const state = esciGraph.states.START;
     if (state.kind === "decision") {
       const ctx = makeCtx();
-      // 14-byte FS G reply: status(2) + chunkSize(4) + bytesPerLine(4) + totalLines(4)
+      // 14-byte FS G reply: status(2) + chunkSize(4) + blockCount(4) + lastBlockBytes(4)
       const payload = Buffer.alloc(14);
       payload.writeUInt16BE(0x0000, 0); // status
       payload.writeUInt32LE(0, 2); // chunkSize = 0 → poll path
@@ -499,15 +558,26 @@ describe("esciGraph reset / gamma / window / start cycles", () => {
     const state = esciGraph.states.START;
     if (state.kind === "decision") {
       const ctx = makeCtx({ source: "flatbed", format: "jpg" });
-      const payload = Buffer.alloc(14);
-      payload.writeUInt32LE(0x1000, 2); // chunkSize
-      payload.writeUInt32LE(0x06d6, 6);
-      payload.writeUInt32LE(7002, 10);
+      const payload = fsGReplyFor(ctx);
       const result = state.decide(ctx, { type: ESCI_REPLY, payload });
       expect("next" in result && result.next).toBe("IMG_RECEIVING");
       expect(ctx.imageBuffer.length).toBeGreaterThan(0);
       expect(ctx.geom).not.toBeNull();
       expect(ctx.imageBuffer.length).toBe(ctx.geom!.widthPx * ctx.geom!.heightPx * 3);
+    }
+  });
+
+  it("START fails when the FS G block layout doesn't cover the dialect's raster", () => {
+    const state = esciGraph.states.START;
+    if (state.kind === "decision") {
+      const ctx = makeCtx({ source: "flatbed", format: "jpg" });
+      const payload = fsGReplyFor(ctx);
+      payload.writeUInt32LE(payload.readUInt32LE(10) + 3, 10); // one pixel too many
+      const result = state.decide(ctx, { type: ESCI_REPLY, payload });
+      expect("error" in result && result.error.message).toMatch(
+        /^START: the printer's FS G block layout .* doesn't match the wf3620 .* raster/,
+      );
+      expect(ctx.imageBuffer.length).toBe(0);
     }
   });
 
@@ -526,10 +596,7 @@ describe("esciGraph reset / gamma / window / start cycles", () => {
         format: "jpg",
         deferredImageChunks: [deferred],
       });
-      const payload = Buffer.alloc(14);
-      payload.writeUInt32LE(0x1000, 2);
-      payload.writeUInt32LE(0x06d6, 6);
-      payload.writeUInt32LE(7002, 10);
+      const payload = fsGReplyFor(ctx);
       const result = state.decide(ctx, { type: ESCI_REPLY, payload });
       expect("next" in result && result.next).toBe("IMG_RECEIVING");
       // 50 pixel bytes from the deferred chunk landed in the new buffer.
@@ -561,10 +628,7 @@ describe("esciGraph reset / gamma / window / start cycles", () => {
         pageCount: 1, // about to flush page 2 (back)
         deferredImageChunks: [overflowing],
       });
-      const payload = Buffer.alloc(14);
-      payload.writeUInt32LE(0x1000, 2);
-      payload.writeUInt32LE(0x06d6, 6);
-      payload.writeUInt32LE(7002, 10);
+      const payload = fsGReplyFor(ctx);
       const result = state.decide(ctx, { type: ESCI_REPLY, payload });
       if ("error" in result) throw new Error("unexpected error result");
       // Flush transition fired without any wire chunk needed.

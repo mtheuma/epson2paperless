@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { EventEmitter } from "node:events";
-import type { Socket } from "node:net";
+import net, { type Socket } from "node:net";
 import { buildDummyJobWritePacket, buildJobReadPacket, runJobNumberCommit } from "./job-control.js";
 import { buildIsPacket, buildUnlockPacket } from "./protocol.js";
 
@@ -82,6 +82,27 @@ describe("runJobControl error handling", () => {
     expect(fake.destroyed).toBe(false);
   });
 
+  it("fails on a socket error that lands between two reads, naming it, not a timeout", async () => {
+    const welcome = buildIsPacket(0x8000, Buffer.from([0x01, 0x04, 0x00, 0x00, 0x00]));
+    // The printer resets the connection as the lock goes out, before the
+    // lock-ack read is listening.
+    const fake: FakeJobSocket = new FakeJobSocket((data) => {
+      if (isType(data) === 0x2100) {
+        fake.emit("error", new Error("read ECONNRESET"));
+        fake.emit("close");
+      }
+      return null;
+    });
+    const p = runJobNumberCommit({
+      printerIp: "192.0.2.9",
+      timeoutMs: 2000,
+      socketFactory: () => asSocket(fake),
+    });
+    setImmediate(() => fake.emit("data", welcome));
+
+    await expect(p).rejects.toThrow(/^JOBR lock ack: read ECONNRESET$/);
+  });
+
   it("reports the reply type and bytes when a packet has an unexpected IS type", async () => {
     const welcome = buildIsPacket(0x8000, Buffer.from([0x01, 0x04, 0x00, 0x00, 0x00]));
     const lockAck = buildIsPacket(0xa100, Buffer.from([0x06]));
@@ -121,5 +142,26 @@ describe("runJobControl error handling", () => {
     setImmediate(() => fake.emit("data", bogus));
 
     await expect(p).rejects.toThrow(/framing desync/);
+  });
+
+  it("fails a timed-out welcome on a real socket without an uncaught socket error", async () => {
+    // The printer accepts the connection and never sends its welcome.
+    const server = net.createServer(() => {});
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const { port } = server.address() as net.AddressInfo;
+    const uncaught: unknown[] = [];
+    const onUncaught = (err: unknown) => uncaught.push(err);
+    process.on("uncaughtException", onUncaught);
+    try {
+      await expect(
+        runJobNumberCommit({ printerIp: "127.0.0.1", port, timeoutMs: 100 }),
+      ).rejects.toThrow(/JOBR welcome: read timeout after 100ms/);
+      // The socket's error event, if any, is emitted after the rejection.
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(uncaught).toEqual([]);
+    } finally {
+      process.off("uncaughtException", onUncaught);
+      await new Promise((resolve) => server.close(resolve));
+    }
   });
 });

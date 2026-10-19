@@ -95,7 +95,7 @@ scan reuses the already-open connection), so its real session is the sole stream
 `tcp.stream 0`. See the shared dual-stream note in `../et-4800/README.md`.
 
 The **first** attachment on the issue (`scan.pcapng`, kept as
-`ds575w-scan-INCOMPLETE-mid-session.pcapng` under `.reference/`) was started
+`ds575w-scan-INCOMPLETE-mid-session.pcapng`, outside the repo) was started
 mid-session and lacked the connection setup / CAPA exchange; the re-capture
 (`ds575w-startup+scan.pcapng`) fixed that for the duplex fixture.
 
@@ -103,8 +103,8 @@ mid-session and lacked the connection setup / CAPA exchange; the re-capture
 
 `driveFixture` feeds every printer→host event to the scanner regardless of what
 the scanner emits, so a committed replay fixture's printer→host IS-packet sequence
-must match the scanner's command sequence exactly. Epson's driver runs the same
-three extras as the FF-680W between the LOCK and the init-poll loop — an `EXI*`
+must match the scanner's command sequence exactly. The captured sessions run the
+same three extras as the FF-680W between the LOCK and the init-poll loop — an `EXI*`
 capability query, an extra `STAT` after `FS Z`, and a 12-byte `#D&T` date/time
 PARA — which our shared `esci2Graph` never emits. The committed fixtures have the
 printer→host IS packets these elicit removed (`trim-init-handshake.ts`, role-driven
@@ -145,4 +145,4 @@ colour oracle is tiny because it keeps only host→printer events.)
 Source `.pcap` files (plus the `analyze-init.ts` / `dump-para.ts` /
 `trim-init-handshake.ts` / `count-poll.ts` / `para-head.ts` / `extract-classes.ts`
 / `validate-*.ts` generation + validation helpers and `SOURCE-NOTES.md`) are
-gitignored under `.reference/wireshark-captures/ds-575w/`.
+kept outside the repo.

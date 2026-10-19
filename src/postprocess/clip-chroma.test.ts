@@ -40,9 +40,13 @@ import { measure } from "../test-oracle/oracle.js";
 // The ramp probe below is page-independent: it applies the real LUTs built from
 // whatever white point this scan yields, so it quantifies the injection for
 // this hardware even when the page itself doesn't trip it.
-const DEFAULT_IMAGE = ".reference/scan-quality-oracle/testpage_raw_front.jpeg";
-const IMAGE = path.resolve(process.env.CLIP_DIAG_IMAGE ?? DEFAULT_IMAGE);
-const run = fs.existsSync(IMAGE) ? describe : describe.skip;
+// The raw test page is local-only: CLIP_DIAG_IMAGE names an image directly, else
+// SCAN_QUALITY_ORACLE_DIR (as in oracle.test.ts) supplies the default; neither set, it skips.
+const ORACLE_DIR = process.env.SCAN_QUALITY_ORACLE_DIR;
+const DEFAULT_IMAGE = ORACLE_DIR ? path.join(ORACLE_DIR, "testpage_raw_front.jpeg") : undefined;
+const IMAGE_PATH = process.env.CLIP_DIAG_IMAGE ?? DEFAULT_IMAGE;
+const IMAGE = IMAGE_PATH ? path.resolve(IMAGE_PATH) : "";
+const run = IMAGE && fs.existsSync(IMAGE) ? describe : describe.skip;
 
 /**
  * Injected chroma across a neutral 0..255 ramp, through the production clip:

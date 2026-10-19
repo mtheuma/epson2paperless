@@ -4,12 +4,14 @@ import path from "node:path";
 import sharp from "sharp";
 import { correctDocumentImage } from "./document.js";
 
-// Local-only: the raw ET-4956 test-page JPEG lives under gitignored .reference/.
-// Extract it once from the Frida capture (see .reference/notes/2026-07-08-adf-lines-capture-plan.md).
-const RAW = path.resolve(".reference/scan-quality-oracle/testpage_raw_front.jpeg");
-const EPSON = path.resolve(".reference/scan-quality-oracle/testpage_epson_enhanced_1.jpg");
-const run = fs.existsSync(RAW) ? describe : describe.skip;
-const runPair = fs.existsSync(RAW) && fs.existsSync(EPSON) ? describe : describe.skip;
+// Local-only: the raw ET-4956 test-page JPEG and its reference rendering are not
+// in the repo. Point SCAN_QUALITY_ORACLE_DIR at the folder holding them to run
+// these tests; unset, they skip.
+const ORACLE_DIR = process.env.SCAN_QUALITY_ORACLE_DIR;
+const RAW = ORACLE_DIR ? path.resolve(ORACLE_DIR, "testpage_raw_front.jpeg") : "";
+const EPSON = ORACLE_DIR ? path.resolve(ORACLE_DIR, "testpage_epson_enhanced_1.jpg") : "";
+const run = RAW && fs.existsSync(RAW) ? describe : describe.skip;
+const runPair = RAW && fs.existsSync(RAW) && fs.existsSync(EPSON) ? describe : describe.skip;
 
 async function swatchMean(jpeg: Buffer, cx: number, cy: number): Promise<[number, number, number]> {
   const { data, info } = await sharp(jpeg).raw().toBuffer({ resolveWithObject: true });

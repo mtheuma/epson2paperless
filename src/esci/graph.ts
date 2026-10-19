@@ -32,7 +32,9 @@ import {
   buildEscCleanup,
   buildPageEject,
   parseFsGReply,
+  buildStreamConfigPayload,
   legacyDetectSource,
+  fsFAdfInstalled,
   SOURCE_BYTE,
   buildEscLowerI,
   buildEscE2,
@@ -50,7 +52,7 @@ import { encodeRawGbrToJpeg } from "./raw-to-jpeg.js";
 import { createLogger } from "../logger.js";
 import { passthru } from "./dialects/send.js";
 import { checkLegacyIdentity } from "./dialects/registry.js";
-import type { LegacyDialectEntry } from "./dialects/entry.js";
+import { fsWBlockFor, type LegacyDialectEntry } from "./dialects/entry.js";
 
 const log = createLogger("scanner-esci");
 
@@ -68,18 +70,29 @@ export interface EsciCtx {
   entry: LegacyDialectEntry;
   duplex: boolean;
   forcedSource: Source | null;
-  /** Set in STATUS_2 from the FS F byte (or ctx.forcedSource). */
+  /**
+   * Set in STATUS_2 from the FS F byte (or ctx.forcedSource), or to "flatbed"
+   * in STATUS_1A when the printer reports no ADF.
+   */
   source: Source;
   format: Format;
   jpegQuality: number;
   /** When true, a non-ACK reply to ESC @ triggers an FS Y diagnostic probe. */
   diagnoseProtocol: boolean;
   /**
-   * True once STATUS_2 has actually run and assigned `ctx.source` (either
-   * from the FS F status byte via `legacyDetectSource` or from
-   * `ctx.forcedSource`), or from the start for a fixed-flatbed dialect,
-   * whose source is pinned with no detection to run (see `initialSource`,
-   * applied by the shell and again by an IDENTITY switch). The shell uses
+   * Whether the printer has an ADF fitted, from the session's first FS F reply
+   * (STATUS_1A, via `fsFAdfInstalled`). `null` until that reply arrives;
+   * `false` from the start for a fixed-flatbed dialect, whose setup never
+   * reaches STATUS_1A. The shared states that select a source take their
+   * no-ADF path only on `false`.
+   */
+  adfInstalled: boolean | null;
+  /**
+   * True once the source is settled: in STATUS_1A when the printer reports no
+   * ADF (flatbed), in STATUS_2 otherwise (from the FS F status byte via
+   * `legacyDetectSource`, or from `ctx.forcedSource`), or from the start for
+   * a fixed-flatbed dialect, whose source is pinned with no detection to run
+   * (see `initialSource`). The shell uses
    * this flag — not just the presence of `ctx.source` — to decide whether to
    * fire `LegacyScanSession.onSourceDetected`, because a detecting dialect
    * starts on a `forcedSource ?? "adf-simplex"` placeholder, so a session that
@@ -244,33 +257,46 @@ function xpIdentMeta(name: string, next: string, expectedLen: number): void {
 }
 
 /**
- * The source state a session starts with on `entry`. Fixed-flatbed dialects
- * have no FS F detection to run, so the source is pinned outright; the rest
- * start on a safe default that STATUS_2 overwrites before anything reads it.
+ * The source state a session starts with on `entry`. A fixed-flatbed dialect
+ * (the XP-620, whose setup never reaches a source-selecting state) has no FS F
+ * detection to run, so the source is pinned outright. The rest start on a safe
+ * default that the first FS F reply (STATUS_1A, no ADF fitted) or STATUS_2
+ * overwrites before anything reads it.
  */
 export function initialSource(
   entry: LegacyDialectEntry,
   forcedSource: Source | null,
-): Pick<EsciCtx, "source" | "sourceDetected"> {
+): Pick<EsciCtx, "source" | "sourceDetected" | "adfInstalled"> {
   return entry.sourcePolicy === "fixed-flatbed"
-    ? { source: "flatbed", sourceDetected: true }
-    : { source: forcedSource ?? "adf-simplex", sourceDetected: false };
+    ? { source: "flatbed", sourceDetected: true, adfInstalled: false }
+    : { source: forcedSource ?? "adf-simplex", sourceDetected: false, adfInstalled: null };
 }
 
 /**
- * An ESCI_FORCE_SOURCE the dialect can't service (e.g. the XP-620 has no
- * ADF), as the error that rejects it — rather than letting the wire session
- * desync partway through a command sequence the printer doesn't support.
+ * An ESCI_FORCE_SOURCE a fixed-flatbed dialect can't service (the XP-620 has
+ * no ADF), as the error that rejects it before the session connects. Every
+ * other dialect learns whether an ADF is fitted from the first FS F reply,
+ * and STATUS_1A rejects a forced ADF source there (see noAdfForForcedSource).
  */
 export function unsupportedForcedSource(
   entry: LegacyDialectEntry,
   forcedSource: Source | null,
 ): Error | null {
-  if (!forcedSource || entry.supportedSources.includes(forcedSource)) return null;
-  const supported = entry.supportedSources.join(", ");
+  if (!forcedSource || forcedSource === "flatbed" || entry.sourcePolicy !== "fixed-flatbed") {
+    return null;
+  }
+  return forcedSourceWithoutAdf(forcedSource, `the ${entry.name} dialect is flatbed-only`);
+}
+
+/** A forced ADF source on a printer whose FS F reply says it has no ADF. */
+function noAdfForForcedSource(forcedSource: Source): Error {
+  return forcedSourceWithoutAdf(forcedSource, "the printer reports no ADF fitted");
+}
+
+function forcedSourceWithoutAdf(forcedSource: Source, reason: string): Error {
   return new Error(
-    `ESCI_FORCE_SOURCE=${forcedSource} is not supported by ${entry.name} ` +
-      `(supports: ${supported}). Unset ESCI_FORCE_SOURCE or set it to one of the supported sources.`,
+    `ESCI_FORCE_SOURCE=${forcedSource}, but ${reason}. ` +
+      "Unset ESCI_FORCE_SOURCE or set it to flatbed.",
   );
 }
 
@@ -278,10 +304,12 @@ export function unsupportedForcedSource(
  * Act on what the printer's FS I identity reply says about the dialect in
  * use. A dialect whose setup matches the running one takes the session over
  * (a PID-less trigger reaching an ET-2550); every other outcome is logged and
- * the session continues on `ctx.entry`. Returns an error only when the
- * adopted dialect can't service ESCI_FORCE_SOURCE.
+ * the session continues on `ctx.entry`. The source needs no reset on a
+ * switch: the adopted dialect shares the running one's setup, so it reaches
+ * the first FS F reply, which settles the source as it would have from the
+ * start (registry.test.ts pins that no fixed-flatbed dialect can be adopted).
  */
-function resolveIdentity(ctx: EsciCtx, payload: Buffer): Error | null {
+function resolveIdentity(ctx: EsciCtx, payload: Buffer): void {
   const { productName, firmware } = parseFsIReply(payload);
   const check = checkLegacyIdentity(ctx.entry, productName);
   if (check.kind === "match") {
@@ -294,15 +322,12 @@ function resolveIdentity(ctx: EsciCtx, payload: Buffer): Error | null {
     );
   } else if (check.kind === "switch") {
     const { owner } = check;
-    const forcedError = unsupportedForcedSource(owner, ctx.forcedSource);
-    if (forcedError) return forcedError;
     log.info(
       `Printer identifies as ${productName}, which has its own ${owner.name} dialect — ` +
         `switching from the ${ctx.entry.name} settings`,
       { firmware },
     );
     ctx.entry = owner;
-    Object.assign(ctx, initialSource(owner, ctx.forcedSource));
   } else {
     const owner = check.owner ? `, which has its own ${check.owner.name} dialect` : "";
     log.warn(
@@ -311,7 +336,6 @@ function resolveIdentity(ctx: EsciCtx, payload: Buffer): Error | null {
       { firmware },
     );
   }
-  return null;
 }
 
 /**
@@ -334,8 +358,7 @@ function identityState(name: string, next: string, send: SendSpec<EsciCtx>): voi
           ),
         };
       }
-      const error = resolveIdentity(ctx, packet.payload);
-      if (error) return { error };
+      resolveIdentity(ctx, packet.payload);
       return { next, send };
     }),
   );
@@ -450,7 +473,9 @@ identityState("IDENTITY", "STATUS_1A", sendFsF());
 
 // STATUS_1A: first FS F status reply. In the inter-page loop, byte 0 = 0x81
 // (ADF empty) jumps straight to cleanup; 0x01 means more paper. On initial
-// setup, always proceed to STATUS_1B.
+// setup it is the session's first FS F reply: record whether an ADF is
+// fitted, settle the source as the flatbed when it isn't, and proceed to
+// STATUS_1B.
 g.state(
   "STATUS_1A",
   decision<EsciCtx>((ctx, packet) => {
@@ -458,9 +483,21 @@ g.state(
     if (typeGuard) return typeGuard;
     const lengthGuard = expectLength(packet.payload, 16, "STATUS_1A", "status");
     if (lengthGuard) return lengthGuard;
-    if (ctx.inInterPageLoop && packet.payload[0] === 0x81) {
-      ctx.inInterPageLoop = false;
-      return { next: "CLEANUP_1", send: sendEscCleanup() };
+    if (ctx.inInterPageLoop) {
+      if (packet.payload[0] === 0x81) {
+        ctx.inInterPageLoop = false;
+        return { next: "CLEANUP_1", send: sendEscCleanup() };
+      }
+      return { next: "STATUS_1B", send: sendFsF() };
+    }
+    ctx.adfInstalled = fsFAdfInstalled(packet.payload);
+    if (!ctx.adfInstalled) {
+      if (ctx.forcedSource && ctx.forcedSource !== "flatbed") {
+        return { error: noAdfForForcedSource(ctx.forcedSource) };
+      }
+      log.debug("Printer reports no ADF fitted — scanning from the flatbed");
+      ctx.source = "flatbed";
+      ctx.sourceDetected = true;
     }
     return { next: "STATUS_1B", send: sendFsF() };
   }),
@@ -478,10 +515,10 @@ g.state(
     if (ctx.inInterPageLoop) {
       return { next: "ADF_IDENTITY_A", send: sendFsI() };
     }
-    // Flatbed-only dialects (ET-2550) have no source to select, and their
-    // driver issues no ESC e at all — sending one gets the parameter byte
-    // NAKed. Go straight to the status read the probe would have preceded.
-    if (ctx.entry.sourcePolicy === "fixed-flatbed") {
+    // A printer with no ADF has no source to select, and NAKs the parameter
+    // byte of an ESC e (the ET-2550 does). Go straight to the status read the
+    // probe would have preceded.
+    if (ctx.adfInstalled === false) {
       return { next: "STATUS_2", send: sendFsF() };
     }
     return { next: "SOURCE_ACK1", send: sendEscEPlusByte(PROBE_SOURCE_BYTE) };
@@ -492,6 +529,9 @@ g.state(
 escEThenAck(g, "SOURCE", "STATUS_2", sendFsF());
 
 // STATUS_2: decision on the FS F reply.
+//   - no ADF fitted (STATUS_1A already chose the flatbed) → reset cycle,
+//     whatever byte 0 says
+//   On a printer with an ADF, by byte 0:
 //   - 0x81 → busy / flatbed → reset cycle (RESET_PAREN, send ESC ()
 //   - 0x01 → ADF (duplex/simplex per ctx) → pre-reset probe (ADF_PRESRC, send ESC e + 0x01)
 //   - other → unrecognised, fail with the compatibility-issue message
@@ -504,12 +544,11 @@ g.state(
     if (typeGuard) return typeGuard;
     const lengthGuard = expectLength(packet.payload, 16, "STATUS_2", "status");
     if (lengthGuard) return lengthGuard;
-    // Fixed-flatbed: ctx.source is already pinned (by the shell, or by the
-    // IDENTITY switch that adopted this dialect), and byte-0 detection
-    // must NOT run — the ET-2550 reports 0x01 here (never the WF-3620's 0x81),
-    // which legacyDetectSource would read as an ADF. Its driver runs the reset
-    // cycle unconditionally, so take that path directly.
-    if (ctx.entry.sourcePolicy === "fixed-flatbed") {
+    // No ADF: STATUS_1A already settled the flatbed, and byte-0 detection
+    // must NOT run — a printer without an ADF can report 0x01 here (the
+    // ET-2550 does; never the WF-3620's 0x81), which legacyDetectSource would
+    // read as an ADF. The reset cycle runs unconditionally, so take that path.
+    if (ctx.adfInstalled === false) {
       return { next: "RESET_PAREN", send: passthru(buildEscParen(), 1) };
     }
     const statusByte = packet.payload[0];
@@ -559,7 +598,8 @@ awaitReply(g, "ADF_STATUS_3", ESCI_REPLY, length16, "RESET_PAREN", passthru(buil
 awaitReply(g, "RESET_PAREN", ESCI_REPLY, length1, "RESET_INIT", passthru(buildEscInit(), 1));
 
 // RESET_INIT: ACK for ESC @ → RESET_SRC_ACK1, send ESC e + ctx.source byte.
-// Fixed-flatbed skips that pair too (see STATUS_1B) and goes straight to FS F.
+// A printer with no ADF skips that pair too (see STATUS_1B) and goes straight
+// to FS F.
 g.state(
   "RESET_INIT",
   decision<EsciCtx>((ctx, packet) => {
@@ -568,7 +608,7 @@ g.state(
     if (!isAck(packet.payload)) {
       return { error: new Error("RESET_INIT: expected ESC @ ack") };
     }
-    if (ctx.entry.sourcePolicy === "fixed-flatbed") {
+    if (ctx.adfInstalled === false) {
       return { next: "STATUS_READY", send: sendFsF() };
     }
     return { next: "RESET_SRC_ACK1", send: sendEscEPlusCtxSource };
@@ -673,7 +713,7 @@ g.state("WINDOW_CMD", {
       validate: isAck,
       next: "WINDOW_DATA",
       send: (ctx: EsciCtx) =>
-        passthru(ctx.entry.fswBlock({ source: ctx.source, format: ctx.format }), 1),
+        passthru(fsWBlockFor(ctx.entry, { source: ctx.source, format: ctx.format }), 1),
     },
   },
 });
@@ -715,15 +755,29 @@ g.state(
       return { next: "START_POLL", send: sendFsF() };
     }
     const geom = ctx.entry.raster({ source: ctx.source, format: ctx.format });
+    // The page buffer is sized from the dialect's raster, so a printer whose
+    // FS G layout describes a different page would overflow it or stall.
+    const pageBytes = geom.widthPx * geom.heightPx * 3;
+    const layoutBytes = reply.blockCount * reply.chunkSize + reply.lastBlockBytes;
+    if (layoutBytes !== pageBytes) {
+      return {
+        error: new Error(
+          `START: the printer's FS G block layout (${reply.blockCount} × ${reply.chunkSize} + ` +
+            `${reply.lastBlockBytes} = ${layoutBytes} bytes) doesn't match the ${ctx.entry.name} ` +
+            `${geom.widthPx}×${geom.heightPx} raster (${pageBytes} bytes) — this printer needs ` +
+            `settings of its own; please report it`,
+        ),
+      };
+    }
     ctx.geom = geom;
-    ctx.imageBuffer = Buffer.alloc(geom.widthPx * geom.heightPx * 3);
+    ctx.imageBuffer = Buffer.alloc(pageBytes);
     ctx.imageBufferOffset = 0;
     // Drain proactively here, BEFORE entering IMG_RECEIVING, in case a
     // slow encode let the printer stash the entire next page during
     // PAGE_ENCODING_DRAIN. Without this, IMG_RECEIVING would sit on its
     // deferred queue until the engine timeout (#71). The IMG_RECEIVING
     // drain prelude stays as a backstop for fragmented arrivals.
-    const streamConfig = buildIsPacket(0x2200, ctx.entry.streamConfig(reply, ctx.format));
+    const streamConfig = buildIsPacket(0x2200, buildStreamConfigPayload(reply));
     if (drainDeferredIntoBuffer(ctx, null) === "overflowed") {
       // Bundle stream-config with the flush transition so the overflow
       // path still emits IS-0x2200 — every non-overflow START path

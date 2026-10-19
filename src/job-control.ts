@@ -106,7 +106,8 @@ async function runJobControl(
         socket.destroy();
       }
     } else {
-      socket.destroy(err instanceof Error ? err : undefined);
+      // No error argument: the caller gets it from the throw below.
+      socket.destroy();
     }
     throw err;
   } finally {
@@ -116,11 +117,24 @@ async function runJobControl(
 
 class IsPacketReader {
   private buffer = Buffer.alloc(0);
+  private failure: Error | null = null;
+  private closed = false;
 
   constructor(
     private readonly socket: net.Socket,
     private readonly timeoutMs: number,
-  ) {}
+  ) {
+    // The waits listen only while they wait. These stay for the socket's
+    // lifetime: an error or close in a gap between waits fails the next read
+    // at once, and a late error during teardown can't go uncaught.
+    socket.on("error", (err) => {
+      this.failure ??= err;
+      log.debug("job-control socket error", err);
+    });
+    socket.on("close", () => {
+      this.closed = true;
+    });
+  }
 
   async read(label: string): Promise<IsPacket> {
     while (true) {
@@ -131,6 +145,8 @@ class IsPacketReader {
         return packet;
       }
 
+      if (this.failure) throw new Error(`${label}: ${this.failure.message}`);
+      if (this.closed) throw new Error(`${label}: socket closed before packet arrived`);
       const chunk = await waitForData(this.socket, this.timeoutMs, label);
       this.buffer = Buffer.concat([this.buffer, chunk]);
     }

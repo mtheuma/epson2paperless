@@ -22,7 +22,7 @@ import {
   buildEsci2Command,
   buildParaHeader,
   parseEsci2ReplyHeader,
-  parseTokens,
+  type Esci2ReplyHeader,
 } from "./commands.js";
 import { ackByte, expectIsType } from "../graph-helpers.js";
 import { supportsWireGrayscale, type Dialect } from "./dialects/model-overrides.js";
@@ -90,6 +90,12 @@ export interface Esci2Ctx {
    * are read together. Undefined otherwise.
    */
   preParaStatusReply?: Buffer;
+  /**
+   * The `#nrd` code (BUSY / WUP) of the latest status before PARA while the
+   * printer is busy or warming up, so the wait is logged once per code and
+   * POST_MODE_STAT_DRAIN knows to ask again. Undefined once it is ready.
+   */
+  notReady?: "BUSY" | "WUP";
   /**
    * Set when the init poll stopped early on a non-ACK to FS Y (see
    * INIT_POLL_FS_Y): the cycle it happened on and a preview of the reply.
@@ -652,11 +658,14 @@ g.state(
  * (e.g. a panel cancel) or a transport failure does not. Returns the reason
  * unchanged when the poll ran its full count, or once PARA was accepted. The
  * named error keeps the original's stack frames, since the logger prints the
- * stack but not `cause`.
+ * stack but not `cause`. Nor does a failure while the printer reports it is
+ * busy or warming up.
  */
 export function nameInitPollEarlyStop(ctx: Esci2Ctx, reason: Error): Error {
   const stop = ctx.initPollEarlyStop;
-  if (stop === undefined) return reason;
+  // A session that fails while the printer says it is busy or warming up
+  // already has its cause, which the wait's own error names.
+  if (stop === undefined || ctx.notReady !== undefined) return reason;
   const message =
     `${reason.message} — likely cause: the init poll stopped early after the printer ` +
     `answered FS Y on cycle ${stop.cycle} with a non-ACK (${stop.reply}).`;
@@ -670,7 +679,7 @@ export function nameInitPollEarlyStop(ctx: Esci2Ctx, reason: Error): Error {
 // INIT_POLL_STAT: decision on STAT reply — drain if length>0, else FIN.
 // INIT_POLL_STAT_DRAIN: drains queued status bytes, then sends FIN.
 // The init poll's statuses are not read: the source and the errors both come
-// from the status before PARA (POST_MODE_STAT), as Epson's driver reads them.
+// from the status before PARA (POST_MODE_STAT), the scanner's state at scan time.
 statThenDrain(g, "INIT_POLL", null);
 
 // INIT_POLL_FIN: decision on FIN reply — loop or advance to MODE_SWITCH.
@@ -853,16 +862,15 @@ function warnOnOtherUnitErrors(ctx: Esci2Ctx, warnings: string[]): void {
 
 /**
  * Reads the status reply just before PARA (the reply itself, then its
- * drained body, if any) as Epson's driver reads the scanner's state at scan
- * time: one parse of one reply decides the source, then is judged against
- * it.
+ * drained body, if any) as the scanner's state at scan time: one parse of
+ * one reply decides the source, then is judged against it.
  *
  * A printer with both sources (sourceDetection "pre-para-status") takes
  * its source from the reply (sourceFromStatusErrors): "ADF paper empty"
  * means the flatbed, anything else the ADF. A single-source printer is fixed
  * to its source, which the reply never changes. The ET-2750 relies on that:
- * its STAT replies declare length 0 but pack #--- filler inline, which
- * carries no error and so would read as ADF on flatbed-only hardware. A
+ * having no ADF, its status reply is the 12-byte header and #--- filler,
+ * which carries no error and so would read as ADF on flatbed-only hardware. A
  * session whose INFO advertises no scan area (sourceDetection null) keeps
  * the scanner shell's default, the unit its PARA scans.
  *
@@ -892,15 +900,10 @@ function settlePreParaStatus(
     // The printer named the cause itself, so an early-stopped init poll
     // isn't blamed for it (nameInitPollEarlyStop).
     ctx.initPollEarlyStop = undefined;
-    // ADF paper empty has nothing to clear: the feeder needs the document.
-    const advice =
-      judgement.blocking === "ADF PE"
-        ? "load the document into the ADF and scan again"
-        : "clear it on the printer and scan again";
     return {
       error: new Error(
         `${state}: the printer reported an error before scanning ` +
-          `(${judgement.blocking}) — ${advice}`,
+          `(${judgement.blocking}) — ${errorAdvice(judgement.blocking)}`,
       ),
     };
   }
@@ -908,8 +911,87 @@ function settlePreParaStatus(
   return undefined;
 }
 
-// POST_MODE_STAT: decision on STAT reply, the last before PARA, whose
-// content decides the source and is judged for errors (settlePreParaStatus).
+/** What to do about a printer error, by its unit and code ("ADF PJ"). */
+function errorAdvice(error: string): string {
+  // ADF paper empty has nothing to clear: the feeder needs the document.
+  return error === "ADF PE"
+    ? "load the document into the ADF and scan again"
+    : "clear it on the printer and scan again";
+}
+
+/**
+ * Ends the session when a reply's header block says the scan can't go
+ * ahead, naming why: the scanner is reserved by another client (`#nrd`
+ * RSVD), it requires user authentication (`#nrd` AFEN), or it reports a
+ * header-level error (`#err`), whatever the unit. Busy and warming up
+ * (`#nrd` BUSY / WUP) are not acted on here (POST_MODE_STAT waits them out,
+ * waitWhileNotReady), nor is any other `#nrd` code.
+ */
+function stopOnReplyHeader(
+  ctx: Esci2Ctx,
+  state: string,
+  header: Esci2ReplyHeader,
+): TransitionResult<Esci2Ctx> | undefined {
+  let reason: string;
+  if (header.notReady === "RSVD") {
+    reason =
+      "the scanner is in use by another client (RSVD) — wait for it to finish and scan again";
+  } else if (header.notReady === "AFEN") {
+    reason =
+      "the printer requires user authentication (AFEN), which this service does not " +
+      "support — turn it off on the printer and scan again";
+  } else if (header.error !== null) {
+    reason = `the printer reported an error (${header.error || "#err"}) — ${errorAdvice(header.error)}`;
+  } else {
+    return undefined;
+  }
+  // The printer named the cause itself, so an early-stopped init poll
+  // isn't blamed for it (nameInitPollEarlyStop).
+  ctx.initPollEarlyStop = undefined;
+  return { error: new Error(`${state}: ${reason}`) };
+}
+
+/** How long to wait before asking a busy or warming-up printer for its status again. */
+const NOT_READY_RETRY_MS = 100;
+
+const NOT_READY_WAIT = {
+  BUSY: "the printer reports it is busy (BUSY)",
+  WUP: "the printer reports it is warming up (WUP)",
+} as const;
+
+/**
+ * Records whether the status before PARA says the printer is busy or
+ * warming up (`#nrd` BUSY / WUP), returning the wait's description if so.
+ * Logs at debug when a wait starts or its code changes, not on every retry.
+ */
+function waitWhileNotReady(ctx: Esci2Ctx, header: Esci2ReplyHeader): string | undefined {
+  const code =
+    header.notReady === "BUSY" || header.notReady === "WUP" ? header.notReady : undefined;
+  if (code !== undefined && code !== ctx.notReady) {
+    log.debug(
+      `Printer not ready (${code}): asking for its status again every ${NOT_READY_RETRY_MS} ms until it is`,
+    );
+  }
+  ctx.notReady = code;
+  return code === undefined ? undefined : NOT_READY_WAIT[code];
+}
+
+/** Asks for the status again after the retry interval, as part of the wait. */
+function askAgainWhenReady(ctx: Esci2Ctx): TransitionResult<Esci2Ctx> {
+  return {
+    next: "POST_MODE_STAT",
+    send: buildPassthruPacket(buildEsci2Command("STAT"), ESCI2_REPLY_SIZE),
+    delayMs: NOT_READY_RETRY_MS,
+    wait: NOT_READY_WAIT[ctx.notReady!],
+  };
+}
+
+// POST_MODE_STAT: decision on STAT reply, the last before PARA. Its header
+// block is read first: stopOnReplyHeader ends the session, and a busy or
+// warming-up printer is asked again until it is ready (waitWhileNotReady),
+// the session's timeout from the first such reply at most. The status of a
+// ready printer then decides the source and is judged for errors
+// (settlePreParaStatus).
 // If length>0 → pure-read drain → POST_MODE_STAT_DRAIN.
 // If length===0 → send PARA header + body → PARA.
 g.state(
@@ -921,16 +1003,22 @@ g.state(
     if (header === null) {
       return { error: new Error("POST_MODE_STAT: unparseable reply header") };
     }
-    // The reply's own tail is #--- filler unless the printer put tokens
-    // inline, so it is read too: here when there is no body to drain,
-    // otherwise alongside the body in POST_MODE_STAT_DRAIN.
+    const stopped = stopOnReplyHeader(ctx, "POST_MODE_STAT", header);
+    if (stopped) return stopped;
+    const wait = waitWhileNotReady(ctx, header);
+    // The reply's header block is #--- filler unless the printer put status
+    // tokens inline, so it is read for them too: here when there is no body
+    // to drain, otherwise alongside the body in POST_MODE_STAT_DRAIN. A
+    // not-ready reply's body is drained too, but not read, so not kept.
     if (header.length > 0) {
-      ctx.preParaStatusReply = packet.payload;
+      if (wait === undefined) ctx.preParaStatusReply = packet.payload;
       return {
         next: "POST_MODE_STAT_DRAIN",
         send: buildPurereadPacket(header.length),
+        ...(wait !== undefined ? { wait } : {}),
       };
     }
+    if (wait !== undefined) return askAgainWhenReady(ctx);
     const failed = settlePreParaStatus(ctx, "POST_MODE_STAT", [packet.payload]);
     if (failed) return failed;
     return { next: "PARA", send: buildParaSend(ctx) };
@@ -946,6 +1034,7 @@ g.state(
     if (typeGuard) return typeGuard;
     const reply = ctx.preParaStatusReply ?? Buffer.alloc(0);
     ctx.preParaStatusReply = undefined;
+    if (ctx.notReady !== undefined) return askAgainWhenReady(ctx);
     const failed = settlePreParaStatus(ctx, "POST_MODE_STAT_DRAIN", [reply, packet.payload]);
     if (failed) return failed;
     return { next: "PARA", send: buildParaSend(ctx) };
@@ -967,7 +1056,7 @@ g.state(
     if (header === null || header.cmd !== "PARA") {
       return { error: new Error("PARA: unparseable reply header") };
     }
-    const par = parseTokens(payload.subarray(12)).get("par")?.trim();
+    const par = header.tokens.get("par")?.trim();
     if (par !== "OK") {
       // The hint is only warranted when the wire DPI actually in use is one
       // we haven't verified works on this model — that's the real suspect
@@ -1012,7 +1101,8 @@ g.state("TRDT", {
 });
 
 // IMG_META: decision on IMG reply header.
-// - Parses header; errors on unparseable or #ERR* token.
+// - Parses header; errors on unparseable, on what the header block reports
+//   (stopOnReplyHeader), or on a status-style #ERR token.
 // - Updates ctx.imgChunkSize, ctx.pageSide, ctx.pageEndKind.
 // - Zero-length chunk with page-end: dispatches page-end without going through IMG_DATA.
 // - Zero-length chunk with no page-end: zero-retry path (up to MAX_ZERO_IMG_RETRIES).
@@ -1034,13 +1124,12 @@ g.state(
     if (!header) {
       return { error: new Error("IMG_META: unparseable reply header") };
     }
-    const tokens = parseTokens(packet.payload.subarray(12));
-    for (const key of tokens.keys()) {
-      if (key.startsWith("ERR") || key.startsWith("err")) {
-        return {
-          error: new Error(`IMG_META: printer error token #${key}${tokens.get(key) ?? ""}`),
-        };
-      }
+    const stopped = stopOnReplyHeader(ctx, "IMG_META", header);
+    if (stopped) return stopped;
+    const tokens = header.tokens;
+    // A status-style #ERR token in an image reply ends the scan too.
+    if (tokens.has("ERR")) {
+      return { error: new Error(`IMG_META: printer error token #ERR${tokens.get("ERR")}`) };
     }
     ctx.imgChunkSize = header.length;
     ctx.pageSide = tokens.get("typ") === "IMGB" ? "back" : "front";

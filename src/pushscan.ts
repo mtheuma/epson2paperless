@@ -95,10 +95,31 @@ export interface PushScanInfo {
    */
   duplex: boolean;
   action: PushScanAction;
+  /**
+   * The request's `x-protocol-version` header (`2.00` for most printers,
+   * `3.00` for the NetScanMonitor v3 ones), `2.00` when absent. A v3 request
+   * decides job control and the trigger defaults (see {@link isV3Request}).
+   */
+  protocolVersion: string;
 }
 
-/** Simple regex-based extraction from the SOAP body — no XML parser needed. */
-export function parsePushScanRequest(body: string): PushScanInfo {
+/** The request's `x-protocol-version`, or `2.00` (the pre-v3 value) when absent. */
+export function parseProtocolVersion(headers: string): string {
+  // Horizontal whitespace only: an empty value must not run into the next line.
+  const match = headers.match(/x-protocol-version[ \t]*:[ \t]*(\S+)/i);
+  return match ? match[1] : "2.00";
+}
+
+/** True for a NetScanMonitor v3 request (`x-protocol-version` major version 3). */
+export function isV3Request(protocolVersion: string): boolean {
+  return /^3(?:\.|$)/.test(protocolVersion);
+}
+
+/**
+ * Simple regex-based extraction from the SOAP body — no XML parser needed.
+ * `headers` supplies the protocol version (`2.00` when it has none).
+ */
+export function parsePushScanRequest(body: string, headers: string): PushScanInfo {
   const getId = (tag: string) => {
     const match = body.match(new RegExp(`<${tag}>([^<]*)</${tag}>`));
     return match ? match[1] : null;
@@ -119,6 +140,7 @@ export function parsePushScanRequest(body: string): PushScanInfo {
     ipAddress: getId("IPAddressIn"),
     duplex,
     action,
+    protocolVersion: parseProtocolVersion(headers),
   };
 }
 
@@ -298,8 +320,8 @@ export function createPushScanServer(
     let releaseAdmission: PushScanReleaseHook | undefined;
     let callbackFired = false;
     // True while beforeResponse runs. The hook hands over its release the
-    // moment it reserves, but the reservation must outlive the hook: on the
-    // FF-680W / DS-575W the hook is a job-control transaction that holds the
+    // moment it reserves, but the reservation must outlive the hook: on a v3
+    // printer the hook is a job-control transaction that holds the
     // printer's lock, and releasing on a mid-transaction socket close would
     // admit a webhook scan against a locked printer (daemon) or let one-shot
     // exit inside the transaction (issue #202). sendResponse drops it once
@@ -430,7 +452,7 @@ export function createPushScanServer(
       log.debug("Request body", body);
 
       const kind = parsePushScanRequestKind(body);
-      const info = parsePushScanRequest(body);
+      const info = parsePushScanRequest(body, headers);
       const capabilities = kind === "jobList" ? parseCapabilityIns(body) : [];
 
       // Echo the printer's x-uid into our response so the printer can
@@ -441,10 +463,9 @@ export function createPushScanServer(
       const xuid = xuidMatch ? xuidMatch[1] : "1";
       log.debug(`Echoing x-uid : ${xuid}`);
 
-      // Mirror the printer's own protocol version (2.00 fleet / 3.00 FF-680W)
-      // rather than advertising a fixed version to every device.
-      const verMatch = headers.match(/x-protocol-version\s*:\s*(\S+)/i);
-      const protocolVersion = verMatch ? verMatch[1] : "2.00";
+      // Mirror the printer's own protocol version (2.00 fleet / 3.00 v3
+      // printers) rather than advertising a fixed version to every device.
+      const { protocolVersion } = info;
 
       const sendResponse = (status: "OK" | "ERROR") => {
         // The pre-response hook can run for a few hundred ms (an out-of-band

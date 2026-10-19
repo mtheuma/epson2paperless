@@ -1,8 +1,8 @@
 # ET-2750 replay fixtures
 
 JSONL fixtures used by `src/esci2/scanner.test.ts`'s
-`runEsci2ScanOverPlain` replay test. Generated from gitignored Wireshark
-captures in `.reference/wireshark-captures/et-2750/` via `npm run pcap:extract`.
+`runEsci2ScanOverPlain` replay test. Generated from Wireshark captures kept
+outside the repo, via `npm run pcap:extract`.
 
 | Fixture                         | Source pcap                      | Scenario                       |
 | ------------------------------- | -------------------------------- | ------------------------------ |
@@ -20,7 +20,7 @@ the long-running conversation. Pass `--stream 10` to isolate it:
 
 ```
 TSHARK_PATH="/path/to/tshark" npm run pcap:extract -- \
-  .reference/wireshark-captures/et-2750/flatbed-single-page-pdf.pcapng \
+  /path/to/captures/et-2750/flatbed-single-page-pdf.pcapng \
   10.31.50.61 10.31.50.16 1865 \
   tools/pcap-extract/captures/et-2750/flatbed-single-page-pdf.jsonl \
   --stream 10

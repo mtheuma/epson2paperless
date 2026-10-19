@@ -31,8 +31,8 @@ What you get:
 | **ET-3950**           | ✅&nbsp;Verified     |                                                                                                                               |
 | **ET-4800**           | ✅&nbsp;Verified     | ADF simplex; ESC/I-2 over plain TCP, no TLS                                                                                   |
 | **ET-4950 / ET-4956** | ✅&nbsp;Verified     |                                                                                                                               |
-| **ET-7700**           | ✅&nbsp;Verified     | Flatbed-only hardware                                                                                                         |
-| **ET-8500**           | ✅&nbsp;Verified     | Flatbed-only hardware                                                                                                         |
+| **ET-7700**           | ✅&nbsp;Verified     | Flatbed-only hardware; colours not yet confirmed on hardware                                                                  |
+| **ET-8500**           | ✅&nbsp;Verified     | Flatbed-only hardware; colours not yet confirmed on hardware                                                                  |
 | **ET-15000**          | 🟡&nbsp;Experimental | Flatbed verified; ADF simplex untested                                                                                        |
 | **FF-680W**           | 🟡&nbsp;Experimental | Requires [pairing](docs/BUTTON-ONLY-SCANNERS.md); ADF-only; 200/300 DPI verified                                              |
 | **WF-2845**           | ✅&nbsp;Verified     | ADF simplex ([#178](https://github.com/mtheuma/epson2paperless/issues/178))                                                   |
@@ -44,7 +44,7 @@ What you get:
 | **XP-7100**           | ✅&nbsp;Verified     |                                                                                                                               |
 | Other Epson models    | 🧪&nbsp;Untested     | Try it; the log says whether it uses the generic dialect. Older ESC/I models try the WF-3620 settings                         |
 
-✅ **Verified**: every capability the hardware has is confirmed working on real hardware by someone.
+✅ **Verified**: every capability the hardware has is confirmed working on real hardware by someone. Any caveat in the Notes says what is still unconfirmed.
 
 🟡 **Experimental**: something is still untested; the Notes say what.
 
@@ -56,11 +56,22 @@ Compatibility reports are welcome whether your model works or doesn't. [Open an 
 
 ### Docker (recommended)
 
-Image: **`ghcr.io/mtheuma/epson2paperless`**. Multi-arch (`linux/amd64`, `linux/arm64`). Published to GHCR on every `main` push (`:main`) and every `v*` git tag (`:vX.Y.Z` + `:latest`).
+Image: **`ghcr.io/mtheuma/epson2paperless`**. Multi-arch (`linux/amd64`, `linux/arm64`). Published to GHCR on every `main` push and every `v*` git tag; see the image tags below.
 
 1. In `compose.yaml`, set exactly one of `PRINTER_IP` (fixed IPv4) or `PRINTER_HOSTNAME` (IPv4-resolvable DNS name), and `./output` to wherever you want scans written.
 2. `docker compose up -d`.
 3. Follow the logs: `docker compose logs -f epson2paperless`.
+
+Image tags:
+
+| Tag            | What it is                                                  |
+| -------------- | ----------------------------------------------------------- |
+| `:latest`      | The last final release. A release candidate never moves it. |
+| `:vX.Y.Z`      | One final release, e.g. `:v0.12.0`.                         |
+| `:vX.Y.Z-rc.N` | A release candidate, e.g. `:v1.0.0-rc.1`.                   |
+| `:main`        | The current `main` branch, not yet released.                |
+
+To try a release candidate, set `image:` in `compose.yaml` to its tag, then `docker compose pull && docker compose up -d`. To go back, set it to a final release (e.g. `:v0.12.0`, or `:latest`), undo any settings that only the candidate accepts, and run the same two commands.
 
 Notes:
 
@@ -215,16 +226,16 @@ Each setting's **Scope** column shows which printers it affects: `All`, `Panel` 
 <details>
 <summary>Advanced (leave as default unless you know why)</summary>
 
-| Variable                   | Scope        | Default  | What it does                                                                                                                                                                                                           |
-| -------------------------- | ------------ | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `SCAN_DEST_ID`             | All          | `0x02`   | Keepalive "Scan to Computer" selector. `0x02` is the only working value; others stop the destination appearing. For multiple instances, vary `SCAN_DEST_NAME` instead.                                                 |
-| `LANGUAGE`                 | All          | `en`     | 2-letter locale sent to the printer; no observed user-visible effect.                                                                                                                                                  |
-| `ESCI_FORCE_SOURCE`        | Legacy ESC/I | —        | Diagnostic override when FS F source autodetection misfires. Set to `flatbed`, `adf-simplex`, or `adf-duplex` to bypass the wire-byte detection.                                                                       |
-| `PRINTER_CERT_FINGERPRINT` | ESC/I-2 TLS  | —        | SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`); scans abort on mismatch. **Requires `PRINTER_PROTOCOL=esci2`** — `auto` can't pin reliably and the non-TLS variants have no cert.                      |
-| `DIAGNOSE_PROTOCOL`        | Legacy ESC/I | `false`  | Compatibility-report aid. On a legacy `ESC @` non-ACK, sends one extra `FS Y` probe and aborts with annotated `[diagnose]` log lines. Leave off in normal use.                                                         |
-| `NETSCAN_VERSION`          | All          | `auto`   | Compatibility-triage aid. Forces the discovery keepalive wire format (`2.0` / `3.0`); `auto` picks it from the scanner's announced PID (`3.0` for the FF-680W and DS-575W, else `2.0`). Leave on `auto` in normal use. |
-| `SHUTDOWN_TIMEOUT_MS`      | All          | `120000` | ms to wait for an in-flight scan, or a panel press still being answered, to finish on `SIGINT`/`SIGTERM` before forcing shutdown. Must cover a full multi-page ADF scan; Docker's `stop_grace_period` must exceed it.  |
-| `ESCI2_TIMEOUT_MS`         | ESC/I-2      | `60000`  | ms to wait for each printer reply during an ESC/I-2 scan before aborting. Raise it if a slow Wi-Fi printer times out while warming up.                                                                                 |
+| Variable                   | Scope        | Default  | What it does                                                                                                                                                                                                                                           |
+| -------------------------- | ------------ | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `SCAN_DEST_ID`             | All          | `0x02`   | Keepalive "Scan to Computer" selector. `0x02` is the only working value; others stop the destination appearing. For multiple instances, vary `SCAN_DEST_NAME` instead.                                                                                 |
+| `LANGUAGE`                 | All          | `en`     | 2-letter locale sent to the printer; no observed user-visible effect.                                                                                                                                                                                  |
+| `ESCI_FORCE_SOURCE`        | Legacy ESC/I | —        | Diagnostic override when FS F source autodetection misfires. Set to `flatbed`, `adf-simplex`, or `adf-duplex` to bypass the wire-byte detection.                                                                                                       |
+| `PRINTER_CERT_FINGERPRINT` | ESC/I-2 TLS  | —        | SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`); scans abort on mismatch. **Requires `PRINTER_PROTOCOL=esci2`** — `auto` can't pin reliably and the non-TLS variants have no cert.                                                      |
+| `DIAGNOSE_PROTOCOL`        | Legacy ESC/I | `false`  | Compatibility-report aid. On a legacy `ESC @` non-ACK, sends one extra `FS Y` probe and aborts with annotated `[diagnose]` log lines. Leave off in normal use.                                                                                         |
+| `NETSCAN_VERSION`          | All          | `auto`   | Compatibility-triage aid. Forces the discovery keepalive wire format (`2.0` / `3.0`); `auto` follows the scanner's announcement (`3.0` when it asks for `Ver`), else its PID; the FF-680W and DS-575W always get `3.0`. Leave on `auto` in normal use. |
+| `SHUTDOWN_TIMEOUT_MS`      | All          | `120000` | ms to wait for an in-flight scan, or a panel press still being answered, to finish on `SIGINT`/`SIGTERM` before forcing shutdown. Must cover a full multi-page ADF scan; Docker's `stop_grace_period` must exceed it.                                  |
+| `ESCI2_TIMEOUT_MS`         | ESC/I-2      | `60000`  | ms to wait for each printer reply during an ESC/I-2 scan, and for a busy or warming-up printer to get ready, before aborting. Raise it if a slow Wi-Fi printer times out while warming up.                                                             |
 
 </details>
 

@@ -234,7 +234,28 @@ export type DecisionFn<Ctx> = (
  * keeps decision call sites aligned with static-transition call sites.
  */
 export type TransitionResult<Ctx> =
-  | { next: string; send?: SendSpec<Ctx> | SendSpec<Ctx>[]; flushPage?: PageFlush }
+  | {
+      next: string;
+      send?: SendSpec<Ctx> | SendSpec<Ctx>[];
+      flushPage?: PageFlush;
+      /**
+       * Writes `send` and enters `next` only after this many ms. Packets
+       * that arrive meanwhile are held for `next`, and the rolling timeout
+       * is off until `next` is entered. A session that ends during the
+       * delay sends nothing.
+       */
+      delayMs?: number;
+      /**
+       * Marks the transition as part of a wait for the printer, described
+       * by this text ("the printer reports it is busy (BUSY)"). The wait
+       * has its own deadline, the run's timeout, counted from its first
+       * transition: replies that keep restarting the rolling timeout don't
+       * extend it. The first transition without `wait` ends the wait. Past
+       * the deadline the session fails, naming the state the wait began in
+       * and the latest description.
+       */
+      wait?: string;
+    }
   | { error: Error };
 
 export interface PageFlush {
@@ -447,6 +468,13 @@ export async function runScanSession<Ctx>(
   // Set during a flushPage barrier — pauses the pump while encode/persist runs.
   let paused = false;
   let timeoutTimer: ReturnType<typeof setTimeout> | null = null;
+  // The open wait's deadline (TransitionResult.wait) and its latest description.
+  let waitDeadline: ReturnType<typeof setTimeout> | null = null;
+  let waitReason = "";
+  // Ends a pending delayed send early (TransitionResult.delayMs) once the session settles.
+  let cancelDelay: (() => void) | null = null;
+  // Wakes a wait for more bytes (moreData) on the next data event or on settle.
+  let wakeOnData: (() => void) | null = null;
 
   const recvChunks: Buffer[] = [];
   let recvBytes = 0;
@@ -508,10 +536,66 @@ export async function runScanSession<Ctx>(
       }
     }
 
+    function clearWaitDeadline(): void {
+      if (waitDeadline) {
+        clearTimeout(waitDeadline);
+        waitDeadline = null;
+      }
+    }
+
+    /**
+     * Opens, extends or ends the wait (TransitionResult.wait). The deadline
+     * is armed once, by the wait's first transition, and names the state
+     * that transition left from: the one the printer was stuck in.
+     */
+    function trackWait(wait: string | undefined): void {
+      if (wait === undefined) {
+        clearWaitDeadline();
+        return;
+      }
+      waitReason = wait;
+      if (waitDeadline) return;
+      const stuckIn = currentState;
+      waitDeadline = setTimeout(() => {
+        const reason = new Error(
+          `Timeout in state ${stuckIn} — still waiting after ${timeoutMs}ms: ${waitReason}`,
+        );
+        settle({ ok: false, reason: protocolFailure(reason), finalCtx: ctx });
+      }, timeoutMs);
+    }
+
+    /** Resolves after `ms`, or as soon as the session settles. */
+    function delay(ms: number): Promise<void> {
+      return new Promise((resolve) => {
+        const timer = setTimeout(() => {
+          cancelDelay = null;
+          resolve();
+        }, ms);
+        cancelDelay = () => {
+          clearTimeout(timer);
+          cancelDelay = null;
+          resolve();
+        };
+      });
+    }
+
+    /** Resolves on the next data event, or as soon as the session settles. */
+    function moreData(): Promise<void> {
+      return new Promise((resolve) => {
+        wakeOnData = () => {
+          wakeOnData = null;
+          resolve();
+        };
+      });
+    }
+
     const settle = (result: RunScanSessionResult<Ctx>) => {
       if (settled) return; // idempotent — close handler may also call this
       settled = true;
       clearTimeoutTimer(); // (T15)
+      clearWaitDeadline();
+      cancelDelay?.();
+      wakeOnData?.();
       // Always destroy — final resource cleanup is the engine's job.
       // Adapters that want to no-op a redundant destroy after a polite
       // end() (DONE path) do so via their own clean-close state
@@ -584,6 +668,8 @@ export async function runScanSession<Ctx>(
         // timer fires "Timeout in state DONE" mid-finalize, races settle, and
         // rms sessionTempDir while finalizeSession is still reading it.
         clearTimeoutTimer();
+        // Same for an open wait's deadline.
+        clearWaitDeadline();
         // Polite close request; peer may ACK late or never. Real sockets
         // can throw on already-destroyed; swallow so doFinalize still runs.
         try {
@@ -676,6 +762,7 @@ export async function runScanSession<Ctx>(
     transport.on("data", (chunk: Buffer) => {
       recvChunks.push(chunk);
       recvBytes += chunk.length;
+      wakeOnData?.();
       void tryDispatch();
     });
 
@@ -742,6 +829,20 @@ export async function runScanSession<Ctx>(
       } finally {
         dispatching = false;
       }
+    }
+
+    /** The IS type of the packet at the head of recvChunks, once its header is in. */
+    function headType(): number | null {
+      if (recvBytes < IS_HEADER_SIZE) return null;
+      const head =
+        recvChunks[0].length >= IS_HEADER_SIZE
+          ? recvChunks[0]
+          : Buffer.concat(recvChunks, recvBytes);
+      return head.readUInt16BE(2);
+    }
+
+    function hasGlobalAbortHandler(type: number | null): boolean {
+      return type !== null && graph.globalAbortHandlers?.[type] !== undefined;
     }
 
     /**
@@ -873,23 +974,24 @@ export async function runScanSession<Ctx>(
     }
 
     /**
-     * Applies a resolved transition: handles the flushPage barrier (encode +
-     * persist while pump is paused), then writes any staged send bytes and
-     * advances currentState. On the non-flush path writes and enters state
-     * immediately. Accepts both StaticTransition and TransitionResult shapes —
-     * resolveSend handles both uniformly.
+     * Applies a resolved transition: opens, extends or ends the wait
+     * (trackWait), handles the flushPage barrier (encode + persist while
+     * pump is paused), waits out any delayMs, then writes the send bytes and
+     * advances currentState. Without a barrier or a delay it writes and
+     * enters the state immediately. Accepts both StaticTransition and
+     * TransitionResult shapes — resolveSend handles both uniformly.
      */
     async function applyTransition(t: {
       next: string;
       send?: SendSpec<Ctx> | SendSpec<Ctx>[];
       flushPage?: PageFlush;
+      delayMs?: number;
+      wait?: string;
     }): Promise<void> {
+      trackWait(t.wait);
       if (t.flushPage) {
         // Spec §3.5 barrier order:
         // pause → encode/persist → unpause → write staged send → enter staged next.
-        const stagedNext = t.next;
-        const stagedSend = t.send;
-
         paused = true;
         clearTimeoutTimer(); // suspend timeout during barrier (spec §3.6)
 
@@ -940,18 +1042,39 @@ export async function runScanSession<Ctx>(
         }
 
         paused = false;
-        // Apply staged send after barrier resolves (spec §3.5 step 8).
-        writeAll(resolveSend(stagedSend));
-        enterState(stagedNext);
-        // Do NOT call tryDispatch() recursively. The outer pump loop is awaiting
-        // this very applyTransition call — the next loop pass picks up any
-        // buffered packets and dispatches them with the new state.
-        return;
+        // The staged send is applied below, after the barrier resolves (spec §3.5 step 8).
       }
 
-      // Non-flush path — write and enter state immediately.
+      if (t.delayMs !== undefined && t.delayMs > 0) {
+        // The pump stays inside this call, so packets arriving meanwhile
+        // are buffered for `next`. The rolling timeout re-arms on entering it.
+        clearTimeoutTimer();
+        await delay(t.delayMs);
+        if (settled) return;
+        // A protocol meta-event (e.g. a panel cancel) that arrived during the
+        // delay is handled before the delayed send goes out; other packets
+        // stay buffered for `next`.
+        while (!settled && hasGlobalAbortHandler(headType())) {
+          const packet = tryParseHead();
+          if (packet) {
+            await dispatchPacket(packet);
+            continue;
+          }
+          if (settled) break; // tryParseHead failed the session (framing)
+          // Its payload is still arriving: wait for it under the rolling
+          // timeout rather than send ahead of it.
+          armTimeout();
+          await moreData();
+          clearTimeoutTimer();
+        }
+        if (settled) return;
+      }
+
       writeAll(resolveSend(t.send));
       enterState(t.next);
+      // Do NOT call tryDispatch() recursively. The outer pump loop is awaiting
+      // this very applyTransition call — the next loop pass picks up any
+      // buffered packets and dispatches them with the new state.
     }
 
     // Enter the initial state. This fires onEnter for the initial state

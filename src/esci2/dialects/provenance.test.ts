@@ -5,10 +5,16 @@
 
 import { readFileSync } from "node:fs";
 import { describe, it, expect } from "vitest";
-import { MODEL_OVERRIDES, type Evidence, type ModelOverride } from "./model-overrides.js";
+import {
+  MODEL_OVERRIDES,
+  type ColourEvidence,
+  type Evidence,
+  type ModelOverride,
+} from "./model-overrides.js";
 import {
   colourSettingsHash,
   provenanceProblems,
+  provisionalColourModels,
   verifiedReadmeModels,
 } from "../test-support/provenance.js";
 
@@ -29,6 +35,8 @@ function withOverride(model: string, change: (o: ModelOverride) => ModelOverride
   if (at < 0) throw new Error(`no override records ${model}`);
   return MODEL_OVERRIDES.map((o, i) => (i === at ? change(o) : o));
 }
+
+const ET4800_CAPTURE = "tools/pcap-extract/captures/et-4800/flatbed-jpg.jsonl";
 
 const overrideFor = (model: string): ModelOverride =>
   MODEL_OVERRIDES.find((o) => o.provenance.models.includes(model))!;
@@ -113,19 +121,19 @@ describe("provenance", () => {
 
   describe("colour", () => {
     it("fails when a ✅ model's colour bytes change without new evidence", () => {
-      // The ET-8500's colour fix (an identity matrix) with only its old reports.
-      const fixed = withOverride("ET-8500", (o) => ({
+      // The ET-4800 sending the identity matrix with only its old capture.
+      const fixed = withOverride("ET-4800", (o) => ({
         ...o,
-        cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
+        cmxClass: { jpg: "identity-um08", pdf: "identity-um08" },
       }));
       expect(provenanceProblems(README, fixed, UNPLACED)).toEqual([
-        expect.stringMatching(/^ET-8500 .*: no colour evidence vouches for its current colour/),
+        expect.stringMatching(/^ET-4800 .*: no colour evidence vouches for its current colour/),
       ]);
     });
 
     it("passes again once evidence vouches for the new bytes", () => {
-      const fixed = withOverride("ET-8500", (o) => {
-        const next = { ...o, cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" } as const };
+      const fixed = withOverride("ET-4800", (o) => {
+        const next = { ...o, cmxClass: { jpg: "identity-um08", pdf: "identity-um08" } as const };
         const scan: (typeof o.provenance.colour)[number] = {
           kind: "reporter-scan",
           link: { issue: 120 },
@@ -137,21 +145,158 @@ describe("provenance", () => {
     });
 
     it("is never satisfied by an own capture or an inherited setting", () => {
-      // The ET-7700's colour without its reporter's compatibility-page scan.
-      const unscanned = withOverride("ET-7700", (o) => ({
+      // The ET-4800's colour resting only on a capture of this service's own
+      // traffic and an inherited setting, both vouching for its current bytes.
+      const unscanned = withOverride("ET-4800", (o) => {
+        const vouchesFor = colourSettingsHash(o);
+        const colour: ColourEvidence[] = [
+          { kind: "own-capture", link: { fixture: ET4800_CAPTURE }, vouchesFor },
+          { kind: "inherited:ET-4950", link: { pr: 121 }, vouchesFor },
+        ];
+        return { ...o, provenance: { ...o.provenance, colour } };
+      });
+      expect(provenanceProblems(README, unscanned, UNPLACED)).toEqual([
+        expect.stringMatching(/^ET-4800 .*: no colour evidence vouches/),
+      ]);
+    });
+  });
+
+  describe("provisional colour", () => {
+    const XP7100_CAPTURE = "tools/pcap-extract/captures/xp-7100/jpg-flatbed.jsonl";
+
+    /**
+     * The ET-4800, whose colour is confirmed, given the XP-7100's colour pair
+     * and resting only on that inheritance and provisional evidence for those
+     * bytes: its capture vouched for the old ones.
+     */
+    const provisionalEt4800 = (): ModelOverride[] =>
+      withOverride("ET-4800", (o) => {
+        const { gmm, gammaClass, cmxClass } = overrideFor("XP-7100");
+        const next = { ...o, gmm, gammaClass, cmxClass };
+        const hash = colourSettingsHash(next);
+        return {
+          ...next,
+          provenance: {
+            ...o.provenance,
+            colour: [
+              ...o.provenance.colour.filter((e) => !e.kind.startsWith("inherited:")),
+              { kind: "inherited:XP-7100", link: { fixture: XP7100_CAPTURE }, vouchesFor: hash },
+              { kind: "provisional", link: { fixture: XP7100_CAPTURE }, vouchesFor: hash },
+            ],
+          },
+        };
+      });
+
+    /** The README with a Notes cell gaining the caveat, by model row. */
+    const withCaveat = (readme: string, row: string): string =>
+      readme
+        .split("\n")
+        .map((line) => {
+          if (!line.startsWith(`| **${row}**`)) return line;
+          const cells = line.split("|");
+          cells[3] = ` ${cells[3].trim()}; colours not yet confirmed on hardware `;
+          return cells.join("|");
+        })
+        .join("\n");
+
+    it("pins the ✅ models whose colour rests only on provisional evidence", () => {
+      // Adding a model here, or removing one, is a deliberate change: each
+      // listed model carries the README caveat until a scan or capture
+      // supersedes its provisional evidence.
+      expect(provisionalColourModels(README, MODEL_OVERRIDES)).toEqual(["ET-7700", "ET-8500"]);
+    });
+
+    it("satisfies the ✅ colour check, and is reported as provisional", () => {
+      const overrides = provisionalEt4800();
+      expect(provisionalColourModels(README, overrides)).toEqual(["ET-4800", "ET-7700", "ET-8500"]);
+      expect(provenanceProblems(withCaveat(README, "ET-4800"), overrides, UNPLACED)).toEqual([]);
+    });
+
+    it("fails for a provisional model whose README Notes lack the caveat", () => {
+      expect(provenanceProblems(README, provisionalEt4800(), UNPLACED)).toEqual([
+        'ET-4800: its colour rests only on provisional evidence, but its README Notes lack "colours not yet confirmed on hardware"',
+      ]);
+    });
+
+    it("is superseded by a reporter scan of the same bytes", () => {
+      const scanned = provisionalEt4800().map((o) => {
+        if (!o.provenance.models.includes("ET-4800")) return o;
+        const scan = {
+          kind: "reporter-scan",
+          link: { issue: 120 },
+          vouchesFor: colourSettingsHash(o),
+        } as const;
+        return { ...o, provenance: { ...o.provenance, colour: [...o.provenance.colour, scan] } };
+      });
+      expect(provisionalColourModels(README, scanned)).toEqual(["ET-7700", "ET-8500"]);
+      expect(provenanceProblems(README, scanned, UNPLACED)).toEqual([]);
+    });
+
+    it("must sit next to an inherited setting and link its capture", () => {
+      const at = (colour: ModelOverride["provenance"]["colour"]): ModelOverride[] =>
+        withOverride("ET-4800", (o) => ({ ...o, provenance: { ...o.provenance, colour } }));
+      const hash = colourSettingsHash(overrideFor("ET-4800"));
+      const report = { kind: "reporter-report", link: { issue: 120 }, vouchesFor: hash } as const;
+      expect(
+        provenanceProblems(
+          README,
+          at([
+            report,
+            { kind: "provisional", link: { fixture: XP7100_CAPTURE }, vouchesFor: hash },
+          ]),
+          UNPLACED,
+        ),
+      ).toEqual([
+        "ET-4800 (ESC/I-2 over plain TCP): its provisional colour evidence sits next to no inherited setting",
+      ]);
+      expect(
+        provenanceProblems(
+          README,
+          at([
+            report,
+            { kind: "inherited:ET-4950", link: { pr: 121 }, vouchesFor: hash },
+            { kind: "provisional", link: { pr: 121 }, vouchesFor: hash },
+          ]),
+          UNPLACED,
+        ),
+      ).toEqual([
+        "ET-4800 (ESC/I-2 over plain TCP): its provisional colour evidence links no capture (a fixture)",
+      ]);
+    });
+
+    it("is evidence for colour only", () => {
+      const misplaced = withOverride("ET-2810", (o) => ({
         ...o,
         provenance: {
           ...o.provenance,
-          colour: o.provenance.colour.filter((e) => e.kind !== "reporter-scan"),
+          window: [
+            ...o.provenance.window,
+            { kind: "provisional", link: { fixture: XP7100_CAPTURE } },
+          ],
+          siblings: { "XP-3200": [{ kind: "provisional", link: { fixture: XP7100_CAPTURE } }] },
         },
       }));
-      expect(overrideFor("ET-7700").provenance.colour.map((e) => e.kind)).toEqual([
-        "inherited:ET-8500",
-        "own-capture",
-        "reporter-scan",
+      expect(provenanceProblems(README, misplaced, UNPLACED)).toEqual([
+        "XP-3200: shares the ET-2810 / XP-3200 (ESC/I-2) override but has no report of its own",
+        "ET-2810 / XP-3200 (ESC/I-2): window carries provisional evidence, which is for colour only",
+        "ET-2810 / XP-3200 (ESC/I-2): XP-3200 carries provisional evidence, which is for colour only",
       ]);
-      expect(provenanceProblems(README, unscanned, UNPLACED)).toEqual([
-        expect.stringMatching(/^ET-7700 .*: no colour evidence vouches/),
+    });
+
+    it("doesn't vouch for colour bytes changed after it was recorded", () => {
+      const changed = provisionalEt4800().map((o) =>
+        o.provenance.models.includes("ET-4800") ? { ...o, gmm: "UG10" } : o,
+      );
+      expect(provisionalColourModels(README, changed)).toEqual(["ET-7700", "ET-8500"]);
+      expect(provenanceProblems(README, changed, UNPLACED)).toEqual([
+        expect.stringMatching(/^ET-4800 .*: no colour evidence vouches for its current colour/),
+      ]);
+    });
+
+    it("fails for a caveat left on a model whose colour is confirmed", () => {
+      // A reporter scan supersedes the provisional entry; the caveat goes with it.
+      expect(provenanceProblems(withCaveat(README, "ET-2750"), MODEL_OVERRIDES, UNPLACED)).toEqual([
+        'ET-2750: its README Notes say "colours not yet confirmed on hardware", but its colour isn\'t provisional',
       ]);
     });
   });
@@ -202,7 +347,7 @@ describe("provenance", () => {
 
     it("leaves the legacy ESC/I models to their own dialects", () => {
       const legacyOnly = provenanceProblems(
-        "| **WF-3620** | ✅&nbsp;Verified | |\n| **XP-620** | ✅&nbsp;Verified | |\n| **ET-2550** | ✅&nbsp;Verified | |",
+        "| **WF-3620** | ✅&nbsp;Verified | |\n| **XP-620** | ✅&nbsp;Verified | |\n| **ET-2550** | ✅&nbsp;Verified | Colours not yet confirmed on hardware |",
         MODEL_OVERRIDES,
         {},
       );

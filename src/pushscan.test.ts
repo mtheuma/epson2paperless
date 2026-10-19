@@ -3,6 +3,7 @@ import type { AddressInfo } from "node:net";
 import { describe, it, expect, vi } from "vitest";
 import {
   buildPushScanResponse,
+  isV3Request,
   parsePushScanRequest,
   createPushScanServer,
   parseCapabilityIns,
@@ -72,12 +73,42 @@ describe("buildPushScanResponse", () => {
   });
 });
 
+describe("isV3Request", () => {
+  it.each([
+    ["3.00", true],
+    ["3.0", true],
+    ["3", true],
+    ["2.00", false],
+    ["1.00", false],
+    ["30.0", false],
+    ["", false],
+  ])("%j → %s", (version, expected) => {
+    expect(isV3Request(version)).toBe(expected);
+  });
+});
+
+describe("parsePushScanRequest protocol version", () => {
+  const soap = `<s:Body><p:PushScan><PushScanIDIn>01</PushScanIDIn></p:PushScan></s:Body>`;
+
+  it.each([
+    ["x-protocol-version : 3.00", "3.00"],
+    ["X-Protocol-Version: 3.00", "3.00"],
+    ["x-uid : 4", "2.00"],
+    // An empty value must not borrow the next header's text.
+    ["x-protocol-version :\r\nx-uid : 3", "2.00"],
+  ])("%j → %s", (headers, expected) => {
+    expect(
+      parsePushScanRequest(soap, `POST /PushScan HTTP/1.0\r\n${headers}`).protocolVersion,
+    ).toBe(expected);
+  });
+});
+
 describe("parsePushScanRequest", () => {
   const body = (id: string) =>
     `<?xml version="1.0" ?><s:Envelope xmlns:s="http://www.w3.org/2003/05/soap-envelope"><s:Body><p:PushScan xmlns:p="http://schema.epson.net/EpsonNet/Scan/2004/pushscan"><ProductNameIn>PID 11D1</ProductNameIn><IPAddressIn>C0A8013A</IPAddressIn><PushScanIDIn>${id}</PushScanIDIn></p:PushScan></s:Body></s:Envelope>`;
 
   it("extracts PushScanIDIn and classifies '01' as simplex", () => {
-    const result = parsePushScanRequest(body("01"));
+    const result = parsePushScanRequest(body("01"), "");
     expect(result.pushScanId).toBe("01");
     expect(result.productName).toBe("PID 11D1");
     expect(result.ipAddress).toBe("C0A8013A");
@@ -89,33 +120,33 @@ describe("parsePushScanRequest", () => {
     // the probe hint) exact-matches on canonical `PID XXXX`, so casing and
     // spacing variance is absorbed here, once.
     const soap = `<s:Body><p:PushScan><ProductNameIn>  pid 11d1 </ProductNameIn><PushScanIDIn>01</PushScanIDIn></p:PushScan></s:Body>`;
-    expect(parsePushScanRequest(soap).productName).toBe("PID 11D1");
+    expect(parsePushScanRequest(soap, "").productName).toBe("PID 11D1");
   });
 
   it("passes a non-PID ProductNameIn through raw for diagnosability", () => {
     const soap = `<s:Body><p:PushScan><ProductNameIn>ET-7700 Series</ProductNameIn><PushScanIDIn>01</PushScanIDIn></p:PushScan></s:Body>`;
-    expect(parsePushScanRequest(soap).productName).toBe("ET-7700 Series");
+    expect(parsePushScanRequest(soap, "").productName).toBe("ET-7700 Series");
   });
 
   it("classifies '11' as duplex", () => {
-    const result = parsePushScanRequest(body("11"));
+    const result = parsePushScanRequest(body("11"), "");
     expect(result.pushScanId).toBe("11");
     expect(result.duplex).toBe(true);
   });
 
   it("classifies '02' (simplex PDF, unvalidated) as simplex", () => {
     // Digit 1 isn't decoded in this spec; only digit 0 matters for duplex.
-    const result = parsePushScanRequest(body("02"));
+    const result = parsePushScanRequest(body("02"), "");
     expect(result.duplex).toBe(false);
   });
 
   it("classifies '12' (duplex PDF, unvalidated) as duplex", () => {
-    const result = parsePushScanRequest(body("12"));
+    const result = parsePushScanRequest(body("12"), "");
     expect(result.duplex).toBe(true);
   });
 
   it("returns duplex=false and nulls when all fields are missing (silent)", () => {
-    const result = parsePushScanRequest("<xml>nothing</xml>");
+    const result = parsePushScanRequest("<xml>nothing</xml>", "");
     expect(result.pushScanId).toBeNull();
     expect(result.productName).toBeNull();
     expect(result.ipAddress).toBeNull();
@@ -123,7 +154,7 @@ describe("parsePushScanRequest", () => {
   });
 
   it("defaults to duplex=false for empty PushScanIDIn (warning-worthy)", () => {
-    const result = parsePushScanRequest(body(""));
+    const result = parsePushScanRequest(body(""), "");
     // The XML regex matches <PushScanIDIn></PushScanIDIn> → empty string,
     // not null. This is a malformed-ish case and should warn, but we don't
     // assert on the warning log here — duplex=false is the observable contract.
@@ -132,46 +163,47 @@ describe("parsePushScanRequest", () => {
   });
 
   it("defaults to duplex=false for unexpected first character 'X'", () => {
-    const result = parsePushScanRequest(body("X1"));
+    const result = parsePushScanRequest(body("X1"), "");
     expect(result.pushScanId).toBe("X1");
     expect(result.duplex).toBe(false);
   });
 
   it("sets action='jpg' for PushScanIDIn='01'", () => {
-    const result = parsePushScanRequest(body("01"));
+    const result = parsePushScanRequest(body("01"), "");
     expect(result.action).toBe("jpg");
   });
 
   it("sets action='pdf' for PushScanIDIn='02'", () => {
-    const result = parsePushScanRequest(body("02"));
+    const result = parsePushScanRequest(body("02"), "");
     expect(result.action).toBe("pdf");
   });
 
   it("sets action='preview' for PushScanIDIn='04'", () => {
-    const result = parsePushScanRequest(body("04"));
+    const result = parsePushScanRequest(body("04"), "");
     expect(result.action).toBe("preview");
   });
 
   it("sets action='jpg' and duplex=true for PushScanIDIn='11'", () => {
-    const result = parsePushScanRequest(body("11"));
+    const result = parsePushScanRequest(body("11"), "");
     expect(result.duplex).toBe(true);
     expect(result.action).toBe("jpg");
   });
 
   it("sets action='pdf' and duplex=true for PushScanIDIn='12'", () => {
-    const result = parsePushScanRequest(body("12"));
+    const result = parsePushScanRequest(body("12"), "");
     expect(result.duplex).toBe(true);
     expect(result.action).toBe("pdf");
   });
 
   it("sets action='unknown' for missing PushScanIDIn", () => {
-    const result = parsePushScanRequest("<xml>nothing</xml>");
+    const result = parsePushScanRequest("<xml>nothing</xml>", "");
     expect(result.action).toBe("unknown");
   });
 
   it("extracts FF-680W JobNumberIn when PushScanIDIn is absent", () => {
     const result = parsePushScanRequest(
       `<s:Body><p:PushScan><ProductNameIn>PID 016B</ProductNameIn><JobNumberIn>0</JobNumberIn></p:PushScan></s:Body>`,
+      "",
     );
     expect(result.productName).toBe("PID 016B");
     expect(result.pushScanId).toBeNull();
@@ -180,7 +212,7 @@ describe("parsePushScanRequest", () => {
   });
 
   it("sets action='unknown' for too-short PushScanIDIn", () => {
-    const result = parsePushScanRequest(body("0"));
+    const result = parsePushScanRequest(body("0"), "");
     expect(result.action).toBe("unknown");
   });
 });
@@ -617,6 +649,57 @@ describe("createPushScanServer", () => {
     client.destroy();
     server.close();
   });
+
+  // Job control and the trigger defaults key on the request's version, so the
+  // hook and the callback both have to see it.
+  it.each([
+    ["3.00", "x-protocol-version: 3.00\r\n"],
+    ["2.00", ""],
+  ])(
+    "hands the request's protocol version (%s) to the hook and the callback",
+    async (expected, versionHeader) => {
+      const seen: string[] = [];
+      let fired!: () => void;
+      const callbackFired = new Promise<void>((r) => (fired = r));
+      const server = createPushScanServer(
+        0,
+        (info) => {
+          seen.push(`callback ${info.protocolVersion}`);
+          fired();
+        },
+        {
+          beforeResponse: ({ info }) => {
+            seen.push(`hook ${info.protocolVersion}`);
+          },
+        },
+      );
+      await new Promise<void>((r) => {
+        if (server.listening) r();
+        else server.once("listening", () => r());
+      });
+      const port = (server.address() as AddressInfo).port;
+
+      const body = buildSoapBody("01", "PID 016B", "C0A80A08");
+      const request =
+        `POST /PushScan HTTP/1.0\r\n` +
+        `Content-Length: ${Buffer.byteLength(body, "utf-8")}\r\n` +
+        versionHeader +
+        `\r\n` +
+        body;
+
+      const client = net.createConnection(port, "127.0.0.1");
+      await new Promise<void>((r) => client.once("connect", () => r()));
+      const responsePromise = readFullHttpResponse(client);
+      client.write(request);
+      await responsePromise;
+      await callbackFired;
+
+      expect(seen).toEqual([`hook ${expected}`, `callback ${expected}`]);
+
+      client.destroy();
+      server.close();
+    },
+  );
 
   it("falls back to x-uid : 1 when request has no x-uid header", async () => {
     const server = createPushScanServer(0, () => {});

@@ -1,8 +1,8 @@
 # ET-7700 replay fixtures
 
 JSONL fixtures used by `src/esci2/scanner.test.ts`'s
-`runEsci2ScanOverPlain` replay test. Generated from gitignored Wireshark
-captures in `.reference/wireshark-captures/et-7700/` via `npm run pcap:extract`.
+`runEsci2ScanOverPlain` replay test. Generated from Wireshark captures kept
+outside the repo, via `npm run pcap:extract`.
 
 | Fixture             | Source pcap               | Scenario                       |
 | ------------------- | ------------------------- | ------------------------------ |
@@ -13,17 +13,23 @@ ET-7700 is flatbed-only hardware (no ADF, no duplex). Both captures were
 provided by the issue [#145](https://github.com/mtheuma/epson2paperless/issues/145)
 reporter and record **epson2paperless itself** (the `:main` image carrying the
 speculative dialect from PR #153) scanning via a panel trigger — not Epson's
-driver. The captured PARA is byte-identical to `composePara`'s output for the
-model override in both sessions, which is what the replay test's
-byte-equivalence shield pins. Because the captures are of our own service,
-no init-handshake trimming is needed: the sessions replay verbatim.
+driver. Because the captures are of our own service, no init-handshake
+trimming is needed: the sessions replay verbatim.
+
+The recorded PARA carries the old colours: that dialect's mixed pair (the
+`et4950-stock` tone curve with the `et4800-um08` colour matrix). The model
+override now sends a neutral pair (the `xp7100-pdf` tone curve with the
+identity matrix), so the replay test pins the scanner's PARA to
+`composePara`'s output and holds it to the recording everywhere except the
+`#GMT` and `#CMX` segments. These fixtures are a structural oracle, not a
+colour one. The recordings are left as captured.
 
 Each pcap holds exactly one TCP conversation on port 1865, so no `--stream`
 isolation is required:
 
 ```
 TSHARK_PATH="/path/to/tshark" npm run pcap:extract -- \
-  .reference/wireshark-captures/et-7700/epson-capture-jpeg.pcap \
+  /path/to/captures/et-7700/epson-capture-jpeg.pcap \
   10.0.30.63 10.0.30.162 1865 \
   tools/pcap-extract/captures/et-7700/flatbed-jpg.jsonl
 ```
