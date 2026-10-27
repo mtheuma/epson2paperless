@@ -11,6 +11,8 @@ A Node.js/TypeScript service that emulates the Windows-side of Epson's "Scan to 
 See:
 
 - `README.md` — user-facing install / run / configure.
+- `GLOSSARY.md` — the project's domain vocabulary, with the words to avoid for each term.
+- `docs/adr/` — architecture decision records.
 - `docs/HOW-IT-WORKS.md` — front-door architecture overview.
 - `docs/PROTOCOL-REFERENCE.md` — protocol layers, wire details, scanner state machines, and printer-family differences.
 - `docs/REVERSE-ENGINEERING.md` — capture workflow, fixture methodology, and reverse-engineering notes.
