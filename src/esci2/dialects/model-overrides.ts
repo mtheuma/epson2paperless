@@ -447,13 +447,12 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     fbExtents: null, // ADF-only hardware — no flatbed
     adfExtents: { x0: 0, y0: 0, w: 1700, h: 7200 },
     windowDpi: 200,
-    // Rendered raw, both sides of the duplex fixture read upside down (the
-    // sheet went in top edge first): the back is not turned relative to the
-    // front, as a single-pass ADF reads it.
+    // A single-pass ADF: the back arrives the same way up as the front. First
+    // read off the duplex fixture rendered raw (both sides upside down, the
+    // sheet having gone in top edge first), then confirmed on hardware.
     duplexOrientationEvidence: {
       backRotated: false,
-      source:
-        "duplex capture ff-680w/adf-duplex-200, rendered raw: back the same way up as the front",
+      source: "hardware report (#249): duplex backs arrive upright with no compensation",
     },
     gmm: "UG18",
     gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
