@@ -11,7 +11,9 @@ permissions:
 
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Pinned: on ubuntu-26.04 the apt tshark (Wireshark 4.6.4) is refused read
+    # access to the checked-in pcap fixture, failing the pcap-extract test.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v6
 
