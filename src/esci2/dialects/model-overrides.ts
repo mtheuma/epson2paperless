@@ -83,7 +83,7 @@ export interface ModelOverride {
 }
 
 /**
- * Where a model override's values came from (CONTEXT.md "Provenance"). No
+ * Where a model override's values came from (GLOSSARY.md "Provenance"). No
  * runtime effect: provenance.test.ts holds it to the README compatibility
  * table, so a ✅ model can't keep colour bytes nothing vouched for.
  */

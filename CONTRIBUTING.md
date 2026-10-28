@@ -48,7 +48,7 @@ PRINTER_IP=192.0.2.58 npm run scan   # one-shot mode
 npm test                             # full test suite
 ```
 
-`docs/HOW-IT-WORKS.md` is the architecture overview. If you're touching anything below the file-output layer, start with `docs/PROTOCOL-REFERENCE.md` for the protocol and scanner state machines, and `docs/REVERSE-ENGINEERING.md` for capture and fixture methodology.
+`docs/HOW-IT-WORKS.md` is the architecture overview. If you're touching anything below the file-output layer, start with `docs/PROTOCOL-REFERENCE.md` for the protocol and scanner state machines, and `docs/REVERSE-ENGINEERING.md` for capture and fixture methodology. `GLOSSARY.md` fixes the project's domain vocabulary: use its terms in code, docs and issue replies. `docs/adr/` holds the architecture decision records.
 
 ## Pull requests
 
