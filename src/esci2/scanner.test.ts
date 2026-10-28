@@ -1134,7 +1134,7 @@ describe("runEsci2ScanOverPlain — ET-2750 fixture replay", () => {
     expect(pdfBytes.subarray(0, 5).toString("ascii")).toBe("%PDF-");
     const doc = await PDFDocument.load(pdfBytes);
     expect(doc.getPageCount()).toBe(1);
-    // Flatbed front side — no 180° rotation.
+    // Flatbed page — no 180° rotation.
     expect(doc.getPage(0).getRotation().angle).toBe(0);
   }, 60_000);
 });
@@ -1307,7 +1307,7 @@ describe("runEsci2ScanOverPlain — XP-7100 fixture replay", () => {
 
   it("flatbed JPG under SCAN_COLOR_MODE=grayscale: PARA unchanged, converted host-side", async () => {
     // The XP-7100 has no greyscale wire support (no monoGammaClass), so
-    // grayscale must not touch the wire — runOne's PARA shield pins the
+    // greyscale must not touch the wire — runOne's PARA shield pins the
     // scanner's bytes against the captured COLOUR session — and the page
     // converts to single-channel greyscale at finalize instead.
     const jpgs = await runOne({
@@ -1591,14 +1591,14 @@ const DS575W_FP = "90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b
 
 // The DS-575W's #ADFCRP flags field mixes SKEW/DFL1 (GUI-driven scan options
 // this service doesn't model, whose bytes/order vary per capture) with DPLX (the
-// duplex axis this service DOES model, from ctx.duplex). To compare a mono
+// duplex axis this service DOES model, from ctx.duplex). To compare a greyscale
 // fixture's captured PARA against the composed one we canonicalise the flags
 // field: keep DPLX so a simplex/duplex framing regression is still caught, and
 // strip exactly the known-unmodeled SKEW/DFL1 tokens whose ordering the capture
 // happened to use. Any OTHER residue in the flags field is a real divergence
 // (e.g. a colour-mode-conditional corruption of the prefix assembly) and fails
 // the comparison rather than being silently normalised away. Everything
-// downstream (#RSM/#RSS, #COL, gamma, CMX, extents, trailer) is pinned as-is.
+// downstream (#RSM/#RSS, #COL, gamma, CMX, scan window, trailer) is pinned as-is.
 function normalizeAdfCrpFlags(para: Buffer): Buffer {
   const HEAD = Buffer.from("#ADFCRP ", "ascii");
   const RSM = Buffer.from("#RSM", "ascii");
@@ -1639,10 +1639,10 @@ describe("runEsci2ScanOverPlain — DS-575W fixture replay", () => {
 
   const FIX_DIR = path.join("tools", "pcap-extract", "captures", "ds-575w");
 
-  // Drive a full-session greyscale mono fixture to completion and return the JPG
+  // Drive a full-session greyscale fixture to completion and return the JPG
   // page count. Also pins the composed greyscale PARA against the captured one
   // (flags-stripped): this is where the novel ds575w-mono gamma, #COLM008, the
-  // et2750-um08 CMX, and the DPI-scaled extents are byte-checked.
+  // et2750-um08 CMX, and the DPI-scaled scan window are byte-checked.
   async function runMono(opts: {
     fixtureFile: string;
     duplex: boolean;
@@ -1683,7 +1683,7 @@ describe("runEsci2ScanOverPlain — DS-575W fixture replay", () => {
     const jpgs = readdirSync(outputDir).filter((f) => f.endsWith(".jpg"));
     for (const f of jpgs) {
       expect(f).toMatch(/^scan_\d{4}-\d{2}-\d{2}_\d{6}(_\d{2})?\.jpg$/);
-      // DS-575W is single-pass dual-sensor hardware: back sides arrive
+      // DS-575W is single-pass dual-sensor hardware: back pages arrive
       // upright, so NO page — front or back — may carry the EXIF
       // Orientation=3 compensation (duplexBackRotated: false). EliSauder's
       // hardware run showed the compensation inverting back pages (#128).
@@ -1717,7 +1717,7 @@ describe("runEsci2ScanOverPlain — DS-575W fixture replay", () => {
   // flags (SKEWDFL1) match our canonical exactly, so the whole 996-byte body is
   // compared with no carve-out. This pins the colour path: #COLC024, the RGB
   // gamma (reused ff680w-adf class), the et2750-um08 CMX, and the 600-DPI
-  // extents. The capture has no init handshake (persistent connection), so it is
+  // scan window. The capture has no init handshake (persistent connection), so it is
   // an oracle only — extracted and compared, not driven.
   it("colour simplex 600 DPI PARA matches composePara byte-for-byte", () => {
     const oracle = loadFixture(path.join(FIX_DIR, "adf-simplex-600-color-jpg.oracle.jsonl"));

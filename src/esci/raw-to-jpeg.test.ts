@@ -73,10 +73,10 @@ describe("raw-to-jpeg", () => {
   });
 
   // Raw wire pixels carry no physical size, so the encoder must stamp the
-  // delivered DPI into the JFIF header — a density-less JPEG reads as 72 DPI,
+  // wire resolution into the JFIF header — a density-less JPEG reads as 72 DPI,
   // and every downstream consumer (viewers, the document re-encode, the PDF
   // page box) sizes the page from that reading (issue #221).
-  it("stamps the delivered DPI as the JFIF density, without an EXIF block", async () => {
+  it("stamps the wire resolution as the JFIF density, without an EXIF block", async () => {
     const raw = Buffer.alloc(4 * 4 * 3, 0x80);
     const jpeg = await encodeRawGbrToJpeg(raw, 4, 4, 90, 300);
     const meta = await sharp(jpeg).metadata();

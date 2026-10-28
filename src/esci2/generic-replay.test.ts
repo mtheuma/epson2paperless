@@ -68,7 +68,7 @@ describe("generic dialect — fixture replay with every override ignored", () =>
         );
         await driveFixture(loadFixture(fixturePath), fake, session);
         expect(warn.mock.calls.map((args) => args.join(" ")).join("\n")).toContain(
-          "not recognised — generic ESC/I-2 dialect, experimental, please report",
+          "not recognised — untested, running the generic ESC/I-2 dialect, please report",
         );
       } finally {
         warn.mockRestore();

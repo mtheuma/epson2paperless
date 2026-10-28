@@ -147,14 +147,14 @@ describe("resolveDialect", () => {
       expect(resolved.dialect.displayName).toBe("generic ESC/I-2 dialect (PID 9999)");
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain(
-        "PID 9999 not recognised — generic ESC/I-2 dialect, experimental, please report",
+        "PID 9999 not recognised — untested, running the generic ESC/I-2 dialect, please report",
       );
       const diagnostic = infos.filter((line) => line.includes("CAPA fingerprint:"));
       expect(diagnostic).toHaveLength(1);
       expect(diagnostic[0]).toContain("[INFO]");
       expect(diagnostic[0]).toContain(`CAPA fingerprint:  ${UNKNOWN_FP}`);
       expect(diagnostic[0]).toContain("PRD:               PID 9999");
-      expect(diagnostic[0]).toContain("esci2-plain");
+      expect(diagnostic[0]).toContain("Transport:         plain TCP");
     });
 
     it("an unknown product name is named in the warning and the diagnostic", () => {

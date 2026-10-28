@@ -32,14 +32,14 @@ export interface FinalizeSessionArgs {
    * on a model without greyscale wire support).
    */
   grayscaleConversion?: GrayscaleConversion;
-  /** Pinned per-dialect tone curve for the `document` profile; omit for none. */
+  /** Pinned per-dialect tone curve for document correction; omit for none. */
   toneCurve?: ToneCurveName;
   /** PRINTER_WHITE_POINT — device cast reference for the auto-colour verdict. */
   whitePoint?: WhitePoint;
   /**
    * Finalize-time host-side DPI downsample — the fallback arm for a
    * SCAN_RESOLUTION the wire couldn't reach (see postprocess/downsample.ts).
-   * Omitted means the wire hit the requested DPI (or has no such notion).
+   * Omitted means the wire hit the target resolution (or has no such notion).
    */
   downsample?: Downsample;
 }

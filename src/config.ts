@@ -142,7 +142,7 @@ export const configSchema = z
     // format from the announced PID (3.0 for the FF-680W and DS-575W, 2.0 for
     // everything else — see V3_KEEPALIVE_PRODUCTS in keepalive.ts). Forcing
     // `3.0` lets reporters with other unrecognised button-only scanners (DS-series
-    // family) test v3 registration without a code change; v3 also switches the
+    // family) test v3 keepalives without a code change; v3 also switches the
     // burst to an ephemeral source port (see keepalive.ts).
     netscanVersion: z.enum(["auto", "2.0", "3.0"]).default("auto"),
     tempDir: z.string().default(""),
@@ -169,7 +169,7 @@ export const configSchema = z
     //
     // It has to be told to us rather than measured per page: in one image a
     // scanner's cast and a sheet's own tint are the same signal, so estimating
-    // the white point from the page being classified would divide out genuine
+    // the device white point from the page being classified would divide out genuine
     // paper colour and convert coloured stock to greyscale. Unset means no
     // correction, which is safe but leaves auto colour mode ineffective on a
     // scanner with a pronounced cast (see #159).
@@ -198,7 +198,7 @@ export const configSchema = z
       // It is a coarse sanity check and NOT a guarantee the reference sheet was
       // neutral: pastel stock at 220:200:190 has a spread of 30 and passes.
       // That limitation is the same ambiguity the whole design rests on — a
-      // single image cannot certify its own white point — so the check can only
+      // single image cannot certify its own device white point — so the check can only
       // reject the obviously wrong, never confirm the right.
       .refine(
         (rgb) => Math.max(...rgb) - Math.min(...rgb) <= MAX_DEVICE_CAST,

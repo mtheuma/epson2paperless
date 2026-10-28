@@ -49,7 +49,7 @@ describe("colourSettingsHash", () => {
     expect(colourSettingsHash(overrideFor("WF-3835"))).toBe(colourSettingsHash(et4800));
   });
 
-  it("changes with any colour byte: gamma, matrix, gamma mode or mono gamma", () => {
+  it("changes with any colour byte: gamma, matrix, gamma mode or greyscale gamma", () => {
     const base = colourSettingsHash(et4800);
     const changed = [
       { ...et4800, gammaClass: { ...et4800.gammaClass, pdf: "et4950-stock" as const } },

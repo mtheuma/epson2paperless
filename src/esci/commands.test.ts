@@ -227,7 +227,7 @@ describe("esci-legacy FS I reply parser", () => {
     });
   });
 
-  it("canonicalises the PID the same way as the push-scan trigger", () => {
+  it("canonicalises the PID the same way as the panel trigger", () => {
     expect(parseFsIReply(buildFsIReply("pid 08c8", "1.10")).productName).toBe("PID 08C8");
   });
 

@@ -21,9 +21,9 @@ export interface DetectOptions {
   override: Override;
   timeoutMs: number;
   /**
-   * The push-scan trigger's `ProductNameIn` ("PID XXXX"), when the dispatch
+   * The panel trigger's `ProductNameIn` ("PID XXXX"), when the dispatch
    * has one (panel-triggered scans; `scan:now` has no panel and passes null).
-   * Consulted only after the TLS arm fails: PIDs in
+   * Consulted only after the TLS step fails: PIDs in
    * `ESCI2_PLAIN_WITH_LEGACY_WELCOME` select `esci2-plain` directly, because
    * their welcome carries no signal. It never overrides a TLS result.
    */
@@ -34,13 +34,13 @@ export interface DetectOptions {
  * ESC/I-2-over-plain-TCP models whose plain-TCP welcome is byte-identical to
  * the legacy ESC/I one, making the payload[1] discriminator alone misclassify
  * them as `esci`. Keyed by the push-scan PID, which is per-model and already
- * pinned by the CAPA diagnostic that seeded each dialect entry. Exported for
+ * pinned by the CAPA diagnostic that seeded each model override. Exported for
  * the disjointness test against the legacy dialect registry — a PID in both
  * would silently shadow its legacy dialect under `auto`.
  *
  * ET-7700: both committed fixtures (`tools/pcap-extract/captures/et-7700/`)
  * open with `49538000300c0000000500000102000000` — the WF-3620's exact
- * welcome — while the model itself is ESC/I-2 (registry entry, issue #145,
+ * welcome — while the model itself is ESC/I-2 (model override, issue #145,
  * hardware-validated). Its push-scan SOAP announces "PID 112B" (verified from
  * the reporter's pcap).
  */
@@ -57,12 +57,12 @@ export async function detectVariant(opts: DetectOptions): Promise<Variant> {
   const cached = cache.get(opts.printerIp);
   if (cached) return cached;
 
-  // Two-arm probe; neither mutates printer state.
+  // Two-step probe; neither step mutates printer state.
   //   1. TLS handshake (port 1865).
   //   2. Plain TCP, listen for an unsolicited `0x8000` welcome and read its
   //      family discriminator (ET-2750 and WF-3620 both send one immediately
   //      on TCP connect; ET-4950 also does, but inside TLS, so it isn't
-  //      reachable from this arm).
+  //      reachable from this step).
   const variant = await runProbe(opts);
 
   // Cache positive evidence only — and only for `esci2` (TLS). The
@@ -85,7 +85,7 @@ async function runProbe(opts: DetectOptions): Promise<Variant> {
     return "esci2";
   }
   // PID hint (see ESCI2_PLAIN_WITH_LEGACY_WELCOME): once TLS is ruled out,
-  // the PID settles the variant directly — the welcome arm is skipped since
+  // the PID settles the variant directly — the welcome step is skipped since
   // no outcome of it could change the routing. pushscan.ts already
   // canonicalises productName; re-extracting here is cheap defence for
   // direct callers.
@@ -101,7 +101,7 @@ async function runProbe(opts: DetectOptions): Promise<Variant> {
   if (fromWelcome) {
     return fromWelcome;
   }
-  // Neither arm classified. Surface that rather than throwing a generic
+  // Neither step classified. Surface that rather than throwing a generic
   // "no variant detected" error — keep the diagnostic actionable. We
   // classify as `esci` so the caller's existing fallback path (which
   // already tolerates connect failures) runs and surfaces the underlying
@@ -177,15 +177,15 @@ const LEGACY_ESCI_WELCOME_DISCRIMINATOR = 0x02;
  * generations emit a welcome unsolicited on TCP connect, so the welcome's
  * *presence* says only "plain TCP"; payload byte 1 says which family — for
  * most models (see the `LEGACY_ESCI_WELCOME_DISCRIMINATOR` caveat; hinted
- * PIDs are routed in `runProbe` and never reach this arm).
+ * PIDs are routed in `runProbe` and never reach this step).
  * ET-4950 also sends a welcome immediately, but only inside its TLS tunnel,
- * so this arm never sees it.
+ * so this step never sees it.
  *
  * Returns the classified variant, or null when the connection yields no
  * usable evidence (timeout, connection refused, peer RST, or an inbound
  * frame that isn't a `0x8000` welcome).
  *
- * This arm is the only wire evidence we act on for plain TCP. There is no
+ * This step is the only wire evidence we act on for plain TCP. There is no
  * follow-up "send `ESC @`, await a bare ACK" probe: real hardware accepts
  * only IS-framed commands, and only after a lock — in both the WF-3620 and
  * XP-620 captures every host write begins with the `IS` magic and `ESC @`

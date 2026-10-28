@@ -14,11 +14,11 @@ The **second wave** (ET-2750, XP-7100, ET-4800, and WF-3620) needed only Wiresha
 
 Wireshark packet captures revealed the discovery and push-scan layers in full. Both operate in plaintext (UDP multicast and HTTP over TCP), so all fields are directly readable. The captures established:
 
-- The multicast address, port, and beacon format (`02 06`/`02 07` packet structure).
+- The multicast address, port, and announcement format (`02 06`/`02 07` packet structure).
 - The sequence echo requirement in keepalives — and the consequence of getting it wrong (no entry in the destination list).
 - The push-scan HTTP request format, including the non-standard header spacing and the `x-uid` counter.
 - The `PushScanIDIn` encoding for Sides and Action.
-- That the printer initiates the push-scan trigger (a plain-TCP connection from the printer to the host's event port 2968), but the _host_ initiates the scan-session connection on port 1865 (TLS for the ET-4950 family + ET-2950, plain TCP for the other ESC/I-2 dialects — ET-2750 / XP-7100 / ET-4800 — and for WF-3620). Knowing which side opens which port turned out to matter for both the firewall rules in `README.md` and the listener / connector roles in `pushscan.ts` vs the scanner shells.
+- That the printer initiates the panel trigger (a plain-TCP connection from the printer to the host's event port 2968), but the _host_ initiates the scan-session connection on port 1865 (TLS for the ET-4950 family + ET-2950, plain TCP for the other ESC/I-2 dialects — ET-2750 / XP-7100 / ET-4800 — and for WF-3620). Knowing which side opens which port turned out to matter for both the firewall rules in `README.md` and the listener / connector roles in `pushscan.ts` vs the scanner shells.
 
 Capturing UDP multicast and non-standard HTTP required binding a promiscuous-mode capture on the Ethernet interface rather than using a loopback filter. On Windows, `dumpcap` (bundled with Wireshark) works well from the command line — identify the target interface via `dumpcap -D` (using the interface GUID rather than a numerical index, since numerical indexes change when USB network adapters are connected or disconnected).
 
@@ -42,7 +42,7 @@ Each captured session is written to a JSONL file in `tools/frida-capture/capture
 | `2026-04-24T09-05-08-flatbed-1p-jpg.jsonl`     | 1-page flatbed JPG                |
 | `2026-04-24T09-06-37-flatbed-1p-pdf.jsonl`     | 1-page flatbed PDF                |
 
-The PDF capture was particularly diagnostic. The printer streams JPEG image data regardless of the panel's format choice, so the protocol-level traffic is the same on JPG and PDF runs — confirmed by reusing the JPG capture file as the fixture for the PDF replay test (see `pdfFixtures` in `src/esci2/scanner.test.ts`). Capture-to-capture byte equality holds at the protocol-flow level; literal byte-equality between JPG and PDF capture _files_ depends on capture-time polling cadence and is not guaranteed.
+The PDF capture was particularly diagnostic. The printer streams JPEG image data regardless of the panel's Action (JPG or PDF), so the protocol-level traffic is the same on JPG and PDF runs — confirmed by reusing the JPG capture file as the fixture for the PDF replay test (see `pdfFixtures` in `src/esci2/scanner.test.ts`). Capture-to-capture byte equality holds at the protocol-flow level; literal byte-equality between JPG and PDF capture _files_ depends on capture-time polling cadence and is not guaranteed.
 
 ### Step 3: Ghidra on ES2Command.dll
 
@@ -91,7 +91,7 @@ That is less of a limitation than it sounds, because the curve is not a per-mode
 
 So a new dialect that has no capture of its own should inherit the near-identity `et4950-stock` class. That's the pass-through choice: it asks the printer for no tone shaping and leaves its default rendering alone, rather than approximating some unknown model-specific value.
 
-The ET-8500 and ET-7700 both took that inheritance when they were added from a diagnostic alone, and both were later validated on real hardware. The ET-7700's compatibility-test-page scan puts numbers on it: nominal-64 grey returned 72/69/69 with no shadow crush, grey-patch channel spreads of 3–11 and no cast. That is what a correctly inherited pass-through curve looks like, and it is the practical answer to the question this section opens with. (That scan measured the ET-7700's earlier pair. It now sends a pass-through pair inherited from the XP-7100 and ET-2750 captures, the near-identity `xp7100-pdf` curve with the identity colour matrix, expected to match but not yet confirmed by a scan.)
+The ET-8500 and ET-7700 both took that inheritance when they were added from a diagnostic alone, and both were later validated on real hardware. The ET-7700's compatibility-page scan puts numbers on it: nominal-64 grey returned 72/69/69 with no shadow crush, grey-patch channel spreads of 3–11 and no cast. That is what a correctly inherited pass-through curve looks like, and it is the practical answer to the question this section opens with. (That scan measured the ET-7700's earlier pair. It now sends a pass-through pair inherited from the XP-7100 and ET-2750 captures, the near-identity `xp7100-pdf` curve with the identity colour matrix, expected to match but not yet confirmed by a scan.)
 
 ### The byte-for-byte replay test
 
@@ -100,7 +100,7 @@ The ET-8500 and ET-7700 both took that inheritance when they were added from a d
 - **TLS replay (byte-for-byte).** For the ET-4950 Frida captures, the test feeds the captured printer-side records to a `FakeTlsSocket` one-by-one and asserts that every byte the state machine writes matches the corresponding host-side record from the capture. Any edit that changes the outgoing byte sequence will fail. The covered scenarios include ADF simplex, ADF duplex, multi-page ADF, and flatbed scans in JPG/PDF output modes. The ADF entries reuse a single capture per scenario across `action='jpg'` and `action='pdf'`; the flatbed entries use separate captures for each format because the original Frida session captured them as distinct runs.
 - **Plain-TCP replay (behavioural + PARA byte-equivalence).** For the `esci2-plain` dialects (ET-2750, XP-7100, ET-4800) driven through `runEsci2ScanOverPlain`, the helper in `src/esci2/test-support/replay.ts` feeds only the printer-side events from a pcap-extracted fixture to a `FakePlainSocket` and asserts the session's on-disk output and end-state. It does not assert full per-host-byte equality the way the TLS replay does, but each replay pins the one host write that encodes the dialect: a byte-equivalence shield asserts the PARA body the scanner composes equals the PARA bytes captured on the wire (`extractScannerParaWrite` vs `extractCapturedParaBody`), so a composer / override / class-data regression fails the test. These fixtures are large (the ET-2750 one is ~3.9 MB) — a couple of orders of magnitude bigger than the WF-3620 fixtures (8–30 KB each) — because the ESC/I-2 IMG cycles wrap pixel data in `0xa000` frames; there's no `0xa200` image-stream summary path to fold the per-chunk records into a single summary line like the WF-3620 extractor uses.
 
-JPG replay entries assert JPEG files on disk with the correct EXIF Orientation byte on back-side pages; PDF replay entries assert a single composed PDF with correct page count and `/Rotate = 180` on back pages.
+JPG replay entries assert JPEG files on disk with the correct EXIF Orientation byte on back pages; PDF replay entries assert a single composed PDF with correct page count and `/Rotate = 180` on back pages.
 
 `src/esci/scanner.test.ts` applies the same behavioural replay approach to the WF-3620 ESC/I path, using pcap-derived JSONL fixtures in `tools/pcap-extract/captures/wf-3620/` that cover single-page, duplex, multi-page, and flatbed cases in JPG/PDF output modes. It also feeds only printer-side events; host bytes are not asserted equal to the fixture.
 

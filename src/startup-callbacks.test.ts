@@ -34,7 +34,7 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
   });
 }
 
-/** A panel press: 2-sided off, Action=PDF, from a non-job-control model. */
+/** A panel trigger: simplex, Action=PDF, from a non-job-control model. */
 const PANEL_INFO: PushScanInfo = {
   pushScanId: "02",
   jobNumber: null,
@@ -119,7 +119,7 @@ describe("buildDaemonPushScanCallback", () => {
     expect(dispatch).not.toHaveBeenCalled();
     expect(setLastScanTimeMock).not.toHaveBeenCalled();
     // Nothing else would ever drop this hold, so the next trigger would be
-    // refused for good (issue #137's gate is shared with POST /scan).
+    // refused for good (issue #137's admission is shared with POST /scan).
     expect(admission.isBusy()).toBe(false);
   });
 });
@@ -174,7 +174,7 @@ describe("buildOneShotPushScanCallback", () => {
 
     expect(dispatch).not.toHaveBeenCalled();
     expect(started).not.toHaveBeenCalled();
-    // The panel can press again: this trigger never became the one scan.
+    // The panel can trigger again: this trigger never became the one scan.
     expect(admission.isBusy()).toBe(false);
   });
 

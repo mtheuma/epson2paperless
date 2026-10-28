@@ -317,7 +317,7 @@ function resolveIdentity(ctx: EsciCtx, payload: Buffer): void {
   } else if (check.kind === "unrecognised") {
     log.warn(
       `Older ESC/I model ${productName ?? "(no product ID reported)"} not recognised — ` +
-        "trying the WF-3620 settings (experimental), please report",
+        "untested, trying the WF-3620 settings, please report",
       { firmware },
     );
   } else if (check.kind === "switch") {

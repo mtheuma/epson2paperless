@@ -1166,7 +1166,7 @@ describe("createPushScanServer admission release hook (#137)", () => {
 
 describe("resolveEffectiveAction", () => {
   // Maps (action from panel, PREVIEW_ACTION config) → 'jpg' | 'pdf' | null.
-  // null signals "do not start a scan — skip this push-scan event entirely".
+  // null signals "do not start a scan — skip this panel trigger entirely".
 
   it("passes 'jpg' through regardless of previewAction", () => {
     expect(resolveEffectiveAction("jpg", "reject")).toBe("jpg");

@@ -2,25 +2,25 @@
 //
 // One scan at a time, whichever door it came through (issue #137). The
 // printer serves a single session, so the panel trigger (TCP 2968) and the
-// POST /scan webhook share this gate.
+// POST /scan webhook share this admission.
 //
-// Why a reservation and not just the inflight count: a panel trigger is not
-// a tracked scan until the OK response has been flushed and the onPushScan
-// callback runs. For a v3 printer that gap contains a job-control
+// Why reserve the slot rather than read the inflight count: a panel trigger
+// is not a tracked scan until the OK response has been flushed and the
+// onPushScan callback runs. For a v3 request that gap contains a job-control
 // round-trip to the printer (JOBR over 1865, up to 3 s), and for every model
 // it contains the response write. Reading only the count would admit a
-// webhook inside that gap and start two scans. So the panel gate reserves
-// the slot at admission, and the reservation is dropped either by commit()
-// (the callback tracked the real scan) or by a release hook the push-scan
-// server fires when the trigger ends without a callback.
+// webhook inside that gap and start two scans. So panel admission reserves
+// the slot, and the reserved slot either passes to the scan at commit()
+// (the callback tracked the real scan) or is freed by a release hook the
+// push-scan server fires when the trigger ends without a callback.
 //
-// The gate and the daemon's shutdown drain answer different questions. The
-// gate (isBusy) reads the hold and the scans. The drain reads the inflight
-// tracker, which holds those and more: the reservation itself, so a signal in
-// the admission→callback gap waits instead of exiting mid-transaction, and a
-// bounded hand-off after a JobList, so the listener stays open for the
-// PushScan that follows on a fresh connection — which the gate must not
-// refuse (issue #207).
+// The admission check and the daemon's shutdown drain answer different
+// questions. The check (isBusy) reads the reserved slot and the scans. The
+// drain reads the inflight tracker, which holds those and more: the reserved
+// slot itself, so a signal in the admission→callback gap waits instead of
+// exiting mid-transaction, and a bounded hand-off after a JobList, so the
+// listener stays open for the PushScan that follows on a fresh connection —
+// which admission must not refuse (issue #207).
 import type { InflightTracker } from "./lifecycle.js";
 
 export interface ScanAdmission {
@@ -40,8 +40,8 @@ export interface ScanAdmission {
   track(scan: Promise<void>): void;
   /**
    * A JobList was answered: keep the drain waiting for its follow-up PushScan
-   * for at most `timeoutMs`, without gating it. Ended early by the next
-   * reserve() — whatever press arrives is the one the process stayed up for.
+   * for at most `timeoutMs`, without making admission busy. Ended early by the next
+   * reserve() — whatever trigger arrives is the one the process stayed up for.
    * A newer JobList replaces the hand-off.
    */
   expectFollowUp(timeoutMs: number): void;
@@ -102,7 +102,7 @@ export function createScanAdmission(inflight: InflightTracker): ScanAdmission {
   });
   // Scans are counted here rather than read off the tracker: the tracker also
   // holds the reservation, a JobList hand-off, and the hooks, none of which
-  // may gate the press they exist for.
+  // may refuse the trigger they exist for.
   let scans = 0;
   const trackScan = (scan: Promise<void>): void => {
     scans++;
@@ -115,9 +115,9 @@ export function createScanAdmission(inflight: InflightTracker): ScanAdmission {
   return {
     isBusy: () => slot.held() || scans > 0,
     reserve() {
-      // The follow-up (or any press) has arrived: its hold takes over, tracked
+      // The follow-up (or any trigger) has arrived: its hold takes over, tracked
       // before the hand-off settles so the drain never reads empty between.
-      // The gate never reserves on top of a live hold, but if it ever did the
+      // Admission never reserves on top of a live hold, but if it ever did the
       // old deferred must not sit in the tracker for good and wedge shutdown.
       settleHold?.();
       settleHold = trackDeferred(inflight);
@@ -161,7 +161,7 @@ export interface SingleScanAdmission extends Pick<
   commit(): void;
   /**
    * True from expectFollowUp() until the next reserve() or the timeout. Never
-   * makes the gate busy: the follow-up PushScan it waits for must be admitted.
+   * makes isBusy() true: the follow-up PushScan it waits for must be admitted.
    */
   followUpPending(): boolean;
   /**
@@ -169,7 +169,7 @@ export interface SingleScanAdmission extends Pick<
    * scan" — release(), or the trigger's own release hook dropping a hold that
    * is still current — and for a JobList hand-off lapsing with no follow-up.
    * Never fired by commit(), by a stale hook, by a release once committed, or
-   * by a hand-off that a press ended or a newer JobList replaced. One-shot's
+   * by a hand-off that a trigger ended or a newer JobList replaced. One-shot's
    * shutdown coordinator waits on this so a signal that lands in the
    * admission→callback gap can tell an abandoned trigger from one still
    * starting, without polling (issue #202, issue #209).
@@ -196,7 +196,7 @@ export function createSingleScanAdmission(): SingleScanAdmission {
   return {
     isBusy: () => committed || slot.held(),
     reserve() {
-      // The follow-up (or any press) has arrived: it is the trigger the
+      // The follow-up (or any trigger) has arrived: it is the trigger the
       // coordinator stayed up for, and the hold takes over from here.
       endHandoff();
       return slot.reserve();
@@ -208,8 +208,8 @@ export function createSingleScanAdmission(): SingleScanAdmission {
     expectFollowUp(timeoutMs) {
       endHandoff();
       handoffTimer = setTimeout(() => {
-        // A cancelled press never sends the follow-up: wake the coordinator
-        // rather than leave it to its deadline.
+        // Cancelling on the panel after the JobList means no follow-up PushScan:
+        // wake the coordinator rather than leave it to its deadline.
         handoffTimer = null;
         notify();
       }, timeoutMs);

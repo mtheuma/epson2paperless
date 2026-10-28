@@ -37,7 +37,7 @@ export interface ModelOverride {
    * The DPI fbExtents and adfExtents are given at: the reference DPI of the
    * PARA profile they were captured under (baseDpiFor). Omitted means 300,
    * the standard profile's; the crop-mode (adf-crp) scanners set 200. A
-   * session whose derived profile has a different reference DPI rescales the
+   * session whose derived PARA profile has a different reference DPI rescales the
    * windows (withCapabilities), so their physical size is kept.
    */
   windowDpi?: number;
@@ -62,7 +62,7 @@ export interface ModelOverride {
    */
   monoGammaClass?: GammaClassName;
   /**
-   * Pinned perceptual tone curve for the `document` post-process profile
+   * Pinned perceptual tone curve for the `document` post-processing mode
    * (stage 2). Set only for printers with a captured raw→Epson oracle pair;
    * omitted printers get the adaptive white-point clip only.
    */
@@ -156,7 +156,7 @@ export interface CapabilityFields {
    * Whether the ADF can scan both sides. Read by assertSourceSupported at
    * PARA-build time: composing an `adf-duplex` PARA for a simplex-only ADF
    * sends the printer a segment its firmware never advertised. The panel
-   * never offers 2-sided on such models, but the host trigger (scan-now) can
+   * never offers 2-Sided on such models, but the host trigger (scan-now) can
    * request it directly, because SCAN_SIDES defaults to "duplex".
    */
   adfDuplex: boolean;
@@ -477,9 +477,9 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
   },
   // The #ADFCRP flag bytes (SKEW/DFL1/DPLX) are scan options chosen in Epson's
   // GUI, which this service does not model: the composer pins the FF-680W's
-  // (SKEW+[DPLX]+DFL1). The colour capture sends exactly that; the mono
+  // (SKEW+[DPLX]+DFL1). The colour capture sends exactly that; the greyscale
   // captures used other GUI orderings, so they replay functionally with only
-  // the mono gamma and CMX pinned. The window is 8.5" x 15.5" at 200 DPI.
+  // the greyscale gamma and CMX pinned. The window is 8.5" x 15.5" at 200 DPI.
   {
     pids: [],
     names: ["DS-575W"],
@@ -530,9 +530,9 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     },
   },
   // The ET-2810 never triggers a scan itself: its button combo is a USB-host
-  // scan and it registers no network destination, so it is host-trigger only.
+  // scan and it lists no network destination, so it is host-trigger only.
   //
-  // The XP-3200 (beacon PID 11AF) shares this CAPA fingerprint but presents
+  // The XP-3200 (announced PID 11AF) shares this CAPA fingerprint but presents
   // over TLS. Its panel lists the destination, yet starting a scan fails at
   // once with "Invalid" and sends the host nothing (no push-scan connection,
   // no unicast probe): the printer rejects it before contacting us, so it is
@@ -672,10 +672,10 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     },
   },
   // The tone curve is a judgement call. By segment shape (QIT present, CCT
-  // absent) the nearest overrides are the ET-8500 and ET-7700, on flat
+  // absent) the nearest overrides are the ET-8500 and ET-7700, on neutral
   // near-identity curves; by hardware class (an office AIO) it is the ET-4800
-  // and ET-15000, on et4800-stock. It follows hardware class: a flat curve was
-  // chosen for the photo models. If wrong, et4800-stock crushes shadows, which
+  // and ET-15000, on et4800-stock. It follows hardware class: a neutral curve
+  // was chosen for the photo models. If wrong, et4800-stock crushes shadows, which
   // a compatibility-page scan would show as a lifted black floor.
   {
     pids: ["117A"],

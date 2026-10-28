@@ -32,7 +32,7 @@ async function main() {
   const scanStarted = new Promise<{ scan: Promise<void> }>((resolve) => {
     onScanStarted = resolve;
   });
-  // A second panel press while the scan runs is refused at beforeResponse so
+  // A second panel trigger while the scan runs is refused at beforeResponse so
   // the panel errors at once, instead of getting an OK and then waiting for a
   // session that never opens (issue #198). The slot never reopens: this
   // process exits after its one scan.
@@ -63,8 +63,8 @@ async function main() {
   // with no trigger pending exits straight away; one that lands while a panel
   // trigger is still being answered gives it the rest of SHUTDOWN_TIMEOUT_MS
   // to start a scan (issue #202); a running scan drains like scan:now (issue
-  // #134). The listener stays open throughout: the admission gate refuses new
-  // presses, and a JobList's follow-up PushScan must still get through.
+  // #134). The listener stays open throughout: admission refuses new
+  // triggers, and a JobList's follow-up PushScan must still get through.
   const exitCode = await runOneShotLifecycle({
     scanStarted,
     signalled,

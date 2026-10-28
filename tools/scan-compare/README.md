@@ -15,7 +15,7 @@ npm run scan:compare -- <file...> [--document] [--tone-curve <name>]
 ```
 
 Accepts PDFs (every embedded JPEG is extracted and measured as a page) or image
-files. `--document` additionally runs each page through the document profile and
+files. `--document` additionally runs each page through document correction and
 prints the after-metrics beneath the before — the before/after view for judging
 a change to the clip. `--tone-curve <name>` (implies `--document`) also applies
 that dialect's pinned tone curve, so the `+ document` row matches what the
@@ -27,13 +27,13 @@ so the row reports the verdict the service would actually reach.
 
 ## Metrics
 
-| Column      | Meaning                                                                                                                                      |
-| ----------- | -------------------------------------------------------------------------------------------------------------------------------------------- |
-| `white%`    | Fraction of the page that is pure 255 — how hard the background is flattened.                                                                |
-| `paper`     | Per-channel 95th-percentile white point, and the `cast` spread between channels.                                                             |
-| `at-risk%`  | Non-white detail within `CLIP_BELOW_PAPER` of the paper white — detail the document profile forces to pure white (torn edges, soft shadows). |
-| `knee%`     | Non-white detail inside the clip's soft-knee band, where (before #164) the steep per-channel slope amplified chroma.                         |
-| `chroma>24` | Fraction over the auto-colour classifier's broad floor, and `>64` over its strong floor, with the resulting verdict.                         |
+| Column      | Meaning                                                                                                                                     |
+| ----------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `white%`    | Fraction of the page that is pure 255 — how hard the background is flattened.                                                               |
+| `paper`     | Per-channel 95th-percentile paper white point, and the `cast` spread between channels.                                                      |
+| `at-risk%`  | Non-white detail within `CLIP_BELOW_PAPER` of the paper white — detail document correction forces to pure white (torn edges, soft shadows). |
+| `knee%`     | Non-white detail inside the clip's soft-knee band, where (before #164) the steep per-channel slope amplified chroma.                        |
+| `chroma>24` | Fraction over the auto-colour classifier's broad floor, and `>64` over its strong floor, with the resulting verdict.                        |
 
 `at-risk%` and `knee%` are shares of non-white detail, not of the page, so they
 stay meaningful regardless of how much white space a page has.

@@ -47,9 +47,9 @@ const PAPERLESS_OPTS: PaperlessUploadOptions = {
   deleteAfterUpload: true,
 };
 
-// Job-control routing and peer validation are independent of the admission
-// gate, so those cases pass an explicit no-gate stub rather than a live
-// admission: never busy, and its reservations are no-ops.
+// Job-control routing and peer validation are independent of admission, so
+// those cases pass an explicit never-busy stub rather than a live admission:
+// never busy, and its reservations are no-ops.
 const NO_GATE = { isBusy: () => false, reserve: () => () => {} };
 
 const FF680W_JOB_NUMBER_INFO: PushScanInfo = {
@@ -238,7 +238,7 @@ describe("trackPendingHooks (#202)", () => {
       }
     });
 
-    it("leaves the admission gate to the hook: a press is still admitted under the wrapper", async () => {
+    it("leaves admission to the hook: a trigger is still admitted under the wrapper", async () => {
       const inflight = createInflightTracker();
       const admission = createScanAdmission(inflight);
       const { options } = trackPendingHooks(
@@ -394,7 +394,7 @@ describe("buildPushScanServerOptions", () => {
       expect(runJobNumberCommitMock).not.toHaveBeenCalled();
     });
 
-    it("does not gate JobList and takes no reservation for it", async () => {
+    it("never refuses a JobList at admission and takes no reservation for it", async () => {
       const admission = busyAdmission();
       const options = buildPushScanServerOptions(makeConfig(), undefined, admission);
       await expect(
@@ -453,7 +453,7 @@ describe("buildPushScanServerOptions", () => {
     // A JobList reserves nothing, but its follow-up PushScan is ~0.7 s away on
     // a fresh connection (pcap-measured). The daemon's drain has to wait for
     // it, so a successful JOBW starts a bounded hand-off in the tracker that
-    // leaves the gate idle for that follow-up (issue #207 review).
+    // leaves admission idle for that follow-up (issue #207 review).
     it("starts a hand-off for the follow-up PushScan once the JobList's JOBW succeeds", async () => {
       const inflight = createInflightTracker();
       const admission = createScanAdmission(inflight);
@@ -885,7 +885,7 @@ describe("dispatchScanSession", () => {
     expect(call.forcedSource).toBeNull();
   });
 
-  it("variant=esci routes XP-620 PID to the xp620 dialect entry", async () => {
+  it("variant=esci routes XP-620 PID to the xp620 legacy dialect", async () => {
     detectVariantMock.mockResolvedValue("esci");
     const config = makeConfig({ printerProtocol: "esci" });
     await dispatchScanSession({

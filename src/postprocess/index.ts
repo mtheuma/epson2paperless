@@ -10,7 +10,7 @@ import type { GrayscaleConversion } from "../config.js";
 export type PostProcessProfile = "none" | "document";
 
 export interface PostProcessOptions {
-  /** JPEG quality for the re-encode (document profile). */
+  /** JPEG quality for the re-encode (document correction). */
   jpegQuality: number;
   /**
    * Pinned per-dialect perceptual tone curve (stage 2 of `document`). Omitted
@@ -22,7 +22,7 @@ export interface PostProcessOptions {
    * (SCAN_COLOR_MODE=auto): pages with no meaningful colour content are
    * re-encoded as single-channel greyscale. "force" (SCAN_COLOR_MODE=grayscale
    * on a model without greyscale wire support): every page converts, no chroma
-   * verdict. Under the `document` profile either mode is integrated into that
+   * verdict. Under document correction either conversion is integrated into that
    * transform (one decode, one encode, with classification on the clip-stage
    * pixels); under `none` it runs as its own conversion pass.
    */
@@ -37,7 +37,7 @@ export interface PostProcessOptions {
   /**
    * Finalize-time host-side DPI downsample — the fallback arm for a
    * SCAN_RESOLUTION the wire couldn't reach. Folded into the document /
-   * grayscale re-encode below when either also runs (single decode-encode);
+   * greyscale re-encode below when either also runs (single decode-encode);
    * otherwise applied as its own standalone pass. Never upscales — see
    * downsample.ts.
    */
@@ -45,7 +45,7 @@ export interface PostProcessOptions {
 }
 
 /**
- * Apply the named post-process profile to a single JPEG page. `none` returns
+ * Apply the named post-processing mode to a single JPEG page. `none` returns
  * the input untouched (no decode) — downsample folding for that path happens
  * in postProcessTempPages, since `applyPostProcess` alone has no way to know
  * a caller wants a resize without a document transform. Transform errors are
@@ -72,7 +72,7 @@ interface MinimalLog {
 }
 
 /**
- * Apply the selected profile to every `page_NN.jpg` in the session temp dir,
+ * Apply the selected post-processing mode to every `page_NN.jpg` in the session temp dir,
  * in place, before promote/compose. Reads the original, transforms to a new
  * buffer, writes a sibling `.tmp`, and atomically renames it over the page —
  * so a failed re-encode never leaves a truncated page. On any per-page error,
@@ -142,7 +142,7 @@ export async function postProcessTempPages(
           }
         }
       }
-      // Neither the document transform nor a grayscale conversion ran (or
+      // Neither the document transform nor a greyscale conversion ran (or
       // "auto" ran but kept the page in colour) — apply the DPI fallback as
       // its own standalone pass instead of silently dropping it.
       if (opts.downsample && !downsampleFolded) {

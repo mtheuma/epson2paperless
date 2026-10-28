@@ -174,7 +174,7 @@ describe("esciGraph IDENTITY / STATUS_1A / STATUS_1B / STATUS_2", () => {
     });
   });
 
-  it("IDENTITY with an unknown PID logs the experimental line and keeps the WF-3620 settings", () => {
+  it("IDENTITY with an unknown PID logs the untested line and keeps the WF-3620 settings", () => {
     const ctx = makeCtx();
     const { result, lines } = decideIdentity(ctx, buildFsIReply("PID 0999", "2.05"));
     expect("next" in result && result.next).toBe("STATUS_1A");
@@ -182,7 +182,7 @@ describe("esciGraph IDENTITY / STATUS_1A / STATUS_1B / STATUS_2", () => {
     const warnings = lines.filter((l) => l.stream === "warn");
     expect(warnings).toHaveLength(1);
     expect(warnings[0].text).toContain(
-      "Older ESC/I model PID 0999 not recognised — trying the WF-3620 settings (experimental), please report",
+      "Older ESC/I model PID 0999 not recognised — untested, trying the WF-3620 settings, please report",
     );
     expect(warnings[0].data).toEqual({ firmware: "2.05" });
   });
@@ -198,7 +198,7 @@ describe("esciGraph IDENTITY / STATUS_1A / STATUS_1B / STATUS_2", () => {
     expect(warnings[0].text).toContain(
       "Printer identifies as PID 08C8, which has its own xp620 dialect, but this session is running the wf3620 settings",
     );
-    expect(warnings[0].text).not.toContain("experimental");
+    expect(warnings[0].text).not.toContain("untested");
   });
 
   it("IDENTITY on the WF-3620 settings switches an ET-2550 to its own dialect", () => {
@@ -243,7 +243,7 @@ describe("esciGraph IDENTITY / STATUS_1A / STATUS_1B / STATUS_2", () => {
     },
   );
 
-  it("IDENTITY on a PID-keyed dialect the printer doesn't name warns without the experimental line", () => {
+  it("IDENTITY on a PID-keyed dialect the printer doesn't name warns without the untested line", () => {
     const ctx = makeCtx({ entry: XP620_ENTRY });
     const { lines } = decideIdentity(ctx, buildFsIReply("PID 0999", "1.00"));
     const warnings = lines.filter((l) => l.stream === "warn");
@@ -737,7 +737,7 @@ describe("esciGraph IMG_RECEIVING / PAGE_ENCODING_DRAIN / cleanup", () => {
     }
   });
 
-  it("IMG_RECEIVING marks back side on even ADF-duplex pages", () => {
+  it("IMG_RECEIVING marks even ADF-duplex pages as back pages", () => {
     const state = esciGraph.states.IMG_RECEIVING;
     if (state.kind === "decision") {
       const ctx = makeCtx({

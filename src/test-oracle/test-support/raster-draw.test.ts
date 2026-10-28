@@ -17,7 +17,7 @@ describe("raster-draw", () => {
     expect(getPixel(r, 0, 0)).toEqual({ r: 255, g: 255, b: 255 });
   });
 
-  it("builds a synthetic test page with black corner crosshairs", () => {
+  it("builds a synthetic compatibility page with black corner crosshairs", () => {
     const { raster } = buildTestPageRaster({ scale: 2 });
     let foundBlack = false;
     for (let y = 0; y < 120 && !foundBlack; y++) {

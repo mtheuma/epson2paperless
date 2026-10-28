@@ -41,11 +41,11 @@ export interface LegacyScanSession {
   format: Format;
   jpegQuality: number;
   /**
-   * SCAN_RESOLUTION. The legacy wire has no resolution arm — the fixed raster
-   * per format/dialect (LegacyDialectEntry.deliveredDpi) is always what's
-   * requested on the wire. When set below what the dialect delivers, pages
-   * are downsampled host-side at finalize; at or above, the dialect's fixed
-   * DPI is delivered as-is (with an info log when it's strictly above).
+   * SCAN_RESOLUTION. The legacy wire has no per-scan resolution choice — the
+   * fixed raster per format/dialect (LegacyDialectEntry.deliveredDpi) is always
+   * what's requested on the wire. When set below that wire resolution, pages
+   * are downsampled host-side at finalize; at or above, pages keep the wire
+   * resolution (with an info log when it's strictly above).
    */
   resolution?: number;
   /** PRINTER_WHITE_POINT — device cast reference for the auto-colour verdict. */
@@ -143,13 +143,13 @@ export async function runEsciScan(
     // Known up front on this path (no dialect-dependent wire capability),
     // but the engine resolves it from the ctx like the tone curve.
     resolveGrayscaleConversion: () => session.grayscaleConversion ?? "off",
-    // The legacy wire has no resolution arm at all — deliveredDpi is a pure
+    // The legacy wire has no per-scan resolution choice — deliveredDpi is a pure
     // function of format (and, for some future dialect, source), so this
     // could read session.format directly, but it reads ctx like the ESC/I-2
-    // resolvers to stay resilient if a future dialect ever varies delivered
-    // DPI by the detected source too. Delegates the actual selection to the
+    // resolvers to stay resilient if a future dialect ever varies the wire
+    // resolution by the detected source too. Delegates the actual selection to the
     // shared `selectWireDpi` (src/esci2/resolution.ts) with a single-element
-    // advertised set — the fixed delivered DPI is the only DPI this wire can
+    // advertised set — the fixed wire resolution is the only DPI this wire can
     // ever produce, so "exact"/"smallest-above"/"capped" collapse to
     // "at delivered"/"below delivered"/"above delivered" respectively.
     resolveDownsample: (ctx: EsciCtx) => {
@@ -167,7 +167,7 @@ export async function runEsciScan(
       }
       return undefined;
     },
-    // No density resolver is needed here: the delivered DPI is stamped into
+    // No density resolver is needed here: the wire resolution is stamped into
     // each page at encode (makeFlushTransition → encodeRawGbrToJpeg), so the
     // exact-match and capped-above cases already carry it, and a downsample
     // re-stamps its own target.

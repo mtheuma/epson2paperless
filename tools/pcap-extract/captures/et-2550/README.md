@@ -61,7 +61,7 @@ LOCK -> ESC @ -> FS I -> FS F x3 -> ESC ( -> ESC @ -> FS F
 
 The reply to that final `ESC )` is a 1-byte `0x80`, not an ACK.
 
-## Notes for the dialect entry
+## Notes for the legacy dialect
 
 - **No `ESC e` anywhere.** The device is flatbed-only and the vendor driver never
   sends a source-select command, which is why the WF-3620 fallback NAKs at

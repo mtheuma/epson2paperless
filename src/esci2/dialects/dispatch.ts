@@ -223,7 +223,7 @@ function resolveGenericDialect(replies: Init1Replies, derived: DerivedCapabiliti
     throw new UnsupportedDialectError(replies.fingerprint, diagnostic, err.message);
   }
   log.warn(
-    `${printerIdentity(replies.info)} not recognised — generic ESC/I-2 dialect, experimental, ` +
+    `${printerIdentity(replies.info)} not recognised — untested, running the generic ESC/I-2 dialect, ` +
       "please report how the scan turns out, with the diagnostic block below.",
   );
   log.info(`Diagnostic block for the report:\n\n${diagnostic}`);
@@ -274,7 +274,7 @@ export function assertSourceSupported(entry: Dialect, source: ParaSpec["source"]
     throw new Error(
       `${entry.displayName} has no duplex ADF — refusing to compose an adf-duplex PARA ` +
         `the hardware never advertised. Set SCAN_SIDES=simplex for host-triggered scans, ` +
-        `or scan 1-sided from the panel.`,
+        `or choose 1-Sided on the panel.`,
     );
   }
 }

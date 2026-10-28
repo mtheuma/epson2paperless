@@ -12,7 +12,7 @@ The pre-generated PDF is committed at
 directly. The generator (`generate.ts`) is here only for regenerating the
 PDF if the layout ever changes.
 
-## What's on the test page
+## What's on the compatibility page
 
 **Page 1 — FRONT:**
 

@@ -214,7 +214,7 @@ async function transformDocumentImage(
     sharp(jpeg).metadata(),
     sharp(jpeg)
       .rotate() // bake in EXIF orientation (duplex back pages carry Orientation=3)
-      .toColourspace("srgb") // promote grayscale/CMYK sources to 3-channel RGB
+      .toColourspace("srgb") // promote greyscale/CMYK sources to 3-channel RGB
       .removeAlpha() // strip any alpha channel .toColourspace() may have kept
       .raw()
       .toBuffer({ resolveWithObject: true }),
@@ -235,7 +235,7 @@ async function transformDocumentImage(
     // neutralises the device cast as a side effect — so clipped pixels are
     // already balanced and applying PRINTER_WHITE_POINT on top would correct
     // twice, injecting chroma into neutral mid-tones (~0.123*v on a cast of
-    // 28) and pushing plain pages back into colour. The white point is for
+    // 28) and pushing plain pages back into colour. The device white point is for
     // pixels that arrive as scanned, which here means only the case where the
     // clip guard declined to run.
     verdict = await classifyRawPixels(

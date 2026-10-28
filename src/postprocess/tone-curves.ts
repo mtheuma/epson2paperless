@@ -4,11 +4,11 @@
 // map a scanner's white-point-normalized output to how the printed page
 // actually looks. Each curve is three 256-entry per-channel LUTs (R, G, B),
 // indexed by the post-clip pixel value, transcribed from a real raw->Epson
-// oracle pair for that printer family. Applied as stage 2 of the `document`
-// profile, AFTER the adaptive white-point clip (stage 1). A dialect with no
+// oracle pair for that printer family. Applied as stage 2 of document
+// correction, AFTER the adaptive white-point clip (stage 1). A dialect with no
 // curve gets stage 1 only (clean white background, no tone match).
 //
-// et4950-family: derived 2026-07-08 from the ET-4956 compatibility-test-page
+// et4950-family: derived 2026-07-08 from the ET-4956 compatibility-page
 // raw-vs-reference pair; reproduces the reference rendering to ~7 grey/colour
 // levels across the 12 swatches.
 //

@@ -38,7 +38,7 @@ export interface ScanSession {
   /**
    * Universal target DPI; undefined = each dialect's pinned default.
    * Resolved per-session against the printer's CAPA-advertised resolution
-   * lists (ESC/I-2) or the fixed delivered DPI (legacy ESC/I).
+   * lists (ESC/I-2) or the fixed wire resolution (legacy ESC/I).
    */
   resolution?: number;
   /**

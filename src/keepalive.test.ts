@@ -714,7 +714,7 @@ describe("createKeepaliveResponder", () => {
 
   it("warns once (throttled) naming observed and expected peer for a mismatched announcement", async () => {
     const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-    // Fixed-IP target the loopback announcer can never match, so every beacon
+    // Fixed-IP target the loopback announcer can never match, so every announcement
     // from 127.0.0.1 is rejected.
     const responder = createKeepaliveResponder({
       keepalive: KEEPALIVE_OPTS,
@@ -740,7 +740,7 @@ describe("createKeepaliveResponder", () => {
       await send(makeAnnouncement(0x50));
       await waitUntil(() => expect(rejectionWarns().length).toBeGreaterThanOrEqual(1));
       // Same peer, different seq — the per-address throttle should suppress
-      // it. A rejected beacon leaves no other trace, so this half can only be
+      // it. A rejected announcement leaves no other trace, so this half can only be
       // a fixed wait.
       await send(makeAnnouncement(0x51));
       await settle(EXTRA_PACKET_WINDOW_MS);
@@ -794,7 +794,7 @@ describe("createKeepaliveResponder", () => {
 
   it("dedupes repeated announcements of the same seq within the window (3 announcements → 1 burst)", async () => {
     const h = await setupHarness({ dedupWindowMs: 1_000 });
-    // Simulate the printer's 3-in-a-row beacons with identical seq.
+    // Simulate the printer's 3-in-a-row announcements with identical seq.
     for (let i = 0; i < 3; i++) await sendAnnouncement(h, makeAnnouncement(0x42));
     // The settle inside waitForReceived also gives the two duplicates time to
     // start a second burst, if they were going to.

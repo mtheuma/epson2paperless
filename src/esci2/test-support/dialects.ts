@@ -63,7 +63,7 @@ export function recordedDialect(fingerprint: string): Dialect {
 /**
  * The fields a dialect resolved from `override` carries unchanged, for
  * toMatchObject: all but the windows, which a session resolves against the
- * printer's own scan area (an inherited "generic" window becomes extents),
+ * printer's own scan area (an inherited "generic" window becomes coordinates),
  * and the provenance, which no session carries.
  */
 export function unresolvedFields(

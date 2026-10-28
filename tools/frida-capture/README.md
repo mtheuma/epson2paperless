@@ -39,8 +39,8 @@ python tools/frida-capture/host.py --child-gate --label my-scan
 
 The host attaches to `EEventManager.exe`, enables child gating, and
 waits. When "child gating enabled" appears, trigger a scan from the
-printer panel (choose the Epson destination the Windows software
-registers, not `epson2paperless`'s destination). The host attaches to
+printer panel (choose the destination the Windows software's own keepalive
+adds, not `epson2paperless`'s destination). The host attaches to
 the spawned `es2projectrunner.exe` and streams each IS packet into a
 JSONL file under `tools/frida-capture/captures/`.
 

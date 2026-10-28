@@ -30,17 +30,17 @@ import { measure } from "../test-oracle/oracle.js";
 //
 // Point it at any scan:
 //   CLIP_DIAG_IMAGE=/path/to/scan.jpg npx vitest run src/postprocess/clip-chroma
-// It defaults to the gitignored raw ET-4956 test-page scan that oracle.test.ts
-// uses. NOTE that the test page is a WEAK probe for this defect: its twelve
+// It defaults to the gitignored raw ET-4956 compatibility-page scan that oracle.test.ts
+// uses. NOTE that the compatibility page is a WEAK probe for this defect: its twelve
 // large saturated swatches inflate the 95th-percentile white-point estimate,
 // lifting the knee band above where the grey swatches sit. An ordinary
 // black-and-white text page is the case that reproduces — paper dominates the
 // histogram, and anti-aliased text edges sweep the knee band.
 //
 // The ramp probe below is page-independent: it applies the real LUTs built from
-// whatever white point this scan yields, so it quantifies the injection for
+// whatever paper white point this scan yields, so it quantifies the injection for
 // this hardware even when the page itself doesn't trip it.
-// The raw test page is local-only: CLIP_DIAG_IMAGE names an image directly, else
+// The raw compatibility-page scan is local-only: CLIP_DIAG_IMAGE names an image directly, else
 // SCAN_QUALITY_ORACLE_DIR (as in oracle.test.ts) supplies the default; neither set, it skips.
 const ORACLE_DIR = process.env.SCAN_QUALITY_ORACLE_DIR;
 const DEFAULT_IMAGE = ORACLE_DIR ? path.join(ORACLE_DIR, "testpage_raw_front.jpeg") : undefined;
@@ -106,7 +106,7 @@ run("clip-induced chroma on neutral greys (#146 diagnostic)", () => {
     );
 
     // 1. Page-independent probe: what the clip does to neutral input, for this
-    //    hardware's white point. This is the defect itself, isolated.
+    //    scan's paper white point. This is the defect itself, isolated.
     const ramp = rampInjection(paperWhite);
     out.push("");
     out.push("neutral-ramp probe (what the clip does to perfectly neutral greys):");
@@ -117,11 +117,11 @@ run("clip-induced chroma on neutral greys (#146 diagnostic)", () => {
       `  inputs over floor(24)  ${
         ramp.overFloor.length
           ? `${ramp.overFloor[0]}..${ramp.overFloor[ramp.overFloor.length - 1]} (${ramp.overFloor.length} levels)`
-          : "none — no injection on this white point"
+          : "none — no injection at this paper white point"
       }`,
     );
 
-    // 2. Test-page swatches, when the scan is of the compatibility page. The
+    // 2. Compatibility-page swatches, when the scan is of that page. The
     //    crosshair fit throws on any other document, which is expected.
     try {
       const mRaw = measure(rasterRaw);
@@ -142,7 +142,7 @@ run("clip-induced chroma on neutral greys (#146 diagnostic)", () => {
       }
     } catch {
       out.push("");
-      out.push("grey swatches      skipped (not a compatibility test-page scan)");
+      out.push("grey swatches      skipped (not a compatibility-page scan)");
     }
 
     // 3. The actual production question: what does auto colour mode decide?
@@ -165,7 +165,7 @@ run("clip-induced chroma on neutral greys (#146 diagnostic)", () => {
     console.log("\n" + out.join("\n") + "\n");
 
     // Sanity only — the numbers above are the deliverable. A scan of white
-    // paper must yield a plausible white point, or the sample (or the decode)
+    // paper must yield a plausible paper white point, or the sample (or the decode)
     // is wrong and everything above it is noise.
     expect(Math.min(...paperWhite)).toBeGreaterThan(170);
   }, 60_000);

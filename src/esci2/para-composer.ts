@@ -10,14 +10,14 @@ export interface Extents {
 }
 
 // The "adf-crp" profile drives the #ADFCRP-led PARA shared by the FF-680W and
-// its DS-575W sibling — byte-identical layout apart from resolution, ACQ
-// extents, colour mode, and the gamma/CMX class data (all override-supplied).
+// its DS-575W sibling — byte-identical layout apart from resolution, the #ACQ
+// scan window, colour mode, and the gamma/CMX class data (all override-supplied).
 export type ParaProfile = "standard" | "adf-crp";
 
 export interface ParaSpec {
   source: "flatbed" | "adf-simplex" | "adf-duplex";
   action: "jpg" | "pdf";
-  /** Flatbed scan extents; null for ADF-only dialects, which never compose a flatbed PARA. */
+  /** Flatbed scan window; null for ADF-only dialects, which never compose a flatbed PARA. */
   fbExtents: Extents | null;
   adfExtents: Extents | null;
   gmm: string;
@@ -27,7 +27,7 @@ export interface ParaSpec {
   profile?: ParaProfile;
   /**
    * Scan resolution in DPI. Consumed by BOTH profiles: drives #RSM/#RSS and
-   * scales the chosen ACQ extents (all four fields) off each profile's
+   * scales the chosen #ACQ scan window (all four fields) off each profile's
    * override-window reference DPI — STANDARD_BASE_DPI (300) for the standard
    * profile, ADF_CRP_BASE_DPI (200) for adf-crp. Falls back to that profile's
    * base DPI when unset, reproducing the captured bytes exactly.
@@ -41,8 +41,8 @@ export interface ParaSpec {
    */
   colorMode?: "color" | "grayscale";
   /**
-   * Single-channel gamma LUT for grayscale scans on the adf-crp profile. Its
-   * presence is what makes a dialect greyscale-capable: grayscale is emitted
+   * Single-channel gamma LUT for greyscale scans on the adf-crp PARA profile. Its
+   * presence is what makes a dialect greyscale-capable: greyscale is emitted
    * only when colorMode is "grayscale" AND this is set. A dialect that leaves it
    * unset stays colour (#COLC024) even under a global SCAN_COLOR_MODE=grayscale,
    * the same way colour-only dialects ignore an unsupported setting. Ignored
@@ -57,7 +57,7 @@ export interface ParaSpec {
   jpegQuality?: number;
   /**
    * The ACQ window at the wire resolution, sent as-is instead of scaling the
-   * source's reference extents. Set by the generic dialect, whose window is
+   * source's reference window. Set by the generic dialect, whose window is
    * computed per DPI (scaled, then clipped to the scan area).
    */
   acqExtents?: Extents;
@@ -85,7 +85,7 @@ function renderStandardPrefix(resolution: number, jpegQuality: number): Buffer {
 
 const ADF_CRP_PREFIX_HEAD = "#ADFCRP SKEW";
 // The overrides' adfExtents are captured at this DPI; both the RSM/RSS
-// resolution fields and the ACQ extents scale linearly off it. For the FF-680W
+// resolution fields and the #ACQ scan window scale linearly off it. For the FF-680W
 // only 200 and 300 are wire-verified — see
 // tools/pcap-extract/captures/ff-680w/README.md. DS-575W adfExtents are
 // stored at the same 200-DPI reference (wire captures at 400 and 600 confirm the
@@ -98,7 +98,7 @@ export function baseDpiFor(profile: ParaProfile | undefined): number {
 }
 
 /**
- * Scales override ACQ extents, pinned at the profile's reference DPI
+ * Scales an override's #ACQ scan window, pinned at the profile's reference DPI
  * (baseDpiFor), to the wire `resolution`, exactly as composePara does.
  *
  * standard: scale the EDGES, not the offset and size independently. The
@@ -252,7 +252,7 @@ function composeStandardPara(spec: ParaSpec): Buffer {
   if (spec.source !== "flatbed") {
     parts.push(Buffer.from("#PAGd000", "ascii"));
   }
-  // 9. ACQ extents (fb or adf, per source). Override windows are pinned at
+  // 9. #ACQ scan window (fb or adf, per source). Override windows are pinned at
   // STANDARD_BASE_DPI; scale all four fields (offsets included — e.g. the
   // ET-4950 ADF's x0=69 would drift the crop at any other DPI) to the chosen
   // resolution, by edges (see scaleAcqExtents).
@@ -269,7 +269,7 @@ function composeAdfCrpPara(spec: ParaSpec): Buffer {
   // selects the DPLX token. Reject flatbed outright rather than silently
   // composing an ADF PARA for a flatbed request (validate() already blocks
   // the null-fbExtents case; this catches a hypothetical adf-crp dialect
-  // that carries flatbed extents).
+  // that carries a flatbed scan window).
   if (spec.source === "flatbed") {
     throw new Error("composePara: profile=adf-crp has no flatbed source");
   }
@@ -286,7 +286,7 @@ function composeAdfCrpPara(spec: ParaSpec): Buffer {
 
   // Colour mode selects the #COL code and gamma LUT. Greyscale needs the
   // single-channel monoGammaClass; colour uses the RGB gammaClass triplet. A
-  // grayscale request only takes effect when the dialect supplies a
+  // greyscale request only takes effect when the dialect supplies a
   // monoGammaClass — colour-only dialects (FF-680W) ignore it and stay #COLC024,
   // mirroring how resolution is ignored by dialects that don't consume it.
   const grayscale = spec.colorMode === "grayscale" && spec.monoGammaClass !== undefined;

@@ -76,7 +76,7 @@ export async function startPrinterDiscovery(
   const target = existingTarget ?? (await createPrinterTarget(config));
   const printerIp = await target.target();
   // Fail-fast reachability check: if the host has no route to the printer at
-  // all, say so now rather than at the first beacon. The address it returns is
+  // all, say so now rather than at the first announcement. The address it returns is
   // NOT what gets advertised — the keepalive handler computes the local
   // address per announcement, against that announcement's source. On a
   // multi-homed host the two can differ, so the log must not read as "this is
@@ -91,8 +91,8 @@ export async function startPrinterDiscovery(
       destId: config.scanDestId,
       language: config.language,
       // "auto" leaves version undefined so the responder picks per-announcement:
-      // it answers the beacon's requested tags (3.0 exactly when `Ver` is
-      // requested), and a beacon with no tag list, or a V3_KEEPALIVE_PRODUCTS one
+      // it answers the announcement's requested tags (3.0 exactly when `Ver` is
+      // requested), and an announcement with no tag list, or a V3_KEEPALIVE_PRODUCTS one
       // whose list lacks `Ver`, falls back to the PID (3.0 for the FF-680W and
       // DS-575W, 2.0 otherwise).
       // An explicit NETSCAN_VERSION pins every burst to that wire format —
@@ -151,8 +151,8 @@ function jobControlFor(kind: PushScanRequestKind, info: PushScanInfo): JobContro
 
 // Printers whose job-control exchange is confirmed on the wire: the FF-680W
 // and its DS-575W sibling (issue #128). For them a job-control failure is
-// answered with the protocol ERROR. For any other v3 printer job control is
-// inferred from the request, so a failure there warns and the scan carries on.
+// answered with the protocol ERROR. For a v3 request from any other printer,
+// job control is inferred from the request, so a failure there warns and the scan carries on.
 // Mirrors V3_KEEPALIVE_PRODUCTS in keepalive.ts — separate axis, shared
 // membership today (see printer-ids.ts).
 const CONFIRMED_JOB_CONTROL_PRODUCTS = new Set([PID_FF680W, PID_DS575W]);
@@ -164,8 +164,8 @@ function hasConfirmedJobControl(productName: string | null): boolean {
 /**
  * How long the daemon's shutdown drain waits, after answering a JobList, for
  * the PushScan that follows it on a fresh connection (issue #207). The FF-680W
- * captures put that follow-up ~0.7 s after our JobList response; a press the
- * user cancels never sends one, so the wait is bounded rather than open.
+ * captures put that follow-up ~0.7 s after our JobList response; if the user
+ * cancels on the panel it never comes, so the wait is bounded rather than open.
  */
 export const JOB_LIST_HANDOFF_MS = 5000;
 
@@ -173,10 +173,11 @@ export const JOB_LIST_HANDOFF_MS = 5000;
  * Options for the push-scan server on TCP 2968.
  *
  * `admission` is required, and `target` therefore takes an explicit
- * `undefined` rather than being optional: an omitted gate used to admit every
- * push-scan silently, which is how one-shot shipped without one (issue #198)
- * past both the compiler and the suite. Callers with genuinely nothing to gate
- * pass an explicit no-gate stub so the intent is visible at the call site.
+ * `undefined` rather than being optional: an omitted admission used to admit
+ * every panel trigger silently, which is how one-shot shipped without one
+ * (issue #198) past both the compiler and the suite. Callers with genuinely
+ * nothing to refuse pass an explicit never-busy stub so the intent is visible
+ * at the call site.
  */
 export function buildPushScanServerOptions(
   config: Config,
@@ -190,14 +191,14 @@ export function buildPushScanServerOptions(
     validatePeer: target ? (peer) => target.accepts(peer) : undefined,
     beforeResponse: async ({ kind, info, peerAddress, onAbandon }) => {
       // Shared admission with the POST /scan webhook (issue #137): the printer
-      // serves one scan at a time. A panel press while a scan runs is refused
+      // serves one scan at a time. A panel trigger while a scan runs is refused
       // here, before any job-control round-trip and before the OK response —
       // refusing in the onPushScan callback would be too late, the printer
       // would already be waiting for a session that never opens.
       //
       // Admitting also *reserves* the slot from this moment. The trigger only
       // becomes a tracked scan once the OK has been flushed and the callback
-      // runs; on a v3 printer that gap holds the JOBR read below (a network
+      // runs; for a v3 request that gap holds the JOBR read below (a network
       // round-trip with a 3 s timeout), and on every model it holds
       // the response write. Without the reservation a webhook arriving in
       // that gap would be admitted and two scans would start. The release
@@ -251,8 +252,8 @@ export function buildPushScanServerOptions(
 
       if (step === "JOBW") {
         // The PushScan that follows is the real trigger. The daemon's drain
-        // must stay up for it (one-shot's coordinator already does), and the
-        // gate must not refuse it — hence a hand-off, not a reservation.
+        // must stay up for it (one-shot's coordinator already does), and
+        // admission must not refuse it — hence a hand-off, not a reserved slot.
         admission.expectFollowUp?.(JOB_LIST_HANDOFF_MS);
       }
     },
@@ -262,17 +263,17 @@ export function buildPushScanServerOptions(
 /**
  * Counts `beforeResponse` hooks in flight, for one-shot's shutdown coordinator
  * (issue #202). A trigger holds the admission slot only from the moment its
- * `pushScan` hook reserves it, but on a v3 printer the panel press
- * first sends a JobList whose JOBW round-trip over TCP/1865 reserves nothing —
+ * `pushScan` hook reserves it, but with v3 requests the printer first
+ * sends a JobList whose JOBW round-trip over TCP/1865 reserves nothing —
  * a signal there would otherwise look like "nothing pending" and exit inside a
  * job-control transaction that holds the printer's lock. The count is the
  * hook's own lifetime; the response write that follows it is local and brief.
  *
  * The daemon has no coordinator: its shutdown drains the inflight tracker.
  * Given `inflight`, each hook's lifetime is registered there too, so that
- * drain waits out the same JobList window (issue #207); the admission gate
- * does not read the tracker, so this never refuses the press it belongs to.
- * A hook's rejection — a refused press, a job-control failure — still reaches
+ * drain waits out the same JobList window (issue #207); the admission check
+ * does not read the tracker, so this never refuses the trigger it belongs to.
+ * A hook's rejection — a refused trigger, a job-control failure — still reaches
  * the server; only the tracker's copy is settled quietly, or every refusal
  * would log as a failed scan.
  */
@@ -370,7 +371,7 @@ export interface OneShotPushScanDeps {
  * but the accepted arm fires once for the life of the process: commit() here
  * is permanent (the slot never reopens) and `onScanStarted` is a promise
  * resolver, so a second trigger that reached the callback anyway — the panel
- * press that raced `beforeResponse` — has to be dropped before either.
+ * trigger that raced `beforeResponse` — has to be dropped before either.
  */
 export function buildOneShotPushScanCallback(deps: OneShotPushScanDeps): PushScanCallback {
   const { config, admission, onScanStarted } = deps;

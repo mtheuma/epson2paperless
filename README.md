@@ -9,7 +9,7 @@
 What you get:
 
 - **Printer panel → file in a folder.** No Epson app required.
-- **JPG or PDF, 1-Sided or 2-Sided, ADF or flatbed.** The panel chooses the format; the service honours it.
+- **JPG or PDF, simplex or duplex, ADF or flatbed.** The panel's choices decide the output; the service honours them.
 - **Standalone or Paperless-ngx feeder.** Drop scans into a consume folder, or POST them directly to the Paperless-ngx API.
 
 ## Requirements
@@ -75,7 +75,7 @@ To try a release candidate, set `image:` in `compose.yaml` to its tag, then `doc
 
 Notes:
 
-- Uses host networking. The printer's multicast beacon can't reach a bridged container. [Why](docs/PROTOCOL-REFERENCE.md#discovery-and-keepalive-udp-multicast).
+- Uses host networking. The printer's multicast announcement can't reach a bridged container. [Why](docs/PROTOCOL-REFERENCE.md#discovery-and-keepalive-udp-multicast).
 - Listens on all interfaces: TCP `2968` for the scan trigger, plus `HEALTH_PORT` (default `3000`). The trigger carries no credential — the printer has no way to log in — so since v0.9.0 the service only accepts connections on `2968` from the configured printer address (`PRINTER_IP`, or whatever `PRINTER_HOSTNAME` currently resolves to); any other LAN host is dropped at connect. That is source filtering, not authentication. Keep the service on a network you trust.
 - Several destinations on the panel (e.g. a greyscale-PDF preset and a colour-JPG preset): one container per entry, each with its own MAC on a `macvlan` network. Compose example and caveats in [MULTIPLE-DESTINATIONS.md](docs/MULTIPLE-DESTINATIONS.md).
 - Container runs as UID 1000 (`node`). If your mount has a different owner, `chown` it to match.
@@ -101,7 +101,7 @@ Open **Scan** > **Computer** on the printer panel. The printer announces itself 
 
 **Windows:** copy `command.bat.example` to `command.bat` (gitignored, so your local `PRINTER_IP` / paths stay private), edit the values, then double-click. The script tees output to `scan.log`.
 
-**One-shot mode.** `npm run scan` runs a single scan and exits, handy for cron jobs or end-to-end tests. Exit codes: `0` success, `1` scan failure. On `SIGINT`/`SIGTERM` an in-flight scan is allowed to finish first (bounded by `SHUTDOWN_TIMEOUT_MS`) and its result is reported; `130`/`143` only when no scan had started or the drain timed out. A signal arriving while a panel press is still being answered waits for its scan to start, and the scan then gets what is left of the same budget. No health endpoint is opened, and a second panel press while the scan runs is refused immediately.
+**One-shot mode.** `npm run scan` runs a single scan and exits, handy for cron jobs or end-to-end tests. Exit codes: `0` success, `1` scan failure. On `SIGINT`/`SIGTERM` an in-flight scan is allowed to finish first (bounded by `SHUTDOWN_TIMEOUT_MS`) and its result is reported; `130`/`143` only when no scan had started or the drain timed out. A signal arriving while a panel trigger is still being answered waits for its scan to start, and the scan then gets what is left of the same budget. No health endpoint is opened, and a second panel trigger while the scan runs is refused immediately.
 
 **Host-triggered scan.** `npm run scan:now` scans immediately and exits, without waiting
 for a panel button. It skips discovery and the push-scan listener entirely and pulls the
@@ -153,7 +153,7 @@ reporting `lastScan`, which is the time the last scan was _triggered_ (panel or 
 not whether it succeeded.
 
 One scan at a time is enforced both ways: the webhook answers `409` while a panel scan runs
-(or a panel press is still being answered), and the printer panel shows an error if Scan is
+(or a panel trigger is still being answered), and the printer panel shows an error if Scan is
 pressed while a webhook scan runs. The panel side of this applies whether or not the webhook
 is enabled: pressing Scan while a previous scan is still running is now refused at the trigger
 (panel error, nothing sent to the printer) where earlier versions opened a second session that
@@ -205,7 +205,7 @@ Each setting's **Scope** column shows which printers it affects: `All`, `Panel` 
 | --------------------- | ---------------------------- | ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `PRINTER_IP`          | All                          | —                | Fixed printer IPv4 address. Mutually exclusive with `PRINTER_HOSTNAME`; retained for compatibility.                                                                                                                                                      |
 | `PRINTER_HOSTNAME`    | All                          | —                | DNS hostname for the printer. IPv4 results are loaded at startup, refreshed every 30 seconds, and refreshed on demand for an unknown peer; the last known-good set is retained after transient DNS failure. Mutually exclusive with `PRINTER_IP`.        |
-| `SCAN_DEST_NAME`      | All                          | `Paperless`      | The label the printer shows on its panel. Give each instance a distinct name. On button-only scanners (FF-680W, DS-575W) it must also match the scanner's stored paired name; see [Button-only scanners](docs/BUTTON-ONLY-SCANNERS.md).                  |
+| `SCAN_DEST_NAME`      | All                          | `Paperless`      | The label the printer shows on its panel. Give each instance a distinct name. On button-only scanners (FF-680W, DS-575W) it must also match the destination name stored on the scanner; see [Button-only scanners](docs/BUTTON-ONLY-SCANNERS.md).        |
 | `OUTPUT_DIR`          | All                          | `/output`        | Where scans are written (JPG or PDF, depending on panel). Created automatically.                                                                                                                                                                         |
 | `TZ`                  | All                          | system           | Timezone for scan filename timestamps. The standard Docker variable, read by Node directly — no app-side validation. Unset uses the container/system zone, which is UTC in the published image.                                                          |
 | `LOG_LEVEL`           | All                          | `info`           | `debug` / `info` / `warn` / `error`.                                                                                                                                                                                                                     |
@@ -213,7 +213,7 @@ Each setting's **Scope** column shows which printers it affects: `All`, `Panel` 
 | `PREVIEW_ACTION`      | Panel                        | `reject`         | What to do when the panel's Action is "Preview on Computer": `reject` silently ignores the scan; `jpg` or `pdf` treats it as if that format was chosen.                                                                                                  |
 | `SCAN_FORMAT`         | FF-680W, DS-575W, `scan:now` | `pdf`            | Output format (`jpg` / `pdf`) when no panel choice reaches us: button-only scanners, and every host-triggered scan.                                                                                                                                      |
 | `SCAN_SIDES`          | FF-680W, DS-575W, `scan:now` | `duplex`         | `simplex` or `duplex` when no panel choice reaches us. Button-only scanners have no panel Sides selector. Set `simplex` for host-triggered scans on ADF models without duplex hardware.                                                                  |
-| `SCAN_RESOLUTION`     | All                          | unset            | Target scan DPI (50-1200). Honoured on the wire where the printer advertises it; otherwise scans at the model's fixed DPI and downsamples. Unset = model default.                                                                                        |
+| `SCAN_RESOLUTION`     | All                          | unset            | Target resolution in DPI (50-1200). Honoured on the wire where the printer advertises it; otherwise scans at the model's fixed DPI and downsamples. Unset = model default.                                                                               |
 | `SCAN_COLOR_MODE`     | All                          | `color`          | `color`, `grayscale`, or `auto`. `grayscale` always yields greyscale: requested on the wire where supported (DS-575W), converted host-side elsewhere. `auto` works on any model: scans in colour, then saves colourless pages as greyscale.              |
 | `PRINTER_WHITE_POINT` | All                          | unset            | How this scanner renders white paper, `R:G:B` (e.g. `227:232:255`). Only affects `SCAN_COLOR_MODE=auto`, correcting the device's colour cast before deciding colour vs greyscale. Measure once with `npm run scan:calibrate`; unset means no correction. |
 | `PRINTER_PROTOCOL`    | All                          | `auto`           | `auto` (probe each session), `esci2` (force ESC/I-2 over TLS), `esci2-plain` (force ESC/I-2 over plain TCP), `esci` (force plain-TCP ESC/I).                                                                                                             |
@@ -234,7 +234,7 @@ Each setting's **Scope** column shows which printers it affects: `All`, `Panel` 
 | `PRINTER_CERT_FINGERPRINT` | ESC/I-2 TLS  | —        | SHA-256 fingerprint of the printer's TLS cert (e.g. `AB:CD:…`); scans abort on mismatch. **Requires `PRINTER_PROTOCOL=esci2`** — `auto` can't pin reliably and the non-TLS variants have no cert.                                                      |
 | `DIAGNOSE_PROTOCOL`        | Legacy ESC/I | `false`  | Compatibility-report aid. On a legacy `ESC @` non-ACK, sends one extra `FS Y` probe and aborts with annotated `[diagnose]` log lines. Leave off in normal use.                                                                                         |
 | `NETSCAN_VERSION`          | All          | `auto`   | Compatibility-triage aid. Forces the discovery keepalive wire format (`2.0` / `3.0`); `auto` follows the scanner's announcement (`3.0` when it asks for `Ver`), else its PID; the FF-680W and DS-575W always get `3.0`. Leave on `auto` in normal use. |
-| `SHUTDOWN_TIMEOUT_MS`      | All          | `120000` | ms to wait for an in-flight scan, or a panel press still being answered, to finish on `SIGINT`/`SIGTERM` before forcing shutdown. Must cover a full multi-page ADF scan; Docker's `stop_grace_period` must exceed it.                                  |
+| `SHUTDOWN_TIMEOUT_MS`      | All          | `120000` | ms to wait for an in-flight scan, or a panel trigger still being answered, to finish on `SIGINT`/`SIGTERM` before forcing shutdown. Must cover a full multi-page ADF scan; Docker's `stop_grace_period` must exceed it.                                |
 | `ESCI2_TIMEOUT_MS`         | ESC/I-2      | `60000`  | ms to wait for each printer reply during an ESC/I-2 scan, and for a busy or warming-up printer to get ready, before aborting. Raise it if a slow Wi-Fi printer times out while warming up.                                                             |
 
 </details>
@@ -333,4 +333,4 @@ MIT. See [`LICENSE`](LICENSE) for the full text.
 
 ---
 
-_Current scope: ADF or flatbed scans, 1-Sided or 2-Sided (ADF), single or multi-page, JPG or PDF output._
+_Current scope: ADF or flatbed scans, simplex or duplex (ADF), single or multi-page, JPG or PDF output._

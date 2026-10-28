@@ -261,7 +261,7 @@ describe("shutdown", () => {
     expect(deps.exitCalls).toEqual([0]);
   });
 
-  it("waits through a JobList hand-off for the follow-up press, then for its scan", async () => {
+  it("waits through a JobList hand-off for the follow-up trigger, then for its scan", async () => {
     const deps = makeDeps();
     const admission = createScanAdmission(deps.inflight);
     admission.expectFollowUp(1000); // JOBW answered; the PushScan is on its way
@@ -631,7 +631,7 @@ describe("runOneShotLifecycle", () => {
     void result.then((code) => (settled = code));
 
     await vi.advanceTimersByTimeAsync(4_000);
-    hooksPending.count = 1; // a second press's JobList arrives; JOBW under way
+    hooksPending.count = 1; // a second trigger's JobList arrives; JOBW under way
     await vi.advanceTimersByTimeAsync(1_000); // the first hand-off lapses
     expect(settled).toBeUndefined();
 

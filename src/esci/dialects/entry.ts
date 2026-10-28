@@ -14,7 +14,7 @@ export interface Branch<S extends string> {
 
 export interface LegacyDialectEntry {
   name: "wf3620" | "xp620" | "et2550";
-  /** `PID XXXX`, matched against the push-scan trigger and the FS I identity reply. */
+  /** `PID XXXX`, matched against the panel trigger and the FS I identity reply. */
   productName: string;
   /**
    * `detect`: the session's FS F replies settle the source — the first one
@@ -38,8 +38,8 @@ export interface LegacyDialectEntry {
   setup: Branch<SetupEntryState>;
   teardown: Branch<TeardownEntryState>;
   /**
-   * DPI the fixed wire parameters actually deliver for a mode. The legacy
-   * path has NO wire resolution arm (cross-product DPI×format combos are
+   * The wire resolution the fixed wire parameters give for a mode. The legacy
+   * path has NO per-scan resolution choice (cross-product DPI×format combos are
    * uncaptured, and every dialect's FS W block is built for its fixed
    * captured geometries only) — this feeds only the host-side downsample
    * decision.

@@ -17,7 +17,7 @@ describe("extractPid", () => {
   });
 
   it("extracts the token from the latin1-decoded announcement shape", () => {
-    // In the real beacon the token sits between a length byte and a NUL
+    // In a real announcement the token sits between a length byte and a NUL
     // ("\x08PID 11D1\0" — see keepalive.test.ts's capture fixture).
     expect(extractPid("service:NetScanMonitor-agent\0\x08PID 11D1\0")).toBe("PID 11D1");
   });

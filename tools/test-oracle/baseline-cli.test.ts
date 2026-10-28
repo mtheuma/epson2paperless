@@ -47,7 +47,7 @@ describe("buildBaselineFromOutputDir", () => {
     const dir = mkdtempSync(path.join(os.tmpdir(), "oracle-cli-dup-"));
     try {
       // Front page: no EXIF. Back page: tagged Orientation=3, as the scanner
-      // does for duplex back sides — that tag is what the CLI reads.
+      // does for duplex back pages — that tag is what the CLI reads.
       writeFileSync(path.join(dir, "scan_2026-06-05_000000_01.jpg"), jpeg);
       writeFileSync(path.join(dir, "scan_2026-06-05_000000_02.jpg"), setJpegOrientation(jpeg, 3));
       const { baseline } = await buildBaselineFromOutputDir(dir, {
