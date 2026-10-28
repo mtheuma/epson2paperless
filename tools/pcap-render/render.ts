@@ -88,7 +88,7 @@ export async function render(opts: RenderOptions): Promise<{ pageCount: number }
       const pageNum = i + 1;
       const isBackPage = opts.source === "adf-duplex" && pageNum % 2 === 0;
       // Explicit --width/--height geometry carries no DPI, so those pages ship
-      // density-less; the dialect geometry stamps the delivered DPI like production.
+      // density-less; the dialect geometry stamps the wire resolution like production.
       const dpi = "dpi" in geom ? geom.dpi : undefined;
       const jpg = await encodeRawGbrToJpeg(pageBytes, geom.widthPx, geom.heightPx, 90, dpi);
       return { pageNum, isBackPage, jpg: isBackPage ? setJpegOrientation(jpg, 3) : jpg };

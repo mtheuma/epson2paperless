@@ -4,9 +4,9 @@ The **FF-680W** and **DS-575W** have no panel to pick a destination from — jus
 
 ## Why pairing is needed
 
-The scanner stores a single paired host name and routes every button press to it, so the `ClientName` advertised by `epson2paperless` (i.e. `SCAN_DEST_NAME`) must match that stored name exactly. If it doesn't, the button press never reaches the service — you'll see healthy keepalives in the log but no scan.
+The scanner stores a single destination name and sends every panel trigger to it, so the `ClientName` advertised by `epson2paperless` (i.e. `SCAN_DEST_NAME`) must match that stored name exactly. If it doesn't, pressing Start never reaches the service — you'll see healthy keepalives in the log but no scan.
 
-## Read the current paired name
+## Read the stored destination name
 
 ```bash
 snmpget -v1 -c epson <printer-ip> \
@@ -14,9 +14,9 @@ snmpget -v1 -c epson <printer-ip> \
 ```
 
 - **A name comes back** — common on the FF-680W if you've run Epson's software, which stores the PC's hostname. Either set `SCAN_DEST_NAME` to that value, or overwrite the stored name (below). Note the current value first if you may want to restore it.
-- **An empty string comes back** — common on the DS-575W, whose button is not paired to a network destination out of the box. You must set it before any button press will reach the service.
+- **An empty string comes back** — common on the DS-575W, whose button is not paired to a network destination out of the box. You must set it before pressing Start will reach the service.
 
-## Set the paired name
+## Set the stored destination name
 
 Set the stored name to match `SCAN_DEST_NAME`:
 

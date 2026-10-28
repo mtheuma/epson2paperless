@@ -15,7 +15,7 @@ Open a GitHub issue with:
 
 ## Contributing a scan capture
 
-The most useful thing you can send is a capture of the project's **[standard test page](https://github.com/mtheuma/epson2paperless/blob/main/tools/test-page/compatibility-test-page.pdf)**. First, check whether your printer uses TLS.
+The most useful thing you can send is a capture of the project's **[compatibility page](https://github.com/mtheuma/epson2paperless/blob/main/tools/test-page/compatibility-test-page.pdf)**. First, check whether your printer uses TLS.
 
 **TLS models can't be captured with Wireshark.** Newer EcoTanks (ET-4950, ET-3950, ET-4956, ET-2950) encrypt the scan session, so a Wireshark capture is unreadable.
 
@@ -23,7 +23,7 @@ If you have one of those models, open a [compatibility report](https://github.co
 
 If you know your printer doesn't use TLS, a Wireshark capture is exactly what we need, and you only need to send it once:
 
-1. **Print the test page:** [compatibility-test-page.pdf](https://github.com/mtheuma/epson2paperless/blob/main/tools/test-page/compatibility-test-page.pdf) at 100% scale (turn off "fit to page"), plain white A4.
+1. **Print the compatibility page:** [compatibility-test-page.pdf](https://github.com/mtheuma/epson2paperless/blob/main/tools/test-page/compatibility-test-page.pdf) at 100% scale (turn off "fit to page"), plain white A4.
 2. **Capture the scan:** set Wireshark's capture filter to `host <printer-ip>` (or `tshark -f "host <printer-ip>"`), then scan the printed page from the panel via **Scan to Computer** into epson2paperless. Put page 1 (the colour grid) first. Do one scan per mode your hardware supports: Flatbed JPG/PDF, plus ADF 1-Sided / 2-Sided JPG/PDF if you have an ADF.
 3. **Send it privately:** a pcap contains your printer's MAC and other identifying bytes, so don't attach it to the issue. Upload to the [Dropbox drop folder](https://www.dropbox.com/request/yksswgt8rqv53l1x9dal) (write-only, no account needed), or email it to `epson2paperless.vineyard182@passmail.com`. Note the model and which mode each capture was.
 

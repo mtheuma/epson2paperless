@@ -147,7 +147,7 @@ describe("resolveDialect", () => {
       expect(resolved.dialect.displayName).toBe("generic ESC/I-2 dialect (PID 9999)");
       expect(warnings).toHaveLength(1);
       expect(warnings[0]).toContain(
-        "PID 9999 not recognised — generic ESC/I-2 dialect, experimental, please report",
+        "PID 9999 not recognised — untested, running the generic ESC/I-2 dialect, please report",
       );
       const diagnostic = infos.filter((line) => line.includes("CAPA fingerprint:"));
       expect(diagnostic).toHaveLength(1);

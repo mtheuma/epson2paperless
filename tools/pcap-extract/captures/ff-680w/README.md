@@ -6,8 +6,8 @@ FF-680W, contributed by **@bchess** for [PR #110](https://github.com/mtheuma/eps
 not epson2paperless. Contributor's host: `192.168.10.154`; printer:
 `192.168.10.8`; transport: ESC/I-2 over plain TCP, port 1865.
 
-The FF-680W is an ADF-only FastFoto scanner: no flatbed. Sides (1-sided /
-2-sided) and resolution (200 / 300 DPI) are software settings chosen at scan
+The FF-680W is an ADF-only FastFoto scanner: no flatbed. Sides (simplex /
+duplex) and resolution (200 / 300 DPI) are software settings chosen at scan
 time, so the fixtures cover the source × resolution matrix the dialect exposes.
 All three captures scan to PDF (the only output the FastFoto UI offers); the wire
 format is JPG, host-composed into a PDF as on every other dialect.

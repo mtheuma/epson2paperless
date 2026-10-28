@@ -151,7 +151,7 @@ const ET7700_REAL_WELCOME_HEX = "49538000300c0000000500000102000000";
 
 /** Install a `net.connect` mock that hands out the given fakes in order.
  * Returns the spy so tests can assert how many plain-TCP connections the
- * probe opened — the welcome arm should need exactly one. */
+ * probe opened — the welcome step should need exactly one. */
 function mockNetConnect(...fakes: FakeNetSocket[]) {
   let i = 0;
   return vi.spyOn(net, "connect").mockImplementation((..._args: unknown[]) => {
@@ -223,7 +223,7 @@ describe("protocol-probe", () => {
   it("returns esci when TLS fails and plain-TCP welcome carries the legacy discriminator (synthetic frame)", async () => {
     // Regression guard: a real WF-3620 / XP-620 emits an unsolicited 0x8000
     // welcome on plain TCP (every wf-3620 fixture under
-    // tools/pcap-extract/captures/ begins with one). The welcome arm must
+    // tools/pcap-extract/captures/ begins with one). The welcome step must
     // classify it as legacy ESC/I directly from the payload[1] discriminator
     // — positive evidence, no follow-up probe.
     vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
@@ -287,7 +287,7 @@ describe("protocol-probe", () => {
   });
 
   it("returns esci when TLS fails and plain-TCP gives no welcome (inconclusive → fallback)", async () => {
-    // A printer that neither speaks TLS nor announces itself leaves both arms
+    // A printer that neither speaks TLS nor announces itself leaves both steps
     // inconclusive. We still answer `esci` so the legacy scanner's connect
     // path runs and surfaces the real socket error — but only one plain-TCP
     // connection is attempted; there is no follow-up probe to fall through to.
@@ -421,8 +421,8 @@ describe("protocol-probe", () => {
   it("routes a known ESC/I-2 PID to esci2-plain without consulting the welcome (ET-7700)", async () => {
     // The literal ET-7700 fixture welcome is byte-identical to the WF-3620's
     // (see ET7700_REAL_WELCOME_HEX), so payload[1] carries no signal for this
-    // model. Once the TLS arm fails, the push-scan PID settles the variant
-    // directly — the welcome arm must not even open a connection, since no
+    // model. Once the TLS step fails, the push-scan PID settles the variant
+    // directly — the welcome step must not even open a connection, since no
     // outcome of it could change the routing.
     vi.spyOn(tls, "connect").mockReturnValue(tlsError("ERR_SSL_WRONG_VERSION_NUMBER"));
     const netSpy = mockNetConnect(
@@ -508,9 +508,9 @@ describe("protocol-probe", () => {
     expect(variant).toBe("esci");
   });
 
-  it("applies the PID hint when the TLS arm is inconclusive (unreachable printer)", async () => {
+  it("applies the PID hint when the TLS step is inconclusive (unreachable printer)", async () => {
     // Unresponsive printer with a known ESC/I-2 PID: the hint still selects
-    // esci2-plain right after the TLS arm gives up, so the socket error
+    // esci2-plain right after the TLS step gives up, so the socket error
     // surfaces from the scanner the model actually speaks — never from a
     // misleading legacy-init failure, and never via the all-probes-failed
     // fallback (whose log would misread the outage as classification).
@@ -587,7 +587,7 @@ describe("protocol-probe", () => {
     });
     expect(a).toBe("esci2-plain");
     expect(b).toBe("esci2-plain");
-    // The welcome arm opens one connection per call, so a cache hit would
+    // The welcome step opens one connection per call, so a cache hit would
     // show up as a single net.connect across both calls.
     expect(netSpy.mock.calls.length).toBeGreaterThanOrEqual(2);
   });

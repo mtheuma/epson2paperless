@@ -14,7 +14,7 @@ type ColourSettings = Pick<ModelOverride, "gmm" | "gammaClass" | "cmxClass" | "m
 
 /**
  * A short hash of the colour bytes an override sends: its gamma mode, the
- * JPG and PDF tone curves and colour matrices, and its mono tone curve. It
+ * JPG and PDF tone curves and colour matrices, and its greyscale tone curve. It
  * hashes bytes, not class names, so renaming a class keeps its evidence;
  * changing a byte does not. A colour evidence entry records the hash of the
  * override's settings when it was recorded. The host-side `toneCurve` is not

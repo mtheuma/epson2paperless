@@ -6,18 +6,18 @@ One running `epson2paperless` is one entry on the printer's **Scan to Computer**
 
 The printer builds its destination list from the keepalive replies it receives, and it keeps one entry per sending network identity. Tested on an ET-4956 (issue [#170](https://github.com/mtheuma/epson2paperless/issues/170)) and reported on an ET-4800 (issue [#105](https://github.com/mtheuma/epson2paperless/issues/105)):
 
-- Two registrations from one MAC never show together. Within a discovery cycle the first one wins and the rest are ignored, whatever their `SCAN_DEST_NAME`, IP or port.
+- Two instances sharing one MAC never show together. Within a discovery cycle the first keepalive wins and the rest are ignored, whatever their `SCAN_DEST_NAME`, IP or port.
 - Two containers on an `ipvlan` network (own IP, shared MAC) still collapsed to a single, seemingly random entry.
 - The same two containers on a `macvlan` network (own IP **and** own MAC) both appeared.
 
 In Docker terms:
 
-| Network mode | Own LAN IP | Own LAN MAC | Works                                                 |
-| ------------ | ---------- | ----------- | ----------------------------------------------------- |
-| `host`       | No         | No          | No. Also clashes on TCP `2968` and the health port.   |
-| `bridge`     | No         | No          | No. The multicast beacon never reaches the container. |
-| `ipvlan`     | Yes        | No          | No. Confirmed in #105.                                |
-| `macvlan`    | Yes        | Yes         | Yes.                                                  |
+| Network mode | Own LAN IP | Own LAN MAC | Works                                                       |
+| ------------ | ---------- | ----------- | ----------------------------------------------------------- |
+| `host`       | No         | No          | No. Also clashes on TCP `2968` and the health port.         |
+| `bridge`     | No         | No          | No. The multicast announcement never reaches the container. |
+| `ipvlan`     | Yes        | No          | No. Confirmed in #105.                                      |
+| `macvlan`    | Yes        | Yes         | Yes.                                                        |
 
 Anything that gives each instance its own MAC works the same way: separate hosts, VMs, or NICs. `macvlan` is just the cheapest on one Linux Docker host.
 
@@ -110,7 +110,7 @@ Before you deploy:
 
 Anything in the [Configure](../README.md#configure) table: colour mode, `POST_PROCESS`, `JPEG_QUALITY`, `SCAN_RESOLUTION`, output folder, Paperless upload settings and so on.
 
-**Format and sides still come from the printer panel.** On panel-driven models the JPG/PDF and 1-Sided/2-Sided choices are made on the printer for every scan, whichever destination is selected. `SCAN_FORMAT` only applies to button-only scanners and `scan:now`, and `PREVIEW_ACTION` only rewrites the panel's "Preview on Computer" action. A destination named "PDF" therefore relies on the person at the panel choosing PDF.
+**Output format and sides still come from the printer panel.** On panel-driven models the JPG/PDF and 1-Sided/2-Sided choices are made on the printer for every scan, whichever destination is selected. `SCAN_FORMAT` only applies to button-only scanners and `scan:now`, and `PREVIEW_ACTION` only rewrites the panel's "Preview on Computer" action. A destination named "PDF" therefore relies on the person at the panel choosing PDF.
 
 ## Caveats
 

@@ -14,7 +14,7 @@ const WINDOW_FRACTION = 0.18; // search window edge length as a fraction of the 
  * from biasing the centroid — they're bright in one channel.
  *
  * Real-scan assumptions (observations for when this runs on actual scans, not
- * the synthetic test page):
+ * the synthetic compatibility page):
  * - The NEAR_BLACK=60 cut is a hard threshold tuned for near-black ink;
  *   anti-aliased / soft crosshair edges on a real scan get dropped, which
  *   narrows but does not bias the (symmetric) centroid.

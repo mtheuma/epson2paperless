@@ -6,9 +6,9 @@ import { getLocalIpForTarget, normalizeIPv4, type PrinterTarget } from "./networ
 const log = createLogger("keepalive");
 
 // Announced PIDs (uppercased "PID XXXX") that get the NetScanMonitor v3.0
-// keepalive wire format when their beacon carries no usable tag list. These are
-// the button-only DS-family scanners — the FF-680W (016B) and its DS-575W
-// sibling (0169). A beacon's tag list, when present, decides instead (see
+// keepalive wire format when their announcement carries no usable tag list. These
+// are the button-only DS-family scanners — the FF-680W (016B) and its DS-575W
+// sibling (0169). An announcement's tag list, when present, decides instead (see
 // chooseKeepaliveFormat); `NETSCAN_VERSION` overrides both.
 const V3_KEEPALIVE_PRODUCTS = new Set([PID_FF680W, PID_DS575W]);
 
@@ -23,7 +23,7 @@ export interface KeepaliveOptions {
   group?: number;
 }
 
-/** Keepalive fields this service can answer, keyed by the tag a beacon requests. */
+/** Keepalive fields this service can answer, keyed by the tag an announcement requests. */
 const KEEPALIVE_TAGS = ["Ver", "ClientName", "IPAddress", "EventPort", "Group"] as const;
 type KeepaliveTag = (typeof KEEPALIVE_TAGS)[number];
 
@@ -31,14 +31,14 @@ function isKeepaliveTag(tag: string): tag is KeepaliveTag {
   return (KEEPALIVE_TAGS as readonly string[]).includes(tag);
 }
 
-/** The field list each wire format sends when no beacon tag list applies. */
+/** The field list each wire format sends when no announcement tag list applies. */
 function defaultTags(version: "2.0" | "3.0"): readonly KeepaliveTag[] {
   return version === "3.0" ? KEEPALIVE_TAGS : ["ClientName", "IPAddress", "EventPort"];
 }
 
 /**
- * Builds the UDP keepalive packet that registers this service as a
- * scan destination on the Epson printer's panel.
+ * Builds the UDP keepalive packet that puts this service on the Epson
+ * printer's destination list.
  *
  * Packet layout (from Wireshark capture analysis):
  *   Offset 0-1:   02 07          — command type
@@ -143,7 +143,7 @@ function parseRequestedTags(data: Buffer): string[] | null {
 }
 
 /**
- * Parses a printer announcement packet (broadcast by the printer to 239.255.255.253:2968).
+ * Parses a printer announcement packet (multicast by the printer to 239.255.255.253:2968).
  *
  * The announcement uses command type 02 06. Byte 11 carries the sequence number
  * that must be echoed in our keepalive response.
@@ -174,7 +174,7 @@ interface KeepaliveFormat {
 /**
  * Picks the keepalive reply for one announcement, in priority order:
  *   1. a forced version (`NETSCAN_VERSION`) sends that version's fixed field list;
- *   2. a beacon tag list is answered tag by tag, in its order, and the reply is
+ *   2. an announcement tag list is answered tag by tag, in its order, and the reply is
  *      v3 exactly when `Ver` is requested. Unknown tags are skipped (debug log).
  *      A V3_KEEPALIVE_PRODUCTS PID whose list lacks `Ver` skips this step;
  *   3. otherwise the announced PID decides (v3 for V3_KEEPALIVE_PRODUCTS).
@@ -236,11 +236,11 @@ export interface KeepaliveResponderOptions {
   burstIntervalMs: number;
   /**
    * Window during which repeated announcements of the same seq are ignored.
-   * The printer broadcasts each `02 06` beacon 3× per announcement; without
-   * this, we'd emit 3 bursts × 3 packets = 9 unicasts per announcement.
+   * The printer sends each `02 06` announcement 3× with the same seq; without
+   * this, we'd emit 3 bursts × 3 packets = 9 unicasts for one announcement.
    * Dedupping by seq collapses that to 1 burst per distinct seq. Default
-   * 30_000 ms — long enough to span an announcement's 3 beacons, short
-   * enough that seq wrap-around across announcements still fires a new burst.
+   * 30_000 ms — long enough to span the 3 repeats, short enough that seq
+   * wrap-around across announcements still fires a new burst.
    */
   dedupWindowMs?: number;
 }
@@ -262,7 +262,7 @@ export interface KeepaliveResponder {
  *
  * This replaces the old `createKeepaliveSender`, which fired unsolicited keepalives
  * every 500 ms with a hardcoded sequence number. The printer only opens UDP 2968
- * during ~60-second windows after broadcasting its own announcement, and only
+ * during ~60-second windows after sending its own announcement, and only
  * accepts keepalives whose byte 11 matches the announcement sequence.
  */
 export function createKeepaliveResponder(opts: KeepaliveResponderOptions): KeepaliveResponder {
@@ -275,7 +275,7 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
   // See dedupWindowMs JSDoc above for the rationale.
   const seenSeqs = new Map<string, ReturnType<typeof setTimeout>>();
   // Unrecognised source IP → auto-expire timer. Throttles the rejected-peer
-  // warning to once per address per dedup window, so a chatty stale beacon
+  // warning to once per address per dedup window, so a chatty stale announcer
   // can't flood the log while the mismatch persists.
   const warnedPeers = new Map<string, ReturnType<typeof setTimeout>>();
   const dedupWindowMs = opts.dedupWindowMs ?? 30_000;
@@ -320,7 +320,7 @@ export function createKeepaliveResponder(opts: KeepaliveResponderOptions): Keepa
                 ? !(await opts.target.accepts(source))
                 : source !== normalizeIPv4(opts.printerIp))
             ) {
-              // A mismatched beacon means no keepalive goes out and the panel
+              // A mismatched announcement means no keepalive goes out and the panel
               // destination never appears — a stale DNS record is the likeliest
               // cause. Warn (parity with the push-scan rejection), naming the
               // observed and expected addresses, throttled per address.

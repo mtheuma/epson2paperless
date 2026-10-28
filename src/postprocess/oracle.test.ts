@@ -4,7 +4,7 @@ import path from "node:path";
 import sharp from "sharp";
 import { correctDocumentImage } from "./document.js";
 
-// Local-only: the raw ET-4956 test-page JPEG and its reference rendering are not
+// Local-only: the raw ET-4956 compatibility-page JPEG and its reference rendering are not
 // in the repo. Point SCAN_QUALITY_ORACLE_DIR at the folder holding them to run
 // these tests; unset, they skip.
 const ORACLE_DIR = process.env.SCAN_QUALITY_ORACLE_DIR;
@@ -31,7 +31,7 @@ async function swatchMean(jpeg: Buffer, cx: number, cy: number): Promise<[number
   return [r / n, g / n, b / n];
 }
 
-run("oracle: ET-4956 test-page front", () => {
+run("oracle: ET-4956 compatibility-page front", () => {
   it("neutralizes the paper background and drops the column-line residual", async () => {
     const out = await correctDocumentImage(fs.readFileSync(RAW), 90);
     const { data, info } = await sharp(out).raw().toBuffer({ resolveWithObject: true });
@@ -65,7 +65,7 @@ run("oracle: ET-4956 test-page front", () => {
     const { data, info } = await sharp(out).raw().toBuffer({ resolveWithObject: true });
     const W = info.width;
     // C0C0C0 swatch (index 6) centre on the uncropped 2481x3506 raster
-    // (test-page geometry: gridLeft≈87.6pt, row 2 → ~x615, y1561 px @ ~4.17 px/pt).
+    // (compatibility-page geometry: gridLeft≈87.6pt, row 2 → ~x615, y1561 px @ ~4.17 px/pt).
     const cx = 615,
       cy = 1561;
     let sum = 0,

@@ -1307,7 +1307,7 @@ describe("runEsci2ScanOverPlain — XP-7100 fixture replay", () => {
 
   it("flatbed JPG under SCAN_COLOR_MODE=grayscale: PARA unchanged, converted host-side", async () => {
     // The XP-7100 has no greyscale wire support (no monoGammaClass), so
-    // grayscale must not touch the wire — runOne's PARA shield pins the
+    // greyscale must not touch the wire — runOne's PARA shield pins the
     // scanner's bytes against the captured COLOUR session — and the page
     // converts to single-channel greyscale at finalize instead.
     const jpgs = await runOne({
@@ -1591,7 +1591,7 @@ const DS575W_FP = "90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b
 
 // The DS-575W's #ADFCRP flags field mixes SKEW/DFL1 (GUI-driven scan options
 // this service doesn't model, whose bytes/order vary per capture) with DPLX (the
-// duplex axis this service DOES model, from ctx.duplex). To compare a mono
+// duplex axis this service DOES model, from ctx.duplex). To compare a greyscale
 // fixture's captured PARA against the composed one we canonicalise the flags
 // field: keep DPLX so a simplex/duplex framing regression is still caught, and
 // strip exactly the known-unmodeled SKEW/DFL1 tokens whose ordering the capture
@@ -1639,7 +1639,7 @@ describe("runEsci2ScanOverPlain — DS-575W fixture replay", () => {
 
   const FIX_DIR = path.join("tools", "pcap-extract", "captures", "ds-575w");
 
-  // Drive a full-session greyscale mono fixture to completion and return the JPG
+  // Drive a full-session greyscale fixture to completion and return the JPG
   // page count. Also pins the composed greyscale PARA against the captured one
   // (flags-stripped): this is where the novel ds575w-mono gamma, #COLM008, the
   // et2750-um08 CMX, and the DPI-scaled extents are byte-checked.

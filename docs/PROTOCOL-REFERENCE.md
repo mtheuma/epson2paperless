@@ -7,8 +7,8 @@ This document is the byte-level protocol reference for `epson2paperless`. It kee
 All supported printers use three distinct network channels in sequence. The first two are universal across families; the third (the scan session) is where the printer-family differences live.
 
 ```
-Printer (broadcast)  →  Service (multicast listener)     Discovery / keepalive
-Printer (unicast)    →  Service (TCP port 2968)          Push-scan trigger
+Printer (multicast)  →  Service (multicast listener)     Discovery / keepalive
+Printer (unicast)    →  Service (TCP port 2968)          Panel trigger
 Service              →  Printer (TCP port 1865)          Scan session
 ```
 
@@ -16,23 +16,23 @@ Each channel is independent enough to be developed and tested separately. Inside
 
 ### Discovery and keepalive (UDP multicast)
 
-The printer broadcasts an `02 06` announcement packet to the multicast address `239.255.255.253:2968` only when triggered, not on a timer: at power-on, when the panel's manual refresh-destinations action is used, and every time Scan > Computer is opened on the panel. The panel's destination list is built from whoever answers the latest announcement; there is no standing registration. (Measured on an ET-4956 with v0.11.1 at `LOG_LEVEL=debug`: 11.5 minutes awake and idle on the home screen produced nothing. An earlier capture that showed a 60 s cadence coincided with Scan being pressed on the panel every minute.) The announcement carries service identification (typically ~80 bytes total: `02 06` magic + 12-byte header + service descriptor + capability list). Byte 11 of the header is a sequence counter that increments with each announcement.
+The printer sends an `02 06` announcement packet to the multicast address `239.255.255.253:2968` only when triggered, not on a timer: at power-on, when the panel's manual refresh-destinations action is used, and every time Scan > Computer is opened on the panel. The panel's destination list is built from whoever answers the latest announcement; no entry outlasts it. (Measured on an ET-4956 with v0.11.1 at `LOG_LEVEL=debug`: 11.5 minutes awake and idle on the home screen produced nothing. An earlier capture that showed a 60 s cadence coincided with Scan being pressed on the panel every minute.) The announcement carries service identification (typically ~80 bytes total: `02 06` magic + 12-byte header + service descriptor + capability list). Byte 11 of the header is a sequence counter that increments with each announcement.
 
-A client registers itself as a scan destination by:
+A client gets onto the printer's destination list by:
 
 1. Joining the multicast group `239.255.255.253` via `IP_ADD_MEMBERSHIP` on a UDP socket bound to port 2968.
 2. Listening for `02 06` announcement packets.
 3. Sending a burst of three unicast `02 07` keepalive packets back to the printer's IP on port 2968, spaced 500 ms apart. Each packet must echo the announcement's sequence number in byte 11. The packet also carries the destination's display name, IP address, TCP event port, and a destination ID. The announcement ends with a tag list naming the fields it wants back, and the keepalive answers those tags in that order: `ClientName,IPAddress,EventPort` on the ET-4950 (NetScanMonitor v2), `Ver,ClientName,IPAddress,EventPort,Group` on the FF-680W (v3, which also sends from an ephemeral source port). A request for `Ver` selects v3; tags the service doesn't know are skipped. An announcement with no tag list falls back to the announced PID (v3 for the FF-680W and DS-575W), and so does an FF-680W or DS-575W one whose list doesn't request `Ver`, so those two always get v3, and `NETSCAN_VERSION` forces either format.
 
-The printer only accepts keepalives during the ~60-second window after broadcasting an announcement. Outside that window it responds with ICMP Port Unreachable. A client that sends unsolicited keepalives — or keepalives with the wrong sequence number — is silently ignored and will not appear in the printer's destination list.
+The printer only accepts keepalives during the ~60-second window after sending an announcement. Outside that window it responds with ICMP Port Unreachable. A client that sends unsolicited keepalives — or keepalives with the wrong sequence number — is silently ignored and will not appear in the printer's destination list.
 
-Implemented in `src/keepalive.ts`. `parsePrinterAnnouncement` extracts the sequence byte, PID and requested tag list from incoming `02 06` packets; `buildKeepalivePacket` assembles the `02 07` response; `createKeepaliveResponder` manages the socket lifecycle, multicast membership, and the per-announcement burst with deduplication (the printer broadcasts each beacon three times per announcement with the same sequence number, so the responder suppresses duplicate-sequence firings within a 30-second window to avoid sending nine keepalives per announcement instead of three).
+Implemented in `src/keepalive.ts`. `parsePrinterAnnouncement` extracts the sequence byte, PID and requested tag list from incoming `02 06` packets; `buildKeepalivePacket` assembles the `02 07` response; `createKeepaliveResponder` manages the socket lifecycle, multicast membership, and the per-announcement burst with deduplication (the printer sends each announcement three times with the same sequence number, so the responder suppresses duplicate-sequence firings within a 30-second window to avoid sending nine keepalives instead of three).
 
-The discovery protocol was fully decoded from Wireshark captures. The critical insight was that byte 11 is a _sequence echo_, not a static "number of key-value pairs" field as the packet structure might suggest — this was confirmed by observing multiple consecutive beacon cycles with different sequence values but the same number of key-value pairs in the keepalive payload. An earlier implementation that hardcoded a fixed byte-11 value of `0x03` was silently ignored by the printer; the service never appeared in its destination list until the sequence-echo behavior was identified and fixed.
+The discovery protocol was fully decoded from Wireshark captures. The critical insight was that byte 11 is a _sequence echo_, not a static "number of key-value pairs" field as the packet structure might suggest — this was confirmed by observing multiple consecutive announcement cycles with different sequence values but the same number of key-value pairs in the keepalive payload. An earlier implementation that hardcoded a fixed byte-11 value of `0x03` was silently ignored by the printer; the service never appeared in its destination list until the sequence-echo behavior was identified and fixed.
 
-### Push-scan trigger (TCP, SOAP-ish)
+### Panel trigger (TCP, SOAP-ish)
 
-When the user selects a destination and presses Scan on the panel, the printer opens a TCP connection to the destination's registered event port (2968) and sends an HTTP POST carrying a SOAP body. The critical wrinkle is that Epson uses non-standard HTTP header formatting — headers contain a space before the colon (`Header : value`), which is invalid HTTP/1.1 and will cause a standard HTTP server to reject the request. The service uses a raw `net.createServer` (not `node:http`) and parses the request manually.
+When the user selects a destination and presses Scan on the panel, the printer opens a TCP connection to the event port its keepalive advertised (2968) and sends an HTTP POST carrying a SOAP body. The critical wrinkle is that Epson uses non-standard HTTP header formatting — headers contain a space before the colon (`Header : value`), which is invalid HTTP/1.1 and will cause a standard HTTP server to reject the request. The service uses a raw `net.createServer` (not `node:http`) and parses the request manually.
 
 The SOAP body's `<PushScanIDIn>` element is the only channel through which the panel's user selections reach the service. It encodes two fields in a compact binary-style string:
 
@@ -47,21 +47,21 @@ Implemented in `src/pushscan.ts`. `parsePushScanRequest` extracts the SOAP field
 
 ### Scan session: three transport variants on port 1865
 
-Three transport variants ride on TCP port 1865, decided per scan session by `src/protocol-probe.ts` (covered in detail in [Protocol probe](#protocol-probe-two-arms) below):
+Three transport variants ride on TCP port 1865, decided per scan session by `src/protocol-probe.ts` (covered in detail in [Protocol probe](#protocol-probe-two-steps) below):
 
 | Variant       | Transport    | Command set          | Hardware (examples)                         |
 | ------------- | ------------ | -------------------- | ------------------------------------------- |
-| `esci2-tls`   | TLS over TCP | ESC/I-2 over IS      | ET-4950 family, ET-2950, XP-3200            |
+| `esci2`       | TLS over TCP | ESC/I-2 over IS      | ET-4950 family, ET-2950, XP-3200            |
 | `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750, XP-7100, ET-4800, FF-680W, DS-575W |
 | `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family, XP-620, ET-2550             |
 
-The Hardware column is illustrative, not exhaustive — the full model list lives in the [README compatibility table](../README.md#compatible-printers) and the dialect registries. The variant is also a per-session transport decision, not a dialect property: ESC/I-2 dialect entries are keyed by model identity, and some are transport-agnostic — the ET-8500 has been reported over both TLS and plain TCP, and the ET-2810 (plain TCP) and XP-3200 (TLS) share one fingerprint and one model override.
+The Hardware column is illustrative, not exhaustive — the full model list lives in the [README compatibility table](../README.md#compatible-printers), the model overrides and the legacy dialects. The variant is also a per-session transport decision, not a dialect property: ESC/I-2 model overrides are keyed by model identity, and some are transport-agnostic — the ET-8500 has been reported over both TLS and plain TCP, and the ET-2810 (plain TCP) and XP-3200 (TLS) share one fingerprint and one model override.
 
-The rest of this section walks the **canonical `esci2-tls` path** in depth, since it's the most mechanically complex (TLS on top, both command generations layered inside) and the foundation that the other two variants peel back from. The plain-TCP ESC/I-2 differences live in [ESC/I-2 over plain TCP](#esci-2-over-plain-tcp), and the legacy ESC/I family in [ESC/I variant](#esci-variant-wf-3620). Both are sibling sections, not appendices.
+The rest of this section walks the **canonical ESC/I-2-over-TLS path** in depth, since it's the most mechanically complex (TLS on top, both command generations layered inside) and the foundation that the other two variants peel back from. The plain-TCP ESC/I-2 differences live in [ESC/I-2 over plain TCP](#esci-2-over-plain-tcp), and the legacy ESC/I family in [ESC/I variant](#esci-variant-wf-3620). Both are sibling sections, not appendices.
 
 #### TLS on the canonical path
 
-The `esci2-tls` image transfer happens over a TLS 1.2 session that the service initiates outbound to the printer on port 1865. TLS chain validation is disabled, since the printer presents a self-signed certificate and there is no trust chain to validate against. As an opt-in alternative, setting `PRINTER_CERT_FINGERPRINT` pins the peer's SHA-256 fingerprint and aborts the scan at handshake time on mismatch (see [README](../README.md#configure)). Pinning requires `PRINTER_PROTOCOL=esci2` set explicitly. Under `auto` (or either of the non-TLS variants), the combination is rejected at startup because a probe failure could downgrade silently to a non-TLS path and bypass the pin.
+The canonical path's image transfer happens over a TLS 1.2 session that the service initiates outbound to the printer on port 1865. TLS chain validation is disabled, since the printer presents a self-signed certificate and there is no trust chain to validate against. As an opt-in alternative, setting `PRINTER_CERT_FINGERPRINT` pins the peer's SHA-256 fingerprint and aborts the scan at handshake time on mismatch (see [README](../README.md#configure)). Pinning requires `PRINTER_PROTOCOL=esci2` set explicitly. Under `auto` (or either of the non-TLS variants), the combination is rejected at startup because a probe failure could downgrade silently to a non-TLS path and bypass the pin.
 
 #### IS framing (universal across all three variants)
 
@@ -137,13 +137,13 @@ The INFO and CAPA replies declare the scanner's capabilities (supported resoluti
 
 The project has two protocol graphs sharing one engine. Each protocol variant lives in a thin orchestration shell that builds a `SessionTransport` and calls the shared `runScanSession` engine in `src/scan-session.ts`. The state machine itself is plain frozen data: a `Graph<Ctx>` defined in a per-protocol `graph.ts` file whose states the engine walks one IS packet at a time. Each transition is either a static rewrite (incoming IS type → next state + bytes to send) or a decision function that inspects the packet payload and returns the same shape. State threading uses a typed ctx object that the engine carries through every transition.
 
-This section walks the **ESC/I-2 graph** in detail, since it covers two of the three variants (`esci2-tls` and `esci2-plain` share it). The legacy ESC/I graph used by the WF-3620 family follows the same engine pattern with a different shape, summarised in [ESC/I variant (WF-3620)](#esci-variant-wf-3620) below.
+This section walks the **ESC/I-2 graph** in detail, since it covers two of the three variants (ESC/I-2 over TLS and over plain TCP share it). The legacy ESC/I graph used by the WF-3620 family follows the same engine pattern with a different shape, summarised in [ESC/I variant (WF-3620)](#esci-variant-wf-3620) below.
 
 The shells / graphs / transports map to the variants like so:
 
 | Variant       | Shell entry point       | Graph             | Transport composition                                                                                                                                |
 | ------------- | ----------------------- | ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `esci2-tls`   | `runEsci2Scan`          | `src/esci2/graph` | `withEsci2UnlockOnDestroy(withTlsErrorLabels(socketAsTransport(tls.connect(...))))` — see [Transport adapters](#transport-adapters)                  |
+| `esci2`       | `runEsci2Scan`          | `src/esci2/graph` | `withEsci2UnlockOnDestroy(withTlsErrorLabels(socketAsTransport(tls.connect(...))))` — see [Transport adapters](#transport-adapters)                  |
 | `esci2-plain` | `runEsci2ScanOverPlain` | `src/esci2/graph` | `withEsci2UnlockOnDestroy(socketAsTransport(net.connect(...)))` — same graph, dialect-driven per-state decisions                                     |
 | `esci`        | `runEsciScan`           | `src/esci/graph`  | `socketAsTransport(net.connect(...))` — no transport adapters; UNLOCK is sent from the graph's `UNLOCKING` state rather than via a destroy-time hook |
 
@@ -151,7 +151,7 @@ Both ESC/I-2 entry points share the same graph with no transport-conditional bra
 
 ```
 CONNECTING
-    │  session handshake (TLS for esci2-tls; plain TCP for esci2-plain)
+    │  session handshake (TLS for esci2; plain TCP for esci2-plain)
     ▼
 WELCOME          ← receive IS 0x8000 welcome
     │  send Lock (IS 0x2100)
@@ -253,46 +253,46 @@ ADF precedence (the printers with both sources, above): when the ADF feeder has 
 
 The composed PARA length depends on the dialect (which gamma / CMX classes and optional segments it carries) and the source axis. Actual `composePara` output per model override:
 
-| Dialect                     | Transport     | Flatbed | ADF simplex | ADF duplex |
-| --------------------------- | ------------- | ------- | ----------- | ---------- |
-| ET-4950 / ET-3950 / ET-4956 | `esci2-tls`   | 928 B   | 936 B       | 940 B      |
-| ET-2950                     | `esci2-tls`   | 928 B   | —           | —          |
-| ET-2750                     | `esci2-plain` | 936 B   | —           | —          |
-| XP-7100                     | `esci2-plain` | 944 B   | 952 B       | 956 B      |
-| ET-4800                     | `esci2-plain` | 936 B   | 944 B       | —          |
-| ET-15000                    | `esci2-plain` | 936 B   | 944 B       | —          |
-| FF-680W                     | `esci2-plain` | —       | 996 B       | 1000 B     |
-| DS-575W                     | `esci2-plain` | —       | 996 B       | 1000 B     |
-| ET-2810 / XP-3200           | either†       | 936 B   | —           | —          |
-| ET-8500                     | either†       | 944 B   | —           | —          |
-| ET-7700                     | `esci2-plain` | 944 B   | —           | —          |
-| WF-3835                     | `esci2-plain` | 944 B   | 952 B       | —          |
+| Dialect                     | Transport | Flatbed | ADF simplex | ADF duplex |
+| --------------------------- | --------- | ------- | ----------- | ---------- |
+| ET-4950 / ET-3950 / ET-4956 | TLS       | 928 B   | 936 B       | 940 B      |
+| ET-2950                     | TLS       | 928 B   | —           | —          |
+| ET-2750                     | plain TCP | 936 B   | —           | —          |
+| XP-7100                     | plain TCP | 944 B   | 952 B       | 956 B      |
+| ET-4800                     | plain TCP | 936 B   | 944 B       | —          |
+| ET-15000                    | plain TCP | 936 B   | 944 B       | —          |
+| FF-680W                     | plain TCP | —       | 996 B       | 1000 B     |
+| DS-575W                     | plain TCP | —       | 996 B       | 1000 B     |
+| ET-2810 / XP-3200           | either†   | 936 B   | —           | —          |
+| ET-8500                     | either†   | 944 B   | —           | —          |
+| ET-7700                     | plain TCP | 944 B   | —           | —          |
+| WF-3835                     | plain TCP | 944 B   | 952 B       | —          |
 
-† Transport-agnostic entries, keyed by model identity rather than transport: the ET-2810 presents over plain TCP and its fingerprint-sharing XP-3200 sibling over TLS; the ET-8500 has been reported over both across reporters.
+† Transport-agnostic overrides, keyed by model identity rather than transport: the ET-2810 presents over plain TCP and its fingerprint-sharing XP-3200 sibling over TLS; the ET-8500 has been reported over both across reporters.
 
 The FF-680W is ADF-only — its source is fixed to ADF (it has no flatbed). It reports no panel selection either (it sends a `JobNumberIn` trigger with no Sides/Action), so its sides, output format, and resolution come from `SCAN_SIDES` / `SCAN_FORMAT` / `SCAN_RESOLUTION` rather than the panel. PARA byte-length is DPI-independent (the `#RSM`/`#RSS`/`#ACQ` fields are fixed-width); the values, not the lengths, scale with `SCAN_RESOLUTION`.
 
-The DS-575W is the FF-680W's ADF-only sibling and reuses the same `adf-crp` PARA layout — the sizes above are its **colour** bodies. It adds a colour-mode axis: `SCAN_COLOR_MODE=grayscale` swaps the 804-byte RGB gamma triplet for a 268-byte mono LUT and `#COLC024` for `#COLM008`, giving 460 B (simplex) / 464 B (duplex) greyscale bodies. (`SCAN_COLOR_MODE=auto` never reaches the wire — it composes the colour body and decides colour vs greyscale per page in host-side post-processing.) The `#ADFCRP` flag bytes (skew / double-feed / duplex) are GUI-only scan options this service doesn't model; the composer pins the FF-680W canonical for them.
+The DS-575W is the FF-680W's ADF-only sibling and reuses the same `adf-crp` PARA layout — the sizes above are its **colour** bodies. It adds a colour-mode axis: `SCAN_COLOR_MODE=grayscale` swaps the 804-byte RGB gamma triplet for a 268-byte greyscale LUT and `#COLC024` for `#COLM008`, giving 460 B (simplex) / 464 B (duplex) greyscale bodies. (`SCAN_COLOR_MODE=auto` never reaches the wire — it composes the colour body and decides colour vs greyscale per page in host-side post-processing.) The `#ADFCRP` flag bytes (skew / double-feed / duplex) are GUI-only scan options this service doesn't model; the composer pins the FF-680W canonical for them.
 
 (ET-2950, ET-2750, ET-2810 / XP-3200, ET-8500 and ET-7700 are flatbed-only hardware; ET-4800 is flatbed + ADF simplex — its `composePara` can emit a 948 B `#ADFDPLX` body, but the simplex-only panel never requests duplex, so that row is `—`. ET-15000 reuses the ET-4800's class data and shares its PARA shape; only the flatbed body is hardware-verified, with the ADF row pending a capture. The WF-3835 is flatbed + ADF simplex — its CAPA reports `duplex: N` — and its entry is speculative from the issue #174 diagnostic, pending hardware validation.)
 
 PARA bodies are assembled at run time by `composePara` (`src/esci2/para-composer.ts`) from the resolved model override (`src/esci2/dialects/model-overrides.ts`) plus the source / action axes — see [How printer-model differences are handled](#how-printer-model-differences-are-handled). The per-dialect byte data lives in `src/esci2/data/gamma-classes.ts` and `cmx-classes.ts`, each class byte-transcribed verbatim from that model's capture; none of it is hardcoded in `src/esci2/commands.ts` (that file holds only the command / header builders). Dialects differ by more than length: gamma constant (`#GMMUG10` for the ET-4950 family and ET-2950; `#GMMUG18` for every other entry), optional-segment presence (`#QITOFF` / `#CCTCOL`, sent when the printer's CAPA lists them), and a model-specific inline `#CMXUM08` ICC-matrix block — so no dialect's body can be derived by editing another's.
 
-Within a dialect, the per-source variants differ in three places: the source token (`#FB ` / `#ADF` / `#ADFDPLX`), the `#PAG` page-count token (present for ADF, omitted for flatbed), and the `#ACQ` x-start offset (`0000069` for ADF, `0000000` for flatbed). The remainder — the three RGB gamma tables (`#GMTRED` / `#GMTGRN` / `#GMTBLU`), CMX colour-correction matrix, and 1 MB buffer-size token — is byte-identical across sources within a dialect. (Scan-area extents and the `#RSM` / `#RSS` resolution fields scale with `SCAN_RESOLUTION` for every dialect — see [Scan resolution and JPEG quality](#scan-resolution-and-jpeg-quality) — so at the default DPI they're byte-identical across sources too, but that's a resolution-axis property, not a per-source one.) The FF-680W and DS-575W (`adf-crp` profile) are the exception to this per-source structure: their sides axis is the presence of a `DPLX` token inside the `#ADFCRP…DFL1` prefix rather than a distinct source token. The DS-575W additionally varies its `#COL` code and gamma LUT with `SCAN_COLOR_MODE`.
+Within a dialect, the per-source variants differ in three places: the source token (`#FB ` / `#ADF` / `#ADFDPLX`), the `#PAG` page-count token (present for ADF, omitted for flatbed), and the `#ACQ` x-start offset (`0000069` for ADF, `0000000` for flatbed). The remainder — the three RGB gamma tables (`#GMTRED` / `#GMTGRN` / `#GMTBLU`), CMX colour-correction matrix, and 1 MB buffer-size token — is byte-identical across sources within a dialect. (The scan window and the `#RSM` / `#RSS` resolution fields scale with `SCAN_RESOLUTION` for every dialect — see [Scan resolution and JPEG quality](#scan-resolution-and-jpeg-quality) — so at the default DPI they're byte-identical across sources too, but that's a resolution-axis property, not a per-source one.) The FF-680W and DS-575W (`adf-crp` PARA profile) are the exception to this per-source structure: their sides axis is the presence of a `DPLX` token inside the `#ADFCRP…DFL1` prefix rather than a distinct source token. The DS-575W additionally varies its `#COL` code and gamma LUT with `SCAN_COLOR_MODE`.
 
-### Sides: 1-sided vs 2-sided
+### Sides: simplex vs duplex
 
 The panel's Sides selection is carried in `PushScanIDIn[0]`: `0` = 1-Sided, `1` = 2-Sided. For ADF scans, the scanner threads this as `ctx.duplex`, which `makeParaSpec` folds into the `adf-duplex` source axis passed to `composePara`. Duplex replaces the `#ADF` source token with `#ADFDPLX` (four bytes wider), increasing the composed PARA length by 4 bytes (e.g. 936 → 940 on the ET-4950 family). The rest of the body is identical.
 
-Duplex scans produce image sides in the order front/back/front/back/... On reversing-ADF hardware (ET-4950 family, XP-7100) the back side of each sheet comes out physically flipped 180° because of the ADF's U-turn paper path — the sheet is pulled through, reversed, and re-fed, so the physical image is upside-down relative to the front side. Single-pass scanners (DS-575W, FF-680W) capture both sides in one pass and deliver the back the same way up as the front — hardware-confirmed on the DS-575W in issue #128, where the blanket compensation inverted them, and on the FF-680W in issue #249. Whether the compensation applies comes from the printer's INFO duplex type on every session (`duplexBackRotated`: `#ADFDPLX2SCN`, two-pass, rotates; `1SCN`, single-pass, or no duplex, does not), resolved by the engine at flush time. A model override records what confirmed it, and which way (`duplexOrientationEvidence`); a duplex scan on a model without that record, or whose record vouched for the other orientation, including any printer on the generic dialect, logs one warning per process naming the choice made and inviting a report. Back sides are identified by the `#typIMGB` token in their `#pst` / `#pen` responses; front sides carry `#typIMGA`. The graph updates `ctx.pageSide` on every `IMG_META` reply (the `typ` token is consistent across all packets within a page); when the page completes, the engine reads `ctx.pageSide` from the `flushPage` barrier and pushes the 1-based page index into a `backPageIndices: number[]` array. The array is forwarded to `finalizeSession` so the EXIF / `/Rotate` injection path knows which pages need rotation; pages flushed under a `duplexBackRotated: false` dialect are never recorded in it.
+Duplex scans produce pages in the order front/back/front/back/... On reversing-ADF hardware (ET-4950 family, XP-7100) the back page of each sheet comes out physically flipped 180° because of the ADF's U-turn paper path — the sheet is pulled through, reversed, and re-fed, so the physical image is upside-down relative to the front side. Single-pass scanners (DS-575W, FF-680W) capture both sides in one pass and deliver the back the same way up as the front — hardware-confirmed on the DS-575W in issue #128, where the blanket compensation inverted them, and on the FF-680W in issue #249. Whether the compensation applies comes from the printer's INFO duplex type on every session (`duplexBackRotated`: `#ADFDPLX2SCN`, two-pass, rotates; `1SCN`, single-pass, or no duplex, does not), resolved by the engine at flush time. A model override records what confirmed it, and which way (`duplexOrientationEvidence`); a duplex scan on a model without that record, or whose record vouched for the other orientation, including any printer on the generic dialect, logs one warning per process naming the choice made and inviting a report. Back pages are identified by the `#typIMGB` token in their `#pst` / `#pen` responses; front pages carry `#typIMGA`. The graph updates `ctx.pageSide` on every `IMG_META` reply (the `typ` token is consistent across all packets within a page); when the page completes, the engine reads `ctx.pageSide` from the `flushPage` barrier and pushes the 1-based page index into a `backPageIndices: number[]` array. The array is forwarded to `finalizeSession` so the EXIF / `/Rotate` injection path knows which pages need rotation; pages flushed under a `duplexBackRotated: false` dialect are never recorded in it.
 
-For JPEG output, back-side images have a minimal EXIF APP1 segment prepended after the JPEG SOI marker (via `src/exif.ts`) that sets `Orientation = 3` (rotate 180°). This is a 36-byte synthetic APP1 — the minimum valid structure — since the scanner-produced JPEGs contain no EXIF data of their own. For PDF output, the page's PDF dictionary `/Rotate` entry is set to 180° (via `src/pdf.ts` using pdf-lib). Both approaches allow the viewing application to display pages right-side up without modifying the raw pixel data.
+For JPEG output, back pages have a minimal EXIF APP1 segment prepended after the JPEG SOI marker (via `src/exif.ts`) that sets `Orientation = 3` (rotate 180°). This is a 36-byte synthetic APP1 — the minimum valid structure — since the scanner-produced JPEGs contain no EXIF data of their own. For PDF output, the page's PDF dictionary `/Rotate` entry is set to 180° (via `src/pdf.ts` using pdf-lib). Both approaches allow the viewing application to display pages right-side up without modifying the raw pixel data.
 
-Flatbed scans are always single-sided regardless of the `PushScanIDIn[0]` value.
+Sides have no meaning on the flatbed: a flatbed scan ignores the `PushScanIDIn[0]` value.
 
 ### Action: JPG / PDF / Preview
 
-The panel's Action selection is the second character of `PushScanIDIn`: `1` = JPG, `2` = PDF, `4` = Preview on Computer. The service resolves this to an effective action via `resolveEffectiveAction` in `src/pushscan.ts`.
+The panel's Action selection is the second character of `PushScanIDIn`: `1` = JPG, `2` = PDF, `4` = Preview on Computer. The service resolves this to an output format, or to no scan, via `resolveEffectiveAction` in `src/pushscan.ts`.
 
 The values are distinct panel options, not combinable bit flags. `3` is not JPG + PDF: the ET-3700 sends it for its "Attach as email" action. The service has no email path, so `computeActionFromId` decodes `3` (and any other value) as `unknown` and the scan is refused. The panel's action list comes from the printer firmware, not the destination, so models can offer actions the service never handles.
 
@@ -313,14 +313,14 @@ The temp directory is removed in a `finally` block regardless of outcome.
 
 ---
 
-## Protocol probe (two arms)
+## Protocol probe (two steps)
 
-Three protocol variants ride on port 1865, decided per scan session by `src/protocol-probe.ts` with two arms — neither of which mutates printer state:
+Three protocol variants ride on port 1865, decided per scan session by `src/protocol-probe.ts` in two steps — neither of which mutates printer state:
 
 1. **TLS handshake** against `1865`. Success → `esci2` (ET-4950 family + ET-2950). The probe socket is destroyed before the real scan begins.
-2. **Plain TCP connect**, await an unsolicited IS-`0x8000` welcome packet within the timeout, then classify from the welcome's payload byte 1 (frame offset 13): `0x02` → `esci`, anything else → `esci2-plain`. The ESC/I-2-over-TLS printers (ET-4950 family, ET-2950) also send a welcome immediately, but only inside the TLS tunnel — connecting to one of them over plain TCP yields no `0x8000` and the arm times out (→ inconclusive).
+2. **Plain TCP connect**, await an unsolicited IS-`0x8000` welcome packet within the timeout, then classify from the welcome's payload byte 1 (frame offset 13): `0x02` → `esci`, anything else → `esci2-plain`. The ESC/I-2-over-TLS printers (ET-4950 family, ET-2950) also send a welcome immediately, but only inside the TLS tunnel — connecting to one of them over plain TCP yields no `0x8000` and the step times out (→ inconclusive).
 
-The byte-1 discriminator in arm 2 is the load-bearing piece: **both** generations send an unsolicited `0x8000` welcome on plain TCP (a misconception in the original probe design said the legacy family stayed silent until prompted), so a welcome's presence alone means only "plain TCP". Payload byte 1 is what separates the families in every committed capture but one (see the ET-7700 caveat below):
+The byte-1 discriminator in step 2 is the load-bearing piece: **both** generations send an unsolicited `0x8000` welcome on plain TCP (a misconception in the original probe design said the legacy family stayed silent until prompted), so a welcome's presence alone means only "plain TCP". Payload byte 1 is what separates the families in every committed capture but one (see the ET-7700 caveat below):
 
 | payload[1] | Variant       | Models (committed fixtures)                 |
 | ---------- | ------------- | ------------------------------------------- |
@@ -329,13 +329,13 @@ The byte-1 discriminator in arm 2 is the load-bearing piece: **both** generation
 
 Real welcome payloads are `01 02 00 00 00` and `01 04 00 00 00`. The XP-620 (issue #124) emits a welcome byte-for-byte identical to the WF-3620's, corroborating the `0x02` anchor. What the byte _means_ is unknown — it is treated as an observed family marker, not a decoded field — so the non-`0x02` side stays open: a future ESC/I-2-class device emitting some third value at payload[1] is still classified `esci2-plain`.
 
-**ET-7700 caveat — the PID hint:** the committed ET-7700 fixtures (issue #145) record scan sessions whose welcome is byte-identical to the WF-3620's — `01 02 00 00 00` from an ESC/I-2 printer — so `0x02` is not a reliable legacy marker on its own. To keep `auto` off the legacy path, the probe takes the push-scan trigger's `ProductNameIn` as a hint: once the TLS arm fails, a PID in `ESCI2_PLAIN_WITH_LEGACY_WELCOME` (`src/protocol-probe.ts`; currently just the ET-7700's `PID 112B`, verified from the reporter's push-scan SOAP, and normalised before lookup to tolerate casing/padding variance) selects `esci2-plain` directly and the welcome arm is skipped — the welcome carries no signal for these models, so no outcome of it could change the routing. The PID names the exact model, whose dialect is hardware-validated, so it outranks the ambiguous discriminator — but it never overrides a successful TLS classification, and `scan:now` (no panel, no PID) still needs `PRINTER_PROTOCOL=esci2-plain` on these models.
+**ET-7700 caveat — the PID hint:** the committed ET-7700 fixtures (issue #145) record scan sessions whose welcome is byte-identical to the WF-3620's — `01 02 00 00 00` from an ESC/I-2 printer — so `0x02` is not a reliable legacy marker on its own. To keep `auto` off the legacy path, the probe takes the panel trigger's `ProductNameIn` as a hint: once the TLS step fails, a PID in `ESCI2_PLAIN_WITH_LEGACY_WELCOME` (`src/protocol-probe.ts`; currently just the ET-7700's `PID 112B`, verified from the reporter's push-scan SOAP, and normalised before lookup to tolerate casing/padding variance) selects `esci2-plain` directly and the welcome step is skipped — the welcome carries no signal for these models, so no outcome of it could change the routing. The PID names the exact model, whose dialect is hardware-validated, so it outranks the ambiguous discriminator — but it never overrides a successful TLS classification, and `scan:now` (no panel, no PID) still needs `PRINTER_PROTOCOL=esci2-plain` on these models.
 
-There is deliberately **no third arm** that sends a bare `ESC @` and awaits a 1-byte ACK. Real hardware only accepts IS-framed commands, and only after a lock: in both the WF-3620 and XP-620 captures every host write begins with the `IS` magic, and `ESC @` appears solely inside a `0x2000` passthru (`IS 2100` lock → `IS 2000` passthru → `1b40`). An unframed `ESC @` models an exchange that has never occurred on the wire, so such an arm could never classify a real printer — it would only add a wasted round-trip and a misleading error before the fallback answered `esci` anyway.
+There is deliberately **no third step** that sends a bare `ESC @` and awaits a 1-byte ACK. Real hardware only accepts IS-framed commands, and only after a lock: in both the WF-3620 and XP-620 captures every host write begins with the `IS` magic, and `ESC @` appears solely inside a `0x2000` passthru (`IS 2100` lock → `IS 2000` passthru → `1b40`). An unframed `ESC @` models an exchange that has never occurred on the wire, so such a step could never classify a real printer — it would only add a wasted round-trip and a misleading error before the fallback answered `esci` anyway.
 
-If neither arm classifies, the dispatcher resolves to `esci` so the legacy scanner's connect path can surface the underlying socket error in a meaningful way (rather than throwing a generic "no protocol matched" message). Hint-set PIDs never reach this fallback — they resolve to `esci2-plain` right after the TLS arm, so an unreachable ET-7700's socket error surfaces from the scanner the model actually speaks.
+If neither step classifies, the dispatcher resolves to `esci` so the legacy scanner's connect path can surface the underlying socket error in a meaningful way (rather than throwing a generic "no protocol matched" message). Hint-set PIDs never reach this fallback — they resolve to `esci2-plain` right after the TLS step, so an unreachable ET-7700's socket error surfaces from the scanner the model actually speaks.
 
-Only `esci2` (TLS) results are cached for the daemon's lifetime. The plain-TCP arm re-probes each scan because it's cheap and a transient ECONNRESET — which can happen mid-handshake against a real ET-4950 too — shouldn't pin a misclassification.
+Only `esci2` (TLS) results are cached for the daemon's lifetime. The plain-TCP step re-probes each scan because it's cheap and a transient ECONNRESET — which can happen mid-handshake against a real ET-4950 too — shouldn't pin a misclassification.
 
 ## ESC/I-2 over plain TCP
 
@@ -363,14 +363,14 @@ pure data, holding only what the printer's replies can't tell us:
   (ET-3950, XP-4100) resolves through the fingerprint it shares with a sibling.
 - Dispatch metadata (`initPollIterations`). Source detection is derived from
   the sources INFO advertises, never carried by the override.
-- Scan extents (`fbExtents`, `adfExtents`) — the captured paper size, pinned at
+- Scan windows (`fbExtents`, `adfExtents`) — the captured paper size, pinned at
   `windowDpi` (300 unless set; 200 for the `adf-crp` scanners), or `"generic"`
   to inherit the generic scan window (see the generic dialect below). An override
   keeps its own only where the generic window differs from it at some
   advertised DPI on some source: the ET-2750 (2477×3500), XP-7100 (Letter),
   FF-680W (long page) and DS-575W (the generic window is clipped at 75 DPI,
   where its own scales one pixel past the area). A session whose derived
-  profile reads a pinned window at another reference DPI rescales it first.
+  PARA profile reads a pinned window at another reference DPI rescales it first.
 - A `gmm` constant plus named `gammaClass` and `cmxClass` lookups resolved from
   `src/esci2/data/gamma-classes.ts` and `cmx-classes.ts`. Class definitions are
   inlined verbatim from captured fixtures; never algorithmically generated
@@ -381,13 +381,13 @@ pure data, holding only what the printer's replies can't tell us:
   are the identity matrix), and `checkColourPair` (`src/esci2/data/colour-pair.ts`)
   rejects a mixed pair; a test holds every override to it.
 - `provenance`: where the colour pair, the scan window and the poll count came
-  from, each a list of evidence (an Epson driver capture, a capture of this
-  service's own traffic, a reporter's measured compatibility-page scan, a
+  from, each a list of evidence (an Epson capture, an own capture of this
+  service's traffic, a reporter's measured compatibility-page scan, a
   reporter's qualitative report, or inheritance from another model), linked to
   an issue, PR or committed fixture. It has no runtime effect.
   `src/esci2/dialects/provenance.test.ts` holds it to the README: every ✅
   model is served by an override (a model sharing another's needs a report of
-  its own); its colour evidence includes a driver capture or reporter
+  its own); its colour evidence includes an Epson capture or reporter
   scan/report that vouched for its current colour bytes, by hash, so changing
   the colour fails until new evidence is recorded; and its window and poll
   count aren't inherited only.
@@ -406,26 +406,26 @@ dialect alike, takes them from the printer's own INFO and CAPA replies
   advertises both scan areas, else fixed to the one source;
 - back-page rotation: duplex back pages are turned 180° when the ADF is
   duplex and INFO reports it two-pass (`#ADFDPLX2SCN`), else left as
-  delivered (see [Sides: 1-sided vs 2-sided](#sides-1-sided-vs-2-sided)).
+  delivered (see [Sides: simplex vs duplex](#sides-simplex-vs-duplex)).
 
-At INIT1_CAPA the graph computes the fingerprint, looks up the entry via
+At INIT1_CAPA the graph computes the fingerprint, looks up the model override via
 `resolveDialect` (product ID, then product name, then CAPA fingerprint),
 and stores it on the session context. INFO is read before CAPA, so the identity
 is available on every trigger path, host-triggered scans included. A product
-ID or name hit whose fingerprint isn't one of the entry's (as after a firmware
+ID or name hit whose fingerprint isn't one of the override's (as after a firmware
 update that changes the CAPA reply) logs a warning with the diagnostic block
-and proceeds with that entry. Such a printer keeps each of the entry's own
+and proceeds with that override. Such a printer keeps each of the override's own
 scan windows only while it still fits the scan area INFO reports (the
 long-paper maximum for `adf-crp`); one that doesn't is replaced by the
-generic window, with a warning. At PARA build time the entry plus the runtime
+generic window, with a warning. At PARA build time the dialect plus the runtime
 source/action axes feed into `makeParaSpec`, and `composePara` assembles the
 PARA body.
 
 Printers whose product ID, product name and CAPA fingerprint are all
 unrecognised run the **generic dialect** (`src/esci2/dialects/generic.ts`),
 built at INIT1 from their own replies. The session logs a warning ("not
-recognised — generic ESC/I-2 dialect, experimental, please report") and the
-diagnostic block at `info`. The generic dialect is:
+recognised — untested, running the generic ESC/I-2 dialect, please report")
+and the diagnostic block at `info`. The generic dialect is:
 
 - the capability-derived fields (`deriveCapabilities`): `#QIT` / `#CCT`,
   ADF duplex, the PARA profile, source detection and back-page rotation
@@ -433,7 +433,7 @@ diagnostic block at `info`. The generic dialect is:
 - the neutral pair: the `et4950-stock` tone curve with the identity UM08
   matrix, in `UG18` (or `UG10` if that's all `#GMMLIST` offers). A printer
   whose `#CMXLIST` lacks `UM08` is sent SoC-style (`UG10`, no `#CMX`) on the
-  standard profile (failing if `UG10` isn't listed); an `adf-crp` printer
+  standard PARA profile (failing if `UG10` isn't listed); an `adf-crp` printer
   fails, since that PARA always carries a matrix;
 - the generic scan window, computed per wire DPI: A4 at 300 DPI placed by
   the `ALGN` rule, scaled to the wire DPI, then clipped to the scan area
@@ -551,13 +551,13 @@ back to a single-element set: the PARA profile's pinned default (300 DPI for the
 standard profile, 200 DPI for `adf-crp`) — so an unrecognised target still goes
 through full selection semantics instead of being silently discarded.
 
-### Extent scaling from the override reference DPI
+### Scan-window scaling from the override reference DPI
 
 A model override's own `fbExtents` / `adfExtents` are pinned at a fixed reference
 DPI per PARA profile (an inherited `"generic"` window isn't scaled: it is computed
 at the wire DPI): `STANDARD_BASE_DPI` (300) for the standard profile, `ADF_CRP_BASE_DPI`
 (200) for `adf-crp` (FF-680W / DS-575W). `composePara` scales both the `#RSM` /
-`#RSS` resolution fields and the `#ACQ` extents by `resolution / referenceDpi`:
+`#RSS` resolution fields and the `#ACQ` window by `resolution / referenceDpi`:
 
 - **Standard profile** scales all four `#ACQ` fields, offsets included — the
   ET-4950 ADF's `x0=69` would drift the crop window at any DPI other than 300 if
@@ -613,13 +613,13 @@ across the board. The resolution-dependent values are already derived (the
 the printer's `FS G` reply, as described in
 [Block layout](#block-layout-fs-w-fs-g-and-the-stream-config)), but each
 dialect's raster is its fixed captured geometry, so the wire bytes are the
-same regardless of `SCAN_RESOLUTION`. `LegacyDialectEntry.deliveredDpi` pins what each dialect
-actually delivers: 600 DPI for WF-3620 JPG / 300 for WF-3620 PDF (the firmware
-locks resolution to the panel's format choice — see
+same regardless of `SCAN_RESOLUTION`. `LegacyDialectEntry.deliveredDpi` pins each dialect's
+wire resolution: 600 DPI for WF-3620 JPG / 300 for WF-3620 PDF (the firmware
+locks resolution to the panel's Action — see
 [Action: JPG / PDF / Preview](#action-jpg--pdf--preview)); a flat 300 DPI for
-XP-620 and ET-2550. `SCAN_RESOLUTION` below what a dialect delivers triggers a
+XP-620 and ET-2550. `SCAN_RESOLUTION` below the wire resolution triggers a
 host-side downsample at finalize — the same mechanism as the ESC/I-2
-smaller-wire-DPI-then-downsample arm above. At or above the delivered DPI, the
+smaller-wire-DPI-then-downsample arm above. At or above the wire resolution, the
 fixed DPI is used as-is, with an info log when it's strictly above (mirroring the
 ESC/I-2 capped-at-max log).
 
@@ -627,7 +627,7 @@ Because legacy pages are encoded host-side from raw RGB, the JPEG would carry no
 density of its own, and a density-less JPEG reads as 72 DPI — the wrong physical
 size in viewers, a `document` re-encode that inherits and rewrites that 72, and a
 PDF page box four times too large once `composePdfFromJpegs` sizes pages from the
-density (issue #221). So `encodeRawGbrToJpeg` stamps the delivered DPI into the
+density (issue #221). So `encodeRawGbrToJpeg` stamps the wire resolution into the
 JFIF header at encode (a lossless header patch), and every later pass inherits
 it; a host-side downsample re-stamps its own target. ESC/I-2 pages need no
 stamp: every captured model writes its own JFIF density (300 DPI on the ET-4950
@@ -653,7 +653,7 @@ rule above guarantees never happens.
 The WF-3620 (and other 2014-era Epson printers using the same firmware
 generation) speaks **plain TCP on port 1865** with **ESC/I commands**
 inside the same IS framing the ET-4950 uses. It's selected by the
-plain-TCP arm of the [protocol probe](#protocol-probe-two-arms): after TLS
+plain-TCP step of the [protocol probe](#protocol-probe-two-steps): after TLS
 fails, the plain-TCP welcome's payload byte 1 (`0x02`) identifies the device
 as legacy-ESC/I-shaped.
 
@@ -669,7 +669,7 @@ flatbed-only with a fixed raster:
   with no ADF. That omission is why the WF-3620 settings NAK at
   `SOURCE_ACK2` on this model.
 
-Per-model differences are resolved through a small dialect registry rather than
+Per-model differences are resolved through the legacy dialects rather than
 branching logic scattered through the graph — see [Per-model dialects
 (LegacyDialectEntry)](#per-model-dialects-legacydialectentry) below.
 
@@ -679,7 +679,7 @@ Key wire differences:
   after the lock, never as a bare write. The printer also emits an
   unsolicited IS-`0x8000` welcome on plain TCP (same as the ET-2750), so
   the auto-probe disambiguates by the welcome's payload byte 1 — see
-  [Protocol probe](#protocol-probe-two-arms).
+  [Protocol probe](#protocol-probe-two-steps).
 - Source select is sent as `ESC e <byte>` (0=flatbed, 1=ADF simplex,
   2=ADF duplex) before scan setup. The same byte is also written into
   byte 26 of the 64-byte FS W parameter block. Not encoded in PARA tokens
@@ -689,9 +689,9 @@ Key wire differences:
 - The printer pushes raw 24-bit GBR-interleaved pixels (bytes per pixel
   are `[G, B, R]`; the host permutes to RGB before sharp encodes them) in
   IS-0xa200 chunks at 600 DPI (JPG) / 300 DPI (PDF) — the firmware locks
-  the resolution to the panel's format choice.
+  the resolution to the panel's Action.
 - ADF pages are terminated by a host-sent `0x0c 0x00` page-eject. Duplex
-  produces two cycles per sheet; the back side comes out 180°-rotated and
+  produces two cycles per sheet; the back page comes out 180°-rotated and
   the host applies EXIF Orientation=3 / `/Rotate 180` accordingly.
 
 The bullets above describe the WF-3620's wire shape specifically; XP-620
@@ -757,10 +757,10 @@ pinned to the flatbed from the start. `registry.test.ts` holds that only a
 dialect whose setup bypasses `INIT` may be `"fixed-flatbed"`.
 
 `src/esci/dialects/registry.ts`'s `resolveLegacyEntry(productName)` picks
-the entry. The push-scan SOAP's `ProductNameIn` field (parsed by
+the legacy dialect. The push-scan SOAP's `ProductNameIn` field (parsed by
 `parsePushScanRequest` in `src/pushscan.ts`, threaded through
 `dispatchScanSession` in `src/startup.ts` as `productName`) is matched
-against each entry's literal PID string — `"PID 08B8"` for `WF3620_ENTRY`,
+against each dialect's literal PID string — `"PID 08B8"` for `WF3620_ENTRY`,
 `"PID 08C8"` for `XP620_ENTRY`, `"PID 1106"` for `ET2550_ENTRY`. Any other
 PID — or `null`, which is what the host-triggered `scan:now` CLI
 (`src/scan-now.ts`) always passes since there is no panel to read a
@@ -782,8 +782,8 @@ decodes it (`parseFsIReply`) and checks it against the running dialect
 - **Match:** the dialect's own PID. Logs the usual debug `Dialect resolved`
   line.
 - **Unrecognised:** a product no dialect claims, on the WF-3620 fallback.
-  Warns that an older ESC/I model is trying the WF-3620 settings
-  (experimental) and asks for a report.
+  Warns that an older ESC/I model is untested and trying the WF-3620
+  settings, and asks for a report.
 - **Switch:** the session is on the WF-3620 fallback, another dialect claims
   the product, and its setup branch is the fallback's (same `setup.next`
   state, same first command). Every
@@ -830,7 +830,7 @@ check, so they see any dialect it switched to:
   that has already flushed — `POST_STATUS` deliberately is not, since its
   `FS F` can still carry a real transfer-end error.
 
-Per-entry fixed data lives on the entry rather than being derived
+Per-dialect fixed data lives on the dialect rather than being derived
 per-request: `raster()` (page dimensions), `gamma` (R/G/B LUTs),
 `transferBufferBytes` (the transfer buffer that sets the lines per block), and
 `fswBlock()` (the 64-byte `FS W` block, given the lines per block that
@@ -845,7 +845,7 @@ and `FS W` block are fixed constants for the same reason (300 DPI A4,
 2481×3507 px), transcribed byte-for-byte from that capture into
 `src/esci/dialects/xp620-data.ts`; its block differs from the WF-3620 layout
 in a few constant bytes, so the dialect keeps the captured block and writes
-only the lines per block into it. The stream config is not per-entry: the
+only the lines per block into it. The stream config is not per-dialect: the
 graph builds it from each `FS G` reply (`buildStreamConfigPayload()`).
 
 `ESCI_FORCE_SOURCE` set to an ADF source can't be serviced by a printer
@@ -905,7 +905,7 @@ The session's first `FS F` status reply (`STATUS_1A`) says whether an ADF is
 fitted: byte 1, bit 7. With none, the source is the flatbed and no `ESC e` is
 sent (the ET-2550).
 
-The PushScan SOAP carries `duplex` and `action` (Sides + Format) but no
+The PushScan SOAP carries `duplex` and `action` (Sides + Action) but no
 explicit ADF-vs-flatbed selector. On a printer with an ADF the legacy graph
 probes with `ESC e 0x01` and reads the following `FS F` status reply to detect
 the physical source:

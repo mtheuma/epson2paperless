@@ -20,7 +20,8 @@ import type { Dialect, DialectWindow } from "./model-overrides.js";
  * - scan window: the generic window (A4, or the full ADF area in crop mode);
  * - poll count: 3, or 12 for an ADF-only printer.
  *
- * Experimental by definition: no report confirms it on any printer yet.
+ * A model that runs it is Untested: no compatibility report confirms the
+ * generic dialect on any printer yet.
  */
 
 /**

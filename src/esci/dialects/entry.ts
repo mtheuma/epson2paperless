@@ -14,7 +14,7 @@ export interface Branch<S extends string> {
 
 export interface LegacyDialectEntry {
   name: "wf3620" | "xp620" | "et2550";
-  /** `PID XXXX`, matched against the push-scan trigger and the FS I identity reply. */
+  /** `PID XXXX`, matched against the panel trigger and the FS I identity reply. */
   productName: string;
   /**
    * `detect`: the session's FS F replies settle the source — the first one

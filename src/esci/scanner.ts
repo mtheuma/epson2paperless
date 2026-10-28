@@ -149,7 +149,7 @@ export async function runEsciScan(
     // resolvers to stay resilient if a future dialect ever varies delivered
     // DPI by the detected source too. Delegates the actual selection to the
     // shared `selectWireDpi` (src/esci2/resolution.ts) with a single-element
-    // advertised set — the fixed delivered DPI is the only DPI this wire can
+    // advertised set — the fixed wire resolution is the only DPI this wire can
     // ever produce, so "exact"/"smallest-above"/"capped" collapse to
     // "at delivered"/"below delivered"/"above delivered" respectively.
     resolveDownsample: (ctx: EsciCtx) => {
@@ -167,7 +167,7 @@ export async function runEsciScan(
       }
       return undefined;
     },
-    // No density resolver is needed here: the delivered DPI is stamped into
+    // No density resolver is needed here: the wire resolution is stamped into
     // each page at encode (makeFlushTransition → encodeRawGbrToJpeg), so the
     // exact-match and capped-above cases already carry it, and a downsample
     // re-stamps its own target.

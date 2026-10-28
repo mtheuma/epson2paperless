@@ -152,13 +152,13 @@ describe("OVERRIDES_BY_FINGERPRINT", () => {
   });
 
   it("supportsWireGrayscale matches composePara's gate (adf-crp + monoGammaClass)", () => {
-    // DS-575W: adf-crp profile with a mono LUT — the wire honours grayscale.
+    // DS-575W: adf-crp PARA profile with a greyscale LUT — the wire honours greyscale.
     expect(
       supportsWireGrayscale(
         recordedDialect("90f98ad1ef34fc40fcd9b49f880b0599569c80b343ab9b05c92d15cfac30b074"),
       ),
     ).toBe(true);
-    // FF-680W: adf-crp but colour-only (no mono LUT).
+    // FF-680W: adf-crp but colour-only (no greyscale LUT).
     expect(
       supportsWireGrayscale(
         recordedDialect("5d4dea564bf876ff0714a167b700007bd381de839615ad8dbded0c59c53eaabd"),

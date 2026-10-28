@@ -80,7 +80,7 @@ describe("postProcessTempPages", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("runs the standalone downsample under profile none (no document/grayscale transform)", async () => {
+  it("runs the standalone downsample under mode none (no document/greyscale transform)", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-ds-none-"));
     await writePage(dir, "page_00.jpg", [222, 220, 244]);
     await postProcessTempPages(
@@ -97,7 +97,7 @@ describe("postProcessTempPages", () => {
     expect(fs.readdirSync(dir).some((f) => f.endsWith(".tmp"))).toBe(false);
   });
 
-  it("document profile folds the downsample into its single encode pass", async () => {
+  it("document correction folds the downsample into its single encode pass", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-ds-doc-"));
     await writePage(dir, "page_00.jpg", [222, 220, 244]);
     await postProcessTempPages(
@@ -150,7 +150,7 @@ describe("postProcessTempPages", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("folds the downsample into the forced-grayscale re-encode (profile none)", async () => {
+  it("folds the downsample into the forced-greyscale re-encode (mode none)", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-ds-gray-"));
     await writePage(dir, "page_00.jpg", [222, 220, 244]);
     await postProcessTempPages(
@@ -171,7 +171,7 @@ describe("postProcessTempPages", () => {
     expect(meta.channels).toBe(1);
   });
 
-  it("profile none with nothing else requested: the page bytes are left untouched", async () => {
+  it("mode none with nothing else requested: the page bytes are left untouched", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-noop-"));
     await writePage(dir, "page_00.jpg", [222, 220, 244]);
     const before = fs.readFileSync(path.join(dir, "page_00.jpg"));

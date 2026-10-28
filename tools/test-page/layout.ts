@@ -1,4 +1,4 @@
-// Single source of truth for the compatibility test-page geometry.
+// Single source of truth for the compatibility-page geometry.
 // Coordinates are PDF POINT space with pdf-lib's BOTTOM-LEFT origin (y up),
 // identical to generate.ts. The oracle maps these into raster (top-left,
 // y down) space via the crosshair-fit transform — see src/test-oracle.

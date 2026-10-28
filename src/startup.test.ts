@@ -238,7 +238,7 @@ describe("trackPendingHooks (#202)", () => {
       }
     });
 
-    it("leaves the admission gate to the hook: a press is still admitted under the wrapper", async () => {
+    it("leaves admission to the hook: a trigger is still admitted under the wrapper", async () => {
       const inflight = createInflightTracker();
       const admission = createScanAdmission(inflight);
       const { options } = trackPendingHooks(
@@ -885,7 +885,7 @@ describe("dispatchScanSession", () => {
     expect(call.forcedSource).toBeNull();
   });
 
-  it("variant=esci routes XP-620 PID to the xp620 dialect entry", async () => {
+  it("variant=esci routes XP-620 PID to the xp620 legacy dialect", async () => {
     detectVariantMock.mockResolvedValue("esci");
     const config = makeConfig({ printerProtocol: "esci" });
     await dispatchScanSession({

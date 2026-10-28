@@ -116,10 +116,10 @@ describe("createScanAdmission", () => {
     expect(admission.isBusy()).toBe(true);
   });
 
-  // The gate and the drain answer different questions. Hooks are tracked
-  // straight into the tracker for the drain; they must not make the gate
-  // refuse the very press they belong to.
-  it("a promise tracked for the drain alone leaves the gate idle", () => {
+  // The admission check and the drain answer different questions. Hooks are
+  // tracked straight into the tracker for the drain; they must not make
+  // admission refuse the very trigger they belong to.
+  it("a promise tracked for the drain alone leaves admission idle", () => {
     const inflight = createInflightTracker();
     const admission = createScanAdmission(inflight);
     void inflight.track(new Promise<void>(() => {}));
@@ -129,10 +129,10 @@ describe("createScanAdmission", () => {
 });
 
 describe("createScanAdmission — expectFollowUp", () => {
-  // On the FF-680W / DS-575W a press is a JobList, then a PushScan on a fresh
-  // connection ~0.7 s later (pcap-measured). The hand-off keeps the drain
+  // On the FF-680W / DS-575W a panel trigger is preceded by a JobList, with the
+  // PushScan on a fresh connection ~0.7 s later (pcap-measured). The hand-off keeps the drain
   // waiting for that follow-up without gating it (issue #207 review).
-  it("keeps the drain waiting without making the gate busy", () => {
+  it("keeps the drain waiting without making admission busy", () => {
     const inflight = createInflightTracker();
     const admission = createScanAdmission(inflight);
     admission.expectFollowUp(1000);
@@ -151,7 +151,7 @@ describe("createScanAdmission — expectFollowUp", () => {
     expect(inflight.count).toBe(1);
   });
 
-  it("a hand-off that no press follows ends at its timeout", async () => {
+  it("a hand-off that no trigger follows ends at its timeout", async () => {
     vi.useFakeTimers();
     try {
       const inflight = createInflightTracker();
@@ -293,7 +293,7 @@ describe("createSingleScanAdmission — expectFollowUp", () => {
     }
   });
 
-  it("a hand-off that no press follows lapses at its timeout", () => {
+  it("a hand-off that no trigger follows lapses at its timeout", () => {
     vi.useFakeTimers();
     try {
       const admission = createSingleScanAdmission();
@@ -307,7 +307,7 @@ describe("createSingleScanAdmission — expectFollowUp", () => {
     }
   });
 
-  // A cancelled press never sends the follow-up. The coordinator waits on
+  // A trigger cancelled on the panel never sends the follow-up. The coordinator waits on
   // onReleased, so a lapse wakes it rather than leaving it to its deadline.
   it("a lapsed hand-off fires onReleased listeners", () => {
     vi.useFakeTimers();

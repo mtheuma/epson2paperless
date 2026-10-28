@@ -14,11 +14,11 @@ The **second wave** (ET-2750, XP-7100, ET-4800, and WF-3620) needed only Wiresha
 
 Wireshark packet captures revealed the discovery and push-scan layers in full. Both operate in plaintext (UDP multicast and HTTP over TCP), so all fields are directly readable. The captures established:
 
-- The multicast address, port, and beacon format (`02 06`/`02 07` packet structure).
+- The multicast address, port, and announcement format (`02 06`/`02 07` packet structure).
 - The sequence echo requirement in keepalives — and the consequence of getting it wrong (no entry in the destination list).
 - The push-scan HTTP request format, including the non-standard header spacing and the `x-uid` counter.
 - The `PushScanIDIn` encoding for Sides and Action.
-- That the printer initiates the push-scan trigger (a plain-TCP connection from the printer to the host's event port 2968), but the _host_ initiates the scan-session connection on port 1865 (TLS for the ET-4950 family + ET-2950, plain TCP for the other ESC/I-2 dialects — ET-2750 / XP-7100 / ET-4800 — and for WF-3620). Knowing which side opens which port turned out to matter for both the firewall rules in `README.md` and the listener / connector roles in `pushscan.ts` vs the scanner shells.
+- That the printer initiates the panel trigger (a plain-TCP connection from the printer to the host's event port 2968), but the _host_ initiates the scan-session connection on port 1865 (TLS for the ET-4950 family + ET-2950, plain TCP for the other ESC/I-2 dialects — ET-2750 / XP-7100 / ET-4800 — and for WF-3620). Knowing which side opens which port turned out to matter for both the firewall rules in `README.md` and the listener / connector roles in `pushscan.ts` vs the scanner shells.
 
 Capturing UDP multicast and non-standard HTTP required binding a promiscuous-mode capture on the Ethernet interface rather than using a loopback filter. On Windows, `dumpcap` (bundled with Wireshark) works well from the command line — identify the target interface via `dumpcap -D` (using the interface GUID rather than a numerical index, since numerical indexes change when USB network adapters are connected or disconnected).
 
@@ -91,7 +91,7 @@ That is less of a limitation than it sounds, because the curve is not a per-mode
 
 So a new dialect that has no capture of its own should inherit the near-identity `et4950-stock` class. That's the pass-through choice: it asks the printer for no tone shaping and leaves its default rendering alone, rather than approximating some unknown model-specific value.
 
-The ET-8500 and ET-7700 both took that inheritance when they were added from a diagnostic alone, and both were later validated on real hardware. The ET-7700's compatibility-test-page scan puts numbers on it: nominal-64 grey returned 72/69/69 with no shadow crush, grey-patch channel spreads of 3–11 and no cast. That is what a correctly inherited pass-through curve looks like, and it is the practical answer to the question this section opens with. (That scan measured the ET-7700's earlier pair. It now sends a pass-through pair inherited from the XP-7100 and ET-2750 captures, the near-identity `xp7100-pdf` curve with the identity colour matrix, expected to match but not yet confirmed by a scan.)
+The ET-8500 and ET-7700 both took that inheritance when they were added from a diagnostic alone, and both were later validated on real hardware. The ET-7700's compatibility-page scan puts numbers on it: nominal-64 grey returned 72/69/69 with no shadow crush, grey-patch channel spreads of 3–11 and no cast. That is what a correctly inherited pass-through curve looks like, and it is the practical answer to the question this section opens with. (That scan measured the ET-7700's earlier pair. It now sends a pass-through pair inherited from the XP-7100 and ET-2750 captures, the near-identity `xp7100-pdf` curve with the identity colour matrix, expected to match but not yet confirmed by a scan.)
 
 ### The byte-for-byte replay test
 

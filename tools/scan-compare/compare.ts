@@ -11,7 +11,7 @@
  *
  *   - `white%`      how hard the background is flattened to pure 255.
  *   - `at-risk%`    non-white detail sitting within CLIP_BELOW_PAPER of the
- *                   measured paper white — i.e. detail our document profile
+ *                   measured paper white — i.e. detail document correction
  *                   would force to pure white (torn edges, soft shadows, the
  *                   faint fibres around spiral-binding tabs).
  *   - `knee%`       non-white detail inside the clip's soft-knee band. Before
@@ -24,7 +24,7 @@
  * Usage:
  *   npm run scan:compare -- <file...> [--document] [--tone-curve <name>]
  *
- * `--document` additionally runs each page through the document profile and
+ * `--document` additionally runs each page through document correction and
  * prints the after-metrics beneath the before, which is the before/after view
  * for judging a change to the clip. `--tone-curve <name>` (implies
  * `--document`) also applies that pinned tone curve, so the `+ document` row
@@ -134,7 +134,7 @@ async function main(): Promise<void> {
       if (withDocument) {
         // The applied tone curve is named once in the header line — repeating
         // it per row would push the metrics out of column alignment. Pixel
-        // metrics measure the colour document-profile output; the chroma
+        // metrics measure the colour document-correction output; the chroma
         // columns and verdict are the pipeline's own, computed by
         // correctDocumentImageAuto on clip-stage raw pixels before the tone
         // curve and before any re-encode (see measurePage).

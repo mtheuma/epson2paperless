@@ -41,8 +41,8 @@ export interface ParaSpec {
    */
   colorMode?: "color" | "grayscale";
   /**
-   * Single-channel gamma LUT for grayscale scans on the adf-crp profile. Its
-   * presence is what makes a dialect greyscale-capable: grayscale is emitted
+   * Single-channel gamma LUT for greyscale scans on the adf-crp PARA profile. Its
+   * presence is what makes a dialect greyscale-capable: greyscale is emitted
    * only when colorMode is "grayscale" AND this is set. A dialect that leaves it
    * unset stays colour (#COLC024) even under a global SCAN_COLOR_MODE=grayscale,
    * the same way colour-only dialects ignore an unsupported setting. Ignored
@@ -286,7 +286,7 @@ function composeAdfCrpPara(spec: ParaSpec): Buffer {
 
   // Colour mode selects the #COL code and gamma LUT. Greyscale needs the
   // single-channel monoGammaClass; colour uses the RGB gammaClass triplet. A
-  // grayscale request only takes effect when the dialect supplies a
+  // greyscale request only takes effect when the dialect supplies a
   // monoGammaClass — colour-only dialects (FF-680W) ignore it and stay #COLC024,
   // mirroring how resolution is ignored by dialects that don't consume it.
   const grayscale = spec.colorMode === "grayscale" && spec.monoGammaClass !== undefined;

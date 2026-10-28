@@ -404,7 +404,7 @@ export interface RunScanSessionOpts<Ctx> {
    */
   resolveGrayscaleConversion?: (ctx: Ctx) => GrayscaleConversion;
   /**
-   * Resolves the pinned tone curve for the `document` profile from the final
+   * Resolves the pinned tone curve for document correction from the final
    * context — the dialect is only known mid-scan (ESC/I-2 sets it at INIT1),
    * so the scanner shell supplies this callback and `runFinalize` reads it once
    * the scan has resolved the entry. Omitted (or returning undefined) means the
@@ -426,7 +426,7 @@ export interface RunScanSessionOpts<Ctx> {
    * final context — set when the wire couldn't reach the requested
    * SCAN_RESOLUTION (the dialect's max, or the wire's own DPI vocabulary, is
    * only known mid-scan). Undefined means no fallback is needed: the wire hit
-   * the requested DPI, or the transport has no such notion.
+   * the target resolution, or the transport has no such notion.
    */
   resolveDownsample?: (ctx: Ctx) => Downsample | undefined;
   paperless?: PaperlessUploadOptions;

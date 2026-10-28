@@ -8,7 +8,7 @@ ESC/I-2 over plain TCP, port 1865.
 
 The DS-575W is an ADF-only, button-only sheet-fed scanner — a sibling of the
 FF-680W (announces PID `0169`; FF-680W is `016B`). No flatbed. Sides
-(1-sided / 2-sided), resolution, and colour mode are software settings chosen at
+(simplex / duplex), resolution, and colour mode are software settings chosen at
 scan time.
 
 | Fixture                                  | Source pcap                                   | Sides       | DPI (wire) | Colour    | `#COL` | tcp.stream | Committed events | Role                    |
@@ -68,9 +68,9 @@ for the replay test:
 
 - The **colour oracle** (`SKEWDFL1`) matches the canonical exactly, so it carries
   a **strict full-PARA byte-equivalence** assertion.
-- The **mono fixtures** were captured with different GUI flag orderings
+- The **greyscale fixtures** were captured with different GUI flag orderings
   (`DFL1SKEW`, `DPLXSKEW`), so they are **driven to completion functionally**; the
-  novel mono data is pinned via direct gamma/CMX segment equality rather than a
+  novel greyscale data is pinned via direct gamma/CMX segment equality rather than a
   full-PARA compare.
 
 End-to-end correctness against real hardware is confirmed separately by having the

@@ -66,7 +66,7 @@ import { scaledDimensions, type Downsample } from "./downsample.js";
 // The reference has to come from configuration, not from the page. In one
 // image a device's cast and a sheet's own tint are indistinguishable: both are
 // a uniform chromatic background with darker content on it. Estimating the
-// white point from the page under test therefore maps a coloured sheet to
+// device white point from the page under test therefore maps a coloured sheet to
 // white and collapses its chroma, converting it to greyscale and destroying
 // the colour — see the regression cases in the test file. A fixed per-device
 // reference has no such failure, because it does not depend on what is on the

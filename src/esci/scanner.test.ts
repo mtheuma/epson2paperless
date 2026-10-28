@@ -54,7 +54,7 @@ interface FixtureSpec {
    */
   expectedDpi: number;
   expectedWidthPt: number;
-  /** Finalize post-process profile — `document` re-encodes every page host-side. */
+  /** Finalize post-processing mode — `document` re-encodes every page host-side. */
   postProcess: "none" | "document";
 }
 
@@ -236,7 +236,7 @@ const FIXTURE_SPECS: FixtureSpec[] = [
     expectedPdfPageCount: 1,
   },
   // POST_PROCESS=document re-encodes every page host-side and writes its own
-  // EXIF resolution; the delivered DPI must survive that on both formats.
+  // EXIF resolution; the wire resolution must survive that on both formats.
   {
     path: "wf-3620/flatbed-single-page-pdf.jsonl",
     format: "pdf",
@@ -376,7 +376,7 @@ describe("scanner-esci", () => {
       }
 
       // Physical-size and back-page rotation assertions. Legacy pages are
-      // host-encoded from raw RGB, so the dialect's delivered DPI has to be
+      // host-encoded from raw RGB, so the dialect's wire resolution has to be
       // stamped into the JFIF header — without it the page reads as 72 DPI
       // and an A4 scan at 300 DPI becomes a 34 × 49 inch page box in the
       // composed PDF (issue #221 follow-up). Anchored to the literal
@@ -388,7 +388,7 @@ describe("scanner-esci", () => {
           expect((await sharp(bytes).metadata()).density).toBe(expectedDpi);
           // Back pages carry EXIF Orientation=3 (the ADF U-turn delivers them
           // upside down); front pages carry no EXIF orientation at all. The
-          // document profile bakes the rotation into the pixels and writes an
+          // document correction bakes the rotation into the pixels and writes an
           // upright tag instead, so there no page may still claim 3.
           const orientation = readJpegOrientation(bytes);
           if (postProcess === "document") {
@@ -404,7 +404,7 @@ describe("scanner-esci", () => {
         // load the document and query page geometry and rotation programmatically.
         const pdfBytes = readFileSync(path.join(outputDir, files[0]));
         const doc = await PDFDocument.load(pdfBytes);
-        // Page box is in points: pixels × 72 / delivered DPI.
+        // Page box is in points: pixels × 72 / wire resolution.
         for (let i = 0; i < doc.getPageCount(); i++) {
           expect(doc.getPage(i).getSize().width).toBeCloseTo(expectedWidthPt, 1);
         }
@@ -560,7 +560,7 @@ describe("scanner-esci", () => {
         ),
       ]);
 
-      // The ET-2550's delivered DPI (300), not the WF-3620's 600 for JPG.
+      // The ET-2550's wire resolution (300), not the WF-3620's 600 for JPG.
       const files = readdirSync(outputDir);
       expect(files).toHaveLength(1);
       const bytes = readFileSync(path.join(outputDir, files[0]));
@@ -635,7 +635,7 @@ describe("scanner-esci", () => {
     expect(new Set(flags)).toEqual(new Set([expected]));
   });
 
-  it("an unrecognised PID in the FS I reply logs the experimental line and runs the WF-3620 settings unchanged", async () => {
+  it("an unrecognised PID in the FS I reply logs the untested line and runs the WF-3620 settings unchanged", async () => {
     const fixture = loadFixture(path.join(FIXTURES, "wf-3620/flatbed-single-page-jpeg.jsonl"));
     const original = Buffer.from("PID 08B8", "latin1").toString("hex");
     const renamed = Buffer.from("PID 0999", "latin1").toString("hex");
@@ -674,7 +674,7 @@ describe("scanner-esci", () => {
     expect(resolved).toEqual([]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain(
-      "Older ESC/I model PID 0999 not recognised — trying the WF-3620 settings (experimental), please report",
+      "Older ESC/I model PID 0999 not recognised — untested, trying the WF-3620 settings, please report",
     );
   }, 60_000);
 });
@@ -746,10 +746,10 @@ describe("SCAN_RESOLUTION host-side downsample fallback (legacy path)", () => {
     return { downsample: capturedDownsample, infoLogs };
   }
 
-  // The delivered DPI itself is stamped at encode and asserted by the replay
+  // The wire resolution itself is stamped at encode and asserted by the replay
   // matrix above; these cover only the downsample decision and its log.
 
-  it("resolution below the delivered DPI (600, JPG): resolveDownsample yields {fromDpi:600, toDpi:150}", async () => {
+  it("target below the wire resolution (600, JPG): resolveDownsample yields {fromDpi:600, toDpi:150}", async () => {
     const { downsample, infoLogs } = await runWithDownsampleSpy({
       fixturePath: "wf-3620/flatbed-single-page-jpeg.jsonl",
       format: "jpg",
@@ -759,7 +759,7 @@ describe("SCAN_RESOLUTION host-side downsample fallback (legacy path)", () => {
     expect(infoLogs.some((l) => /exceeds|maximum|delivers/.test(l))).toBe(false);
   }, 60_000);
 
-  it("resolution above the delivered DPI (800 requested, 300 delivered, PDF): resolveDownsample undefined, plus an info log", async () => {
+  it("target above the wire resolution (800 requested, 300 delivered, PDF): resolveDownsample undefined, plus an info log", async () => {
     const { downsample, infoLogs } = await runWithDownsampleSpy({
       fixturePath: "wf-3620/flatbed-single-page-pdf.jsonl",
       format: "pdf",
@@ -769,7 +769,7 @@ describe("SCAN_RESOLUTION host-side downsample fallback (legacy path)", () => {
     expect(infoLogs.some((l) => /exceeds|maximum|delivers/.test(l))).toBe(true);
   }, 60_000);
 
-  it("resolution exactly equal to the delivered DPI (600, JPG): resolveDownsample undefined, no info log", async () => {
+  it("target exactly equal to the wire resolution (600, JPG): resolveDownsample undefined, no info log", async () => {
     const { downsample, infoLogs } = await runWithDownsampleSpy({
       fixturePath: "wf-3620/flatbed-single-page-jpeg.jsonl",
       format: "jpg",

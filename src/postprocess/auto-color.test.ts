@@ -179,9 +179,9 @@ describe("page-wide colour survives the as-scanned classifier", () => {
     });
   }
 
-  it("converts tinted stock under the document profile, by design", async () => {
+  it("converts tinted stock under document correction, by design", async () => {
     // The counterpart to the cases above, pinned so the difference between the
-    // two profiles is a recorded decision rather than a surprise. Under
+    // two modes is a recorded decision rather than a surprise. Under
     // `document` the clip flattens the paper to pure white BEFORE the verdict,
     // so the tint is already absent from the delivered pixels and converting
     // loses nothing. Under `none` the same page must stay colour, because
@@ -325,7 +325,7 @@ describe("PRINTER_WHITE_POINT cast correction (#159)", () => {
   // neutralises the cast. Applying PRINTER_WHITE_POINT on top would correct
   // twice and inject chroma into neutral mid-tones, undoing the very
   // conversion the setting is meant to enable.
-  it("does not correct twice under the document profile", async () => {
+  it("does not correct twice under document correction", async () => {
     const src = await encode(castPagePixels(), 300);
     const without = await correctDocumentImageAuto(src, 90, undefined, "auto");
     const with_ = await correctDocumentImageAuto(src, 90, undefined, "auto", ET4956);
@@ -472,9 +472,9 @@ describe("correctDocumentImageAuto", () => {
 
 describe("correctDocumentImage with a single-channel source", () => {
   it("keeps a 1-channel greyscale JPEG single-channel through the transform", async () => {
-    // DS-575W wire-greyscale pages arrive as 1-channel JPEGs; the document
-    // profile (with no conversion pass — resolveGrayscaleConversion returned
-    // "off" because the wire already honoured grayscale) must not promote
+    // DS-575W wire-greyscale pages arrive as 1-channel JPEGs; document
+    // correction (with no conversion pass — resolveGrayscaleConversion returned
+    // "off" because the wire already honoured greyscale) must not promote
     // them back to a 3-channel colour encode.
     const src = await sharp(await encode(neutralPagePixels()))
       .toColourspace("b-w")
@@ -492,7 +492,7 @@ describe("correctDocumentImage with a single-channel source", () => {
 const noopLog = { info: () => {}, error: () => {} };
 
 describe("postProcessTempPages with grayscaleConversion=auto", () => {
-  it("converts a neutral page and keeps a colour page byte-identical under profile none", async () => {
+  it("converts a neutral page and keeps a colour page byte-identical under mode none", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-auto-"));
     fs.writeFileSync(path.join(dir, "page_00.jpg"), await encode(neutralPagePixels()));
     fs.writeFileSync(path.join(dir, "page_01.jpg"), await encode(colourPagePixels()));
@@ -512,7 +512,7 @@ describe("postProcessTempPages with grayscaleConversion=auto", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("composes with the document profile", async () => {
+  it("composes with document correction", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-auto-doc-"));
     fs.writeFileSync(path.join(dir, "page_00.jpg"), await encode(neutralPagePixels()));
     await postProcessTempPages(
@@ -531,7 +531,7 @@ describe("postProcessTempPages with grayscaleConversion=auto", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("conversion off leaves everything untouched under profile none", async () => {
+  it("conversion off leaves everything untouched under mode none", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-auto-off-"));
     fs.writeFileSync(path.join(dir, "page_00.jpg"), await encode(neutralPagePixels()));
     const before = fs.readFileSync(path.join(dir, "page_00.jpg"));
@@ -545,7 +545,7 @@ describe("postProcessTempPages with grayscaleConversion=force", () => {
   // SCAN_COLOR_MODE=grayscale on a model without greyscale wire support:
   // the scan ran in colour and EVERY page converts — the chroma verdict is
   // bypassed, so even a page with real colour content comes out greyscale.
-  it("converts a colour page unconditionally under profile none", async () => {
+  it("converts a colour page unconditionally under mode none", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-force-"));
     fs.writeFileSync(path.join(dir, "page_00.jpg"), await encode(colourPagePixels()));
 
@@ -561,7 +561,7 @@ describe("postProcessTempPages with grayscaleConversion=force", () => {
     fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  it("composes with the document profile (clip applied, single encode to one channel)", async () => {
+  it("composes with document correction (clip applied, single encode to one channel)", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "pp-force-doc-"));
     fs.writeFileSync(path.join(dir, "page_00.jpg"), await encode(colourPagePixels()));
 

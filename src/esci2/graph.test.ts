@@ -2319,7 +2319,9 @@ describe("esci2Graph — generic dialect", () => {
     expect(ctx.entry!.sourceDetection).toBe("pre-para-status");
     expect(ctx.genericDialect).toBe(true);
     expect(warnings).toHaveLength(1);
-    expect(warnings[0]).toContain("PID FFFF not recognised — generic ESC/I-2 dialect");
+    expect(warnings[0]).toContain(
+      "PID FFFF not recognised — untested, running the generic ESC/I-2 dialect",
+    );
     expect(
       infos.some((line) => line.includes("[INFO]") && line.includes("CAPA fingerprint:")),
     ).toBe(true);

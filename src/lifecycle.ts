@@ -212,8 +212,8 @@ export interface OneShotDeps {
  * when an admitted trigger is abandoned (socket closed, ERROR, undeliverable
  * response, or the callback's reject arm) or a JobList's hand-off lapses with
  * no follow-up (issue #209) — unless another trigger is still pending, in
- * which case the wait goes on under the same deadline. New presses need no
- * special handling: the admission gate refuses them, and the listener stays
+ * which case the wait goes on under the same deadline. New triggers need no
+ * special handling: admission refuses them, and the listener stays
  * open so a JobList's follow-up PushScan can still arrive.
  */
 export async function runOneShotLifecycle(deps: OneShotDeps): Promise<number> {
@@ -264,7 +264,7 @@ export async function runOneShotLifecycle(deps: OneShotDeps): Promise<number> {
         deadlineHit,
       ]);
       // One trigger ending is not the end of every trigger: a JobList hand-off
-      // can lapse while a newer press's JOBW round-trip is still in flight
+      // can lapse while a newer trigger's JOBW round-trip is still in flight
       // (the timer is only replaced once that round-trip completes). Recheck,
       // and keep waiting on the same deadline rather than exit mid-transaction.
       if (outcome.kind !== "abandoned" || !deps.triggerPending()) break;
@@ -319,10 +319,10 @@ export async function shutdown(deps: ShutdownDeps): Promise<void> {
 
   // Nothing closes until the drain is done, the push-scan listener included.
   // The tracker holds scans and admitted panel triggers alike (issue #207),
-  // and on a v3 printer a press is a JobList followed by a PushScan
+  // and with v3 requests a JobList comes first, then the trigger's PushScan
   // on a fresh connection: closing the listener first would turn a follow-up
   // that lands mid-drain into a refused connection and a panel error. A new
-  // press while a scan drains is refused at admission as before, so the open
+  // trigger while a scan drains is refused at admission as before, so the open
   // listener adds at most a JobList round-trip, within the same budget.
   const drainResult = await deps.inflight.waitAll(deps.shutdownTimeoutMs);
   if (drainResult.timedOut > 0) {

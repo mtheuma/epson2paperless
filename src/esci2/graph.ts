@@ -743,7 +743,7 @@ function buildParaSend(ctx: Esci2Ctx): Buffer[] {
   const paraSource: ParaSpec["source"] =
     ctx.source === "flatbed" ? "flatbed" : ctx.duplex ? "adf-duplex" : "adf-simplex";
   assertSourceSupported(ctx.entry!, paraSource);
-  // Where the wire can't honour grayscale, the scan runs in colour and every
+  // Where the wire can't honour greyscale, the scan runs in colour and every
   // page converts to greyscale host-side at finalize (see the scanner
   // shell's resolveGrayscaleConversion, keyed on the same predicate). Say
   // so, or the colour wire traffic in a remote-triage debug log reads as

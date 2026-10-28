@@ -43,7 +43,7 @@ function buildResponseBody(status: "OK" | "ERROR", capabilities: string[] = []):
 // counter it increments and expects to see echoed back in our 200 OK. When
 // the values mismatch, the printer surfaces "Scanning Error" on the panel
 // even though the scan itself completes. See
-// `docs/PROTOCOL-REFERENCE.md#push-scan-trigger-tcp-soap-ish`.
+// `docs/PROTOCOL-REFERENCE.md#panel-trigger-tcp-soap-ish`.
 export interface PushScanResponseOptions {
   status?: "OK" | "ERROR";
   capabilities?: string[];
@@ -85,7 +85,7 @@ export interface PushScanInfo {
    * the first character of PushScanIDIn — '0' = 1-Sided, '1' = 2-Sided.
    * Any missing / malformed value defaults to false (safer to under-scan
    * than emit a duplex PARA the user didn't ask for). The encoding was
-   * established empirically from three captured scans (1-sided, 2-sided,
+   * established empirically from three captured scans (simplex, duplex,
    * and a confirmation run).
    *
    * Meaningful only when the printer is in ADF mode. Flatbed scans always
@@ -211,8 +211,8 @@ export function computeActionFromId(id: string | null): PushScanAction {
 
 /**
  * Resolves the panel's raw action against the PREVIEW_ACTION config.
- * Returns the format the scanner should actually use, or null when the
- * push-scan event should be skipped entirely (no TLS session, nothing
+ * Returns the output format the scanner should actually use, or null when the
+ * panel trigger should be skipped entirely (no TLS session, nothing
  * written to disk).
  */
 export function resolveEffectiveAction(
