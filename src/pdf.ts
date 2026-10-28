@@ -10,7 +10,7 @@ const log = createLogger("pdf");
 export interface PdfComposeOptions {
   /**
    * 1-based page indices to rotate 180°. Out-of-range indices are silently
-   * ignored — back-side detection is a best-effort hint from the scanner.
+   * ignored — back-page detection is a best-effort hint from the scanner.
    */
   backPages: number[];
 }
@@ -19,7 +19,7 @@ export interface PdfComposeOptions {
  * Composes a PDF from `page_NN.jpg` files in `tempDir`, ordered numerically.
  * Pages whose 1-based index appears in `options.backPages` get PDF
  * `/Rotate = 180` (the ADF U-turn path produces physically flipped
- * back-side JPEGs).
+ * back pages).
  * Throws if `tempDir` has no page files.
  */
 export async function composePdfFromJpegs(

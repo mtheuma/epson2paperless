@@ -19,7 +19,7 @@ describe("buildDiagnostic", () => {
     });
     expect(diagnostic).toContain("PID 1147");
     expect(diagnostic).toContain("FB  2.00");
-    expect(diagnostic).toContain("esci2-plain");
+    expect(diagnostic).toContain("plain TCP");
     // Source caps line — derived from INFO + CAPA segment presence.
     expect(diagnostic).toMatch(/Source caps:.*flatbed: Y.*ADF: Y.*duplex: Y/);
     expect(diagnostic).toContain("d850i0001170"); // FB scan area
@@ -28,6 +28,20 @@ describe("buildDiagnostic", () => {
     expect(diagnostic).toContain("UNITUM08");
     expect(diagnostic).toContain("COL MONOPREF"); // CCT list surfaced
     expect(diagnostic).toContain("abc123");
+  });
+
+  it("names the transport the session ran over", () => {
+    const transportLine = (transport: "tls" | "plain") =>
+      buildDiagnostic({
+        capaBody: Buffer.alloc(0),
+        infoBody: Buffer.alloc(0),
+        transport,
+        fingerprint: "transport",
+      })
+        .split("\n")
+        .find((line) => line.startsWith("Transport:"));
+    expect(transportLine("tls")).toBe("Transport:         TLS");
+    expect(transportLine("plain")).toBe("Transport:         plain TCP");
   });
 
   it("shows INFO's ADF duplex type, which back-page rotation is derived from", () => {

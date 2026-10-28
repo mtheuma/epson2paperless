@@ -226,7 +226,7 @@ describe("OVERRIDES_BY_FINGERPRINT", () => {
     }
   });
 
-  it("never claims adfDuplex without ADF extents", () => {
+  it("never claims adfDuplex without an ADF scan window", () => {
     for (const [fp, e] of OVERRIDES_BY_FINGERPRINT) {
       if (recordedDialect(fp).adfDuplex) {
         expect(e.adfExtents, `entry ${fp} (${e.displayName})`).not.toBeNull();

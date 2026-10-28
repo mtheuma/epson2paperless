@@ -32,7 +32,7 @@ The discovery protocol was fully decoded from Wireshark captures. The critical i
 
 ### Panel trigger (TCP, SOAP-ish)
 
-When the user selects a destination and presses Scan on the panel, the printer opens a TCP connection to the event port its keepalive advertised (2968) and sends an HTTP POST carrying a SOAP body. The critical wrinkle is that Epson uses non-standard HTTP header formatting — headers contain a space before the colon (`Header : value`), which is invalid HTTP/1.1 and will cause a standard HTTP server to reject the request. The service uses a raw `net.createServer` (not `node:http`) and parses the request manually.
+When the user selects a destination and presses Scan on the panel, the printer opens a TCP connection to the event port the destination's keepalive advertised (2968) and sends an HTTP POST carrying a SOAP body. The critical wrinkle is that Epson uses non-standard HTTP header formatting — headers contain a space before the colon (`Header : value`), which is invalid HTTP/1.1 and will cause a standard HTTP server to reject the request. The service uses a raw `net.createServer` (not `node:http`) and parses the request manually.
 
 The SOAP body's `<PushScanIDIn>` element is the only channel through which the panel's user selections reach the service. It encodes two fields in a compact binary-style string:
 
@@ -298,7 +298,7 @@ The values are distinct panel options, not combinable bit flags. `3` is not JPG 
 
 A key protocol finding for the ESC/I-2 path: **the printer always streams JPEG-encoded image data regardless of the panel's Action setting.** PDF is composed host-side with pdf-lib after all pages have been received, so the printer is never told "PDF". The scan-parameter (PARA) bytes are action-invariant for most dialects (ET-4950 family, ET-2750, ET-4800) — the same capture replays for both `action='jpg'` and `action='pdf'`, and the ADF replay tests assert this by reusing one Frida JPG capture across both runs. **XP-7100 is the exception:** its model override carries per-action gamma / CMX classes, so it emits different PARA bytes for JPG vs PDF even though the image stream is identical JPEG either way. (The committed JPG and PDF flatbed captures are separate Frida sessions and so differ slightly in capture-time polling cadence, but the protocol structure is the same.)
 
-The ESC/I path (WF-3620) is different: the firmware locks the scan resolution to the panel's format choice (600 DPI for JPG, 300 DPI for PDF), so the wire bytes do differ between the two — see [ESC/I variant (WF-3620)](#esci-variant-wf-3620) below. Composition still happens host-side via pdf-lib in PDF mode, but the underlying pixel stream is captured at the lower resolution.
+The ESC/I path (WF-3620) is different: the firmware locks the scan resolution to the panel's Action (600 DPI for JPG, 300 DPI for PDF), so the wire bytes do differ between the two — see [ESC/I variant (WF-3620)](#esci-variant-wf-3620) below. Composition still happens host-side via pdf-lib in PDF mode, but the underlying pixel stream is captured at the lower resolution.
 
 Preview on Computer (`PushScanIDIn[1] = 4`) is rejected by default (the scan does not proceed). The `PREVIEW_ACTION` environment variable overrides this: setting it to `jpg` or `pdf` redirects preview scans through the normal capture flow. Panels don't always label this action "Preview": the ET-3700's "User setting" preset sends `4` too.
 
@@ -307,7 +307,7 @@ A refused action still gets the HTTP 200 OK. No scan session follows, so the pri
 After `DONE`, the engine calls `transport.end()` to queue the FIN synchronously and then schedules the end-of-scan step via `setImmediate` — it does **not** wait for the socket's `'close'` event (the close handler is a no-op on the DONE path). The `setImmediate` exists to give any in-flight microtasks — notably the previous `flushPage`'s file-write resolving its Promise — a tick to settle before the synchronous finalize step runs:
 
 - `action='jpg'`: `promoteTempPagesToOutput` reads each `page_NN.jpg` from the session temp directory, writes it to `scan_<timestamp>[_NN].jpg` in the output directory (with collision-suffix handling), and unlinks the temp page. Reading + writing rather than `rename` lets temp and output directories live on different filesystems.
-- `action='pdf'`: `composePdfFromJpegs` in `src/pdf.ts` embeds each temp JPEG into a pdf-lib `PDFDocument`, applies `/Rotate = 180` on back-side pages, and writes `scan_<timestamp>.pdf`. If composition fails, it falls back to the JPEG promote path.
+- `action='pdf'`: `composePdfFromJpegs` in `src/pdf.ts` embeds each temp JPEG into a pdf-lib `PDFDocument`, applies `/Rotate = 180` on back pages, and writes `scan_<timestamp>.pdf`. If composition fails, it falls back to the JPEG promote path.
 
 The temp directory is removed in a `finally` block regardless of outcome.
 
@@ -493,7 +493,7 @@ has already flushed.
 `SCAN_RESOLUTION` (50–1200 DPI, optional) and `JPEG_QUALITY` (1–100, default 90) are
 universal knobs, validated once in `src/config.ts`. On ESC/I-2 both are resolved
 per-session against whatever the printer's CAPA reply actually advertises; on
-legacy ESC/I neither has a wire arm at all (see below).
+legacy ESC/I neither can be chosen per scan (see below).
 
 ### CAPA-advertised resolution and quality lists
 
@@ -606,7 +606,7 @@ at a different DPI.
 
 ### Legacy ESC/I: fallback-only
 
-The legacy path (WF-3620 family, XP-620, ET-2550) has no resolution arm on the
+The legacy path (WF-3620 family, XP-620, ET-2550) has no resolution choice on the
 wire at all: the cross-product of DPI × format × dialect was never captured
 across the board. The resolution-dependent values are already derived (the
 `FS W` block's lines per block from the raster width, the stream config from

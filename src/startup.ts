@@ -164,8 +164,8 @@ function hasConfirmedJobControl(productName: string | null): boolean {
 /**
  * How long the daemon's shutdown drain waits, after answering a JobList, for
  * the PushScan that follows it on a fresh connection (issue #207). The FF-680W
- * captures put that follow-up ~0.7 s after our JobList response; a trigger the
- * user cancels never sends one, so the wait is bounded rather than open.
+ * captures put that follow-up ~0.7 s after our JobList response; if the user
+ * cancels on the panel it never comes, so the wait is bounded rather than open.
  */
 export const JOB_LIST_HANDOFF_MS = 5000;
 
@@ -173,10 +173,11 @@ export const JOB_LIST_HANDOFF_MS = 5000;
  * Options for the push-scan server on TCP 2968.
  *
  * `admission` is required, and `target` therefore takes an explicit
- * `undefined` rather than being optional: an omitted gate used to admit every
- * push-scan silently, which is how one-shot shipped without one (issue #198)
- * past both the compiler and the suite. Callers with genuinely nothing to gate
- * pass an explicit no-gate stub so the intent is visible at the call site.
+ * `undefined` rather than being optional: an omitted admission used to admit
+ * every panel trigger silently, which is how one-shot shipped without one
+ * (issue #198) past both the compiler and the suite. Callers with genuinely
+ * nothing to refuse pass an explicit never-busy stub so the intent is visible
+ * at the call site.
  */
 export function buildPushScanServerOptions(
   config: Config,
@@ -251,8 +252,8 @@ export function buildPushScanServerOptions(
 
       if (step === "JOBW") {
         // The PushScan that follows is the real trigger. The daemon's drain
-        // must stay up for it (one-shot's coordinator already does), and the
-        // gate must not refuse it — hence a hand-off, not a reservation.
+        // must stay up for it (one-shot's coordinator already does), and
+        // admission must not refuse it — hence a hand-off, not a reserved slot.
         admission.expectFollowUp?.(JOB_LIST_HANDOFF_MS);
       }
     },

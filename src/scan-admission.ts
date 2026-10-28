@@ -4,23 +4,23 @@
 // printer serves a single session, so the panel trigger (TCP 2968) and the
 // POST /scan webhook share this admission.
 //
-// Why a reservation and not just the inflight count: a panel trigger is not
-// a tracked scan until the OK response has been flushed and the onPushScan
-// callback runs. For a v3 request that gap contains a job-control
+// Why reserve the slot rather than read the inflight count: a panel trigger
+// is not a tracked scan until the OK response has been flushed and the
+// onPushScan callback runs. For a v3 request that gap contains a job-control
 // round-trip to the printer (JOBR over 1865, up to 3 s), and for every model
 // it contains the response write. Reading only the count would admit a
 // webhook inside that gap and start two scans. So panel admission reserves
-// the slot, and the reservation is dropped either by commit()
-// (the callback tracked the real scan) or by a release hook the push-scan
-// server fires when the trigger ends without a callback.
+// the slot, and the reserved slot either passes to the scan at commit()
+// (the callback tracked the real scan) or is freed by a release hook the
+// push-scan server fires when the trigger ends without a callback.
 //
 // The admission check and the daemon's shutdown drain answer different
-// questions. The check (isBusy) reads the hold and the scans. The drain reads the inflight
-// tracker, which holds those and more: the reservation itself, so a signal in
-// the admission→callback gap waits instead of exiting mid-transaction, and a
-// bounded hand-off after a JobList, so the listener stays open for the
-// PushScan that follows on a fresh connection — which admission must not
-// refuse (issue #207).
+// questions. The check (isBusy) reads the reserved slot and the scans. The
+// drain reads the inflight tracker, which holds those and more: the reserved
+// slot itself, so a signal in the admission→callback gap waits instead of
+// exiting mid-transaction, and a bounded hand-off after a JobList, so the
+// listener stays open for the PushScan that follows on a fresh connection —
+// which admission must not refuse (issue #207).
 import type { InflightTracker } from "./lifecycle.js";
 
 export interface ScanAdmission {
@@ -40,7 +40,7 @@ export interface ScanAdmission {
   track(scan: Promise<void>): void;
   /**
    * A JobList was answered: keep the drain waiting for its follow-up PushScan
-   * for at most `timeoutMs`, without gating it. Ended early by the next
+   * for at most `timeoutMs`, without making admission busy. Ended early by the next
    * reserve() — whatever trigger arrives is the one the process stayed up for.
    * A newer JobList replaces the hand-off.
    */
@@ -208,8 +208,8 @@ export function createSingleScanAdmission(): SingleScanAdmission {
     expectFollowUp(timeoutMs) {
       endHandoff();
       handoffTimer = setTimeout(() => {
-        // A trigger cancelled on the panel never sends the follow-up: wake the coordinator
-        // rather than leave it to its deadline.
+        // Cancelling on the panel after the JobList means no follow-up PushScan:
+        // wake the coordinator rather than leave it to its deadline.
         handoffTimer = null;
         notify();
       }, timeoutMs);

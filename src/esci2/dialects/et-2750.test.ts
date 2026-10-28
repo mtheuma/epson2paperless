@@ -7,7 +7,7 @@ const ET2750_FP = "de76c9302793fa8fd663c22288dea07f8fcacaee8cd710bf2d49f7075f2b5
 const entry = recordedDialect(ET2750_FP);
 
 describe("ET-2750 model override", () => {
-  it("is flatbed-only (no ADF extents)", () => {
+  it("is flatbed-only (no ADF scan window)", () => {
     expect(entry.adfExtents).toBeNull();
   });
 

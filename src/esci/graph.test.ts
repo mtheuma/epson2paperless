@@ -737,7 +737,7 @@ describe("esciGraph IMG_RECEIVING / PAGE_ENCODING_DRAIN / cleanup", () => {
     }
   });
 
-  it("IMG_RECEIVING marks back side on even ADF-duplex pages", () => {
+  it("IMG_RECEIVING marks even ADF-duplex pages as back pages", () => {
     const state = esciGraph.states.IMG_RECEIVING;
     if (state.kind === "decision") {
       const ctx = makeCtx({

@@ -403,7 +403,7 @@ describe("runScanSession (engine pump)", () => {
     fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
-  it("injects EXIF Orientation=3 on back-side flushPage when action='jpg'", async () => {
+  it("injects EXIF Orientation=3 on a back page's flushPage when action='jpg'", async () => {
     const transport = new FakeTransport();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
     const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
@@ -503,7 +503,7 @@ describe("runScanSession (engine pump)", () => {
   });
 
   it("skips the back-page EXIF compensation when resolveBackPageRotated returns false", async () => {
-    // Single-pass dual-sensor hardware (DS-575W) delivers back sides upright;
+    // Single-pass dual-sensor hardware (DS-575W) delivers back pages upright;
     // the 180° compensation would invert them (issue #128 follow-up).
     const transport = new FakeTransport();
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));

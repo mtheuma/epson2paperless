@@ -17,9 +17,9 @@ Open a GitHub issue with:
 
 The most useful thing you can send is a capture of the project's **[compatibility page](https://github.com/mtheuma/epson2paperless/blob/main/tools/test-page/compatibility-test-page.pdf)**. First, check whether your printer uses TLS.
 
-**TLS models can't be captured with Wireshark.** Newer EcoTanks (ET-4950, ET-3950, ET-4956, ET-2950) encrypt the scan session, so a Wireshark capture is unreadable.
+**Printers that scan over TLS can't be captured with Wireshark.** Newer EcoTanks (ET-4950, ET-3950, ET-4956, ET-2950) encrypt the scan session, so a Wireshark capture is unreadable.
 
-If you have one of those models, open a [compatibility report](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) and say so. That's still valuable; TLS models need a different, heavier capture method I can help with. Not sure whether your printer uses TLS? Open a compatibility report first and I'll tell you whether a capture is worth it.
+If you have one of those models, open a [compatibility report](https://github.com/mtheuma/epson2paperless/issues/new?template=compatibility.yml) and say so. That's still valuable; those printers need a different, heavier capture method I can help with. Not sure whether your printer uses TLS? Open a compatibility report first and I'll tell you whether a capture is worth it.
 
 If you know your printer doesn't use TLS, a Wireshark capture is exactly what we need, and you only need to send it once:
 

@@ -681,7 +681,7 @@ describe("scanner-esci", () => {
 
 // ---------------------------------------------------------------------------
 // SCAN_RESOLUTION host-side downsample fallback — the legacy wire has no
-// resolution arm at all (fixed raster per format/dialect), so every axis
+// per-scan resolution choice (fixed raster per format/dialect), so every axis
 // is resolved host-side from LegacyDialectEntry.deliveredDpi. Spies on
 // finalizeSession (same technique as scan-session.test.ts's plumbing test)
 // to observe the `downsample` opt the scanner's resolveDownsample resolver
@@ -759,7 +759,7 @@ describe("SCAN_RESOLUTION host-side downsample fallback (legacy path)", () => {
     expect(infoLogs.some((l) => /exceeds|maximum|delivers/.test(l))).toBe(false);
   }, 60_000);
 
-  it("target above the wire resolution (800 requested, 300 delivered, PDF): resolveDownsample undefined, plus an info log", async () => {
+  it("target above the wire resolution (target 800, wire 300, PDF): resolveDownsample undefined, plus an info log", async () => {
     const { downsample, infoLogs } = await runWithDownsampleSpy({
       fixturePath: "wf-3620/flatbed-single-page-pdf.jsonl",
       format: "pdf",

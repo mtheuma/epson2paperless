@@ -119,7 +119,7 @@ describe("buildDaemonPushScanCallback", () => {
     expect(dispatch).not.toHaveBeenCalled();
     expect(setLastScanTimeMock).not.toHaveBeenCalled();
     // Nothing else would ever drop this hold, so the next trigger would be
-    // refused for good (issue #137's gate is shared with POST /scan).
+    // refused for good (issue #137's admission is shared with POST /scan).
     expect(admission.isBusy()).toBe(false);
   });
 });

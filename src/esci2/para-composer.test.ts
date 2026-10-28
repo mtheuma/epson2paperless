@@ -138,7 +138,7 @@ describe("composePara — optional segments", () => {
   });
 });
 
-describe("composePara — extents (#ACQ rendering)", () => {
+describe("composePara — scan window (#ACQ rendering)", () => {
   it("renders fbExtents as four i%07d ASCII integers for flatbed", () => {
     const body = composePara({
       ...baselineSpec(),
@@ -263,7 +263,7 @@ describe("composePara — adf-crp profile (FF-680W)", () => {
     expect(body.includes(Buffer.from("DPLX", "ascii"))).toBe(false);
   });
 
-  it("derives RSM/RSS and scales ACQ extents from resolution (300dpi)", () => {
+  it("derives RSM/RSS and scales the #ACQ window from resolution (300dpi)", () => {
     const body = composePara(ff680wSpec({ source: "adf-simplex", resolution: 300 }));
     expect(body.subarray(0, 64).toString("ascii")).toBe(
       "#ADFCRP SKEWDFL1#RSMi0000300#RSSi0000300#COLC024#FMTJPG #JPGd090",
@@ -308,7 +308,7 @@ describe("composePara — adf-crp colour-mode axis (DS-575W)", () => {
     expect(body.subarray(gmt, gmt + 804).equals(GAMMA_CLASSES["ff680w-adf"])).toBe(true);
   });
 
-  it("greyscale simplex @400 → #COLM008 + 268-byte mono gamma (460 bytes)", () => {
+  it("greyscale simplex @400 → #COLM008 + 268-byte greyscale gamma (460 bytes)", () => {
     const body = composePara(ds575wSpec({ resolution: 400, colorMode: "grayscale" }));
     expect(body.length).toBe(460);
     expect(body.subarray(0, 72).toString("ascii")).toBe(

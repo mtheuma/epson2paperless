@@ -1,6 +1,6 @@
 // Wiring tests for the POST /scan webhook (issue #137, plan §5.1). Everything
 // is real except the printer target and the scan dispatch: the HTTP server,
-// the inflight tracker, the panel-side admission gate and the shutdown drain.
+// the inflight tracker, the panel-side admission check and the shutdown drain.
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import http from "node:http";
 
@@ -228,7 +228,7 @@ describe("scan webhook wiring", () => {
     expect(h.dispatch).toHaveBeenCalledTimes(1);
   });
 
-  it("a webhook scan makes the panel gate refuse PushScan but not JobList", async () => {
+  it("a webhook scan makes panel admission refuse PushScan but not JobList", async () => {
     const scan = deferred();
     h = await harness({ dispatch: () => scan.promise });
     expect(await post(h.base)).toBe(202);

@@ -121,7 +121,7 @@ run("clip-induced chroma on neutral greys (#146 diagnostic)", () => {
       }`,
     );
 
-    // 2. Test-page swatches, when the scan is of the compatibility page. The
+    // 2. Compatibility-page swatches, when the scan is of that page. The
     //    crosshair fit throws on any other document, which is expected.
     try {
       const mRaw = measure(rasterRaw);

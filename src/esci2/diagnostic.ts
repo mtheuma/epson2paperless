@@ -41,7 +41,7 @@ export function buildDiagnostic(args: {
 }): string {
   const info = parseInfoTokens(args.infoBody);
   const capa = parseCapaTokens(args.capaBody);
-  const transportLabel = args.transport === "tls" ? "esci2" : "esci2-plain";
+  const transportLabel = args.transport === "tls" ? "TLS" : "plain TCP";
   // Source caps derived from segment presence:
   //   flatbed: any #FB ALGNxx or #FB AREA segment seen in INFO
   //   ADF:     any #ADFxxxx segment seen in INFO (#ADFAREA, #ADFTYPE, etc.)

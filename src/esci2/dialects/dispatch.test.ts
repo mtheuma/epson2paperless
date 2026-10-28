@@ -154,7 +154,7 @@ describe("resolveDialect", () => {
       expect(diagnostic[0]).toContain("[INFO]");
       expect(diagnostic[0]).toContain(`CAPA fingerprint:  ${UNKNOWN_FP}`);
       expect(diagnostic[0]).toContain("PRD:               PID 9999");
-      expect(diagnostic[0]).toContain("esci2-plain");
+      expect(diagnostic[0]).toContain("Transport:         plain TCP");
     });
 
     it("an unknown product name is named in the warning and the diagnostic", () => {

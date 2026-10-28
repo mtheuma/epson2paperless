@@ -129,9 +129,9 @@ describe("createScanAdmission", () => {
 });
 
 describe("createScanAdmission — expectFollowUp", () => {
-  // On the FF-680W / DS-575W a panel trigger is preceded by a JobList, with the
-  // PushScan on a fresh connection ~0.7 s later (pcap-measured). The hand-off keeps the drain
-  // waiting for that follow-up without gating it (issue #207 review).
+  // On the FF-680W / DS-575W a JobList comes first and the panel trigger, a
+  // PushScan, follows on a fresh connection ~0.7 s later (pcap-measured). The
+  // hand-off keeps the drain waiting for it without making admission busy (issue #207 review).
   it("keeps the drain waiting without making admission busy", () => {
     const inflight = createInflightTracker();
     const admission = createScanAdmission(inflight);
@@ -261,7 +261,7 @@ describe("createSingleScanAdmission — expectFollowUp", () => {
   // Same JobList → PushScan hand-off as the daemon's, seen from one-shot's
   // coordinator (issue #209): the follow-up arrives on a fresh connection
   // ~0.7 s after the JobList is answered, with no hook and no hold in flight.
-  it("reports the hand-off as pending without making the gate busy", () => {
+  it("reports the hand-off as pending without making admission busy", () => {
     const admission = createSingleScanAdmission();
     expect(admission.followUpPending()).toBe(false);
     admission.expectFollowUp(1000);
@@ -307,8 +307,8 @@ describe("createSingleScanAdmission — expectFollowUp", () => {
     }
   });
 
-  // A trigger cancelled on the panel never sends the follow-up. The coordinator waits on
-  // onReleased, so a lapse wakes it rather than leaving it to its deadline.
+  // Cancelling on the panel after the JobList means no follow-up PushScan. The
+  // coordinator waits on onReleased, so a lapse wakes it rather than leaving it to its deadline.
   it("a lapsed hand-off fires onReleased listeners", () => {
     vi.useFakeTimers();
     try {

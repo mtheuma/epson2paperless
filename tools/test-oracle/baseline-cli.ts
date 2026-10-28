@@ -46,7 +46,7 @@ export async function buildBaselineFromOutputDir(
   const pageBuffers = jpgs.map((f) => readFileSync(path.join(outputDir, f)));
   // Pixel metrics (swatch colour, grey neutrality, stripe variance, crosshair
   // geometry) are sampled from the FRONT page only — page 1 is where the
-  // compatibility PDF's swatch grid lives. Later pages (e.g. a duplex back side,
+  // compatibility PDF's swatch grid lives. Later pages (e.g. a duplex back page,
   // which carries text rather than the grid) are covered by expectedPageCount and
   // per-page EXIF orientation, not pixel metrics. Full per-page colour checks are
   // a follow-up gated on a multi-front-sheet fixture / the WF-3620 host-decode

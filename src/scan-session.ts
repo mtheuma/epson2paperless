@@ -414,10 +414,10 @@ export interface RunScanSessionOpts<Ctx> {
   /**
    * Whether duplex back pages need the 180° rotation compensation (EXIF
    * Orientation=3 on the JPG path, /Rotate 180 on the PDF path). Reversing-ADF
-   * hardware re-feeds the sheet, so back sides arrive physically upside down —
+   * hardware re-feeds the sheet, so back pages arrive physically upside down —
    * true, and the default when the callback is omitted. Single-pass
-   * scanners (DS-575W, FF-680W) deliver back sides the same way up as the
-   * front, so compensating would invert them — false. Resolved from the ctx at flush time, like
+   * scanners (DS-575W, FF-680W) deliver back pages the same way up as the
+   * front ones, so compensating would invert them — false. Resolved from the ctx at flush time, like
    * resolveToneCurve, because the dialect is only known mid-scan.
    */
   resolveBackPageRotated?: (ctx: Ctx) => boolean;
@@ -1010,7 +1010,7 @@ export async function runScanSession<Ctx>(
           if (settled) return;
 
           // Back-page rotation compensation is per-dialect: only hardware
-          // that physically flips back sides (reversing ADF) needs it. The
+          // that physically flips back pages (reversing ADF) needs it. The
           // index feeds both the JPG EXIF path and the PDF /Rotate=180 path
           // in finalizeSession, so both are gated by the same resolution.
           const rotateBackPage =
