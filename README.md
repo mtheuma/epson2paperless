@@ -34,7 +34,7 @@ What you get:
 | **ET-7700**           | ✅&nbsp;Verified     | Flatbed-only hardware; colours not yet confirmed on hardware                                                                  |
 | **ET-8500**           | ✅&nbsp;Verified     | Flatbed-only hardware; colours not yet confirmed on hardware                                                                  |
 | **ET-15000**          | 🟡&nbsp;Experimental | Flatbed verified; ADF simplex untested                                                                                        |
-| **FF-680W**           | 🟡&nbsp;Experimental | Requires [pairing](docs/BUTTON-ONLY-SCANNERS.md); ADF-only; only duplex PDF @ 200 DPI hardware-verified                       |
+| **FF-680W**           | ✅&nbsp;Verified     | Requires [pairing](docs/BUTTON-ONLY-SCANNERS.md); ADF-only; above 300 DPI untested                                            |
 | **WF-2845**           | ✅&nbsp;Verified     | ADF simplex ([#178](https://github.com/mtheuma/epson2paperless/issues/178))                                                   |
 | **WF-3620**           | ✅&nbsp;Verified     | Plain TCP scanner, no TLS pinning                                                                                             |
 | **WF-3835**           | 🟡&nbsp;Experimental | ADF simplex; inferred dialect, no reporter retest yet ([#174](https://github.com/mtheuma/epson2paperless/issues/174))         |

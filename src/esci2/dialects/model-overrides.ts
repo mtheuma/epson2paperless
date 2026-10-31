@@ -457,7 +457,9 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
     gmm: "UG18",
     gammaClass: { jpg: "ff680w-adf", pdf: "ff680w-adf" },
     cmxClass: { jpg: "et2750-um08", pdf: "et2750-um08" },
-    verifiedWireDpis: [200, 300], // the replay fixtures
+    // The replay fixtures; both also hardware-verified (#249: duplex PDF at
+    // 200, simplex JPG at 300).
+    verifiedWireDpis: [200, 300],
     provenance: {
       models: ["FF-680W"],
       colour: [
@@ -466,12 +468,15 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
           link: { fixture: `${PCAP}/ff-680w/adf-simplex-200.jsonl` },
           vouchesFor: "61b8d0509942f6e8",
         },
+        { kind: "reporter-report", link: { issue: 249 }, vouchesFor: "61b8d0509942f6e8" },
       ],
       window: [
         { kind: "epson-capture", link: { fixture: `${PCAP}/ff-680w/adf-simplex-200.jsonl` } },
+        { kind: "reporter-report", link: { issue: 249 } },
       ],
       pollCount: [
         { kind: "epson-capture", link: { fixture: `${PCAP}/ff-680w/adf-simplex-200.jsonl` } },
+        { kind: "reporter-report", link: { issue: 249 } },
       ],
     },
   },
