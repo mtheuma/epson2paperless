@@ -2113,29 +2113,33 @@ describe("runScanSession — onSessionEnd", () => {
     );
     const onSessionEnd = vi.fn();
 
-    const promise = runScanSession({
-      graph: onePageGraph(),
-      initialCtx: {},
-      transportFactory: () => Promise.resolve(transport),
-      outputDir,
-      tempDir,
-      sessionTs: new Date(),
-      action: "pdf",
-      onSessionEnd,
-    });
-    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
-    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+    // The mock never settles on its own, so a failed assertion must not leave
+    // it in place: every later DONE-path test in this file would hang.
+    try {
+      const promise = runScanSession({
+        graph: onePageGraph(),
+        initialCtx: {},
+        transportFactory: () => Promise.resolve(transport),
+        outputDir,
+        tempDir,
+        sessionTs: new Date(),
+        action: "pdf",
+        onSessionEnd,
+      });
+      setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+      await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
 
-    // Finalize (the PDF, the upload) is still running; the printer is not.
-    expect(onSessionEnd).toHaveBeenCalledTimes(1);
-    finishFinalize();
-    const result = await promise;
-    expect(result.ok).toBe(true);
-    expect(onSessionEnd).toHaveBeenCalledTimes(1);
-
-    spy.mockRestore();
-    fs.rmSync(tempDir, { recursive: true, force: true });
-    fs.rmSync(outputDir, { recursive: true, force: true });
+      // Finalize (the PDF, the upload) is still running; the printer is not.
+      expect(onSessionEnd).toHaveBeenCalledTimes(1);
+      finishFinalize();
+      const result = await promise;
+      expect(result.ok).toBe(true);
+      expect(onSessionEnd).toHaveBeenCalledTimes(1);
+    } finally {
+      spy.mockRestore();
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      fs.rmSync(outputDir, { recursive: true, force: true });
+    }
   });
 
   it("fires once when the session fails", async () => {

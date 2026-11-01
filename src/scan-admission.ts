@@ -18,7 +18,8 @@
 // what is left (post-processing, the output file, the Paperless upload) is
 // host-side work, so the next scan is admitted while it finishes (issue
 // #155). The slot frees when the session ends or the scan settles, whichever
-// comes first: a scan can fail before any session starts.
+// comes first: a scan can fail before any session starts. Once the shutdown
+// drain begins, a scan keeps the slot until it settles again (beginDrain).
 //
 // The admission check and the daemon's shutdown drain answer different
 // questions. The check (isBusy) reads the reserved slot and the scans still
@@ -56,6 +57,13 @@ export interface ScanAdmission {
    * A newer JobList replaces the hand-off.
    */
   expectFollowUp(timeoutMs: number): void;
+  /**
+   * The daemon's shutdown drain has begun: from now on a scan keeps the slot
+   * until it settles, upload included, as before issue #155. The drain keeps
+   * the listener open for a JobList's follow-up, and a fresh trigger must not
+   * start a scan behind one that is only uploading.
+   */
+  beginDrain(): void;
 }
 
 /**
@@ -111,26 +119,30 @@ export function createScanAdmission(inflight: InflightTracker): ScanAdmission {
     settleHold?.();
     settleHold = null;
   });
-  // Scans still in their session are counted here rather than read off the
-  // tracker: the tracker also holds the reservation, a JobList hand-off, the
-  // hooks, and scans whose session has ended, none of which may refuse the
-  // trigger that comes next.
-  let sessions = 0;
+  // Scans are counted here rather than read off the tracker: the tracker also
+  // holds the reservation, a JobList hand-off, and the hooks, none of which
+  // may refuse the trigger they exist for. Each scan is counted twice: until
+  // its session ends or it settles, whichever comes first (what admission
+  // reads), and until it settles (what admission reads once the drain begins).
+  let inSession = 0;
+  let unsettled = 0;
+  let draining = false;
   const trackScan = (scan: Promise<void>, sessionEnded: Promise<void>): void => {
-    sessions++;
-    let counted = true;
+    inSession++;
+    unsettled++;
+    const settled = inflight.track(scan);
+    void settled.finally(() => {
+      unsettled--;
+    });
     const endSession = (): void => {
-      if (!counted) return;
-      counted = false;
-      sessions--;
+      inSession--;
     };
-    void inflight.track(scan).finally(endSession);
-    void sessionEnded.then(endSession, endSession);
+    void Promise.race([settled, sessionEnded]).then(endSession, endSession);
   };
   let endHandoff: (() => void) | null = null;
 
   return {
-    isBusy: () => slot.held() || sessions > 0,
+    isBusy: () => slot.held() || (draining ? unsettled : inSession) > 0,
     reserve() {
       // The follow-up (or any trigger) has arrived: its hold takes over, tracked
       // before the hand-off settles so the drain never reads empty between.
@@ -158,6 +170,9 @@ export function createScanAdmission(inflight: InflightTracker): ScanAdmission {
         endHandoff = null;
         settle();
       };
+    },
+    beginDrain() {
+      draining = true;
     },
   };
 }

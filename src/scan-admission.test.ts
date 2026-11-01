@@ -185,6 +185,24 @@ describe("createScanAdmission — scan session end", () => {
     await settle();
     expect(admission.isBusy()).toBe(false);
   });
+
+  // During the shutdown drain the listener stays open (issue #207), so a scan
+  // that is only uploading must keep the slot, or a press would start a scan
+  // the drain then has to wait for or cut off.
+  it("keeps the slot until the scan settles once the drain has begun", async () => {
+    const admission = createScanAdmission(createInflightTracker());
+    const scan = deferred();
+    const session = deferred();
+    admission.track(scan.promise, session.promise);
+    session.resolve();
+    await settle();
+    expect(admission.isBusy()).toBe(false);
+    admission.beginDrain();
+    expect(admission.isBusy()).toBe(true);
+    scan.resolve();
+    await settle();
+    expect(admission.isBusy()).toBe(false); // a JobList's follow-up is still admitted
+  });
 });
 
 describe("createScanAdmission — expectFollowUp", () => {

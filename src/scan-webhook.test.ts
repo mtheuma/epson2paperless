@@ -433,6 +433,7 @@ describe("scan webhook wiring", () => {
       healthServer: { close: () => order.push("health") },
       responder: { stop: () => order.push("responder") },
       inflight: h.inflight,
+      admission: h.admission,
       shutdownTimeoutMs: 5000,
       signal: "SIGTERM",
       exit: (code) => exits.push(code),
@@ -443,5 +444,32 @@ describe("scan webhook wiring", () => {
     await done;
     expect(order).toEqual(["pushscan", "health", "responder"]);
     expect(exits).toEqual([0]);
+  });
+
+  it("refuses a webhook during the drain while the previous scan is still uploading", async () => {
+    const upload = deferred();
+    h = await harness({
+      dispatch: (args) => {
+        args.onSessionEnd?.();
+        return upload.promise;
+      },
+    });
+    expect(await post(h.base)).toBe(202);
+    await settle();
+    const done = shutdown({
+      pushscanServer: { close: () => {} },
+      healthServer: { close: () => {} },
+      responder: { stop: () => {} },
+      inflight: h.inflight,
+      admission: h.admission,
+      shutdownTimeoutMs: 5000,
+      signal: "SIGTERM",
+      exit: () => {},
+    });
+    await settle();
+    expect(await post(h.base)).toBe(409);
+    expect(h.dispatch).toHaveBeenCalledTimes(1);
+    upload.resolve();
+    await done;
   });
 });

@@ -523,9 +523,10 @@ export interface DispatchArgs {
   printerIp?: string;
   /**
    * Fired once the printer is done with the scan session, before the output
-   * and upload; see RunScanSessionOpts. Not fired when the scan fails before
-   * a session starts (the variant probe, an unwritable temp dir), so a caller
-   * freeing the scan slot on it must also free it when the promise settles.
+   * and upload; see RunScanSessionOpts. A refused connection fires it too, but
+   * a scan that fails before the engine runs (the variant probe, an unwritable
+   * temp dir) does not, so a caller freeing the scan slot on it must also free
+   * it when the promise settles.
    */
   onSessionEnd?: () => void;
 }

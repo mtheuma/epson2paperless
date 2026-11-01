@@ -472,6 +472,32 @@ describe("scanner-esci", () => {
     expect(foundEject).toBe(true);
   }, 60_000);
 
+  // The daemon frees the scan slot on this hook (issue #155), so the shell
+  // must hand it to the engine.
+  it("flatbed-single-page-jpeg: fires onSessionEnd once", async () => {
+    const fixture = loadFixture(path.join(FIXTURES, "wf-3620/flatbed-single-page-jpeg.jsonl"));
+    const fake = new FakeTcpSocket();
+    const onSessionEnd = vi.fn();
+
+    const sessionPromise = runEsciScan(
+      {
+        printerIp: "1.2.3.4",
+        port: 1865,
+        outputDir,
+        tempDir,
+        entry: WF3620_ENTRY,
+        duplex: false,
+        forcedSource: null,
+        format: "jpg",
+        jpegQuality: 90,
+        onSessionEnd,
+      },
+      fake.asFactory(),
+    );
+    await driveFixture(fixture, fake, sessionPromise);
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+  }, 60_000);
+
   // -------------------------------------------------------------------------
   // SCAN_COLOR_MODE=grayscale — the legacy wire has no greyscale request, so
   // the shared finalize converts every page host-side (grayscaleConversion
