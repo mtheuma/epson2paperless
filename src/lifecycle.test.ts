@@ -8,7 +8,14 @@ import {
   type ShutdownDeps,
   __resetShutdownStateForTesting,
 } from "./lifecycle.js";
-import { createScanAdmission, createSingleScanAdmission } from "./scan-admission.js";
+import {
+  createScanAdmission,
+  createSingleScanAdmission,
+  type ScanAdmission,
+} from "./scan-admission.js";
+
+/** A scan session that never reports its end: the scan's own settle frees the slot. */
+const sessionOpen = new Promise<void>(() => {});
 
 describe("InflightTracker", () => {
   it("starts with count 0", () => {
@@ -163,14 +170,16 @@ describe("InflightTracker", () => {
   });
 });
 
-function makeDeps(overrides: Partial<ShutdownDeps> = {}): ShutdownDeps & {
+function makeDeps(overrides: Partial<Omit<ShutdownDeps, "admission">> = {}): ShutdownDeps & {
+  admission: ScanAdmission;
   callOrder: string[];
   exitCalls: number[];
 } {
   const callOrder: string[] = [];
   const exitCalls: number[] = [];
   const tracker = createInflightTracker();
-  const deps: ShutdownDeps = {
+  const admission = createScanAdmission(tracker);
+  const deps: ShutdownDeps & { admission: ScanAdmission } = {
     pushscanServer: {
       close: () => {
         callOrder.push("pushscan");
@@ -187,6 +196,7 @@ function makeDeps(overrides: Partial<ShutdownDeps> = {}): ShutdownDeps & {
       },
     },
     inflight: tracker,
+    admission,
     shutdownTimeoutMs: 1000,
     signal: "TEST",
     exit: (code: number) => {
@@ -230,7 +240,7 @@ describe("shutdown", () => {
 
   it("drains a held panel reservation before exiting (issue #207)", async () => {
     const deps = makeDeps();
-    const admission = createScanAdmission(deps.inflight);
+    const { admission } = deps;
     const release = admission.reserve(); // admitted, OK not yet flushed
     const shutdownPromise = shutdown(deps);
     await new Promise((r) => setImmediate(r));
@@ -242,7 +252,7 @@ describe("shutdown", () => {
 
   it("waits for a scan committed while the drain is under way", async () => {
     const deps = makeDeps();
-    const admission = createScanAdmission(deps.inflight);
+    const { admission } = deps;
     admission.reserve();
     const shutdownPromise = shutdown(deps);
     await new Promise((r) => setImmediate(r));
@@ -251,6 +261,7 @@ describe("shutdown", () => {
       new Promise<void>((r) => {
         resolveScan = r;
       }),
+      sessionOpen,
     );
     await new Promise((r) => setImmediate(r));
     expect(deps.exitCalls).toEqual([]);
@@ -263,7 +274,7 @@ describe("shutdown", () => {
 
   it("waits through a JobList hand-off for the follow-up trigger, then for its scan", async () => {
     const deps = makeDeps();
-    const admission = createScanAdmission(deps.inflight);
+    const { admission } = deps;
     admission.expectFollowUp(1000); // JOBW answered; the PushScan is on its way
     const shutdownPromise = shutdown(deps);
     await new Promise((r) => setImmediate(r));
@@ -275,10 +286,39 @@ describe("shutdown", () => {
       new Promise<void>((r) => {
         resolveScan = r;
       }),
+      sessionOpen,
     );
     await new Promise((r) => setImmediate(r));
     expect(deps.exitCalls).toEqual([]);
     resolveScan();
+    await shutdownPromise;
+    expect(deps.callOrder).toEqual(["pushscan", "health", "responder"]);
+    expect(deps.exitCalls).toEqual([0]);
+  });
+
+  // Issue #155: a scan whose session has ended frees the scan slot, but its
+  // output and Paperless upload are still running and must not be cut off.
+  it("waits for a scan whose session has ended but whose upload is still running", async () => {
+    const deps = makeDeps();
+    const { admission } = deps;
+    admission.reserve();
+    let resolveScan!: () => void;
+    admission.commit(
+      new Promise<void>((r) => {
+        resolveScan = r;
+      }),
+      Promise.resolve(), // the printer is done
+    );
+    await new Promise((r) => setImmediate(r));
+    expect(admission.isBusy()).toBe(false);
+    const shutdownPromise = shutdown(deps);
+    await new Promise((r) => setImmediate(r));
+    expect(deps.exitCalls).toEqual([]);
+    expect(deps.callOrder).toEqual([]);
+    // The listener is still open, but a press now must not start a scan that
+    // the drain would then have to wait for, or cut off at its timeout.
+    expect(admission.isBusy()).toBe(true);
+    resolveScan(); // upload finished
     await shutdownPromise;
     expect(deps.callOrder).toEqual(["pushscan", "health", "responder"]);
     expect(deps.exitCalls).toEqual([0]);

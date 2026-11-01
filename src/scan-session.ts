@@ -431,6 +431,15 @@ export interface RunScanSessionOpts<Ctx> {
   resolveDownsample?: (ctx: Ctx) => Downsample | undefined;
   paperless?: PaperlessUploadOptions;
   /**
+   * Called once, when the session has finished with the printer: on entering
+   * DONE (the printer has answered the teardown), or when the run settles on
+   * any other path, including a transport that never opened. Post-processing,
+   * the output file and the Paperless upload all run after it. The daemon
+   * frees the scan slot here, so the next scan need not wait for them (issue
+   * #155).
+   */
+  onSessionEnd?: () => void;
+  /**
    * Test-only: allow reaching DONE without any flushPage having fired.
    * Production paths must never set this — zero-page completion is a
    * real failure mode (printer-side error that aborted before pixel
@@ -453,6 +462,18 @@ export async function runScanSession<Ctx>(
   const timeoutMs = opts.timeoutMs ?? graph.timeoutMs;
   const ctx = { ...initialCtx }; // engine owns mutability
 
+  // Fires opts.onSessionEnd at most once (see its JSDoc).
+  let sessionEnded = false;
+  const endSession = (): void => {
+    if (sessionEnded) return;
+    sessionEnded = true;
+    try {
+      opts.onSessionEnd?.();
+    } catch {
+      /* swallow — a throwing hook must not stop the run from settling */
+    }
+  };
+
   // Factory failures (TLS handshake, cert-fingerprint mismatch, plain TCP
   // connect refusal) must surface as { ok: false, reason } to keep the
   // engine's Result contract honest.
@@ -461,6 +482,7 @@ export async function runScanSession<Ctx>(
     transport = await transportFactory();
   } catch (err) {
     const reason = err instanceof Error ? err : new Error(String(err));
+    endSession();
     return { ok: false, reason, finalCtx: ctx };
   }
 
@@ -608,6 +630,9 @@ export async function runScanSession<Ctx>(
       } catch {
         /* swallow — destroy may throw on already-closed sockets */
       }
+      // Already fired on the DONE path; this covers every failure, before the
+      // post-scan-save fallback below starts its own finalize.
+      endSession();
 
       // Post-scan-save fallback (v0.3.0 §3.3) — see Graph.cleanupStates
       // JSDoc for the contract. If finalize itself fails, surface the
@@ -677,6 +702,8 @@ export async function runScanSession<Ctx>(
         } catch {
           /* swallow */
         }
+        // The printer is done with us: finalize below is host-side only.
+        endSession();
         // Schedule logical finalize independently — do NOT block on socket
         // close. setImmediate gives any in-flight microtasks (e.g. flushPage's
         // last file-write) a tick to settle before we run finalize.

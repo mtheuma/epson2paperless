@@ -261,11 +261,33 @@ describe("scan webhook wiring", () => {
   it("a tracked panel scan makes the webhook answer 409", async () => {
     h = await harness({});
     const panelScan = deferred();
-    h.admission.commit(panelScan.promise); // as the daemon's onPushScan callback does
+    // As the daemon's onPushScan callback does, with a session still running.
+    h.admission.commit(panelScan.promise, new Promise<void>(() => {}));
     expect(await post(h.base)).toBe(409);
     panelScan.resolve();
     await settle();
     expect(await post(h.base)).toBe(202);
+  });
+
+  // Issue #155: the printer is free once a scan's session ends, even though
+  // its output and Paperless upload are still running.
+  it("accepts a webhook scan once the previous scan's session has ended", async () => {
+    const first = deferred();
+    let calls = 0;
+    h = await harness({
+      dispatch: (args) => {
+        if (++calls > 1) return Promise.resolve();
+        args.onSessionEnd?.();
+        return first.promise; // still uploading
+      },
+    });
+    expect(await post(h.base)).toBe(202);
+    await settle();
+    expect(await post(h.base)).toBe(202);
+    await settle();
+    expect(h.dispatch).toHaveBeenCalledTimes(2);
+    expect(h.inflight.count).toBe(1); // the first scan, still tracked for the drain
+    first.resolve();
   });
 
   it("releases the busy state when target resolution fails", async () => {
@@ -411,6 +433,7 @@ describe("scan webhook wiring", () => {
       healthServer: { close: () => order.push("health") },
       responder: { stop: () => order.push("responder") },
       inflight: h.inflight,
+      admission: h.admission,
       shutdownTimeoutMs: 5000,
       signal: "SIGTERM",
       exit: (code) => exits.push(code),
@@ -421,5 +444,32 @@ describe("scan webhook wiring", () => {
     await done;
     expect(order).toEqual(["pushscan", "health", "responder"]);
     expect(exits).toEqual([0]);
+  });
+
+  it("refuses a webhook during the drain while the previous scan is still uploading", async () => {
+    const upload = deferred();
+    h = await harness({
+      dispatch: (args) => {
+        args.onSessionEnd?.();
+        return upload.promise;
+      },
+    });
+    expect(await post(h.base)).toBe(202);
+    await settle();
+    const done = shutdown({
+      pushscanServer: { close: () => {} },
+      healthServer: { close: () => {} },
+      responder: { stop: () => {} },
+      inflight: h.inflight,
+      admission: h.admission,
+      shutdownTimeoutMs: 5000,
+      signal: "SIGTERM",
+      exit: () => {},
+    });
+    await settle();
+    expect(await post(h.base)).toBe(409);
+    expect(h.dispatch).toHaveBeenCalledTimes(1);
+    upload.resolve();
+    await done;
   });
 });

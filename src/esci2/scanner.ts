@@ -55,6 +55,8 @@ export interface ScanSession {
   timeoutMs?: number;
   paperless?: PaperlessUploadOptions;
   printerCertFingerprint?: string;
+  /** Fired once the printer is done with the session; see RunScanSessionOpts. */
+  onSessionEnd?: () => void;
 }
 
 /**
@@ -238,6 +240,7 @@ export async function runEsci2Scan(
     whitePoint: session.whitePoint,
     ...makeOutputResolvers(session),
     paperless: session.paperless,
+    onSessionEnd: session.onSessionEnd,
   });
   if (!result.ok) throw result.reason;
 }
@@ -269,6 +272,7 @@ export async function runEsci2ScanOverPlain(
     whitePoint: session.whitePoint,
     ...makeOutputResolvers(session),
     paperless: session.paperless,
+    onSessionEnd: session.onSessionEnd,
   });
   if (!result.ok) throw result.reason;
 }

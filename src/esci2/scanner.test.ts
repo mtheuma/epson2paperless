@@ -347,7 +347,8 @@ describe("scanner replay — full Windows-driver session", () => {
     async ({ path: fixturePath, expectedFilenamePattern, expectedFileCount, duplex, action }) => {
       const raw = readJsonl(fixturePath);
       const trimmed = trimStatCycles(raw, 3);
-      const result = await replayCapture(trimmed, outputDir, duplex, action);
+      const onSessionEnd = vi.fn();
+      const result = await replayCapture(trimmed, outputDir, duplex, action, { onSessionEnd });
       // Byte-for-byte shield: every scanner write must equal the captured
       // driver `send` bytes, in order. Lifted out of replayCapture (which is
       // expect-free for reuse) and re-asserted here.
@@ -360,6 +361,8 @@ describe("scanner replay — full Windows-driver session", () => {
         ).toBe(sends[i].payload_hex ?? "");
       }
       await expect(result.sessionPromise).resolves.toBeUndefined();
+      // The shell hands the engine's session-end hook on (issue #155).
+      expect(onSessionEnd).toHaveBeenCalledTimes(1);
 
       const files = readdirSync(outputDir).sort();
       expect(files.length).toBe(expectedFileCount);
@@ -1097,6 +1100,7 @@ describe("runEsci2ScanOverPlain — ET-2750 fixture replay", () => {
     );
     const fixture = loadFixture(fixturePath);
     const fake = new FakePlainSocket();
+    const onSessionEnd = vi.fn();
 
     const sessionPromise = runEsci2ScanOverPlain(
       {
@@ -1107,10 +1111,13 @@ describe("runEsci2ScanOverPlain — ET-2750 fixture replay", () => {
         tempDir,
         duplex: false,
         action: "pdf",
+        onSessionEnd,
       },
       fake.asFactory(),
     );
     await driveFixture(fixture, fake, sessionPromise);
+    // The shell hands the engine's session-end hook on (issue #155).
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
 
     // Byte-equivalence shield: assert the scanner's PARA wire bytes match
     // what the captured Wireshark session sent. Without this, driveFixture

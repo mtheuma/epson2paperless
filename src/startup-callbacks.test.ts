@@ -96,7 +96,10 @@ describe("buildDaemonPushScanCallback", () => {
     buildDaemonPushScanCallback({ config, admission, dispatch })(PANEL_INFO, PEER);
 
     expect(dispatch).toHaveBeenCalledTimes(1);
-    expect(dispatch).toHaveBeenCalledWith(expectedArgs(config));
+    expect(dispatch).toHaveBeenCalledWith({
+      ...expectedArgs(config),
+      onSessionEnd: expect.any(Function),
+    });
     expect(setLastScanTimeMock).toHaveBeenCalledTimes(1);
 
     // commit() really tracked the promise: busy while it runs, idle after.
@@ -106,6 +109,28 @@ describe("buildDaemonPushScanCallback", () => {
     scan.resolve();
     await settle();
     expect(admission.isBusy()).toBe(false);
+    expect(inflight.count).toBe(0);
+  });
+
+  // Issue #155: the next panel press must not be refused while the previous
+  // scan's PDF and Paperless upload finish.
+  it("frees the scan slot when the scan session ends, before the scan settles", async () => {
+    const inflight = createInflightTracker();
+    const admission = createScanAdmission(inflight);
+    const scan = deferred();
+    const dispatch = vi.fn<(args: DispatchArgs) => Promise<void>>(() => scan.promise);
+
+    admission.reserve();
+    buildDaemonPushScanCallback({ config: makeConfig(), admission, dispatch })(PANEL_INFO, PEER);
+    await settle();
+    expect(admission.isBusy()).toBe(true);
+
+    dispatch.mock.calls[0][0].onSessionEnd?.(); // the printer is done
+    await settle();
+    expect(admission.isBusy()).toBe(false);
+    expect(inflight.count).toBe(1); // the upload is still tracked for shutdown
+    scan.resolve();
+    await settle();
     expect(inflight.count).toBe(0);
   });
 

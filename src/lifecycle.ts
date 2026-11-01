@@ -1,4 +1,5 @@
 import { createLogger } from "./logger.js";
+import type { ScanAdmission } from "./scan-admission.js";
 
 const log = createLogger("lifecycle");
 
@@ -296,6 +297,8 @@ export interface ShutdownDeps {
   healthServer: { close: () => void };
   responder: { stop: () => void };
   inflight: InflightTracker;
+  /** Told when the drain begins, so a new trigger can't start a scan mid-drain. */
+  admission: Pick<ScanAdmission, "beginDrain">;
   shutdownTimeoutMs: number;
   signal: string;
   exit: (code: number) => void;
@@ -322,8 +325,10 @@ export async function shutdown(deps: ShutdownDeps): Promise<void> {
   // and with v3 requests a JobList comes first, then the trigger's PushScan
   // on a fresh connection: closing the listener first would turn a follow-up
   // that lands mid-drain into a refused connection and a panel error. A new
-  // trigger while a scan drains is refused at admission as before, so the open
-  // listener adds at most a JobList round-trip, within the same budget.
+  // trigger while a scan drains is refused at admission: from beginDrain() on,
+  // a scan keeps the slot until its upload is done too (issue #155), so the
+  // open listener adds at most a JobList round-trip, within the same budget.
+  deps.admission.beginDrain();
   const drainResult = await deps.inflight.waitAll(deps.shutdownTimeoutMs);
   if (drainResult.timedOut > 0) {
     log.warn(
