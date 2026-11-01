@@ -2078,3 +2078,130 @@ describe("runScanSession — delayed sends and the wait deadline", () => {
     );
   });
 });
+
+// Issue #155: the daemon frees the scan slot on onSessionEnd, so it must fire
+// once the printer is done, before the output and upload, and on every path.
+describe("runScanSession — onSessionEnd", () => {
+  /** One page, then DONE. */
+  function onePageGraph() {
+    const g = createGraph<Record<string, never>>("PAGE", 1_000);
+    g.state("PAGE", {
+      on: {
+        0xa000: {
+          next: "DONE",
+          flushPage: {
+            side: "front",
+            encode: () => Promise.resolve(Buffer.from([0xff, 0xd8, 0xff, 0xd9])),
+          },
+        },
+      },
+    });
+    return g.build();
+  }
+
+  it("fires once on reaching DONE, before finalize finishes", async () => {
+    const transport = new FakeTransport();
+    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-test-"));
+    const outputDir = fs.mkdtempSync(path.join(os.tmpdir(), "engine-out-"));
+    const outputTail = await import("./output-tail.js");
+    let finishFinalize!: () => void;
+    const spy = vi.spyOn(outputTail, "finalizeSession").mockImplementation(
+      () =>
+        new Promise<void>((r) => {
+          finishFinalize = r;
+        }),
+    );
+    const onSessionEnd = vi.fn();
+
+    const promise = runScanSession({
+      graph: onePageGraph(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir,
+      tempDir,
+      sessionTs: new Date(),
+      action: "pdf",
+      onSessionEnd,
+    });
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+    await vi.waitFor(() => expect(spy).toHaveBeenCalledTimes(1));
+
+    // Finalize (the PDF, the upload) is still running; the printer is not.
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+    finishFinalize();
+    const result = await promise;
+    expect(result.ok).toBe(true);
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+
+    spy.mockRestore();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+    fs.rmSync(outputDir, { recursive: true, force: true });
+  });
+
+  it("fires once when the session fails", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("WAITING", 1_000);
+    g.state(
+      "WAITING",
+      decision(() => ({ error: new Error("boom") })),
+    );
+    const onSessionEnd = vi.fn();
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+      onSessionEnd,
+    });
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa200, Buffer.from([0x01]))));
+
+    const result = await promise;
+    expect(result.ok).toBe(false);
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("fires when the transport never opens", async () => {
+    const onSessionEnd = vi.fn();
+    const result = await runScanSession({
+      graph: onePageGraph(),
+      initialCtx: {},
+      transportFactory: () => Promise.reject(new Error("ECONNREFUSED")),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      onSessionEnd,
+    });
+    expect(result.ok).toBe(false);
+    expect(onSessionEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it("still settles when the hook throws", async () => {
+    const transport = new FakeTransport();
+    const g = createGraph<Record<string, never>>("WAITING", 1_000);
+    g.state("WAITING", { on: { 0xa000: { next: "DONE" } } });
+
+    const promise = runScanSession({
+      graph: g.build(),
+      initialCtx: {},
+      transportFactory: () => Promise.resolve(transport),
+      outputDir: "/tmp",
+      tempDir: "/tmp",
+      sessionTs: new Date(),
+      action: "jpg",
+      allowZeroPages: true,
+      onSessionEnd: () => {
+        throw new Error("hook bug");
+      },
+    });
+    setImmediate(() => transport.emit("data", buildIsPacket(0xa000, Buffer.alloc(0))));
+
+    const result = await promise;
+    expect(result.ok).toBe(true);
+  });
+});

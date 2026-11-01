@@ -10,6 +10,9 @@ import {
 } from "./lifecycle.js";
 import { createScanAdmission, createSingleScanAdmission } from "./scan-admission.js";
 
+/** A scan session that never reports its end: the scan's own settle frees the slot. */
+const sessionOpen = new Promise<void>(() => {});
+
 describe("InflightTracker", () => {
   it("starts with count 0", () => {
     const tracker = createInflightTracker();
@@ -251,6 +254,7 @@ describe("shutdown", () => {
       new Promise<void>((r) => {
         resolveScan = r;
       }),
+      sessionOpen,
     );
     await new Promise((r) => setImmediate(r));
     expect(deps.exitCalls).toEqual([]);
@@ -275,10 +279,36 @@ describe("shutdown", () => {
       new Promise<void>((r) => {
         resolveScan = r;
       }),
+      sessionOpen,
     );
     await new Promise((r) => setImmediate(r));
     expect(deps.exitCalls).toEqual([]);
     resolveScan();
+    await shutdownPromise;
+    expect(deps.callOrder).toEqual(["pushscan", "health", "responder"]);
+    expect(deps.exitCalls).toEqual([0]);
+  });
+
+  // Issue #155: a scan whose session has ended frees the scan slot, but its
+  // output and Paperless upload are still running and must not be cut off.
+  it("waits for a scan whose session has ended but whose upload is still running", async () => {
+    const deps = makeDeps();
+    const admission = createScanAdmission(deps.inflight);
+    admission.reserve();
+    let resolveScan!: () => void;
+    admission.commit(
+      new Promise<void>((r) => {
+        resolveScan = r;
+      }),
+      Promise.resolve(), // the printer is done
+    );
+    await new Promise((r) => setImmediate(r));
+    expect(admission.isBusy()).toBe(false);
+    const shutdownPromise = shutdown(deps);
+    await new Promise((r) => setImmediate(r));
+    expect(deps.exitCalls).toEqual([]);
+    expect(deps.callOrder).toEqual([]);
+    resolveScan(); // upload finished
     await shutdownPromise;
     expect(deps.callOrder).toEqual(["pushscan", "health", "responder"]);
     expect(deps.exitCalls).toEqual([0]);

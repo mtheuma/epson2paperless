@@ -71,6 +71,8 @@ export interface LegacyScanSession {
    * mutable return value. Production code does not pass this.
    */
   onSourceDetected?: (source: Source) => void;
+  /** Fired once the printer is done with the session; see RunScanSessionOpts. */
+  onSessionEnd?: () => void;
 }
 
 export type TcpSocketFactory = (host: string, port: number, onConnect?: () => void) => net.Socket;
@@ -137,6 +139,7 @@ export async function runEsciScan(
     sessionTs: resolveSessionTimestamp(new Date(), session.outputDir),
     action: session.format === "pdf" ? "pdf" : "jpg",
     paperless: session.paperless,
+    onSessionEnd: session.onSessionEnd,
     postProcess: session.postProcess ?? "none",
     jpegQuality: session.jpegQuality,
     whitePoint: session.whitePoint,

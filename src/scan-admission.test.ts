@@ -8,6 +8,8 @@ function deferred() {
   return { promise, resolve };
 }
 const settle = () => new Promise((r) => setImmediate(r));
+/** A scan session that never reports its end: the scan's own settle frees the slot. */
+const sessionOpen = new Promise<void>(() => {});
 
 describe("createScanAdmission", () => {
   it("is idle with nothing tracked and nothing reserved", () => {
@@ -19,7 +21,7 @@ describe("createScanAdmission", () => {
     const inflight = createInflightTracker();
     const admission = createScanAdmission(inflight);
     const scan = deferred();
-    admission.track(scan.promise);
+    admission.track(scan.promise, sessionOpen);
     expect(admission.isBusy()).toBe(true);
     scan.resolve();
     await settle();
@@ -39,7 +41,7 @@ describe("createScanAdmission", () => {
     const admission = createScanAdmission(inflight);
     admission.reserve();
     const scan = deferred();
-    admission.commit(scan.promise);
+    admission.commit(scan.promise, sessionOpen);
     expect(admission.isBusy()).toBe(true);
     await settle(); // the hold's tracker entry settles; the scan remains
     expect(inflight.count).toBe(1);
@@ -92,7 +94,7 @@ describe("createScanAdmission", () => {
     admission.reserve();
     expect(inflight.count).toBe(1);
     const scan = deferred();
-    admission.commit(scan.promise);
+    admission.commit(scan.promise, sessionOpen);
     // The scan is tracked before the hold settles: both are present for a
     // microtask, and a drain that snapshotted the hold sees the scan next.
     expect(inflight.count).toBe(2);
@@ -124,6 +126,63 @@ describe("createScanAdmission", () => {
     const admission = createScanAdmission(inflight);
     void inflight.track(new Promise<void>(() => {}));
     expect(inflight.count).toBe(1);
+    expect(admission.isBusy()).toBe(false);
+  });
+});
+
+// Issue #155: a scan holds the slot for its scan session only. Its output and
+// Paperless upload run on afterwards, and the next scan must not wait for them.
+describe("createScanAdmission — scan session end", () => {
+  it("frees the slot when the session ends, keeping the scan tracked for the drain", async () => {
+    const inflight = createInflightTracker();
+    const admission = createScanAdmission(inflight);
+    admission.reserve();
+    const scan = deferred();
+    const session = deferred();
+    admission.commit(scan.promise, session.promise);
+    await settle();
+    expect(admission.isBusy()).toBe(true);
+    session.resolve(); // the printer is done; the upload is still running
+    await settle();
+    expect(admission.isBusy()).toBe(false);
+    expect(inflight.count).toBe(1);
+    scan.resolve();
+    await settle();
+    expect(inflight.count).toBe(0);
+  });
+
+  it("frees the slot when the scan settles before any session ends", async () => {
+    const admission = createScanAdmission(createInflightTracker());
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      admission.track(Promise.reject(new Error("probe failed")), sessionOpen);
+      await settle();
+      expect(admission.isBusy()).toBe(false);
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  it("admits the next scan while the previous one finishes its upload", async () => {
+    const inflight = createInflightTracker();
+    const admission = createScanAdmission(inflight);
+    const first = deferred();
+    const firstSession = deferred();
+    admission.track(first.promise, firstSession.promise);
+    firstSession.resolve();
+    await settle();
+    expect(admission.isBusy()).toBe(false);
+
+    const second = deferred();
+    admission.track(second.promise, sessionOpen);
+    expect(admission.isBusy()).toBe(true);
+    expect(inflight.count).toBe(2);
+    // The first scan's upload finishing must not free the second scan's slot.
+    first.resolve();
+    await settle();
+    expect(admission.isBusy()).toBe(true);
+    second.resolve();
+    await settle();
     expect(admission.isBusy()).toBe(false);
   });
 });

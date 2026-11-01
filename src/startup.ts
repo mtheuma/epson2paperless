@@ -312,6 +312,19 @@ export function trackPendingHooks(
   };
 }
 
+/**
+ * A promise that settles when `end` is called. The daemon passes `end` to a
+ * scan's dispatch as onSessionEnd and the promise to admission, which frees
+ * the scan slot on it (issue #155).
+ */
+function sessionEndSignal(): { ended: Promise<void>; end: () => void } {
+  let end!: () => void;
+  const ended = new Promise<void>((resolve) => {
+    end = resolve;
+  });
+  return { ended, end };
+}
+
 export interface DaemonPushScanDeps {
   config: Config;
   /** Holds the reservation taken for this trigger at `beforeResponse`. */
@@ -343,6 +356,7 @@ export function buildDaemonPushScanCallback(deps: DaemonPushScanDeps): PushScanC
     );
     setLastScanTime(new Date().toISOString());
 
+    const session = sessionEndSignal();
     const scanPromise = dispatch({
       config,
       duplex: scan.duplex,
@@ -350,9 +364,11 @@ export function buildDaemonPushScanCallback(deps: DaemonPushScanDeps): PushScanC
       paperless: buildPaperlessOptions(config),
       productName: info.productName,
       printerIp: peerAddress,
+      onSessionEnd: session.end,
     });
-    // Converts the reservation taken at beforeResponse into a tracked scan.
-    admission.commit(scanPromise);
+    // Converts the reservation taken at beforeResponse into a tracked scan,
+    // which keeps the slot until its scan session ends.
+    admission.commit(scanPromise, session.ended);
   };
 }
 
@@ -452,6 +468,7 @@ export function buildScanTriggerOptions(deps: ScanWebhookDeps): ScanTriggerOptio
       // slot is taken before anything yields. No reservation is needed on
       // this side — unlike a panel trigger, the webhook has no response
       // round-trip between admission and tracking.
+      const session = sessionEndSignal();
       const scan = (async () => {
         const printerIp = await target.target();
         await dispatch({
@@ -463,9 +480,10 @@ export function buildScanTriggerOptions(deps: ScanWebhookDeps): ScanTriggerOptio
           paperless: buildPaperlessOptions(config),
           productName: null,
           printerIp,
+          onSessionEnd: session.end,
         });
       })();
-      admission.track(scan);
+      admission.track(scan, session.ended);
     },
   };
 }
@@ -503,6 +521,13 @@ export interface DispatchArgs {
   paperless: PaperlessUploadOptions | undefined;
   productName: string | null;
   printerIp?: string;
+  /**
+   * Fired once the printer is done with the scan session, before the output
+   * and upload; see RunScanSessionOpts. Not fired when the scan fails before
+   * a session starts (the variant probe, an unwritable temp dir), so a caller
+   * freeing the scan slot on it must also free it when the promise settles.
+   */
+  onSessionEnd?: () => void;
 }
 
 export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
@@ -548,6 +573,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
       timeoutMs: args.config.esci2TimeoutMs,
       paperless: args.paperless,
       printerCertFingerprint: args.config.printerCertFingerprint,
+      onSessionEnd: args.onSessionEnd,
     });
   }
   if (variant === "esci2-plain") {
@@ -571,6 +597,7 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
       colorMode: args.config.scanColorMode,
       timeoutMs: args.config.esci2TimeoutMs,
       paperless: args.paperless,
+      onSessionEnd: args.onSessionEnd,
     });
   }
   // Legacy. Source is autodetected from the FS F status byte (see esci/scanner.ts
@@ -604,5 +631,6 @@ export async function dispatchScanSession(args: DispatchArgs): Promise<void> {
     grayscaleConversion,
     paperless: args.paperless,
     diagnoseProtocol: args.config.diagnoseProtocol,
+    onSessionEnd: args.onSessionEnd,
   });
 }

@@ -32,7 +32,7 @@ export interface ScanTriggerOptions {
   token: string;
   /** Panel-less fallbacks applied when the query omits format / sides. */
   defaults: ScanTriggerDefaults;
-  /** True while a scan is in flight — the request is refused with 409. */
+  /** True while the scan slot is taken — the request is refused with 409. */
   isBusy: () => boolean;
   /**
    * Fire-and-forget dispatch. Evaluated in the same synchronous turn as

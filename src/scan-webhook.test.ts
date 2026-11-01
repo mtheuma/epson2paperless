@@ -261,11 +261,33 @@ describe("scan webhook wiring", () => {
   it("a tracked panel scan makes the webhook answer 409", async () => {
     h = await harness({});
     const panelScan = deferred();
-    h.admission.commit(panelScan.promise); // as the daemon's onPushScan callback does
+    // As the daemon's onPushScan callback does, with a session still running.
+    h.admission.commit(panelScan.promise, new Promise<void>(() => {}));
     expect(await post(h.base)).toBe(409);
     panelScan.resolve();
     await settle();
     expect(await post(h.base)).toBe(202);
+  });
+
+  // Issue #155: the printer is free once a scan's session ends, even though
+  // its output and Paperless upload are still running.
+  it("accepts a webhook scan once the previous scan's session has ended", async () => {
+    const first = deferred();
+    let calls = 0;
+    h = await harness({
+      dispatch: (args) => {
+        if (++calls > 1) return Promise.resolve();
+        args.onSessionEnd?.();
+        return first.promise; // still uploading
+      },
+    });
+    expect(await post(h.base)).toBe(202);
+    await settle();
+    expect(await post(h.base)).toBe(202);
+    await settle();
+    expect(h.dispatch).toHaveBeenCalledTimes(2);
+    expect(h.inflight.count).toBe(1); // the first scan, still tracked for the drain
+    first.resolve();
   });
 
   it("releases the busy state when target resolution fails", async () => {

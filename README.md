@@ -157,7 +157,8 @@ One scan at a time is enforced both ways: the webhook answers `409` while a pane
 pressed while a webhook scan runs. The panel side of this applies whether or not the webhook
 is enabled: pressing Scan while a previous scan is still running is now refused at the trigger
 (panel error, nothing sent to the printer) where earlier versions opened a second session that
-the printer then rejected.
+the printer then rejected. A scan stops counting as running once the printer has finished with
+it, so the next scan can start while the previous one's file is written and uploaded.
 
 A Home Assistant `rest_command`, with the whole header value kept in `secrets.yaml`
 (Home Assistant's `!secret` must replace the entire value, not part of it):
