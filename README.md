@@ -34,7 +34,7 @@ What you get:
 | **ET-7700**           | ✅&nbsp;Verified     | Flatbed-only hardware; colours not yet confirmed on hardware                                                                  |
 | **ET-8500**           | ✅&nbsp;Verified     | Flatbed-only hardware; colours not yet confirmed on hardware                                                                  |
 | **ET-15000**          | 🟡&nbsp;Experimental | Flatbed verified; ADF simplex untested                                                                                        |
-| **FF-680W**           | 🟡&nbsp;Experimental | Requires [pairing](docs/BUTTON-ONLY-SCANNERS.md); ADF-only; only duplex PDF @ 200 DPI hardware-verified                       |
+| **FF-680W**           | ✅&nbsp;Verified     | Requires [pairing](docs/BUTTON-ONLY-SCANNERS.md); ADF-only                                                                    |
 | **WF-2845**           | ✅&nbsp;Verified     | ADF simplex ([#178](https://github.com/mtheuma/epson2paperless/issues/178))                                                   |
 | **WF-3620**           | ✅&nbsp;Verified     | Plain TCP scanner, no TLS pinning                                                                                             |
 | **WF-3835**           | 🟡&nbsp;Experimental | ADF simplex; inferred dialect, no reporter retest yet ([#174](https://github.com/mtheuma/epson2paperless/issues/174))         |
@@ -67,11 +67,11 @@ Image tags:
 | Tag            | What it is                                                  |
 | -------------- | ----------------------------------------------------------- |
 | `:latest`      | The last final release. A release candidate never moves it. |
-| `:vX.Y.Z`      | One final release, e.g. `:v0.12.0`.                         |
+| `:vX.Y.Z`      | One final release, e.g. `:v1.0.0`.                          |
 | `:vX.Y.Z-rc.N` | A release candidate, e.g. `:v1.0.0-rc.1`.                   |
 | `:main`        | The current `main` branch, not yet released.                |
 
-To try a release candidate, set `image:` in `compose.yaml` to its tag, then `docker compose pull && docker compose up -d`. To go back, set it to a final release (e.g. `:v0.12.0`, or `:latest`), undo any settings that only the candidate accepts, and run the same two commands.
+To try a release candidate, set `image:` in `compose.yaml` to its tag, then `docker compose pull && docker compose up -d`. To go back, set it to a final release (e.g. `:v1.0.0`, or `:latest`), undo any settings that only the candidate accepts, and run the same two commands.
 
 Notes:
 
