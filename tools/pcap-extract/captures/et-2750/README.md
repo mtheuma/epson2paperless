@@ -14,9 +14,10 @@ host-side from `#FMTJPG` data, identical to how our service composes PDFs.
 
 The source pcap contains two TCP conversations on port 1865: a brief
 aborted SYN/RST attempt (stream 9) and the real 30-second scan session
-(stream 10). The aborted stream's bytes interleave with the real stream
-in the host→printer direction filter unless we constrain extraction to
-the long-running conversation. Pass `--stream 10` to isolate it:
+(stream 10). The extractor reads only payload-carrying segments and
+refuses a capture with more than one payload-carrying conversation (see
+`../../README.md`), so the aborted stream can't leak into the fixture. The
+fixture was extracted with `--stream 10`:
 
 ```
 TSHARK_PATH="/path/to/tshark" npm run pcap:extract -- \

@@ -22,12 +22,12 @@ The ET-4800 driver first opens a short TLS probe on port 1865, which the printer
 rejects (it has no TLS), then reopens a second plain-TCP connection for the real
 session. Each pcap therefore contains two `tcp.port==1865` conversations: an
 8-frame TLS-probe stream and the multi-thousand-frame plain-TCP scan stream.
-Extract with `--stream <N>` (the plain-TCP stream per the table above) so the
-TLS-probe bytes — a leading ClientHello plus a stray `0x8000` welcome from the
-doomed socket — don't get concatenated ahead of the real session. Without the
-filter the fixture would carry the welcome twice and a leading TLS record, neither
-of which the scanner sees against real hardware (it opens one plain-TCP socket and
-receives a single welcome, same as the ET-4950 / ET-2750 references).
+Extract with `--stream <N>` (the plain-TCP stream per the table above).
+`pcap:extract` refuses the capture without it, because both conversations carry
+payload: the TLS-probe stream holds a ClientHello and a stray `0x8000` welcome
+from the doomed socket, neither of which the scanner sees against real hardware
+(it opens one plain-TCP socket and receives a single welcome, same as the
+ET-4950 / ET-2750 references).
 
 ## Init-poll trim
 

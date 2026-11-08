@@ -38,9 +38,9 @@ relative to the front, as expected from a single-pass ADF (INFO
 Each pcap contains several `tcp.port==1865` conversations ahead of the real
 session — rejected TLS probes plus the FF-680W's JOBW/JOBR job-control
 handshakes — and the real plain-TCP scan session is **tcp.stream 7** in every
-capture. Extract with `--stream 7` so the throwaway streams' bytes don't
-concatenate ahead of the real one and desync replay (see the shared dual-stream
-note in `../et-4800/README.md`).
+capture. Extract with `--stream 7`: the throwaway streams carry payload too, so
+`pcap:extract` refuses the capture without it (see the shared dual-stream note in
+`../et-4800/README.md`).
 
 ## Init-handshake trim
 

@@ -15,8 +15,11 @@ TSHARK_PATH="/c/Program Files/Wireshark/tshark.exe" \
 ```
 
 `--stream N` isolates one `tcp.stream` when the pcap holds multiple
-conversations on `<port>` (e.g. an aborted SYN/RST or a rejected TLS probe
-ahead of the real session).
+conversations on `<port>` (e.g. a rejected TLS probe ahead of the real
+session). Only segments that carry payload (`tcp.len>0`) are read, so a
+conversation with none, such as an aborted SYN/RST, is ignored. A capture with
+more than one payload-carrying conversation is refused, naming the streams,
+until `--stream` picks one.
 
 Extraction is TCP-sequence-aware: per direction, segments are ordered by
 `tcp.seq`, duplicate retransmits are dropped, partial overlaps are trimmed
