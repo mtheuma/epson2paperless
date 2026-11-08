@@ -75,6 +75,7 @@ export const REPLAY_DEST_ID = 0x02;
 export interface ReplayOptions {
   printerIp?: string;
   destId?: number;
+  onSessionEnd?: () => void;
 }
 
 export interface ReplayResult {
@@ -110,6 +111,7 @@ export async function replayCapture(
       tempDir: "",
       duplex,
       action,
+      onSessionEnd: opts.onSessionEnd,
     },
     fake.asFactory(),
   );

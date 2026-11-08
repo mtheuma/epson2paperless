@@ -773,6 +773,26 @@ describe("dispatchScanSession", () => {
     expect(runEsci2ScanOverPlainMock.mock.calls[0][0].timeoutMs).toBe(90000);
   });
 
+  // Issue #155: the daemon frees the scan slot on this hook. An optional field
+  // dropped on one route still typechecks, and would quietly bring back the
+  // refusal for every printer on that variant.
+  it("forwards onSessionEnd to all three scanners", async () => {
+    const onSessionEnd = (): void => {};
+    const args = { duplex: false, action: "jpg" as const, paperless: undefined, productName: null };
+
+    detectVariantMock.mockResolvedValue("esci2");
+    await dispatchScanSession({ config: makeConfig(), ...args, onSessionEnd });
+    expect(runEsci2ScanMock.mock.calls[0][0].onSessionEnd).toBe(onSessionEnd);
+
+    detectVariantMock.mockResolvedValue("esci2-plain");
+    await dispatchScanSession({ config: makeConfig(), ...args, onSessionEnd });
+    expect(runEsci2ScanOverPlainMock.mock.calls[0][0].onSessionEnd).toBe(onSessionEnd);
+
+    detectVariantMock.mockResolvedValue("esci");
+    await dispatchScanSession({ config: makeConfig(), ...args, onSessionEnd });
+    expect(runEsciScanMock.mock.calls[0][0].onSessionEnd).toBe(onSessionEnd);
+  });
+
   it("forwards SCAN_COLOR_MODE=grayscale to both ESC/I-2 scanners", async () => {
     // esci2-plain — the DS-575W's actual path.
     detectVariantMock.mockResolvedValue("esci2-plain");

@@ -64,6 +64,7 @@ async function main() {
       healthServer,
       responder,
       inflight,
+      admission,
       shutdownTimeoutMs: config.shutdownTimeoutMs,
       signal,
       exit: process.exit.bind(process),

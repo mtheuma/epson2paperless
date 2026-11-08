@@ -14,17 +14,25 @@
 // (the callback tracked the real scan) or is freed by a release hook the
 // push-scan server fires when the trigger ends without a callback.
 //
+// A scan keeps the slot only for its scan session. Once the printer is done,
+// what is left (post-processing, the output file, the Paperless upload) is
+// host-side work, so the next scan is admitted while it finishes (issue
+// #155). The slot frees when the session ends or the scan settles, whichever
+// comes first: a scan can fail before any session starts. Once the shutdown
+// drain begins, a scan keeps the slot until it settles again (beginDrain).
+//
 // The admission check and the daemon's shutdown drain answer different
-// questions. The check (isBusy) reads the reserved slot and the scans. The
-// drain reads the inflight tracker, which holds those and more: the reserved
-// slot itself, so a signal in the admission→callback gap waits instead of
-// exiting mid-transaction, and a bounded hand-off after a JobList, so the
+// questions. The check (isBusy) reads the reserved slot and the scans still
+// in their session. The drain reads the inflight tracker, which holds those
+// and more: every scan until it settles, upload included; the reserved slot
+// itself, so a signal in the admission→callback gap waits instead of
+// exiting mid-transaction; and a bounded hand-off after a JobList, so the
 // listener stays open for the PushScan that follows on a fresh connection —
 // which admission must not refuse (issue #207).
 import type { InflightTracker } from "./lifecycle.js";
 
 export interface ScanAdmission {
-  /** True while a scan is tracked or a panel trigger holds the slot. */
+  /** True while a scan is in its scan session or a panel trigger holds the slot. */
   isBusy(): boolean;
   /**
    * Hold the slot for a panel trigger that has just been admitted. Returns a
@@ -32,12 +40,16 @@ export interface ScanAdmission {
    * a newer one) and is safe to call more than once.
    */
   reserve(): () => void;
-  /** The admitted panel trigger became a scan: track it, then drop the hold. */
-  commit(scan: Promise<void>): void;
+  /**
+   * The admitted panel trigger became a scan: track it, then drop the hold.
+   * The scan keeps the slot until `sessionEnded` settles or the scan does,
+   * and stays tracked for the drain until it settles.
+   */
+  commit(scan: Promise<void>, sessionEnded: Promise<void>): void;
   /** The admitted panel trigger will not scan (e.g. PREVIEW_ACTION=reject). */
   release(): void;
-  /** Track a scan that holds no reservation (the webhook path). */
-  track(scan: Promise<void>): void;
+  /** Track a scan that holds no reservation (the webhook path). Frees as commit() does. */
+  track(scan: Promise<void>, sessionEnded: Promise<void>): void;
   /**
    * A JobList was answered: keep the drain waiting for its follow-up PushScan
    * for at most `timeoutMs`, without making admission busy. Ended early by the next
@@ -45,6 +57,13 @@ export interface ScanAdmission {
    * A newer JobList replaces the hand-off.
    */
   expectFollowUp(timeoutMs: number): void;
+  /**
+   * The daemon's shutdown drain has begun: from now on a scan keeps the slot
+   * until it settles, upload included, as before issue #155. The drain keeps
+   * the listener open for a JobList's follow-up, and a fresh trigger must not
+   * start a scan behind one that is only uploading.
+   */
+  beginDrain(): void;
 }
 
 /**
@@ -102,18 +121,28 @@ export function createScanAdmission(inflight: InflightTracker): ScanAdmission {
   });
   // Scans are counted here rather than read off the tracker: the tracker also
   // holds the reservation, a JobList hand-off, and the hooks, none of which
-  // may refuse the trigger they exist for.
-  let scans = 0;
-  const trackScan = (scan: Promise<void>): void => {
-    scans++;
-    void inflight.track(scan).finally(() => {
-      scans--;
+  // may refuse the trigger they exist for. Each scan is counted twice: until
+  // its session ends or it settles, whichever comes first (what admission
+  // reads), and until it settles (what admission reads once the drain begins).
+  let inSession = 0;
+  let unsettled = 0;
+  let draining = false;
+  const trackScan = (scan: Promise<void>, sessionEnded: Promise<void>): void => {
+    inSession++;
+    unsettled++;
+    const settled = inflight.track(scan);
+    void settled.finally(() => {
+      unsettled--;
     });
+    const endSession = (): void => {
+      inSession--;
+    };
+    void Promise.race([settled, sessionEnded]).then(endSession, endSession);
   };
   let endHandoff: (() => void) | null = null;
 
   return {
-    isBusy: () => slot.held() || scans > 0,
+    isBusy: () => slot.held() || (draining ? unsettled : inSession) > 0,
     reserve() {
       // The follow-up (or any trigger) has arrived: its hold takes over, tracked
       // before the hand-off settles so the drain never reads empty between.
@@ -124,10 +153,10 @@ export function createScanAdmission(inflight: InflightTracker): ScanAdmission {
       endHandoff?.();
       return slot.reserve();
     },
-    commit(scan) {
+    commit(scan, sessionEnded) {
       // Track before clearing so isBusy() never reads false in between, and
       // so a drain that snapshotted the hold finds the scan on its next pass.
-      trackScan(scan);
+      trackScan(scan, sessionEnded);
       slot.clear();
     },
     release: slot.clear,
@@ -141,6 +170,9 @@ export function createScanAdmission(inflight: InflightTracker): ScanAdmission {
         endHandoff = null;
         settle();
       };
+    },
+    beginDrain() {
+      draining = true;
     },
   };
 }
