@@ -11,7 +11,7 @@ Service              ->  Printer (TCP port 1865)          Scan session
 Any host (unicast)   ->  Service (HEALTH_PORT, /scan)     Webhook trigger (optional, bearer token)
 ```
 
-Discovery and the panel trigger work the same on every model. The scan session comes in three variants, each named by the `PRINTER_PROTOCOL` value that forces it:
+Discovery and the panel trigger are shared across supported models, with small per-model variations. The scan session comes in three variants, each named by the `PRINTER_PROTOCOL` value that forces it:
 
 | Variant       | Transport    | Command set          | Hardware (examples)                         |
 | ------------- | ------------ | -------------------- | ------------------------------------------- |
@@ -39,9 +39,9 @@ When someone selects the Paperless destination and presses Scan, the printer ope
 
 The SOAP body's `PushScanIDIn` value carries the panel's choices: byte 0 is Sides (`0` simplex, `1` duplex) and byte 1 is Action (`1` JPG, `2` PDF, `3` Attach as email, `4` Preview on Computer). Email isn't supported and is refused like any unrecognised value, and `PREVIEW_ACTION=jpg` or `pdf` turns Preview into a real scan. The response must echo the request's `x-uid` header exactly; if it doesn't, the data transfer can still succeed but the panel reports "Scanning Error" afterwards.
 
-Button-only scanners (the FF-680W and DS-575W) send no `PushScanIDIn`, so their sides and format come from `SCAN_SIDES` and `SCAN_FORMAT`. They, and any printer that sends NetScanMonitor v3 requests, also get a short job-control exchange over TCP/1865 before the service answers. [PROTOCOL-REFERENCE.md](PROTOCOL-REFERENCE.md#panel-trigger-tcp-soap-ish) covers both.
+Button-only scanners (the FF-680W and DS-575W) send no `PushScanIDIn`, so their sides and format come from `SCAN_SIDES` and `SCAN_FORMAT`. Their requests, like a NetScanMonitor v3 `JobList` or a v3 `PushScan` with no `PushScanIDIn` from any printer, also get a short job-control exchange over TCP/1865 before the service answers. [PROTOCOL-REFERENCE.md](PROTOCOL-REFERENCE.md#panel-trigger-tcp-soap-ish) covers both.
 
-The printer serves one scan session at a time, so the panel trigger and the webhook share one scan slot (`src/scan-admission.ts`). A panel trigger that arrives while the slot is taken is answered with the protocol `ERROR` response and the panel shows an error; a webhook request gets `409`. An admitted trigger holds the slot from that moment, so a webhook request can't start a second scan while the response is still being written. A scan gives the slot up when its scan session ends: its output file and Paperless upload finish in the background while the next trigger is admitted.
+The printer serves one scan session at a time, so the panel trigger and the webhook share one scan slot (`src/scan-admission.ts`). A panel trigger that arrives while the slot is taken is answered with the protocol `ERROR` response and the panel shows an error; a webhook request gets `409`. An admitted trigger holds the slot from that moment, so a webhook request can't start a second scan while the response, or the job-control read that precedes it for a v3 request, is still in progress. A scan gives the slot up when its scan session ends: its output file and Paperless upload finish in the background while the next trigger is admitted.
 
 Implemented in `src/pushscan.ts`, with job control in `src/job-control.ts`.
 
@@ -86,7 +86,7 @@ The legacy ESC/I graph follows the same engine contract with a different command
 
 Per-model differences are data, not branches in the graph:
 
-- **ESC/I-2:** a model override, matched by model identity from the printer's INFO reply, supplies only what the printer's own replies can't (a captured colour pair, a scan window, quirks); everything else is derived from those replies. A printer no model override matches runs the generic dialect, and the log says the model is untested. See [How printer-model differences are handled](PROTOCOL-REFERENCE.md#how-printer-model-differences-are-handled).
+- **ESC/I-2:** a model override, matched by model identity from the printer's INFO reply (or by its CAPA fingerprint as a fallback), supplies only what the printer's own replies can't (a captured colour pair, a scan window, quirks); everything else is derived from those replies. A printer no model override matches runs the generic dialect, and the log says the model is untested. See [How printer-model differences are handled](PROTOCOL-REFERENCE.md#how-printer-model-differences-are-handled).
 - **Legacy ESC/I:** one legacy dialect per model, chosen by the panel trigger's PID and checked against the printer's own `FS I` identity reply. See [Legacy dialects](PROTOCOL-REFERENCE.md#legacy-dialects).
 
 ---

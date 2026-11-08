@@ -33,7 +33,7 @@ A tag list that requests `Ver` selects v3. An announcement with no tag list fall
 
 When someone presses Scan with this destination selected, the printer connects to the event port its keepalive advertised (2968) and sends an HTTP POST with a SOAP body. Epson's headers put a space before the colon (`Header : value`), which is invalid HTTP/1.1 and makes a standard HTTP server reject the request, so the service parses requests itself on a raw `net.createServer`.
 
-The request's root element names its kind: `PushScan` (the trigger itself), `JobList` (see [Job control](#job-control-netscanmonitor-v3)) or `ScanEnd`, which is answered OK and nothing more. The service answers HTTP 200 OK, echoing the request's `x-uid` header verbatim and its `x-protocol-version`, then half-closes the connection with a FIN; an RST makes the printer tear down its end aggressively. The printer increments `x-uid` on every trigger, and a response that doesn't echo it makes the panel show "Scanning Error" after the scan, even though the data transfers and the output file is written ([the panel-error investigation](REVERSE-ENGINEERING.md#the-panel-error-investigation)). A trigger that arrives while the scan slot is taken is answered with the protocol `ERROR` status instead, and the panel shows an error.
+The request's root element names its kind: `PushScan` (the trigger itself), `JobList` (see [Job control](#job-control-netscanmonitor-v3)) or `ScanEnd`, which is answered OK and nothing more. The service answers HTTP 200 OK, echoing the request's `x-uid` header verbatim and its `x-protocol-version`, then half-closes the connection with a FIN; an RST makes the printer tear down its end aggressively. The printer increments `x-uid` on every trigger and uses it to match the response to the trigger; a response that doesn't echo it makes the panel show "Scanning Error" after the scan, even though the data transfers and the output file is written ([the panel-error investigation](REVERSE-ENGINEERING.md#the-panel-error-investigation)). A trigger that arrives while the scan slot is taken is answered with the protocol `ERROR` status instead, and the panel shows an error.
 
 Once the response is written, the service opens the scan session on the printer's port 1865 ([Scan session variants](#scan-session-variants-on-port-1865)). `src/pushscan.ts` implements the server: `parsePushScanRequest` extracts the SOAP fields and `buildPushScanResponse` builds the reply.
 
@@ -63,7 +63,7 @@ A v3 request (`x-protocol-version : 3.00`) is answered only after a job-control 
 
 Each exchange is welcome (`0x8000`) → lock (`0x2100`, 30 s timeout) → lock ack (`0xa100`, `06`) → job packet → job reply (`0xa300`, payload length checked) → unlock (`0x2101`) → unlock ack (`0xa101`). The job packet is IS type `0x2300` carrying the passthru's 8-byte `cmd_size` / `reply_size` header and then the command. Every read times out after 3 s. A failure after the lock still sends the unlock, so the printer isn't left locked against the scan session that opens on the same port moments later.
 
-The `JobList` response echoes the request's `CapabilityIn` values as `CapabilityOut`. The `PushScan` that follows a `JobList` arrives on a fresh connection (about 0.7 s later on the FF-680W).
+The `JobList` response echoes the request's `CapabilityIn` values as `CapabilityOut`. The `PushScan` that follows a `JobList` arrives on a fresh connection (about 0.7 s later on the FF-680W). An admitted `PushScan` holds the scan slot through its `JOBR` round-trip; a `JobList` never takes the slot.
 
 Job control follows the request, not the model: v1 and v2 requests get none, except from the FF-680W and DS-575W, whose job control is confirmed on the wire and runs whatever version they send. For those two a job-control failure is answered with `ERROR`. For any other printer job control is inferred from the request: its first v3 request logs that once, and a failure warns and the scan carries on. `src/job-control.ts` runs the exchanges; `buildPushScanServerOptions` in `src/startup.ts` routes them.
 
@@ -93,11 +93,11 @@ Both protocol generations send a welcome on plain TCP, so its presence means onl
 
 Real welcome payloads are `01 02 00 00 00` and `01 04 00 00 00`; the XP-620's is byte-identical to the WF-3620's. What the byte means is unknown, so it is treated as an observed family marker, and any value other than `0x02` classifies as `esci2-plain`.
 
-**The ET-7700 exception.** The ET-7700 speaks ESC/I-2 but welcomes with the WF-3620's exact bytes, so `0x02` alone isn't a reliable legacy ESC/I marker. Once the TLS step fails, the probe looks up the panel trigger's PID (`ProductNameIn`, normalised for case and padding) in `ESCI2_PLAIN_WITH_LEGACY_WELCOME`, currently only the ET-7700's `PID 112B`. A match selects `esci2-plain` and skips the welcome step, which carries no signal for these models. The PID never overrides a successful TLS step. A host trigger (`scan:now` or the webhook) has no PID, so ET-7700 users need `PRINTER_PROTOCOL=esci2-plain` there.
+**The ET-7700 exception.** The ET-7700 speaks ESC/I-2 but welcomes with the WF-3620's exact bytes, so `0x02` alone isn't a reliable legacy ESC/I marker. Once the TLS step fails, the probe looks up the panel trigger's PID (`ProductNameIn`, normalised for case and padding) in `ESCI2_PLAIN_WITH_LEGACY_WELCOME`, currently only the ET-7700's `PID 112B` (issue #145, verified from the reporter's push-scan SOAP). A match selects `esci2-plain` and skips the welcome step, which carries no signal for these models. The PID names the exact model, whose dialect is hardware-validated, so it outranks the ambiguous welcome byte. The PID never overrides a successful TLS step. A host trigger (`scan:now` or the webhook) has no PID, so ET-7700 users need `PRINTER_PROTOCOL=esci2-plain` there.
 
 If neither step classifies, the dispatcher falls back to `esci`, so the legacy ESC/I scanner's connect path reports the underlying socket error rather than a generic "no protocol matched". A PID in the ET-7700 set never reaches that fallback, so an unreachable ET-7700's socket error comes from the scanner it actually speaks.
 
-The probe has no third step sending a bare `ESC @`. Real printers accept only IS-framed commands, and only after a lock (`ESC @` appears on the wire only inside a `0x2000` passthru after `IS 2100`), so such a step could never classify one.
+The probe has no third step sending a bare `ESC @`. Real printers accept only IS-framed commands, and only after a lock: in both the WF-3620 and XP-620 captures every host write begins with the `IS` magic, and `ESC @` appears only inside a `0x2000` passthru after `IS 2100`. Such a step could never classify a real printer, and would only add a wasted round-trip and a misleading error before the fallback answered `esci` anyway.
 
 Only the TLS result is cached for the daemon's lifetime. The plain-TCP step re-probes every session: it is cheap, and a transient ECONNRESET (possible mid-handshake on a real ET-4950 too) shouldn't pin a misclassification.
 
@@ -120,7 +120,7 @@ Offset  Len  Field
  12      N   Payload
 ```
 
-The data offset is asymmetric. The host always writes `0x000C`. Printers send `0x300C`, except the FF-680W and DS-575W, which send `0x380C` in every frame; the SANE `epsonds` source also treats the value as opaque. The parser reads only the type and length and ignores bytes 4–5, so the variation needs no code.
+The data offset is asymmetric. The host always writes `0x000C`. Printers send `0x300C` in every committed capture except the FF-680W's and DS-575W's, which carry `0x380C` in every frame. It is a printer-firmware constant, which the SANE `epsonds` source also treats as opaque. The parser reads only the type and length and ignores bytes 4–5, so the variation needs no code.
 
 | Type     | Direction      | Meaning                                                     | Used by      |
 | -------- | -------------- | ----------------------------------------------------------- | ------------ |
@@ -139,16 +139,16 @@ The data offset is asymmetric. The host always writes `0x000C`. Printers send `0
 
 An async event (`0x9000`) carries one dispatch byte. The ESC/I-2 graph handles it in every state through its `globalAbortHandlers`; the legacy ESC/I graph registers no handler.
 
-| Byte   | Event       | ESC/I-2 session    |
-| ------ | ----------- | ------------------ |
-| `0x01` | ScanStart   | Logged, carries on |
-| `0x04` | Stop        | Logged, carries on |
-| `0x03` | ScanCancel  | Fails              |
-| `0x02` | Disconnect  | Fails              |
-| `0x80` | Timeout     | Fails              |
-| `0xa0` | ServerError | Fails              |
+| Byte   | Event       | ESC/I-2 session     |
+| ------ | ----------- | ------------------- |
+| `0x01` | ScanStart   | Ignored, carries on |
+| `0x04` | Stop        | Ignored, carries on |
+| `0x03` | ScanCancel  | Fails               |
+| `0x02` | Disconnect  | Fails               |
+| `0x80` | Timeout     | Fails               |
+| `0xa0` | ServerError | Fails               |
 
-A ServerError means the printer rejected the last command (typically a malformed PARA or an unexpected command order) and has torn down the session. The connection closes within milliseconds and there is no recovery.
+Any other byte is ignored too. A failing event settles the session with `{ ok: false, reason }`, whichever it was. A ServerError means the printer rejected the last command (typically a malformed PARA or an unexpected command order) and has torn down the session. The connection closes within milliseconds and there is no recovery.
 
 `src/protocol.ts` parses and builds IS packets. `parseIsPacket` reads one packet from a `Buffer` and returns `null` until the declared payload has arrived, so the scanner buffers incoming data and retries after each TCP segment. `buildLockPacket` and `buildUnlockPacket` build the `0x2100` / `0x2101` packets; the lock payload is 7 bytes, `01 a0 04` and a big-endian u32 timeout.
 
@@ -252,7 +252,7 @@ DONE             ← compose/promote output files, then resolve
 
 Before the mode switch the session runs two capability cycles: `INFO → CAPA → FIN` after the first `FS Y` ACK, and `INFO → CAPA → RESA → FIN` after the `FS Z` ACK. The Frida captures show the same counts (2 × INFO, 2 × CAPA, 1 × RESA) in every scan scenario, so they look like mandatory initialization rather than optional queries. The `@` prefix in Frida capture names is not on the wire: the commands are `INFOx0000000` and `CAPAx0000000`.
 
-INFO and CAPA describe the scanner: resolutions, colour modes, sources and the like. The session uses them to resolve the model ([How printer-model differences are handled](#how-printer-model-differences-are-handled)), to derive the capability fields, and to choose the wire resolution and JPEG quality ([Scan resolution and JPEG quality](#scan-resolution-and-jpeg-quality)). Colour (the gamma and CMX classes, `gmm`) is not negotiated but taken from the dialect's pinned data, transcribed from that model's capture. Negotiating it would only restate what the captures pin, while a single fixed DPI doesn't serve every use the way a fixed colour curve does.
+INFO and CAPA describe the scanner: resolutions, colour modes, sources and the like. The session uses them to resolve the model ([How printer-model differences are handled](#how-printer-model-differences-are-handled)), to derive the capability fields, and to choose the wire resolution and JPEG quality ([Scan resolution and JPEG quality](#scan-resolution-and-jpeg-quality)). Colour (the gamma and CMX classes, `gmm`) is not negotiated but taken from the dialect's pinned data, transcribed from that model's capture. Every supported printer's colour parameters are fixed in firmware for what this project needs, so negotiating them would only restate what the captures pin, at the cost of more reverse-engineering work and no change to the result. Resolution is the exception because a single fixed DPI doesn't serve every use the way a fixed colour curve does.
 
 **Init poll.** The session then runs `FS Y → STAT → FIN` up to `ctx.entry.initPollIterations` times: 3 for most dialects, 2 for the ET-2750, 8 for the FF-680W, 12 for the DS-575W. The count isn't tied to the transport, and it is a counter, not a readiness check: the STAT replies are drained unread. After at least one good cycle, a non-ACK to `FS Y` ends the poll early with a warning carrying the reply bytes, and if the mode switch or PARA then fails, the error names that non-ACK as the likely cause. A non-ACK on the first cycle fails the session. This is defensive: no capture shows a printer refusing `FS Y` mid-poll, and none shows what the ET-2750 does with a third `FS Y`.
 
@@ -279,7 +279,7 @@ Lowercase `#err` is the header token. Uppercase `#ERR` tokens are status errors 
 
 #### Source
 
-The panel has no source selector and the push-scan request doesn't name one, so the printer reports it. How the session reads it depends on the sources INFO advertises (`sourceDetection`, derived for every session):
+The panel has no source selector and the push-scan request doesn't name one, so the printer detects its own source with the ADF paper sensor and reports it. How the session reads it depends on the sources INFO advertises (`sourceDetection`, derived for every session):
 
 - **Both a flatbed and an ADF** (`pre-para-status`; among recorded models the ET-4950 family, XP-7100, ET-4800, ET-15000 and WF-3835): the reply's content decides. `#ERRADF PE` ("ADF paper empty") → flatbed. Anything else, no error or any other ADF code (which reads as a document in the feeder), → ADF. A loaded feeder wins over a document on the glass, and its reply carries no error, so to scan the flatbed the user must clear the ADF. On every recorded session the flatbed reply is the 12-byte `#ERRADF PE  ` (`STATx000000C`) and the ADF reply is a zero-length `STATx0000000`, so content and declared length agree on the fixtures. A non-zero declared length must be drained with a pure-read before the next command, or the IS framing desyncs.
 - **One source** (`fixed-flatbed` / `fixed-adf`): `ctx.source` is pinned at INIT1 and the reply never changes it. The ET-2750 depends on this: with no ADF, its status reply is header and filler only, which a content read would take for ADF. The other flatbed-only models (ET-2950, ET-2810 / XP-3200, ET-8500, ET-7700) take the same path, and the ADF-only FF-680W and DS-575W are `fixed-adf`.
@@ -336,7 +336,7 @@ Each supported ESC/I-2 model has a model override in `src/esci2/dialects/model-o
 - **The init-poll count** (`initPollIterations`).
 - **Scan windows** (`fbExtents`, `adfExtents`): the captured paper size at `windowDpi` (300 unless set; 200 for the `adf-crp` scanners), or `"generic"` to inherit the [generic scan window](#the-generic-dialect). An override keeps its own window only where the generic one differs from it at some advertised DPI on some source: the ET-2750 (2477×3500), XP-7100 (Letter), FF-680W (long page) and DS-575W (the generic window is clipped at 75 DPI, where its own scales one pixel past the scan area). A session whose derived PARA profile reads a pinned window at another reference DPI rescales it first.
 - **Colour**: a `gmm` constant and named `gammaClass` / `cmxClass` entries from `src/esci2/data/gamma-classes.ts` and `cmx-classes.ts`, each transcribed verbatim from a captured fixture and never generated. (`identity-um08` names the `et2750-um08` bytes, the identity matrix, for a record that should say so: the ET-8500 and ET-7700 overrides and the generic dialect.) Each class is tagged neutral or Epson-look (a CMX class by whether it is the identity matrix), and `checkColourPair` (`src/esci2/data/colour-pair.ts`) rejects a mixed pair; a test holds every override to it.
-- **`provenance`**: the evidence for the colour pair, scan window and poll count, each a list of an Epson capture, an own capture, a reporter's compatibility-page scan, a reporter's report, or inheritance from another model, linked to an issue, PR or committed fixture. It has no runtime effect. `src/esci2/dialects/provenance.test.ts` holds it to the README: every ✅ model is served by an override (a model sharing another's needs a report of its own); its colour evidence includes an Epson capture or reporter scan or report that vouched for its current colour bytes, by hash, so changing the colour fails until new evidence is recorded; and its window and poll count aren't inherited only.
+- **`provenance`**: the evidence for the colour pair, scan window and poll count, each a list of an Epson capture, an own capture of this service's traffic, a reporter's measured compatibility-page scan, a reporter's qualitative report, or inheritance from another model, linked to an issue, PR or committed fixture. It has no runtime effect. `src/esci2/dialects/provenance.test.ts` holds it to the README: every ✅ model is served by an override (a model sharing another's needs a report of its own); its colour evidence includes an Epson capture or reporter scan or report that vouched for its current colour bytes, by hash, so changing the colour fails until new evidence is recorded; and its window and poll count aren't inherited only.
 
 Three optional fields are covered where they act: `monoGammaClass` ([PARA layout](#layout)), `verifiedWireDpis` ([Scan resolution and JPEG quality](#verifiedwiredpis-and-the-explicit-only-warning)) and `duplexOrientationEvidence` ([Duplex back pages](#duplex-back-pages)).
 
@@ -356,7 +356,7 @@ Five fields are never on an override. Every session, model override or generic d
 
 At INIT1_CAPA the graph computes the CAPA fingerprint, calls `resolveDialect` (product ID, then product name, then fingerprint) and stores the result on the session context. INFO is read before CAPA, so model identity is available on every trigger path, host triggers included.
 
-A product ID or name hit whose fingerprint isn't one of the override's (as after a firmware update that changes the CAPA reply) warns with the diagnostic block and proceeds with that override. Each of the override's own scan windows is kept only while it still fits the scan area INFO reports (the long-paper maximum for `adf-crp`); one that doesn't is replaced by the generic window, with a warning.
+A product ID or name hit whose fingerprint isn't one of the override's (as after a firmware update that changes the CAPA reply) warns with the diagnostic block and proceeds with that override. Such a printer keeps each of the override's own scan windows only while it still fits the scan area INFO reports (the long-paper maximum for `adf-crp`); one that doesn't is replaced by the generic window, with a warning. A matching fingerprint skips this check.
 
 At PARA build time `makeParaSpec` combines the dialect with the runtime source and action, and `composePara` assembles the body ([PARA body](#para-body)).
 
@@ -486,7 +486,7 @@ The legacy ESC/I path (WF-3620 family, XP-620, ET-2550) has no resolution choice
 
 ## Legacy ESC/I scan session
 
-The WF-3620, and Epson printers of the same firmware generation, speak legacy ESC/I over plain TCP on port 1865, inside the same IS framing. The probe's plain-TCP step selects it by the welcome's payload byte 1 (`0x02`).
+The WF-3620, and other 2014-era Epson printers of the same firmware generation, speak legacy ESC/I over plain TCP on port 1865, inside the same IS framing. The probe's plain-TCP step selects it by the welcome's payload byte 1 (`0x02`).
 
 Two more models speak distinct dialects of the same command family. Both have the same framing and a byte-identical welcome, and both are flatbed-only with a fixed raster:
 

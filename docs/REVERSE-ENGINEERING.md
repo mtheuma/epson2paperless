@@ -4,7 +4,7 @@ How the supported Epson scan protocols were decoded, and how to produce new capt
 
 ## Toolchain
 
-Each printer family was decoded with the lightest toolchain that could read it. The ET-4950 family wraps its scan session in TLS, so it needed Wireshark, Frida and Ghidra (steps 1–3): Frida hooked the Windows driver's pre-encryption send and post-decryption receive paths to dump the plaintext IS payload, and Ghidra decompiled the same DLL to find the hook offsets and decode the IS type codes. Every other supported printer, ESC/I-2 and legacy ESC/I alike, runs its scan session over plain TCP, so a single Wireshark capture shows every byte (step 4). That is the method to reach for first with a new printer.
+Each printer family was decoded with the lightest toolchain that could read it. The ET-4950 family wraps its scan session in TLS, so it needed Wireshark, Frida and Ghidra (steps 1–3): Frida hooked the Windows driver's pre-encryption send and post-decryption receive paths to dump the plaintext IS payload, and Ghidra decompiled the same DLL to find the hook offsets and decode the IS type codes. A printer whose scan session runs over plain TCP, ESC/I-2 and legacy ESC/I alike, needs only Wireshark, because a single capture shows every byte (step 4). That is the method to reach for first with a new printer.
 
 ### Step 1: Wireshark
 
@@ -14,7 +14,7 @@ Wireshark captures revealed the discovery and panel-trigger layers in full, sinc
 - the sequence echo in keepalives, and that getting it wrong keeps the destination off the list ([The sequence-echo investigation](#the-sequence-echo-investigation));
 - the panel-trigger HTTP format, including the non-standard header spacing and the `x-uid` counter;
 - the `PushScanIDIn` encoding of Sides and Action;
-- which side opens which port. The printer opens the panel trigger to the host's event port 2968, but the host opens the scan session to the printer's port 1865 (TLS on the ET-4950 family and ET-2950, plain TCP on the rest). That decides the firewall rules in `README.md` and the listener and connector roles of `pushscan.ts` and the scanner shells.
+- which side opens which port. The printer opens the panel trigger to the host's event port 2968, but the host opens the scan session to the printer's port 1865 (TLS on the `esci2` models such as the ET-4950 family, plain TCP on the others). That decides the firewall rules in `README.md` and the listener and connector roles of `pushscan.ts` and the scanner shells.
 
 Capturing UDP multicast and the non-standard HTTP needs a promiscuous-mode capture on the Ethernet interface rather than a loopback filter. On Windows, `dumpcap` (bundled with Wireshark) works well from the command line. Pick the interface from `dumpcap -D` by its GUID rather than its number, since the numbers change when USB network adapters are connected or disconnected.
 
@@ -38,7 +38,7 @@ Each session is written to a JSONL file in `tools/frida-capture/captures/`. Wire
 | `2026-04-24T09-05-08-flatbed-1p-jpg.jsonl`     | 1-page flatbed JPG                |
 | `2026-04-24T09-06-37-flatbed-1p-pdf.jsonl`     | 1-page flatbed PDF                |
 
-The PDF capture was particularly diagnostic. The printer streams JPEG whatever the panel's Action, so JPG and PDF runs exchange the same protocol flow, and the PDF replay test reuses the JPG capture (`pdfFixtures` in `src/esci2/scanner.test.ts`). The capture files themselves aren't byte-equal, because the polling cadence varies from one capture to the next.
+The PDF capture was particularly diagnostic. The printer streams JPEG whatever the panel's Action, so JPG and PDF runs exchange the same protocol flow, and the PDF replay test reuses the JPG capture (`pdfFixtures` in `src/esci2/scanner.test.ts`). Byte equality between the capture files themselves isn't guaranteed, because the polling cadence varies from one capture to the next.
 
 ### Step 3: Ghidra on ES2Command.dll
 
@@ -69,7 +69,7 @@ A plain-TCP printer, ESC/I-2 or legacy ESC/I, exposes its whole scan session on 
 npm run pcap:extract -- <pcap> <hostIp> <printerIp> <port> <out.jsonl>
 ```
 
-Add `--stream N` when the pcap holds more than one TCP conversation on port 1865. Most plain-TCP ESC/I-2 captures do: the vendor software opens a throwaway connection before the real session (an aborted SYN/RST on the ET-2750, a rejected TLS probe on the XP-7100, ET-4800, FF-680W and DS-575W), and without isolating the real stream a TLS-probe capture's fixture gets a duplicate `0x8000` welcome and its replay desyncs. The ET-7700 captures are single-stream. List the stream indices with
+Add `--stream N` when the pcap holds more than one TCP conversation on port 1865. Most plain-TCP ESC/I-2 captures do: the vendor software opens a throwaway connection before the real session (an aborted SYN/RST on the ET-2750, a rejected TLS probe on the XP-7100, ET-4800, FF-680W and DS-575W), and `pcap:extract` refuses a capture holding more than one conversation that carries payload, naming the streams to choose from. The ET-2750's payload-less SYN/RST doesn't trip that check; isolate the real stream anyway. The ET-7700 captures are single-stream. List the stream indices with
 
 ```sh
 tshark -r <pcap> -Y "tcp.port==1865" -T fields -e tcp.stream -e ip.src -e ip.dst -e ipv6.src -e ipv6.dst | sort -u
@@ -81,9 +81,9 @@ Commit the result under `tools/pcap-extract/captures/<model>/`, where it drives 
 
 #### Fixture format
 
-One JSON object per line. Ordinary events are `{"dir":"h>p"|"p>h","ts":<seconds>,"hex":"<hex>"}`. In legacy ESC/I fixtures, runs of IS-`0xa200` image chunks fold into one summary record, `{"dir":"p>h","ts":<seconds>,"summary":"image-stream","chunkCount":N,"totalBytes":N,"chunkSize":N}`, where `chunkCount` counts `0xa200` chunks, not TCP frames. The summaries keep legacy ESC/I fixtures in the 8–30 KB range. ESC/I-2 carries its pixels inside `0xa000` IMG replies, which have no summary form, so its fixtures stay full size: about 3.9 MB for one ET-2750 flatbed page.
+One JSON object per line. Ordinary events are `{"dir":"h>p"|"p>h","ts":<seconds>,"hex":"<hex>"}`. In legacy ESC/I fixtures, runs of IS-`0xa200` image chunks fold into one summary record, `{"dir":"p>h","ts":<seconds>,"summary":"image-stream","chunkCount":N,"totalBytes":N,"chunkSize":N}`, where `chunkCount` counts `0xa200` chunks, not TCP frames. The summaries keep legacy ESC/I fixtures under 30 KB. ESC/I-2 carries its pixels inside `0xa000` IMG replies, which have no summary form, so its fixtures stay full size: about 3.9 MB for one ET-2750 flatbed page.
 
-The pcap shape differs from the Frida one (`{hook, type_hex, payload_hex, payload_size, ts}`). `src/esci/test-support/replay.ts` and `src/esci2/test-support/replay.ts` read the pcap shape; `src/esci2/scanner.test.ts` reads the Frida shape directly.
+The pcap shape differs from the Frida one (`{hook, type_hex, payload_hex, payload_size, ts}`). `src/esci/test-support/replay.ts` and `src/esci2/test-support/replay.ts` read the pcap shape; `src/esci2/test-support/frida-replay.ts` reads the Frida shape.
 
 #### Validate a legacy ESC/I fixture
 
@@ -117,19 +117,19 @@ That is less of a limitation than it sounds, because the curve is not a per-mode
 
 So a new dialect with no capture of its own should inherit the near-identity `et4950-stock` class. That is the pass-through choice: it asks the printer for no tone shaping and leaves its default rendering alone, rather than approximating some unknown model-specific value.
 
-The ET-8500 and ET-7700 both took that inheritance when they were added from a diagnostic alone, and both were later validated on real hardware. The ET-7700's compatibility-page scan puts numbers on it: nominal-64 grey returned 72/69/69 with no shadow crush, grey-patch channel spreads of 3–11, and no cast. That is what a correctly inherited pass-through curve looks like, and it answers the question this section opens with. (That scan measured the ET-7700's earlier pair. It now sends the near-identity `xp7100-pdf` curve with the identity colour matrix, a pass-through pair inherited from the XP-7100 and ET-2750 captures, which no scan has measured yet.)
+The ET-8500 and ET-7700 both took that inheritance when they were added from a diagnostic alone, and both were later validated on real hardware. The ET-7700's compatibility-page scan puts numbers on it: nominal-64 grey returned 72/69/69 with no shadow crush, grey-patch channel spreads of 3–11, and no cast. That is what a correctly inherited pass-through curve looks like, and it answers the question this section opens with. (That scan measured the ET-7700's earlier pair. It now sends the near-identity `xp7100-pdf` curve with the identity colour matrix, a pass-through pair inherited from the XP-7100 and ET-2750 captures, expected to match but not yet confirmed by a scan.)
 
 ## Replay tests
 
 The replay harnesses are the regression shield for protocol work. Each feeds a fixture's printer-side records to a fake socket and checks what the service does in reply:
 
-| Harness                                | Fixtures                                                   | Asserts                                                                               |
-| -------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------- |
-| `src/esci2/scanner.test.ts`, TLS       | ET-4950 Frida captures                                     | Every host write, byte for byte, against the capture's host records (`FakeTlsSocket`) |
-| `src/esci2/scanner.test.ts`, plain TCP | ET-2750, XP-7100, ET-4800, ET-7700, FF-680W, DS-575W pcaps | On-disk output and end state, plus the PARA body byte for byte (`FakePlainSocket`)    |
-| `src/esci/scanner.test.ts`             | WF-3620, XP-620, ET-2550 pcaps                             | The full host transcript byte for byte, plus on-disk output and the detected source   |
+| Harness                                | Fixtures                                                                                  | Asserts                                                                               |
+| -------------------------------------- | ----------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `src/esci2/scanner.test.ts`, TLS       | ET-4950 Frida captures                                                                    | Every host write, byte for byte, against the capture's host records (`FakeTlsSocket`) |
+| `src/esci2/scanner.test.ts`, plain TCP | ET-2750, XP-7100, ET-4800, ET-7700, FF-680W, DS-575W pcaps                                | On-disk output and end state, plus the PARA body byte for byte (`FakePlainSocket`)    |
+| `src/esci/scanner.test.ts`             | WF-3620 (single-page, duplex, multi-page and flatbed, JPG and PDF), XP-620, ET-2550 pcaps | The full host transcript byte for byte, plus on-disk output and the detected source   |
 
-On the TLS path, any edit that changes the outgoing byte sequence fails a test. Its scenarios cover ADF simplex, ADF duplex, multi-page ADF and flatbed scans in both JPG and PDF output. The ADF entries reuse one capture per scenario for `action='jpg'` and `action='pdf'`; the flatbed entries use a separate capture per format, because the Frida session captured them as distinct runs. That byte-for-byte guarantee is the strongest shield in the suite: the state machine is correct, by construction, if and only if it produces the exact bytes the Windows driver produced on the same printer.
+On the TLS path, any edit that changes the outgoing byte sequence fails a test. Its scenarios cover ADF simplex, ADF duplex, multi-page ADF and flatbed scans in both JPG and PDF output. The ADF entries reuse one capture per scenario for `action='jpg'` and `action='pdf'`; the flatbed entries use a separate capture per format, because the Frida session captured them as distinct runs. This byte-for-byte check, shared with the legacy ESC/I harness, is the strongest shield in the suite: the state machine is correct, by construction, if and only if it produces the bytes the Windows driver produced on the same printer. (The Frida fixtures' init poll is first trimmed to three STAT cycles, the session's own poll count.)
 
 The ESC/I-2 plain-TCP harness, in `src/esci2/test-support/replay.ts`, drives `runEsci2ScanOverPlain` from the printer-side events alone and doesn't compare every host write. It does pin the one host write that encodes the dialect: the PARA body the scanner composes must equal the PARA bytes on the wire (`extractScannerParaWrite` against `extractCapturedParaBody`), so a composer, override or class-data regression fails the test. The ET-7700's fixtures are own captures that record an earlier colour pair, so its PARA is held to them everywhere except the `#GMT` / `#CMX` segments.
 
