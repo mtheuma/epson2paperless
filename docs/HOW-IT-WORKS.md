@@ -33,7 +33,7 @@ When someone selects the Paperless destination and presses Scan, the printer ope
 
 The SOAP body's `PushScanIDIn` value carries the panel's choices: byte 0 is Sides (`0` simplex, `1` duplex) and byte 1 is Action (`1` JPG, `2` PDF, `3` Attach as email, `4` Preview on Computer). Email isn't supported and is refused like any unrecognised value, and `PREVIEW_ACTION=jpg` or `pdf` turns Preview into a real scan. The response must echo the request's `x-uid` header exactly; if it doesn't, the data transfer can still succeed but the panel reports "Scanning Error" afterwards.
 
-Button-only scanners (the FF-680W and DS-575W) send no `PushScanIDIn`, so their sides and format come from `SCAN_SIDES` and `SCAN_FORMAT`. Their requests, like a NetScanMonitor v3 `JobList` or a v3 `PushScan` with no `PushScanIDIn` from any printer, also get a short job-control exchange over TCP/1865 before the service answers. [PROTOCOL-REFERENCE.md](PROTOCOL-REFERENCE.md#panel-trigger-tcp-soap-ish) covers both.
+Button-only scanners (the FF-680W and DS-575W) send no `PushScanIDIn`, so their sides and format come from `SCAN_SIDES` and `SCAN_FORMAT`. A `JobList`, or a `PushScan` with no `PushScanIDIn`, gets a short job-control exchange over TCP/1865 before the service answers it, when it is a NetScanMonitor v3 request or comes from one of these two scanners. [PROTOCOL-REFERENCE.md](PROTOCOL-REFERENCE.md#panel-trigger-tcp-soap-ish) covers both.
 
 The printer serves one scan session at a time, so the panel trigger and the webhook share one scan slot (`src/scan-admission.ts`). A panel trigger that arrives while the slot is taken is answered with the protocol `ERROR` response and the panel shows an error; a webhook request gets `409`. An admitted trigger holds the slot from that moment, so a webhook request can't start a second scan while the response, or the job-control read that precedes it for a v3 request, is still in progress. A scan gives the slot up when its scan session ends: its output file and Paperless upload finish in the background while the next trigger is admitted.
 
@@ -46,7 +46,7 @@ Implemented in `src/pushscan.ts`, with job control in `src/job-control.ts`.
 After the panel trigger's response is written, the service connects to the printer on TCP port `1865`. Under `PRINTER_PROTOCOL=auto`, `src/protocol-probe.ts` picks the variant for each scan:
 
 1. Try a TLS handshake. Success selects `esci2`.
-2. If TLS fails, connect over plain TCP and read the discriminator byte of the printer's unsolicited IS welcome packet: the WF-3620-shaped `0x02` selects `esci`, anything else `esci2-plain`. Known ESC/I-2 models whose welcome carries the legacy `0x02` (currently the ET-7700) skip this step, and the panel trigger's PID selects `esci2-plain` directly.
+2. If TLS fails, connect over plain TCP and read the discriminator byte of the printer's unsolicited IS welcome packet: the WF-3620-shaped `0x02` selects `esci`, anything else `esci2-plain`. Known ESC/I-2 models whose welcome carries the legacy ESC/I `0x02` (currently the ET-7700) skip this step, and the panel trigger's PID selects `esci2-plain` directly.
 3. If neither step classifies, fall back to `esci`, so the scanner's connect path reports the underlying error.
 
 The TLS result is cached for the daemon's lifetime. Plain-TCP printers are re-probed each time, because the probe is cheap and re-probing avoids pinning a transient misclassification. The dispatcher in `src/startup.ts` then calls the matching scanner shell:
@@ -89,7 +89,7 @@ Per-model differences are data, not branches in the graph:
 
 The panel trigger carries the panel's Sides and Action choices, but not whether the scan is from the ADF or the flatbed. The source comes from the scan session instead:
 
-- **ESC/I-2:** a printer with both a flatbed and an ADF reads the status reply just before PARA, the scanner's state at scan time: "ADF paper empty" means flatbed, anything else means ADF. A printer with one source is fixed to it. On every ESC/I-2 printer, an error in that reply on the unit being scanned stops the scan before PARA with a message naming it; an error on another unit is logged as a warning and the scan carries on.
+- **ESC/I-2:** a printer with both a flatbed and an ADF reads the status reply just before PARA, the scanner's state at scan time: "ADF paper empty" means flatbed, anything else means ADF. A printer with one source is fixed to it. On every ESC/I-2 printer, an error in that reply for the source being scanned stops the scan before PARA with a message naming it; an error elsewhere on the printer is logged as a warning and the scan carries on.
 - **Legacy ESC/I:** the first `FS F` status reply says whether an ADF is fitted. With one (the WF-3620 class), the session probes with `ESC e` and reads the next `FS F` status byte. Without one (the ET-2550), it scans the flatbed with no `ESC e` probe. The flatbed-only XP-620 is fixed to the flatbed from the start.
 
 On ESC/I-2 printers the panel's JPG/PDF choice doesn't change the image stream: the printer sends JPEG either way, and PDF composition happens on the host. On the WF-3620's legacy ESC/I path the Action sets the wire resolution, so JPG and PDF sessions differ on the wire.

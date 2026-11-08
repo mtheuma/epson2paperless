@@ -69,7 +69,7 @@ A plain-TCP printer, ESC/I-2 or legacy ESC/I, exposes its whole scan session on 
 npm run pcap:extract -- <pcap> <hostIp> <printerIp> <port> <out.jsonl>
 ```
 
-Add `--stream N` when the pcap holds more than one TCP conversation on port 1865. Most plain-TCP ESC/I-2 captures do: the vendor software opens a throwaway connection before the real session (an aborted SYN/RST on the ET-2750, a rejected TLS probe on the XP-7100, ET-4800, FF-680W and DS-575W), and `pcap:extract` refuses a capture holding more than one conversation that carries payload, naming the streams to choose from. It reads only segments that carry payload, so a conversation with none, such as an aborted SYN/RST, is simply ignored ([tools/pcap-extract/README.md](../tools/pcap-extract/README.md)). The ET-7700 captures are single-stream. List the stream indices with
+Add `--stream N` when more than one TCP conversation on port 1865 carries payload: `pcap:extract` refuses such a capture and names the streams to choose from ([tools/pcap-extract/README.md](../tools/pcap-extract/README.md)). Most plain-TCP ESC/I-2 captures need it, because the vendor software opens a throwaway connection before the real session, a rejected TLS probe on the XP-7100, ET-4800, FF-680W and DS-575W. The ET-2750's throwaway connection is an aborted SYN/RST with no payload, which the extractor ignores, since it reads only segments that carry payload. The ET-7700 captures are single-stream. List the stream indices with
 
 ```sh
 tshark -r <pcap> -Y "tcp.port==1865" -T fields -e tcp.stream -e ip.src -e ip.dst -e ipv6.src -e ipv6.dst | sort -u

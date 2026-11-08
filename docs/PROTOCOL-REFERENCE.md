@@ -54,7 +54,7 @@ Some scanners send no `PushScanIDIn` at all. The button-only FF-680W and DS-575W
 
 ### Job control (NetScanMonitor v3)
 
-A v3 request (`x-protocol-version : 3.00`) is answered only after a job-control exchange with the printer, on a connection of its own to port 1865. That connection is always plain TCP, even to a printer whose scan session is TLS. An `esci2` printer sends its welcome only inside TLS, so there the exchange times out waiting for it, as the probe's plain-TCP step does, and the scan carries on with a warning:
+Two kinds of v3 request (`x-protocol-version : 3.00`) are answered only after a job-control exchange with the printer, on a connection of its own to port 1865. A v3 `PushScan` that carries a `PushScanIDIn`, and a `ScanEnd`, get none.
 
 | Request                           | Step   | Command                  | Reply payload |
 | --------------------------------- | ------ | ------------------------ | ------------- |
@@ -62,6 +62,8 @@ A v3 request (`x-protocol-version : 3.00`) is answered only after a job-control 
 | `PushScan` with no `PushScanIDIn` | `JOBR` | `JOBR`                   | 8 bytes       |
 
 Each exchange is welcome (`0x8000`) → lock (`0x2100`, 30 s timeout) → lock ack (`0xa100`, `06`) → job packet → job reply (`0xa300`, payload length checked) → unlock (`0x2101`) → unlock ack (`0xa101`). The job packet is IS type `0x2300` carrying the passthru's 8-byte `cmd_size` / `reply_size` header and then the command. Every read times out after 3 s. A failure after the lock still sends the unlock, so the printer isn't left locked against the scan session that opens on the same port moments later.
+
+The connection is always plain TCP, even to a printer whose scan session is TLS. An `esci2` printer sends its welcome only inside TLS, so there the exchange times out waiting for it, as the probe's plain-TCP step does; the failure is logged as a warning and the request is still answered.
 
 The `JobList` response echoes the request's `CapabilityIn` values as `CapabilityOut`. The `PushScan` that follows a `JobList` arrives on a fresh connection (about 0.7 s later on the FF-680W). An admitted `PushScan` holds the scan slot through its `JOBR` round-trip; a `JobList` never takes the slot.
 
@@ -290,8 +292,8 @@ The panel has no source selector and the push-scan request doesn't name one, so 
 
 Each `#ERR` token is a 4-character unit (`ADF`, `FB`, `TPU`) and a code. The session keeps one code per unit, the last the reply gives, so `#ERRADF PE  #ERRADF PJ  ` is a jammed ADF.
 
-- An error on the unit being scanned ends the session before PARA, naming it: `POST_MODE_STAT_DRAIN: the printer reported an error before scanning (ADF PJ)`.
-- An error on another unit warns once per process per model and set of codes (repeats go to `debug`), and the scan carries on.
+- An error whose unit is the source being scanned ends the session before PARA, naming it: `POST_MODE_STAT_DRAIN: the printer reported an error before scanning (ADF PJ)`.
+- An error on any other unit warns once per process per model and set of codes (repeats go to `debug`), and the scan carries on.
 - `ADF PE` on a flatbed scan is a state, not a fault, and isn't reported.
 
 No code is always fatal and none is exempt. An ADF-only printer stops on `ADF PE` when its feeder is still empty just before PARA, while on a printer with both sources an empty feeder can't stop a scan, because `ADF PE` makes the flatbed the source. Every replay fixture's status before PARA is clear for its source: empty on ADF sessions, `ADF PE` alone on flatbed ones. Only the status reply is judged; the `#ERR` tokens some printers (FF-680W, DS-575W) put in their `CAPA` and `RESA` replies list error codes, not errors the printer is reporting now.
@@ -388,15 +390,14 @@ PARA is sent in two passthru packets: the 12-byte `PARAx<hex-len>` header with `
 
 Dialects differ in the gamma constant (`#GMMUG10` for the ET-4950 family and ET-2950, `#GMMUG18` for every other override), in the optional `#QITOFF` / `#CCTCOL` segments (sent when CAPA lists them), and in a model-specific inline `#CMXUM08` matrix block, so no dialect's body can be derived by editing another's.
 
-Within a dialect, the standard profile's source variants differ in three places:
+Within a dialect, the standard profile's source variants differ in up to three places, two of them fixed:
 
 | Field             | Flatbed | ADF simplex | ADF duplex            |
 | ----------------- | ------- | ----------- | --------------------- |
 | Source token      | `#FB `  | `#ADF`      | `#ADFDPLX` (+4 bytes) |
 | `#PAG` page count | Absent  | Present     | Present               |
-| `#ACQ` window     | Flatbed | ADF         | ADF                   |
 
-The `#ACQ` window is the dialect's scan window for that source, so how much it differs is per model. On the ET-4950 family the ADF window starts at x `0000069` where the flatbed's starts at `0000000`; the XP-7100's windows are identical, both at x 0. Everything else is identical across sources: the three RGB gamma tables (`#GMTRED` / `#GMTGRN` / `#GMTBLU`), the CMX matrix, the 1 MB buffer-size token, and the `#RSM` / `#RSS` resolution fields, which scale with the wire resolution on every dialect ([Scan resolution and JPEG quality](#scan-resolution-and-jpeg-quality)) along with the window. Duplex comes from Sides: the session threads `PushScanIDIn[0]` as `ctx.duplex`, which `makeParaSpec` folds into the `adf-duplex` source axis.
+The third is the `#ACQ` scan window, the dialect's window for that source, so whether it differs is per model. On the ET-4950 family the ADF window starts at x `0000069` where the flatbed's starts at `0000000`; the XP-7100's windows are identical, both at x 0. Everything else is identical across sources: the three RGB gamma tables (`#GMTRED` / `#GMTGRN` / `#GMTBLU`), the CMX matrix, the 1 MB buffer-size token, and the `#RSM` / `#RSS` resolution fields, which scale with the wire resolution on every dialect ([Scan resolution and JPEG quality](#scan-resolution-and-jpeg-quality)) along with the window. Duplex comes from Sides: the session threads `PushScanIDIn[0]` as `ctx.duplex`, which `makeParaSpec` folds into the `adf-duplex` source axis.
 
 The `adf-crp` profile (FF-680W, DS-575W) has no per-source token. Its sides axis is a `DPLX` token inside the `#ADFCRP…DFL1` prefix. The `#ADFCRP` flag bytes (skew, double-feed, duplex) are GUI-only scan options the service doesn't model, so the composer pins the FF-680W's values.
 
