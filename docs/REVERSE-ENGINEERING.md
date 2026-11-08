@@ -1,36 +1,32 @@
 # Reverse engineering
 
-This document explains how the supported Epson scan protocols were decoded and how to produce new captures or replay fixtures. For the architecture overview, see [HOW-IT-WORKS.md](HOW-IT-WORKS.md). For the byte-level protocol reference, see [PROTOCOL-REFERENCE.md](PROTOCOL-REFERENCE.md).
+How the supported Epson scan protocols were decoded, and how to produce new captures and replay fixtures. [HOW-IT-WORKS.md](HOW-IT-WORKS.md) has the architecture overview and [PROTOCOL-REFERENCE.md](PROTOCOL-REFERENCE.md) the byte-level reference.
 
-## Overview
+## Toolchain
 
-The implementation grew in two distinct waves, each using the lightest reverse-engineering toolchain that could decode the printer family at hand.
-
-The **first wave** (ET-4950) needed all three of Wireshark, Frida, and Ghidra because the scan session is wrapped in TLS. Frida hooked the Windows driver's pre-encryption send and post-decryption receive paths to dump the plaintext IS payload; Ghidra decompiled the same DLL to identify the hook offsets and decode the IS type-code map. Three steps, in order.
-
-The **second wave** (ET-2750, XP-7100, ET-4800, and WF-3620) needed only Wireshark. They all speak plain TCP — the ESC/I-2 dialects (ET-2750 / XP-7100 / ET-4800) and the legacy ESC/I WF-3620 alike — so the wire bytes are directly readable from a single capture. `tools/pcap-extract/` converts those captures into JSONL replay fixtures. This is "Step 4" below: the same methodology with one fewer tool, applicable to any future plain-TCP Epson printer family.
+Each printer family was decoded with the lightest toolchain that could read it. The ET-4950 family wraps its scan session in TLS, so it needed Wireshark, Frida and Ghidra (steps 1–3): Frida hooked the Windows driver's pre-encryption send and post-decryption receive paths to dump the plaintext IS payload, and Ghidra decompiled the same DLL to find the hook offsets and decode the IS type codes. Every other supported printer, ESC/I-2 and legacy ESC/I alike, runs its scan session over plain TCP, so a single Wireshark capture shows every byte (step 4). That is the method to reach for first with a new printer.
 
 ### Step 1: Wireshark
 
-Wireshark packet captures revealed the discovery and push-scan layers in full. Both operate in plaintext (UDP multicast and HTTP over TCP), so all fields are directly readable. The captures established:
+Wireshark captures revealed the discovery and panel-trigger layers in full, since both are plaintext (UDP multicast, and HTTP over TCP). They established:
 
-- The multicast address, port, and announcement format (`02 06`/`02 07` packet structure).
-- The sequence echo requirement in keepalives — and the consequence of getting it wrong (no entry in the destination list).
-- The push-scan HTTP request format, including the non-standard header spacing and the `x-uid` counter.
-- The `PushScanIDIn` encoding for Sides and Action.
-- That the printer initiates the panel trigger (a plain-TCP connection from the printer to the host's event port 2968), but the _host_ initiates the scan-session connection on port 1865 (TLS for the ET-4950 family + ET-2950, plain TCP for the other ESC/I-2 dialects — ET-2750 / XP-7100 / ET-4800 — and for WF-3620). Knowing which side opens which port turned out to matter for both the firewall rules in `README.md` and the listener / connector roles in `pushscan.ts` vs the scanner shells.
+- the multicast address, port and announcement format (`02 06` / `02 07`);
+- the sequence echo in keepalives, and that getting it wrong keeps the destination off the list ([The sequence-echo investigation](#the-sequence-echo-investigation));
+- the panel-trigger HTTP format, including the non-standard header spacing and the `x-uid` counter;
+- the `PushScanIDIn` encoding of Sides and Action;
+- which side opens which port. The printer opens the panel trigger to the host's event port 2968, but the host opens the scan session to the printer's port 1865 (TLS on the ET-4950 family and ET-2950, plain TCP on the rest). That decides the firewall rules in `README.md` and the listener and connector roles of `pushscan.ts` and the scanner shells.
 
-Capturing UDP multicast and non-standard HTTP required binding a promiscuous-mode capture on the Ethernet interface rather than using a loopback filter. On Windows, `dumpcap` (bundled with Wireshark) works well from the command line — identify the target interface via `dumpcap -D` (using the interface GUID rather than a numerical index, since numerical indexes change when USB network adapters are connected or disconnected).
+Capturing UDP multicast and the non-standard HTTP needs a promiscuous-mode capture on the Ethernet interface rather than a loopback filter. On Windows, `dumpcap` (bundled with Wireshark) works well from the command line. Pick the interface from `dumpcap -D` by its GUID rather than its number, since the numbers change when USB network adapters are connected or disconnected.
 
-The TLS session on port 1865 is opaque to Wireshark without the session keys. The captures confirmed that a TLS handshake occurs and that the printer accepts TLS connections from the service, but they could not reveal the plaintext payload.
+Without the session keys, the TLS session on port 1865 is opaque. The captures confirmed that a TLS handshake happens and that the printer accepts TLS connections from the service, but not what they carry.
 
 ### Step 2: Frida on the Epson driver (Windows build)
 
-The TLS payload was captured by hooking `CISProtocolStream::SendISPacket` and `CISProtocolStream::ReceiveISPacket` inside `ES2Command.dll` — the two functions, identified by Ghidra analysis (see Step 3), that construct outgoing IS packets and parse incoming IS packets respectively. Windows was chosen as the capture target because Ghidra decompilation of `ES2Command.dll` gave clean access to the hook offsets; the same observations should hold on the macOS or Linux builds modulo symbol differences. Because these functions operate on plaintext before TLS encryption (send path) and after TLS decryption (receive path), the hooks capture the full unencrypted IS payload including all ESC/I-2 command bytes.
+The TLS payload was captured by hooking `CISProtocolStream::SendISPacket` and `CISProtocolStream::ReceiveISPacket` in `ES2Command.dll`, the two functions that build outgoing IS packets and parse incoming ones (found with Ghidra, step 3). They work on plaintext, before encryption on the send path and after decryption on the receive path, so the hooks see the full IS payload, every ESC/I-2 command byte included. Windows was the target because Ghidra gave clean access to the hook offsets there; the macOS and Linux builds should behave the same, modulo symbol differences.
 
-The Frida setup has a Windows-specific complication: the target process (`es2projectrunner.exe`) is spawned on demand by `EEventManager.exe` when a scan is triggered, and Windows does not support `device.enable_spawn_gating` (the Frida API for intercepting child processes before they execute). The solution is to hook `EEventManager.exe` directly and instrument it to watch for child-process spawns, then attach to `es2projectrunner.exe` at spawn time via a custom hook in the parent. This is implemented in `tools/frida-capture/host.py` and `tools/frida-capture/agent.js`.
+On Windows the target process, `es2projectrunner.exe`, is spawned on demand by `EEventManager.exe` when a scan starts, and Frida's `device.enable_spawn_gating` (which intercepts child processes before they run) isn't supported. `tools/frida-capture/host.py` and `tools/frida-capture/agent.js` work around this by instrumenting `EEventManager.exe` to watch for child spawns and attaching to `es2projectrunner.exe` as it is spawned.
 
-Each captured session is written to a JSONL file in `tools/frida-capture/captures/`. The wire records have shape `{"hook": "send"|"recv", "type_hex": "0xNNNN", "payload_hex": "<hex>", "payload_size": N, "ts": "<iso8601>"}`; lifecycle records (`hook: "startup"`, `hook: "waiting"`) appear at the head of each file with agent-specific metadata. The captures cover:
+Each session is written to a JSONL file in `tools/frida-capture/captures/`. Wire records have the shape `{"hook": "send"|"recv", "type_hex": "0xNNNN", "payload_hex": "<hex>", "payload_size": N, "ts": "<iso8601>"}`, and lifecycle records (`hook: "startup"`, `hook: "waiting"`) at the head of each file carry agent metadata. The captures cover:
 
 | File                                           | Scenario                          |
 | ---------------------------------------------- | --------------------------------- |
@@ -42,91 +38,108 @@ Each captured session is written to a JSONL file in `tools/frida-capture/capture
 | `2026-04-24T09-05-08-flatbed-1p-jpg.jsonl`     | 1-page flatbed JPG                |
 | `2026-04-24T09-06-37-flatbed-1p-pdf.jsonl`     | 1-page flatbed PDF                |
 
-The PDF capture was particularly diagnostic. The printer streams JPEG image data regardless of the panel's Action (JPG or PDF), so the protocol-level traffic is the same on JPG and PDF runs — confirmed by reusing the JPG capture file as the fixture for the PDF replay test (see `pdfFixtures` in `src/esci2/scanner.test.ts`). Capture-to-capture byte equality holds at the protocol-flow level; literal byte-equality between JPG and PDF capture _files_ depends on capture-time polling cadence and is not guaranteed.
+The PDF capture was particularly diagnostic. The printer streams JPEG whatever the panel's Action, so JPG and PDF runs exchange the same protocol flow, and the PDF replay test reuses the JPG capture (`pdfFixtures` in `src/esci2/scanner.test.ts`). The capture files themselves aren't byte-equal, because the polling cadence varies from one capture to the next.
 
 ### Step 3: Ghidra on ES2Command.dll
 
-Ghidra static analysis of `ES2Command.dll` (32-bit x86) provided the semantic layer that the Frida captures alone could not: function names, the IS type-code map, the async-event dispatch table, the lock-packet payload format, and the dual command-stack architecture (legacy ESC/I and ESC/I-2 co-existing over the same IS framing). The key findings were:
+Static analysis of the 32-bit x86 `ES2Command.dll` supplied what the Frida captures alone could not: function names, the IS type-code map, the async-event dispatch table, the lock-packet format, and the two command stacks (legacy ESC/I and ESC/I-2) sharing the same IS framing. The key findings:
 
-- The complete IS type-code table (`0x8000` welcome, `0x9000` async event, `0xa000` passthru reply, `0xa100` lock ack, `0xa101` unlock ack, `0x2000` passthru request, `0x2100`/`0x2101` lock/unlock). These are not documented anywhere publicly; Ghidra's decompilation of `CISProtocolStream::CheckEvent` and its dispatcher made them explicit.
-- The async-event dispatch byte table in `CISProtocolStream::DidReceiveAsyncEvent` — specifically that `0xa0` is `ServerError`, which the driver treats as an unrecoverable error requiring session teardown. Early implementation attempts received `IS 0x9000` + `0xa0` on every session and interpreted it as a "write acknowledge" needing a follow-up read, which was incorrect. Ghidra definitively resolved this: `0x9000`/`0xa0` means the printer has rejected the session and will close the connection; there is no recovery.
-- The lock-packet payload format: 7 bytes, `01 a0 04 <timeout_BE_u32>`. This exact payload is in `buildLockPacket` in `src/protocol.ts`.
-- The existence of two parallel command stacks: `CESCI2Command` for ESC/I-2 text commands and `CESCICommand` for legacy binary ESC/I — both multiplexed through `CISProtocolStream` over the same IS type `0x2000` envelope. This explained why the scanner needs to speak both command languages in a single session.
-- Hook addresses used by the Frida agent (`FUN_100a5a40` for `SendISPacket`, `FUN_100a5bf0` for `ReceiveISPacket`), which were identified by following the call chain from the decompiled DLL entry point `ESCreateScanner` through the IS protocol layer.
+- **The IS type codes** (`0x8000` welcome, `0x9000` async event, `0xa000` passthru reply, `0xa100` / `0xa101` lock and unlock acks, `0x2000` passthru request, `0x2100` / `0x2101` lock and unlock), which are documented nowhere publicly. The decompiled `CISProtocolStream::CheckEvent` and its dispatcher made them explicit.
+- **The async-event table** in `CISProtocolStream::DidReceiveAsyncEvent`, in particular that `0xa0` is `ServerError`, an unrecoverable error that ends the session. Early attempts received `IS 0x9000` + `0xa0` on every session and read it as a "write acknowledge" needing a follow-up read. Ghidra settled it: the printer has rejected the session and will close the connection, and there is no recovery.
+- **The lock packet:** 7 bytes, `01 a0 04 <timeout_BE_u32>`, exactly as `buildLockPacket` in `src/protocol.ts` builds it.
+- **Two parallel command stacks:** `CESCI2Command` for ESC/I-2 text commands and `CESCICommand` for legacy binary ESC/I, both multiplexed through `CISProtocolStream` in the same IS `0x2000` envelope. That explained why a session has to speak both command languages.
+- **The hook addresses** for the Frida agent (`FUN_100a5a40` for `SendISPacket`, `FUN_100a5bf0` for `ReceiveISPacket`), found by following the call chain from the DLL entry point `ESCreateScanner` through the IS protocol layer.
 
-Ghidra alone could not reveal the exact byte sequences the driver sends during a scan session, since that information is assembled at runtime from device state and query results. Ghidra established the structure and the semantics; Frida captured the runtime content. The combination of both tools was necessary for the TLS-tunnel family.
+Ghidra alone could not show the exact bytes of a session, which the driver assembles at run time from device state and query replies. Ghidra established the structure and the semantics, Frida captured the runtime content, and the TLS family needed both.
 
 ### Step 4: pcap-only decoding for plain-TCP variants
 
-The plain-TCP ESC/I-2 dialects (ET-2750 / XP-7100 / ET-4800) and the legacy ESC/I WF-3620 family all speak plain TCP on port 1865 (no TLS layer), so a Wireshark capture of one scan session shows every byte the driver and printer exchanged. Frida and Ghidra are not needed.
+A plain-TCP printer, ESC/I-2 or legacy ESC/I, exposes its whole scan session on port 1865 to one Wireshark capture, so Frida and Ghidra aren't needed. If a `tcp.port == 1865` capture instead shows a TLS handshake, then ciphertext and no readable IS frames, fall back to steps 2 and 3.
 
-The workflow:
+#### Capture
 
-1. Run a Windows VM (or another machine with the vendor driver installed) on the same LAN as the printer.
+1. Run a Windows VM, or another machine with the vendor driver installed, on the printer's LAN.
 2. Start `dumpcap` (or Wireshark) on the LAN-side interface, filtering on `tcp port 1865 || udp port 2968`.
 3. Trigger a scan from the printer panel and let it complete.
-4. Save the resulting `.pcapng` (or `.pcap`).
-5. Convert the capture into a JSONL replay fixture: `npm run pcap:extract -- <pcap> <hostIp> <printerIp> <port> <out.jsonl>` (add `--stream N` if the pcap contains multiple TCP conversations on port 1865 and you need to isolate one; list the available stream indices with `tshark -r <pcap> -Y "tcp.port==1865" -T fields -e tcp.stream -e ip.src -e ip.dst -e ipv6.src -e ipv6.dst | sort -u`, or open the pcap in Wireshark and read the `tcp.stream` field on a packet). Pass the endpoints in whichever family the session actually used: a Bonjour-discovered scanner can pick IPv6 with no user control over the choice (ET-2550, issue #166), in which case the `ip.*` columns above come back blank and `<hostIp>`/`<printerIp>` take the IPv6 literals. The fixture's shape is one JSON object per line: regular events look like `{"dir":"h>p"|"p>h","ts":<seconds>,"hex":"<hex>"}`, and runs of `IS-0xa200` image chunks (WF-3620 family and XP-620) are folded up into single summary records of the form `{"dir":"p>h","ts":<seconds>,"summary":"image-stream","chunkCount":N,"totalBytes":N,"chunkSize":N}` — `chunkCount` counts `0xa200` IS chunks, not TCP frames. The summary collapse is what keeps WF-3620/XP-620 fixtures in the 8–30 KB range; ET-2750 carries pixels inside `0xa000` ESC/I-2 frames so its fixture stays uncompressed (about 3.9 MB for one flatbed page).
-6. Eyeball-validate the result. **For WF-3620-family and XP-620 captures:** `npm run pcap:render -- <pcap> <source> <format> <outputDir>` reconstructs the scanned page from the raw 24-bit GBR pixels carried in `IS-0xa200` chunks, where `source` is `flatbed`/`adf-simplex`/`adf-duplex` and `format` is `jpg`/`pdf`. It operates on the original `.pcap` (not the JSONL) and reads `HOST_IP`/`PRINTER_IP`/`SCAN_PORT` env vars (defaults baked in) for the same tshark filter `pcap:extract` uses. Add `--stream N` for dual-stream captures (same isolation as step 5), and `--width <px> --height <px>` to override the geometry lookup for fixed-geometry models like the XP-620. **For ESC/I-2 plain-TCP captures (ET-2750 / XP-7100 / ET-4800)**, `pcap:render` does not apply: their image data lives inside ESC/I-2 `0xa000` IMG replies as already-encoded JPEG bytes, not in the WF-3620's GBR-pixel `0xa200` stream. Validation goes through the replay test instead. Drop the new JSONL into the matching `tools/pcap-extract/captures/<model>/` directory (`et-2750/`, `xp-7100/`, or `et-4800/`) and wire it into that model's fixture block in `src/esci2/scanner.test.ts`, including the PARA byte-equivalence shield (`extractScannerParaWrite` vs `extractCapturedParaBody`). Remember these plain-TCP pcaps usually hold more than one `tcp.port==1865` conversation — an aborted SYN/RST (ET-2750) or a rejected TLS probe (XP-7100, ET-4800) ahead of the real plain-TCP session — so isolate the real stream with `--stream` (step 5). Each model's harness asserts its expected on-disk output — a composed PDF for the PDF fixtures, per-page JPEGs for the JPG fixtures — then cleans `outputDir` and the session temp dir in `afterEach`. To eyeball the rendered scan, either temporarily skip the `afterEach` cleanup and open the asserted PDF, or run a one-off replay outside the harness (call `runEsci2ScanOverPlain` directly against a non-temp output directory, with `action: "jpg"` if you want per-page JPEGs to inspect rather than a composed PDF).
+4. Save the resulting `.pcapng` (or `.pcap`). Capture sources stay outside the repo.
 
-Capture sources are kept outside the repo. The extracted JSONL replay fixtures are committed to `tools/pcap-extract/captures/{wf-3620,xp-620,et-2750,xp-7100,et-4800}/` and drive the per-variant replay tests; see [The byte-for-byte replay test](#the-byte-for-byte-replay-test) below. Note that the pcap fixture shape (`{dir, ts, hex}` plus optional image-stream summaries) is **different** from the Frida fixture shape (`{hook, type_hex, payload_hex, payload_size, ts}`) used for the ET-4950 captures; `src/esci/test-support/replay.ts` and `src/esci2/test-support/replay.ts` consume the pcap shape, while `src/esci2/scanner.test.ts` consumes the Frida shape directly.
+#### Extract a fixture
 
-This is the methodology to reach for first when adding a new printer family. If TLS turns out to be in play (a `tcp.port == 1865` capture shows a TLS handshake, opaque ciphertext after, no readable IS frames), fall back to the Step 2 + 3 toolchain.
+```sh
+npm run pcap:extract -- <pcap> <hostIp> <printerIp> <port> <out.jsonl>
+```
+
+Add `--stream N` when the pcap holds more than one TCP conversation on port 1865. Most plain-TCP ESC/I-2 captures do: the vendor software opens a throwaway connection before the real session (an aborted SYN/RST on the ET-2750, a rejected TLS probe on the XP-7100, ET-4800, FF-680W and DS-575W), and without isolating the real stream a TLS-probe capture's fixture gets a duplicate `0x8000` welcome and its replay desyncs. The ET-7700 captures are single-stream. List the stream indices with
+
+```sh
+tshark -r <pcap> -Y "tcp.port==1865" -T fields -e tcp.stream -e ip.src -e ip.dst -e ipv6.src -e ipv6.dst | sort -u
+```
+
+or read the `tcp.stream` field of a packet in Wireshark. Pass the endpoints in the address family the session actually used: a Bonjour-discovered scanner can pick IPv6 with no user control over the choice (the ET-2550, issue #166), and then the `ip.*` columns above come back blank and `<hostIp>` / `<printerIp>` take the IPv6 literals.
+
+Commit the result under `tools/pcap-extract/captures/<model>/`, where it drives that model's replay test ([Replay tests](#replay-tests)).
+
+#### Fixture format
+
+One JSON object per line. Ordinary events are `{"dir":"h>p"|"p>h","ts":<seconds>,"hex":"<hex>"}`. In legacy ESC/I fixtures, runs of IS-`0xa200` image chunks fold into one summary record, `{"dir":"p>h","ts":<seconds>,"summary":"image-stream","chunkCount":N,"totalBytes":N,"chunkSize":N}`, where `chunkCount` counts `0xa200` chunks, not TCP frames. The summaries keep legacy ESC/I fixtures in the 8–30 KB range. ESC/I-2 carries its pixels inside `0xa000` IMG replies, which have no summary form, so its fixtures stay full size: about 3.9 MB for one ET-2750 flatbed page.
+
+The pcap shape differs from the Frida one (`{hook, type_hex, payload_hex, payload_size, ts}`). `src/esci/test-support/replay.ts` and `src/esci2/test-support/replay.ts` read the pcap shape; `src/esci2/scanner.test.ts` reads the Frida shape directly.
+
+#### Validate a legacy ESC/I fixture
+
+`npm run pcap:render -- <pcap> <source> <format> <outputDir>` rebuilds the scanned page from the raw 24-bit GBR pixels in the `0xa200` chunks, where `source` is `flatbed`, `adf-simplex` or `adf-duplex` and `format` is `jpg` or `pdf`. It reads the original pcap rather than the JSONL, and takes `HOST_IP` / `PRINTER_IP` / `SCAN_PORT` from the environment (with defaults built in) for the same tshark filter `pcap:extract` uses. Add `--stream N` for a dual-stream capture, and `--width <px> --height <px>` to override the geometry lookup for a fixed-geometry model like the XP-620.
+
+#### Validate an ESC/I-2 plain-TCP fixture
+
+`pcap:render` doesn't apply here: the image data is already-encoded JPEG inside the `0xa000` IMG replies, not a GBR pixel stream. Validate through the replay test instead. Wire the new JSONL into the model's fixture block in `src/esci2/scanner.test.ts`, including the PARA byte-equivalence check (`extractScannerParaWrite` against `extractCapturedParaBody`). Each model's harness asserts its expected on-disk output (a composed PDF for PDF fixtures, per-page JPEGs for JPG fixtures) and then cleans `outputDir` and the session temp directory in `afterEach`. To look at the rendered scan, temporarily skip that cleanup and open the asserted PDF, or call `runEsci2ScanOverPlain` directly against a non-temp output directory, with `action: "jpg"` for per-page JPEGs rather than a composed PDF.
+
+## Investigations
+
+### The sequence-echo investigation
+
+The keepalive's byte 11 looks like a static "number of key-value pairs" field. An early implementation hardcoded `0x03` there, and the printer silently ignored it: the service never appeared in the destination list. Capturing several consecutive announcement cycles showed byte 11 changing while the number of key-value pairs in the keepalive stayed the same, which identified it as an echo of the announcement's sequence counter. Echoing it fixed discovery.
 
 ### The panel-error investigation
 
-One significant debugging episode is worth understanding because its resolution shaped the push-scan implementation. After all other protocol layers were working correctly, the printer's panel displayed "Scanning Error" after every scan via the service, even though a valid output file was produced. The scan data transferred correctly end-to-end.
+After every other protocol layer worked, the panel showed "Scanning Error" after every scan through the service, even though the scan data transferred end-to-end and a valid output file was written.
 
-Investigation via paired Wireshark captures (one from the Epson driver, one from the service) identified the cause: the printer includes an `x-uid` counter in each push-scan POST request and expects to see that exact value echoed in the 200 OK response. The service had hardcoded `x-uid : 1` in its response. The printer resets its counter to `1` at power-on, so the first scan after a reboot succeeded (the counter happened to be `1`), but every subsequent scan failed as the counter advanced. The fix — parsing the `x-uid` from the incoming request and echoing it in the response — is in `buildPushScanResponse` in `src/pushscan.ts`.
+Paired Wireshark captures, one of the Epson driver and one of the service, found the cause. The printer sends an `x-uid` counter in each panel-trigger POST and expects that exact value echoed in the 200 OK, but the service had hardcoded `x-uid : 1`. The printer resets the counter to `1` at power-on, so the first scan after a reboot succeeded and every later one failed as the counter advanced. `buildPushScanResponse` in `src/pushscan.ts` now parses the request's `x-uid` and echoes it.
 
 ### Why the gamma table is pinned per dialect rather than queried
 
-Each ESC/I-2 model override carries a `gammaClass`: the 804-byte RGB tone-curve triplet (`#GMTRED` / `#GMTGRN` / `#GMTBLU`) that `composePara` puts in the PARA body. Those bytes are transcribed from a capture of that model, which raises an obvious question when adding a printer nobody has captured — can the printer just be asked what curve it wants?
+Each ESC/I-2 model override carries a `gammaClass`, the 804-byte RGB tone-curve triplet (`#GMTRED` / `#GMTGRN` / `#GMTBLU`) that `composePara` puts in the PARA body. Those bytes are transcribed from a capture of that model, which raises an obvious question when adding a printer nobody has captured: can the printer just be asked what curve it wants?
 
-No observed or documented query returns one. The ESC/I-2 request vocabulary has nothing that reports recommended or default scan parameters. `RESA`, the one command whose name suggests it ("read parameter confirmation"), returns maintenance counters in the mode the drivers actually use it in — page counts, jam counts, buffer size — and our `esci2Graph` already sends it during INIT2 and discards the body. Gamma is host→printer data in every observed exchange; CAPA advertises only the mode-name list (`#GMM`, e.g. `UG10UG18`), never a curve.
+No observed or documented query returns one. The ESC/I-2 request vocabulary has nothing that reports recommended or default scan parameters. `RESA`, the one command whose name suggests it ("read parameter confirmation"), returns maintenance counters (page counts, jam counts, buffer size) in the mode the drivers actually use it in, and `esci2Graph` already sends it during INIT2 and discards the body. Gamma is host→printer data in every observed exchange; CAPA advertises only the mode-name list (`#GMM`, e.g. `UG10UG18`), never a curve.
 
-One gap is worth recording so nobody re-derives it: `RESA` in inquiry/control mode, issued _before_ any `PARA`, has never been tried on any model. The vendor drivers never do it, so no capture shows what comes back, and a printer's power-on defaults could in principle populate the reply. Everything below holds regardless — the curve not being model-specific is established independently — but that probe remains untested.
+One gap is worth recording so nobody re-derives it: `RESA` in inquiry/control mode, issued _before_ any `PARA`, has never been tried on any model. The vendor drivers never do it, so no capture shows what comes back, and in principle a printer's power-on defaults could populate the reply. The rest of this section holds either way, because the curve not being model-specific is established independently, but that probe remains untested.
 
-That is less of a limitation than it sounds, because the curve is not a per-model constant. Measured against a strict identity ramp, four of the six committed gamma classes are identity to within ±1 (that ±1 being rounding noise, which the replay tests pin and which must not be "fixed"). The two exceptions are a contrast stretch that clips shadows and saturates highlights — and one of them is the XP-7100, which also has an identity class from a different capture of the same printer. A value that takes two forms on one model isn't a property of the model.
+That is less of a limitation than it sounds, because the curve is not a per-model constant. Measured against a strict identity ramp, four of the six committed gamma classes are identity to within ±1 (that ±1 is rounding noise, which the replay tests pin and which must not be "fixed"). The two exceptions are a contrast stretch that clips shadows and saturates highlights, and one of them is the XP-7100, which also has an identity class from a different capture of the same printer. A value that takes two forms on one model isn't a property of the model.
 
-So a new dialect that has no capture of its own should inherit the near-identity `et4950-stock` class. That's the pass-through choice: it asks the printer for no tone shaping and leaves its default rendering alone, rather than approximating some unknown model-specific value.
+So a new dialect with no capture of its own should inherit the near-identity `et4950-stock` class. That is the pass-through choice: it asks the printer for no tone shaping and leaves its default rendering alone, rather than approximating some unknown model-specific value.
 
-The ET-8500 and ET-7700 both took that inheritance when they were added from a diagnostic alone, and both were later validated on real hardware. The ET-7700's compatibility-page scan puts numbers on it: nominal-64 grey returned 72/69/69 with no shadow crush, grey-patch channel spreads of 3–11 and no cast. That is what a correctly inherited pass-through curve looks like, and it is the practical answer to the question this section opens with. (That scan measured the ET-7700's earlier pair. It now sends a pass-through pair inherited from the XP-7100 and ET-2750 captures, the near-identity `xp7100-pdf` curve with the identity colour matrix, expected to match but not yet confirmed by a scan.)
+The ET-8500 and ET-7700 both took that inheritance when they were added from a diagnostic alone, and both were later validated on real hardware. The ET-7700's compatibility-page scan puts numbers on it: nominal-64 grey returned 72/69/69 with no shadow crush, grey-patch channel spreads of 3–11, and no cast. That is what a correctly inherited pass-through curve looks like, and it answers the question this section opens with. (That scan measured the ET-7700's earlier pair. It now sends the near-identity `xp7100-pdf` curve with the identity colour matrix, a pass-through pair inherited from the XP-7100 and ET-2750 captures, which no scan has measured yet.)
 
-### The byte-for-byte replay test
+## Replay tests
 
-`src/esci2/scanner.test.ts` is the regression shield for the ESC/I-2 path. It runs in two modes:
+The replay harnesses are the regression shield for protocol work. Each feeds a fixture's printer-side records to a fake socket and checks what the service does in reply:
 
-- **TLS replay (byte-for-byte).** For the ET-4950 Frida captures, the test feeds the captured printer-side records to a `FakeTlsSocket` one-by-one and asserts that every byte the state machine writes matches the corresponding host-side record from the capture. Any edit that changes the outgoing byte sequence will fail. The covered scenarios include ADF simplex, ADF duplex, multi-page ADF, and flatbed scans in JPG/PDF output modes. The ADF entries reuse a single capture per scenario across `action='jpg'` and `action='pdf'`; the flatbed entries use separate captures for each format because the original Frida session captured them as distinct runs.
-- **Plain-TCP replay (behavioural + PARA byte-equivalence).** For the `esci2-plain` dialects (ET-2750, XP-7100, ET-4800) driven through `runEsci2ScanOverPlain`, the helper in `src/esci2/test-support/replay.ts` feeds only the printer-side events from a pcap-extracted fixture to a `FakePlainSocket` and asserts the session's on-disk output and end-state. It does not assert full per-host-byte equality the way the TLS replay does, but each replay pins the one host write that encodes the dialect: a byte-equivalence shield asserts the PARA body the scanner composes equals the PARA bytes captured on the wire (`extractScannerParaWrite` vs `extractCapturedParaBody`), so a composer / override / class-data regression fails the test. These fixtures are large (the ET-2750 one is ~3.9 MB) — a couple of orders of magnitude bigger than the WF-3620 fixtures (8–30 KB each) — because the ESC/I-2 IMG cycles wrap pixel data in `0xa000` frames; there's no `0xa200` image-stream summary path to fold the per-chunk records into a single summary line like the WF-3620 extractor uses.
+| Harness                                | Fixtures                                                   | Asserts                                                                               |
+| -------------------------------------- | ---------------------------------------------------------- | ------------------------------------------------------------------------------------- |
+| `src/esci2/scanner.test.ts`, TLS       | ET-4950 Frida captures                                     | Every host write, byte for byte, against the capture's host records (`FakeTlsSocket`) |
+| `src/esci2/scanner.test.ts`, plain TCP | ET-2750, XP-7100, ET-4800, ET-7700, FF-680W, DS-575W pcaps | On-disk output and end state, plus the PARA body byte for byte (`FakePlainSocket`)    |
+| `src/esci/scanner.test.ts`             | WF-3620, XP-620, ET-2550 pcaps                             | The full host transcript byte for byte, plus on-disk output and the detected source   |
 
-JPG replay entries assert JPEG files on disk with the correct EXIF Orientation byte on back pages; PDF replay entries assert a single composed PDF with correct page count and `/Rotate = 180` on back pages.
+On the TLS path, any edit that changes the outgoing byte sequence fails a test. Its scenarios cover ADF simplex, ADF duplex, multi-page ADF and flatbed scans in both JPG and PDF output. The ADF entries reuse one capture per scenario for `action='jpg'` and `action='pdf'`; the flatbed entries use a separate capture per format, because the Frida session captured them as distinct runs. That byte-for-byte guarantee is the strongest shield in the suite: the state machine is correct, by construction, if and only if it produces the exact bytes the Windows driver produced on the same printer.
 
-`src/esci/scanner.test.ts` applies the same behavioural replay approach to the WF-3620 ESC/I path, using pcap-derived JSONL fixtures in `tools/pcap-extract/captures/wf-3620/` that cover single-page, duplex, multi-page, and flatbed cases in JPG/PDF output modes. It also feeds only printer-side events; host bytes are not asserted equal to the fixture.
+The ESC/I-2 plain-TCP harness, in `src/esci2/test-support/replay.ts`, drives `runEsci2ScanOverPlain` from the printer-side events alone and doesn't compare every host write. It does pin the one host write that encodes the dialect: the PARA body the scanner composes must equal the PARA bytes on the wire (`extractScannerParaWrite` against `extractCapturedParaBody`), so a composer, override or class-data regression fails the test. The ET-7700's fixtures are own captures that record an earlier colour pair, so its PARA is held to them everywhere except the `#GMT` / `#CMX` segments.
 
-The TLS replay's byte-for-byte guarantee is the strongest regression shield in the suite: that state machine is, by construction, correct if and only if it produces the exact byte sequence that the Windows driver produced on the same printer. The pcap-based replays don't assert full per-host-byte equality, but the PARA byte-equivalence shield pins the one host write that encodes the dialect, so a composer regression can't slip through; they cover the variants for which Frida captures aren't available.
+JPG entries assert JPEG files on disk with the right EXIF Orientation byte on back pages, and PDF entries assert one composed PDF with the right page count and `/Rotate = 180` on back pages.
 
----
-
-## Ongoing validation
-
-The replay harnesses are the regression shield for protocol work:
-
-- `src/esci2/scanner.test.ts` replays ESC/I-2 sessions. TLS captures from the ET-4950 family assert byte-for-byte host output against Frida records. Plain-TCP fixtures (ET-2750, XP-7100, ET-4800) assert completed output and session behavior from pcap-derived records, plus PARA byte-equivalence against the captured wire.
-- `src/esci/scanner.test.ts` replays the WF-3620 ESC/I path from pcap-derived fixtures and asserts completed output and session behavior.
-
-Run the focused replay test when changing a protocol path, then run the full project gate before publishing:
-
-```sh
-npm run typecheck
-npm run lint
-npm run format:check
-npm test
-```
+Run the focused replay test when changing a protocol path, then the full gate ([HOW-IT-WORKS.md](HOW-IT-WORKS.md#testing)) before publishing.
 
 ## References
 
-- **node-hp-scan-to** — a comparable project for HP printers that reverse-engineered HP's equivalent "Scan to Computer" protocol.
-- **Frida** (`frida.re`) — dynamic instrumentation toolkit used to hook `ES2Command.dll` and extract plaintext TLS payloads at runtime.
-- **Ghidra** (`ghidra.re`) — static analysis suite used for `ES2Command.dll` function names, type-code maps, and hook addresses.
-- **Wireshark / tshark** — packet capture and decode tooling used for discovery, push-scan, and plain-TCP scan sessions.
+- [node-hp-scan-to](https://github.com/manuc66/node-hp-scan-to): a comparable project that reverse-engineered HP's equivalent "Scan to Computer" protocol.
+- [Frida](https://frida.re): the dynamic instrumentation toolkit used to hook `ES2Command.dll` and extract plaintext TLS payloads at run time.
+- [Ghidra](https://ghidra-sre.org): the static analysis suite used for `ES2Command.dll`'s function names, type-code maps and hook addresses.
+- [Wireshark / tshark](https://www.wireshark.org): the packet capture and decode tooling used for discovery, the panel trigger and plain-TCP scan sessions.
