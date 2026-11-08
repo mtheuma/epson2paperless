@@ -466,6 +466,7 @@ export const MODEL_OVERRIDES: readonly ModelOverride[] = [
           link: { fixture: `${PCAP}/ff-680w/adf-simplex-200.jsonl` },
           vouchesFor: "61b8d0509942f6e8",
         },
+        { kind: "reporter-report", link: { issue: 249 }, vouchesFor: "61b8d0509942f6e8" },
       ],
       window: [
         { kind: "epson-capture", link: { fixture: `${PCAP}/ff-680w/adf-simplex-200.jsonl` } },
