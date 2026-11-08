@@ -54,7 +54,7 @@ Some scanners send no `PushScanIDIn` at all. The button-only FF-680W and DS-575W
 
 ### Job control (NetScanMonitor v3)
 
-A v3 request (`x-protocol-version : 3.00`) is answered only after a job-control exchange with the printer, on a connection of its own to port 1865:
+A v3 request (`x-protocol-version : 3.00`) is answered only after a job-control exchange with the printer, on a connection of its own to port 1865. That connection is always plain TCP, even to a printer whose scan session is TLS. An `esci2` printer sends its welcome only inside TLS, so there the exchange times out waiting for it, as the probe's plain-TCP step does, and the scan carries on with a warning:
 
 | Request                           | Step   | Command                  | Reply payload |
 | --------------------------------- | ------ | ------------------------ | ------------- |
@@ -390,13 +390,13 @@ Dialects differ in the gamma constant (`#GMMUG10` for the ET-4950 family and ET-
 
 Within a dialect, the standard profile's source variants differ in three places:
 
-| Field             | Flatbed   | ADF simplex | ADF duplex            |
-| ----------------- | --------- | ----------- | --------------------- |
-| Source token      | `#FB `    | `#ADF`      | `#ADFDPLX` (+4 bytes) |
-| `#PAG` page count | Absent    | Present     | Present               |
-| `#ACQ` x-start    | `0000000` | `0000069`   | `0000069`             |
+| Field             | Flatbed | ADF simplex | ADF duplex            |
+| ----------------- | ------- | ----------- | --------------------- |
+| Source token      | `#FB `  | `#ADF`      | `#ADFDPLX` (+4 bytes) |
+| `#PAG` page count | Absent  | Present     | Present               |
+| `#ACQ` window     | Flatbed | ADF         | ADF                   |
 
-Everything else is identical across sources: the three RGB gamma tables (`#GMTRED` / `#GMTGRN` / `#GMTBLU`), the CMX matrix and the 1 MB buffer-size token. The `#RSM` / `#RSS` fields and the scan window scale with the wire resolution on every dialect ([Scan resolution and JPEG quality](#scan-resolution-and-jpeg-quality)), so at the default DPI they match across sources too. Duplex comes from Sides: the session threads `PushScanIDIn[0]` as `ctx.duplex`, which `makeParaSpec` folds into the `adf-duplex` source axis.
+The `#ACQ` window is the dialect's scan window for that source, so how much it differs is per model. On the ET-4950 family the ADF window starts at x `0000069` where the flatbed's starts at `0000000`; the XP-7100's windows are identical, both at x 0. Everything else is identical across sources: the three RGB gamma tables (`#GMTRED` / `#GMTGRN` / `#GMTBLU`), the CMX matrix, the 1 MB buffer-size token, and the `#RSM` / `#RSS` resolution fields, which scale with the wire resolution on every dialect ([Scan resolution and JPEG quality](#scan-resolution-and-jpeg-quality)) along with the window. Duplex comes from Sides: the session threads `PushScanIDIn[0]` as `ctx.duplex`, which `makeParaSpec` folds into the `adf-duplex` source axis.
 
 The `adf-crp` profile (FF-680W, DS-575W) has no per-source token. Its sides axis is a `DPLX` token inside the `#ADFCRP…DFL1` prefix. The `#ADFCRP` flag bytes (skew, double-feed, duplex) are GUI-only scan options the service doesn't model, so the composer pins the FF-680W's values.
 
@@ -605,7 +605,7 @@ Duplex pages arrive in the order front, back, front, back. On a two-pass ADF (ET
 
 On ESC/I-2 the printer's INFO duplex type decides, every session (`duplexBackRotated`: `#ADFDPLX2SCN`, two-pass, rotates; `1SCN`, single-pass, or no duplex, doesn't), resolved by the engine at flush time. A model override records what confirmed its orientation, and which way (`duplexOrientationEvidence`). A duplex scan on a model without that record, or whose record vouched for the other orientation, any printer on the generic dialect included, logs one warning per process naming the choice made and inviting a report. The legacy ESC/I WF-3620's back pages are rotated too.
 
-When a page completes, the engine reads `ctx.pageSide` (from `#typIMGB` on ESC/I-2; the `typ` token is the same on every packet of a page) at the `flushPage` barrier and pushes back pages' 1-based indices into `backPageIndices`. Pages flushed under `duplexBackRotated: false` are never recorded. `finalizeSession` uses the list to turn those pages without re-encoding pixels:
+When a page completes, the engine reads the side the graph set on its `flushPage` barrier. The ESC/I-2 graph takes it from `ctx.pageSide`, set by the `#typIMGB` token (the same on every packet of a page); the legacy ESC/I graph marks every second page of an `adf-duplex` scan as a back page. The engine pushes back pages' 1-based indices into `backPageIndices`, except under an ESC/I-2 dialect with `duplexBackRotated: false`, whose pages are never recorded. `finalizeSession` uses the list to turn those pages without re-encoding pixels:
 
 - **JPG:** `src/exif.ts` inserts a 36-byte synthetic EXIF APP1 segment after the SOI marker with `Orientation = 3` (rotate 180°). It is the minimum valid structure; the printer's JPEGs carry no EXIF of their own.
 - **PDF:** `src/pdf.ts` sets the page's `/Rotate` entry to 180 with pdf-lib.

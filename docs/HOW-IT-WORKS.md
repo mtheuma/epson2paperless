@@ -11,13 +11,7 @@ Service              ->  Printer (TCP port 1865)          Scan session
 Any host (unicast)   ->  Service (HEALTH_PORT, /scan)     Webhook trigger (optional, bearer token)
 ```
 
-Discovery and the panel trigger are shared across supported models, with small per-model variations. The scan session comes in three variants, each named by the `PRINTER_PROTOCOL` value that forces it:
-
-| Variant       | Transport    | Command set          | Hardware (examples)                         |
-| ------------- | ------------ | -------------------- | ------------------------------------------- |
-| `esci2`       | TLS over TCP | ESC/I-2 over IS      | ET-4950 family, ET-2950                     |
-| `esci2-plain` | Plain TCP    | ESC/I-2 over IS      | ET-2750, XP-7100, ET-4800, FF-680W, DS-575W |
-| `esci`        | Plain TCP    | Legacy ESC/I over IS | WF-3620 family, XP-620, ET-2550             |
+Discovery and the panel trigger are shared across supported models, with small per-model variations. The scan session comes in three variants, each named by the `PRINTER_PROTOCOL` value that forces it: `esci2` is ESC/I-2 over TLS, `esci2-plain` is ESC/I-2 over plain TCP, and `esci` is legacy ESC/I over plain TCP, all inside Epson's IS framing. [Scan session variants](PROTOCOL-REFERENCE.md#scan-session-variants-on-port-1865) gives example models for each.
 
 This document is the front door: it explains how the pieces fit together. [PROTOCOL-REFERENCE.md](PROTOCOL-REFERENCE.md) has the byte-level protocol, [REVERSE-ENGINEERING.md](REVERSE-ENGINEERING.md) the capture and fixture workflow, and the [README](../README.md) installation, configuration and the [full list of compatible printers](../README.md#compatible-printers).
 
@@ -138,7 +132,7 @@ Test files mirror the modules they cover.
 
 ## Testing
 
-Treat protocol edits as replay-fixture-sensitive. The replay harnesses in `src/esci2/scanner.test.ts` and `src/esci/scanner.test.ts` are the main protocol regression protection: they check host writes byte-for-byte against the ESC/I-2-over-TLS Frida captures and the legacy ESC/I pcap fixtures, and check the PARA body byte-for-byte, alongside the completed output, on the ESC/I-2 plain-TCP fixtures. An edit that changes wire bytes must be mirrored in the fixtures. [REVERSE-ENGINEERING.md](REVERSE-ENGINEERING.md#replay-tests) describes each harness.
+Treat protocol edits as replay-fixture-sensitive. The replay harnesses in `src/esci2/scanner.test.ts` and `src/esci/scanner.test.ts` are the main protocol regression protection: they check host writes byte-for-byte against the ESC/I-2-over-TLS Frida captures and the legacy ESC/I pcap fixtures, and check the PARA body byte-for-byte, alongside the completed output, on the ESC/I-2 plain-TCP fixtures (except the ET-7700's `#GMT` / `#CMX` segments, since its own-capture fixtures record an earlier colour pair). An edit that changes wire bytes must be mirrored in the fixtures. [REVERSE-ENGINEERING.md](REVERSE-ENGINEERING.md#replay-tests) describes each harness.
 
 For routine changes, run the focused Vitest file first, then the full gate before publishing:
 
