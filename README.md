@@ -36,6 +36,7 @@ What you get:
 | **ET-15000**          | 🟡&nbsp;Experimental | Flatbed verified; ADF simplex untested                                                                                        |
 | **FF-680W**           | ✅&nbsp;Verified     | Requires [pairing](docs/BUTTON-ONLY-SCANNERS.md); ADF-only                                                                    |
 | **WF-2845**           | ✅&nbsp;Verified     | ADF simplex ([#178](https://github.com/mtheuma/epson2paperless/issues/178))                                                   |
+| **WF-2950**           | ✅&nbsp;Verified     | ADF simplex ([#258](https://github.com/mtheuma/epson2paperless/issues/258))                                                   |
 | **WF-3620**           | ✅&nbsp;Verified     | Plain TCP scanner, no TLS pinning                                                                                             |
 | **WF-3835**           | 🟡&nbsp;Experimental | ADF simplex; inferred dialect, no reporter retest yet ([#174](https://github.com/mtheuma/epson2paperless/issues/174))         |
 | **XP-620**            | ✅&nbsp;Verified     | Flatbed-only hardware                                                                                                         |
