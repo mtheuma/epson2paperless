@@ -20,13 +20,15 @@ import {
 
 const README = readFileSync("README.md", "utf8");
 
-// ✅ models that reached an existing override by sharing its CAPA fingerprint,
-// with a report of their own, but whose override was never recorded: no log
-// from them names the dialect they resolved. Each leaves this list when a
-// debug log places it in an override's siblings.
+// ✅ models with a report of their own but no recorded dialect: no log from
+// them names what they resolved, whether an existing override (by sharing its
+// CAPA fingerprint) or the generic dialect. Their colour bytes aren't tied to
+// any override, so these checks don't guard them. Each leaves this list when
+// a debug log places it in an override's siblings.
 const UNPLACED: Readonly<Record<string, readonly Evidence[]>> = {
   "WF-2845": [{ kind: "reporter-report", link: { issue: 178 } }],
   "ET-3700": [{ kind: "reporter-report", link: { issue: 228 } }],
+  "WF-2950": [{ kind: "reporter-report", link: { issue: 258 } }],
 };
 
 /** A copy of the overrides with one changed, by model name. */
@@ -116,7 +118,7 @@ describe("provenance", () => {
       ),
     );
     expect(siblings).toEqual({ "ET-3950": "ET-4950", "XP-4100": "ET-2750", "XP-3200": "ET-2810" });
-    expect(Object.keys(UNPLACED)).toEqual(["WF-2845", "ET-3700"]);
+    expect(Object.keys(UNPLACED)).toEqual(["WF-2845", "ET-3700", "WF-2950"]);
   });
 
   describe("colour", () => {
@@ -342,6 +344,7 @@ describe("provenance", () => {
       expect(provenanceProblems(README, MODEL_OVERRIDES, {})).toEqual([
         "ET-3700: ✅ in the README, but no model override serves it",
         "WF-2845: ✅ in the README, but no model override serves it",
+        "WF-2950: ✅ in the README, but no model override serves it",
       ]);
     });
 
