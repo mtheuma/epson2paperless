@@ -20,10 +20,11 @@ import {
 
 const README = readFileSync("README.md", "utf8");
 
-// ✅ models that reached an existing override by sharing its CAPA fingerprint,
-// with a report of their own, but whose override was never recorded: no log
-// from them names the dialect they resolved. Each leaves this list when a
-// debug log places it in an override's siblings.
+// ✅ models with a report of their own but no recorded dialect: no log from
+// them names what they resolved, whether an existing override (by sharing its
+// CAPA fingerprint) or the generic dialect. Their colour bytes aren't tied to
+// any override, so these checks don't guard them. Each leaves this list when
+// a debug log places it in an override's siblings.
 const UNPLACED: Readonly<Record<string, readonly Evidence[]>> = {
   "WF-2845": [{ kind: "reporter-report", link: { issue: 178 } }],
   "ET-3700": [{ kind: "reporter-report", link: { issue: 228 } }],
